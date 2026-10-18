@@ -4,6 +4,8 @@
 }
 /* 透明窗口必须有自己的底色，否则看不见 */
 body { margin: 0; background: #06080F; color: #EAF0FF; }
+/* 系统毛玻璃生效时半透明，由材质负责模糊 */
+:root[data-material="glass"] body { background: rgb(6 8 15 / .55); }
 #q {
   box-sizing: border-box;
   width: calc(100% - 32px);

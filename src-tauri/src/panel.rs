@@ -1,8 +1,66 @@
+use std::sync::OnceLock;
+
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Monitor, WebviewWindow};
 
 use crate::state::AppState;
 
 const LABEL: &str = "panel";
+
+/// 面板材质：系统毛玻璃生效时为 `"glass"`，否则 `"opaque"`。
+static MATERIAL: OnceLock<&'static str> = OnceLock::new();
+
+pub fn material() -> &'static str {
+    MATERIAL.get().copied().unwrap_or("opaque")
+}
+
+/// 无 Dock 图标；把面板窗口换成不激活应用的 NSPanel，浮在全屏应用之上；铺系统毛玻璃。
+/// 只有激活策略失败才返回错误，NSPanel / 毛玻璃失败只记日志。
+#[cfg(target_os = "macos")]
+#[allow(deprecated)] // cocoa 已弃用，但 tauri-nspanel 公开的就是它的类型
+pub fn setup_macos(app: &tauri::App) -> Result<(), crate::error::AppError> {
+    use tauri_nspanel::WebviewWindowExt;
+    use tauri_nspanel::cocoa::{
+        appkit::{NSWindow, NSWindowCollectionBehavior as B},
+        base::id,
+    };
+    use window_vibrancy::{NSVisualEffectMaterial, NSVisualEffectState};
+    // AppKit 常量，cocoa 未导出
+    const NS_WINDOW_STYLE_MASK_NONACTIVATING_PANEL: i32 = 1 << 7;
+    const NS_FLOATING_WINDOW_LEVEL: i32 = 3;
+
+    app.handle()
+        .set_activation_policy(tauri::ActivationPolicy::Accessory)?;
+    let Some(w) = window(app.handle()) else {
+        return Ok(());
+    };
+    let to_panel = || -> tauri::Result<()> {
+        let mask = unsafe { (w.ns_window()? as id).styleMask() }.bits() as i32;
+        // to_panel 只能调一次；setup 只跑一次
+        let panel = w.to_panel()?;
+        panel.set_style_mask(mask | NS_WINDOW_STYLE_MASK_NONACTIVATING_PANEL);
+        panel.set_level(NS_FLOATING_WINDOW_LEVEL);
+        panel.set_collection_behaviour(
+            B::NSWindowCollectionBehaviorCanJoinAllSpaces
+                | B::NSWindowCollectionBehaviorFullScreenAuxiliary,
+        );
+        Ok(())
+    };
+    if let Err(e) = to_panel() {
+        log::warn!("转换 NSPanel 失败：{e}");
+    }
+    match window_vibrancy::apply_vibrancy(
+        &w,
+        NSVisualEffectMaterial::HudWindow,
+        Some(NSVisualEffectState::Active),
+        Some(16.0),
+    ) {
+        Ok(()) => {
+            let _ = MATERIAL.set("glass");
+        }
+        Err(e) => log::warn!("毛玻璃不可用：{e}"),
+    }
+    Ok(())
+}
 
 /// 逻辑像素的矩形区域。
 #[derive(Clone, Copy, Debug)]
@@ -101,25 +159,52 @@ fn try_show(app: &AppHandle, w: &WebviewWindow, t0: Option<u64>) -> tauri::Resul
     if let Err(e) = place(app, w) {
         log::warn!("面板定位失败：{e}");
     }
-    w.show()?;
-    w.set_focus()?;
+    #[cfg(target_os = "macos")]
+    {
+        use tauri_nspanel::ManagerExt;
+        match app.get_webview_panel(LABEL) {
+            // orderFrontRegardless + makeKeyWindow，不激活应用，前台应用保持不变
+            Ok(p) => p.show(),
+            Err(_) => w.show()?,
+        }
+        // 键盘交给 WKWebView（只设 first responder，不激活应用）
+        w.as_ref().set_focus()?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        w.show()?;
+        w.set_focus()?;
+    }
     w.emit("panel-shown", serde_json::json!({ "t0": t0 }))
 }
 
-pub fn show(app: &AppHandle, t0: Option<u64>) {
-    if let Some(w) = window(app)
-        && let Err(e) = try_show(app, &w, t0)
-    {
-        log::warn!("显示面板失败：{e}");
+/// AppKit 只能在主线程调用；已在主线程时同步执行（hide_panel 命令跑在异步线程上）。
+fn on_main(app: &AppHandle, f: impl FnOnce(&AppHandle) + Send + 'static) {
+    let a = app.clone();
+    if let Err(e) = app.run_on_main_thread(move || f(&a)) {
+        log::warn!("切换到主线程失败：{e}");
     }
 }
 
+pub fn show(app: &AppHandle, t0: Option<u64>) {
+    on_main(app, move |app| {
+        if let Some(w) = window(app)
+            && let Err(e) = try_show(app, &w, t0)
+        {
+            log::warn!("显示面板失败：{e}");
+        }
+    });
+}
+
 pub fn hide(app: &AppHandle) {
-    if let Some(w) = window(app)
-        && let Err(e) = w.hide()
-    {
-        log::warn!("隐藏面板失败：{e}");
-    }
+    on_main(app, |app| {
+        // NSPanel 上 hide 即 orderOut:
+        if let Some(w) = window(app)
+            && let Err(e) = w.hide()
+        {
+            log::warn!("隐藏面板失败：{e}");
+        }
+    });
 }
 
 /// 以窗口实际可见性为准切换，不另存状态。

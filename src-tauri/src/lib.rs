@@ -12,7 +12,10 @@ use xpaste_core::Settings;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = builder.plugin(tauri_nspanel::init());
+    builder
         .setup(|app| {
             let logs = app.path().data_dir()?.join("xPaste").join("logs");
             // Builder::new() 自带 Stdout + LogDir，先清掉，只留下面显式加的目标
@@ -32,6 +35,8 @@ pub fn run() {
             }
             app.handle().plugin(builder.build())?;
             log::info!("xPaste 启动，平台 {}", xpaste_platform::OS);
+            #[cfg(target_os = "macos")]
+            panel::setup_macos(app)?;
             let hotkey = app
                 .state::<AppState>()
                 .settings

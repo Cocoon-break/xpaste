@@ -9,6 +9,7 @@ use crate::state::AppState;
 #[serde(rename_all = "camelCase")]
 pub struct PlatformInfo {
     pub os: &'static str,
+    pub material: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -23,6 +24,7 @@ pub fn bootstrap_inner(state: &AppState) -> Bootstrap {
         settings: state.settings.lock().unwrap().clone(),
         platform: PlatformInfo {
             os: xpaste_platform::OS,
+            material: crate::panel::material(),
         },
     }
 }
@@ -42,6 +44,7 @@ mod tests {
         let b = bootstrap_inner(&state);
         assert_eq!(b.settings.max_records, 500);
         assert_eq!(b.platform.os, xpaste_platform::OS);
+        assert!(matches!(b.platform.material, "glass" | "opaque"));
     }
 
     #[test]

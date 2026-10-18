@@ -19,6 +19,7 @@ export interface Settings {
 
 export interface PlatformInfo {
   os: 'macos' | 'windows';
+  material: 'glass' | 'opaque';
 }
 
 export interface Bootstrap {
