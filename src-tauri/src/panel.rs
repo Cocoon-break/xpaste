@@ -191,6 +191,15 @@ pub fn show(app: &AppHandle, t0: Option<u64>) {
         xpaste_platform::foreground_window().unwrap_or(0),
         std::sync::atomic::Ordering::Relaxed,
     );
+    show_panel(app, t0);
+}
+
+/// 粘贴失败后重新显示面板给出降级提示；不覆盖 `previous_window`（此时前台可能已是别的窗口）。
+pub fn reshow(app: &AppHandle) {
+    show_panel(app, None);
+}
+
+fn show_panel(app: &AppHandle, t0: Option<u64>) {
     on_main(app, move |app| {
         if let Some(w) = window(app)
             && let Err(e) = try_show(app, &w, t0)

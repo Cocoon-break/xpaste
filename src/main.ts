@@ -29,9 +29,9 @@ const pasteKey = b.platform.os === 'macos' ? '⌘ + V' : 'Ctrl + V';
 document.querySelector('#pasteTest')!.addEventListener('click', async () => {
   try {
     const r = await pasteText('xPaste 粘贴测试 ' + Date.now());
+    axSettings.hidden = !(r.result === 'copiedOnly' && r.reason === 'needAccessibility');
     if (r.result === 'copiedOnly') {
       status.textContent = `已复制，在目标应用中按 ${pasteKey} 粘贴`;
-      if (r.reason === 'needAccessibility') axSettings.hidden = false;
     } else {
       status.textContent = r.result === 'pasted' ? '已粘贴' : '已复制';
     }

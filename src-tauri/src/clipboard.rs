@@ -11,12 +11,13 @@ pub const CLIPBOARD_CHANGED: &str = "clipboard-changed";
 
 pub fn start(app: AppHandle) {
     xpaste_platform::watch(move |seq| {
-        if seq
-            == app
-                .state::<AppState>()
-                .last_write_seq
-                .load(Ordering::Relaxed)
-        {
+        let state = app.state::<AppState>();
+        // Windows 上 WM_CLIPBOARDUPDATE 可能早于 last_write_seq 写入到达
+        if state.writing.load(Ordering::SeqCst) {
+            log::info!("跳过自身写入（写入中）");
+            return;
+        }
+        if seq == state.last_write_seq.load(Ordering::SeqCst) {
             log::info!("跳过自身写入 seq={seq}");
             return;
         }

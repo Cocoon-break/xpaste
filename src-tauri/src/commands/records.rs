@@ -22,50 +22,47 @@ pub enum CopyResult {
 }
 
 // 阶段 1 临时命令，阶段 4 由 copy 替换
-/// 写剪切板；能模拟粘贴就隐藏面板并粘贴到上一个应用，否则只复制并说明原因（面板不隐藏）。
+/// 写剪切板；能模拟粘贴就隐藏面板并粘贴到上一个应用，否则只复制并说明原因（面板保持或重新显示）。
+/// 阶段 4 的 copy 遵循同一规则：返回 `CopiedOnly` 时面板必须可见，用户才能看到降级提示。
 #[tauri::command(async)]
 pub async fn paste_text(
     app: AppHandle,
     state: State<'_, AppState>,
     text: String,
 ) -> Result<CopyResult, AppError> {
-    let seq = xpaste_platform::write_text(&text).map_err(|e| {
+    state.writing.store(true, Ordering::SeqCst);
+    let written = xpaste_platform::write_text(&text);
+    if let Ok(seq) = written {
+        state.last_write_seq.store(seq, Ordering::SeqCst);
+    }
+    state.writing.store(false, Ordering::SeqCst);
+    written.map_err(|e| {
         log::warn!("写入剪切板失败 bytes={}：{e}", text.len());
         AppError::ClipboardWrite
     })?;
-    state.last_write_seq.store(seq, Ordering::Relaxed);
     let target = Some(state.previous_window.load(Ordering::Relaxed)).filter(|&h| h != 0);
     match xpaste_platform::can_paste(target) {
         PasteBlock::NeedAccessibility => Ok(CopyResult::CopiedOnly {
             reason: "needAccessibility",
         }),
         PasteBlock::Elevated => Ok(CopyResult::CopiedOnly { reason: "elevated" }),
+        // Windows 不知道目标窗口时不盲发 Ctrl+V；面板尚未隐藏，直接给降级提示
+        PasteBlock::None if cfg!(windows) && target.is_none() => {
+            log::warn!("模拟粘贴跳过：没有记录到目标窗口");
+            Ok(CopyResult::CopiedOnly {
+                reason: "pasteFailed",
+            })
+        }
         PasteBlock::None => {
             crate::panel::hide(&app);
-            // 等面板消失、焦点回到上一个应用；sleep 与等待主线程都是阻塞调用，放到阻塞线程池
-            let a = app.clone();
-            let result = tauri::async_runtime::spawn_blocking(move || {
-                std::thread::sleep(Duration::from_millis(50));
-                let (tx, rx) = mpsc::channel();
-                a.run_on_main_thread(move || {
-                    let _ = tx.send(xpaste_platform::paste(target));
-                })?;
-                Ok::<_, tauri::Error>(rx.recv())
-            })
-            .await??;
-            match result {
-                Ok(Ok(())) => {
+            match paste_on_main(&app, target).await {
+                Ok(()) => {
                     log::info!("已模拟粘贴 bytes={}", text.len());
                     Ok(CopyResult::Pasted)
                 }
-                Ok(Err(e)) => {
+                Err(e) => {
                     log::warn!("模拟粘贴失败：{e}");
-                    Ok(CopyResult::CopiedOnly {
-                        reason: "pasteFailed",
-                    })
-                }
-                Err(_) => {
-                    log::warn!("模拟粘贴失败：主线程未返回结果");
+                    crate::panel::reshow(&app);
                     Ok(CopyResult::CopiedOnly {
                         reason: "pasteFailed",
                     })
@@ -73,6 +70,24 @@ pub async fn paste_text(
             }
         }
     }
+}
+
+/// 等面板消失、焦点回到上一个应用后在主线程粘贴。sleep 与等待主线程都是阻塞调用，放到阻塞线程池。
+async fn paste_on_main(app: &AppHandle, target: Option<isize>) -> Result<(), String> {
+    let a = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        let (tx, rx) = mpsc::channel();
+        a.run_on_main_thread(move || {
+            let _ = tx.send(xpaste_platform::paste(target));
+        })
+        .map_err(|e| format!("切换到主线程失败：{e}"))?;
+        rx.recv()
+            .map_err(|_| "主线程未返回结果".to_string())?
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("阻塞任务失败：{e}"))?
 }
 
 #[cfg(test)]
