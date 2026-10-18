@@ -26,6 +26,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 log.workspace = true
 tauri-plugin-log = "2"
+tauri-plugin-global-shortcut = "2"
 
 [dev-dependencies]
 tauri = { workspace = true, features = ["test"] }
