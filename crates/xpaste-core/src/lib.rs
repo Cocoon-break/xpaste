@@ -1,1 +1,7 @@
 //! xPaste 核心逻辑：类型识别、采集、存储。不依赖 Tauri 和系统接口。
+
+pub mod error;
+pub mod model;
+
+pub use error::CoreError;
+pub use model::*;
