@@ -3,26 +3,37 @@ use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
-use windows::Win32::Foundation::{CloseHandle, HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{
+    CloseHandle, GlobalFree, HANDLE, HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM,
+};
+use windows::Win32::Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation};
 use windows::Win32::System::DataExchange::{
-    AddClipboardFormatListener, CloseClipboard, EnumClipboardFormats, GetClipboardData,
-    GetClipboardOwner, GetClipboardSequenceNumber, OpenClipboard, RegisterClipboardFormatW,
+    AddClipboardFormatListener, CloseClipboard, EmptyClipboard, EnumClipboardFormats,
+    GetClipboardData, GetClipboardOwner, GetClipboardSequenceNumber, OpenClipboard,
+    RegisterClipboardFormatW, SetClipboardData,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
+use windows::Win32::System::Memory::{
+    GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock,
+};
 use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::System::Threading::{
-    OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+    GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
+    VIRTUAL_KEY, VK_CONTROL,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetForegroundWindow, GetMessageW,
-    GetWindowThreadProcessId, HWND_MESSAGE, MSG, RegisterClassW, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WM_CLIPBOARDUPDATE, WNDCLASSW,
+    GetWindowThreadProcessId, HWND_MESSAGE, MSG, RegisterClassW, SetForegroundWindow,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLIPBOARDUPDATE, WNDCLASSW,
 };
 use windows::core::{Error, PCWSTR, PWSTR, w};
 use xpaste_core::{AppInfo, Flavor, Snapshot};
 
-use crate::PlatformError;
+use crate::{PasteBlock, PlatformError};
 
 pub const OS: &str = "windows";
 
@@ -264,4 +275,144 @@ fn app_of_window(hwnd: HWND) -> Option<AppInfo> {
             .map_or_else(|| id.clone(), |s| s.to_string_lossy().into_owned());
         Some(AppInfo { id, name })
     }
+}
+
+/// 清空剪切板后写入 `CF_UNICODETEXT`，返回写入后的序号。
+pub fn write_text(text: &str) -> Result<u64, PlatformError> {
+    let wide: Vec<u16> = text.encode_utf16().chain([0]).collect();
+    let bytes = wide.len() * 2;
+    let err = |what: &str, e: Error| PlatformError::Clipboard(format!("{what}：{e}"));
+    let guard = ClipboardGuard::open()?;
+    // SAFETY: 剪切板已打开；内存块大小与拷贝长度一致；SetClipboardData 成功后所有权归系统，失败时自行释放
+    unsafe {
+        EmptyClipboard().map_err(|e| err("清空剪切板失败", e))?;
+        let hglobal = GlobalAlloc(GMEM_MOVEABLE, bytes).map_err(|e| err("分配内存失败", e))?;
+        let ptr = GlobalLock(hglobal) as *mut u16;
+        if ptr.is_null() {
+            let _ = GlobalFree(Some(hglobal));
+            return Err(PlatformError::Clipboard("锁定内存失败".into()));
+        }
+        std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr, wide.len());
+        let _ = GlobalUnlock(hglobal);
+        if let Err(e) = SetClipboardData(u32::from(CF_UNICODETEXT.0), Some(HANDLE(hglobal.0))) {
+            let _ = GlobalFree(Some(hglobal));
+            return Err(err("写入剪切板失败", e));
+        }
+    }
+    drop(guard);
+    Ok(change_count())
+}
+
+/// 进程是否以提升权限运行；读不到令牌时返回 `None`。
+fn is_elevated(process: HANDLE) -> Option<bool> {
+    let mut token = HANDLE::default();
+    let mut elevation = TOKEN_ELEVATION::default();
+    let mut len = 0u32;
+    // SAFETY: 输出参数都指向本地变量；令牌句柄用完即关
+    unsafe {
+        OpenProcessToken(process, TOKEN_QUERY, &mut token).ok()?;
+        let ok = GetTokenInformation(
+            token,
+            TokenElevation,
+            Some(&mut elevation as *mut _ as *mut core::ffi::c_void),
+            size_of::<TOKEN_ELEVATION>() as u32,
+            &mut len,
+        );
+        let _ = CloseHandle(token);
+        ok.ok()?;
+    }
+    Some(elevation.TokenIsElevated != 0)
+}
+
+/// 目标窗口进程权限高于本进程时 `Elevated`（读不到目标令牌也按提升处理）。
+pub fn can_paste(target: Option<isize>) -> PasteBlock {
+    let Some(hwnd) = target.map(|h| HWND(h as *mut _)) else {
+        return PasteBlock::None;
+    };
+    // SAFETY: 伪句柄，无需关闭
+    if is_elevated(unsafe { GetCurrentProcess() }) == Some(true) {
+        return PasteBlock::None;
+    }
+    let mut pid = 0u32;
+    // SAFETY: pid 指向本地变量；进程句柄用完即关
+    let target_elevated = unsafe {
+        GetWindowThreadProcessId(hwnd, Some(&mut pid as *mut u32));
+        match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
+            Ok(process) if pid != 0 => {
+                let e = is_elevated(process);
+                let _ = CloseHandle(process);
+                e
+            }
+            Ok(process) => {
+                let _ = CloseHandle(process);
+                None
+            }
+            Err(_) => None,
+        }
+    };
+    if target_elevated == Some(false) {
+        PasteBlock::None
+    } else {
+        PasteBlock::Elevated
+    }
+}
+
+fn key(vk: VIRTUAL_KEY, up: bool) -> INPUT {
+    INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: vk,
+                dwFlags: if up {
+                    KEYEVENTF_KEYUP
+                } else {
+                    KEYBD_EVENT_FLAGS(0)
+                },
+                ..Default::default()
+            },
+        },
+    }
+}
+
+/// 把 `target` 切回前台（最多等 100 ms），再发 Ctrl+V。
+pub fn paste(target: Option<isize>) -> Result<(), PlatformError> {
+    if let Some(hwnd) = target.map(|h| HWND(h as *mut _)) {
+        // SAFETY: 只读查询与前台切换，hwnd 失效时调用失败而不会崩溃
+        unsafe {
+            let _ = SetForegroundWindow(hwnd);
+            let mut waited = 0;
+            while GetForegroundWindow() != hwnd {
+                if waited >= 100 {
+                    return Err(PlatformError::Clipboard("前台窗口切换超时".into()));
+                }
+                thread::sleep(Duration::from_millis(10));
+                waited += 10;
+            }
+        }
+    }
+    let v = VIRTUAL_KEY(u16::from(b'V'));
+    let inputs = [
+        key(VK_CONTROL, false),
+        key(v, false),
+        key(v, true),
+        key(VK_CONTROL, true),
+    ];
+    // SAFETY: inputs 是本地数组，cbsize 为单个 INPUT 大小
+    let sent = unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) };
+    if sent as usize != inputs.len() {
+        return Err(PlatformError::Clipboard(format!(
+            "模拟按键只发出 {sent}/{} 个：{}",
+            inputs.len(),
+            Error::from_thread()
+        )));
+    }
+    Ok(())
+}
+
+pub fn open_accessibility_settings() {}
+
+pub fn foreground_window() -> Option<isize> {
+    // SAFETY: 只读查询
+    let hwnd = unsafe { GetForegroundWindow() };
+    (!hwnd.is_invalid()).then_some(hwnd.0 as isize)
 }

@@ -3,9 +3,19 @@ use std::time::Duration;
 
 use objc2::rc::autoreleasepool;
 use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString, NSWorkspace};
+use objc2_core_graphics::{CGEvent, CGEventFlags, CGEventTapLocation};
+use objc2_foundation::{NSString, NSURL};
 use xpaste_core::{AppInfo, Flavor, Snapshot};
 
-use crate::PlatformError;
+use crate::{PasteBlock, PlatformError};
+
+#[link(name = "ApplicationServices", kind = "framework")]
+unsafe extern "C" {
+    fn AXIsProcessTrusted() -> bool;
+}
+
+/// `kVK_ANSI_V`
+const KEY_V: u16 = 9;
 
 pub const OS: &str = "macos";
 
@@ -98,4 +108,56 @@ pub fn frontmost_app() -> Option<AppInfo> {
             id,
         })
     })
+}
+
+/// 清空剪切板后写入纯文本，返回写入后的 `changeCount`。
+pub fn write_text(text: &str) -> Result<u64, PlatformError> {
+    autoreleasepool(|_| {
+        let pb = NSPasteboard::generalPasteboard();
+        pb.clearContents();
+        // SAFETY: AppKit 导出的常量，进程内一直有效
+        let ok = pb.setString_forType(&NSString::from_str(text), unsafe { NSPasteboardTypeString });
+        if !ok {
+            return Err(PlatformError::Clipboard("写入文本失败".into()));
+        }
+        Ok(change_count())
+    })
+}
+
+/// macOS 只看辅助功能权限，忽略 `target`。
+pub fn can_paste(_target: Option<isize>) -> PasteBlock {
+    // SAFETY: 无参数的只读查询
+    if unsafe { AXIsProcessTrusted() } {
+        PasteBlock::None
+    } else {
+        PasteBlock::NeedAccessibility
+    }
+}
+
+/// 向当前前台应用发 ⌘V。须在主线程调用。
+pub fn paste(_target: Option<isize>) -> Result<(), PlatformError> {
+    for down in [true, false] {
+        let event = CGEvent::new_keyboard_event(None, KEY_V, down)
+            .ok_or_else(|| PlatformError::Clipboard("创建按键事件失败".into()))?;
+        CGEvent::set_flags(Some(&event), CGEventFlags::MaskCommand);
+        CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&event));
+    }
+    Ok(())
+}
+
+pub fn open_accessibility_settings() {
+    autoreleasepool(|_| {
+        let url = NSString::from_str(
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+        );
+        match NSURL::URLWithString(&url) {
+            Some(url) if NSWorkspace::sharedWorkspace().openURL(&url) => {}
+            _ => log::warn!("打开辅助功能设置失败"),
+        }
+    })
+}
+
+/// macOS 粘贴发给当前前台应用，不需要记录窗口。
+pub fn foreground_window() -> Option<isize> {
+    None
 }
