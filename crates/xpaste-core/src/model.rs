@@ -66,8 +66,12 @@ impl Default for Settings {
     }
 }
 
-const MODIFIERS: [&str; 8] = [
+const MODIFIERS: [&str; 12] = [
     "commandorcontrol",
+    "cmdorctrl",
+    "cmdorcontrol",
+    "commandorctrl",
+    "cmd",
     "command",
     "control",
     "ctrl",
@@ -202,6 +206,8 @@ mod tests {
             "CommandOrControl+Alt+C",
             "Control+Shift+V",
             "Command+Shift+V",
+            "CmdOrCtrl+Shift+V",
+            "cmd+shift+v",
         ] {
             assert!(
                 Settings {

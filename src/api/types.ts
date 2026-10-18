@@ -18,7 +18,7 @@ export interface Settings {
 }
 
 export interface PlatformInfo {
-  os: string;
+  os: 'macos' | 'windows';
 }
 
 export interface Bootstrap {
@@ -27,6 +27,6 @@ export interface Bootstrap {
 }
 
 export interface AppError {
-  kind: string;
+  kind: 'fileMissing' | 'clipboardWrite' | 'hotkeyTaken' | 'invalidSettings' | 'internal';
   message: string;
 }
