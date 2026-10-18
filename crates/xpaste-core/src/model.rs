@@ -66,7 +66,16 @@ impl Default for Settings {
     }
 }
 
-const MODIFIERS: [&str; 8] = ["commandorcontrol", "command", "control", "ctrl", "alt", "option", "super", "meta"];
+const MODIFIERS: [&str; 8] = [
+    "commandorcontrol",
+    "command",
+    "control",
+    "ctrl",
+    "alt",
+    "option",
+    "super",
+    "meta",
+];
 
 impl Settings {
     /// 按顺序检查，返回第一条不满足的规则。
@@ -99,7 +108,10 @@ mod tests {
     use super::*;
 
     fn invalid(s: &Settings) -> String {
-        match s.validate() { Err(CoreError::InvalidSettings(m)) => m, other => panic!("expected InvalidSettings, got {other:?}") }
+        match s.validate() {
+            Err(CoreError::InvalidSettings(m)) => m,
+            other => panic!("expected InvalidSettings, got {other:?}"),
+        }
     }
 
     #[test]
@@ -134,44 +146,98 @@ mod tests {
     #[test]
     fn serializes_camel_case() {
         let json = serde_json::to_string(&Settings::default()).unwrap();
-        assert!(json.contains(r#""maxRecords":500"#) && json.contains(r#""retentionDays":30"#) && json.contains(r#""appearance":"system""#));
+        assert!(
+            json.contains(r#""maxRecords":500"#)
+                && json.contains(r#""retentionDays":30"#)
+                && json.contains(r#""appearance":"system""#)
+        );
     }
 
     #[test]
     fn rejects_max_records_33() {
-        let s = Settings { max_records: 33, ..Default::default() };
+        let s = Settings {
+            max_records: 33,
+            ..Default::default()
+        };
         assert_eq!(invalid(&s), "请输入 50 到 5000 之间、50 的整数倍");
     }
 
     #[test]
     fn max_records_boundaries() {
-        for ok in [50, 5000] { assert!(Settings { max_records: ok, ..Default::default() }.validate().is_ok()); }
-        for bad in [0, 5050] { assert!(Settings { max_records: bad, ..Default::default() }.validate().is_err()); }
+        for ok in [50, 5000] {
+            assert!(
+                Settings {
+                    max_records: ok,
+                    ..Default::default()
+                }
+                .validate()
+                .is_ok()
+            );
+        }
+        for bad in [0, 5050] {
+            assert!(
+                Settings {
+                    max_records: bad,
+                    ..Default::default()
+                }
+                .validate()
+                .is_err()
+            );
+        }
     }
 
     #[test]
     fn rejects_hotkey_without_modifier() {
-        let s = Settings { hotkey: "C".into(), ..Default::default() };
+        let s = Settings {
+            hotkey: "C".into(),
+            ..Default::default()
+        };
         assert_eq!(invalid(&s), "至少需要包含 Mod 或 Alt");
     }
 
     #[test]
     fn hotkey_modifier_check_is_case_insensitive() {
-        for hk in ["alt+c", "CommandOrControl+Alt+C", "Control+Shift+V", "Command+Shift+V"] {
-            assert!(Settings { hotkey: hk.into(), ..Default::default() }.validate().is_ok(), "{hk}");
+        for hk in [
+            "alt+c",
+            "CommandOrControl+Alt+C",
+            "Control+Shift+V",
+            "Command+Shift+V",
+        ] {
+            assert!(
+                Settings {
+                    hotkey: hk.into(),
+                    ..Default::default()
+                }
+                .validate()
+                .is_ok(),
+                "{hk}"
+            );
         }
-        assert!(Settings { hotkey: "Shift+V".into(), ..Default::default() }.validate().is_err());
+        assert!(
+            Settings {
+                hotkey: "Shift+V".into(),
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
     }
 
     #[test]
     fn rejects_unknown_retention() {
-        let s = Settings { retention_days: Some(10), ..Default::default() };
+        let s = Settings {
+            retention_days: Some(10),
+            ..Default::default()
+        };
         assert_eq!(invalid(&s), "历史保留只能是 7 天、30 天、90 天或永久");
     }
 
     #[test]
     fn rejects_panel_size_below_minimum() {
-        let s = Settings { panel_size: (640.0, 400.0), ..Default::default() };
+        let s = Settings {
+            panel_size: (640.0, 400.0),
+            ..Default::default()
+        };
         assert_eq!(invalid(&s), "面板尺寸不能小于 720 × 520");
     }
 }
