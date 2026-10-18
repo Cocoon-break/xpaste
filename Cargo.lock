@@ -4612,6 +4612,12 @@ dependencies = [
 name = "xpaste-platform"
 version = "0.1.0"
 dependencies = [
+ "log",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "thiserror 2.0.21",
+ "windows",
  "xpaste-core",
 ]
 

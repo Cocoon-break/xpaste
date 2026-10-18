@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 use crate::CoreError;
@@ -107,9 +109,54 @@ impl Settings {
     }
 }
 
+/// 剪切板里一个 item 的一种格式的原始数据。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Flavor {
+    pub item: u32,
+    pub format: String,
+    pub data: Vec<u8>,
+}
+
+/// 来源应用：macOS 为 bundle id，Windows 为可执行文件完整路径。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AppInfo {
+    pub id: String,
+    pub name: String,
+}
+
+/// 平台层读到的一次剪切板内容。`sensitive` 为 true 时不含任何内容。
+#[derive(Debug, Default)]
+pub struct Snapshot {
+    pub flavors: Vec<Flavor>,
+    pub text: Option<String>,
+    pub html: Option<String>,
+    pub file_paths: Vec<PathBuf>,
+    pub bitmap: Option<Vec<u8>>,
+    pub url_title: Option<String>,
+    pub sensitive: bool,
+    pub source: Option<AppInfo>,
+}
+
+impl Snapshot {
+    /// 文本的 UTF-8 字节数，供日志使用（不暴露内容）。
+    pub fn text_bytes(&self) -> usize {
+        self.text.as_ref().map_or(0, String::len)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snapshot_text_bytes_counts_utf8() {
+        let s = Snapshot {
+            text: Some("你好".into()),
+            ..Default::default()
+        };
+        assert_eq!(s.text_bytes(), 6);
+        assert_eq!(Snapshot::default().text_bytes(), 0);
+    }
 
     fn invalid(s: &Settings) -> String {
         match s.validate() {
