@@ -1,3 +1,4 @@
+mod clipboard;
 mod commands;
 pub mod error;
 mod hotkey;
@@ -48,6 +49,7 @@ pub fn run() {
                 // 系统通知在阶段 5
                 log::warn!("快捷键注册失败：{e}");
             }
+            clipboard::start(app.handle().clone());
             Ok(())
         })
         .plugin(

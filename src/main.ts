@@ -1,6 +1,6 @@
 import { attachConsole, info } from './api/log';
 import { bootstrap, hidePanel } from './api/commands';
-import { onPanelShown } from './api/events';
+import { onClipboardChanged, onPanelShown } from './api/events';
 
 const q = document.querySelector<HTMLInputElement>('#q')!;
 
@@ -10,6 +10,9 @@ await onPanelShown(({ t0 }) => {
   requestAnimationFrame(() => {
     if (t0 !== null) void info(`唤起耗时 ${Date.now() - t0} ms`);
   });
+});
+await onClipboardChanged((p) => {
+  void info(`剪切板变化 ${p.bytes} B sensitive=${p.sensitive}`);
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !e.isComposing) void hidePanel();
