@@ -200,7 +200,11 @@ pub fn read_snapshot() -> Result<Option<Snapshot>, PlatformError> {
                     .map(|&c| u16::from_ne_bytes(c))
                     .take_while(|&c| c != 0)
                     .collect();
-                String::from_utf16_lossy(&wide)
+                // 原始 UTF-16LE 字节（截到首个 NUL），供日后原样写回
+                (
+                    String::from_utf16_lossy(&wide),
+                    b[..wide.len() * 2].to_vec(),
+                )
             })
         })
         .flatten();
@@ -209,11 +213,11 @@ pub fn read_snapshot() -> Result<Option<Snapshot>, PlatformError> {
         source,
         ..Default::default()
     };
-    if let Some(text) = text {
+    if let Some((text, data)) = text {
         snapshot.flavors.push(Flavor {
             item: 0,
             format: "CF_UNICODETEXT".into(),
-            data: text.as_bytes().to_vec(),
+            data,
         });
         snapshot.text = Some(text);
     }

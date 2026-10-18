@@ -7,7 +7,7 @@ use xpaste_core::Settings;
 pub struct AppState {
     pub settings: Mutex<Settings>,
     pub paused: AtomicBool,
-    /// 本应用最近一次写剪切板后的序号，监听时据此跳过自身写入
+    /// 本应用最近一次写剪切板后的序号，监听时据此跳过自身写入；`u64::MAX` 表示从未写过
     pub last_write_seq: AtomicU64,
 }
 
@@ -16,7 +16,7 @@ impl AppState {
         Self {
             settings: Mutex::new(settings),
             paused: AtomicBool::new(false),
-            last_write_seq: AtomicU64::new(0),
+            last_write_seq: AtomicU64::new(u64::MAX),
         }
     }
 }

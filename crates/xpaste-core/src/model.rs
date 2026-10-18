@@ -1,3 +1,4 @@
+use std::fmt;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -125,7 +126,8 @@ pub struct AppInfo {
 }
 
 /// 平台层读到的一次剪切板内容。`sensitive` 为 true 时不含任何内容。
-#[derive(Debug, Default)]
+/// `Debug` 只输出长度与标记，不输出内容、路径、标题。
+#[derive(Default)]
 pub struct Snapshot {
     pub flavors: Vec<Flavor>,
     pub text: Option<String>,
@@ -135,6 +137,21 @@ pub struct Snapshot {
     pub url_title: Option<String>,
     pub sensitive: bool,
     pub source: Option<AppInfo>,
+}
+
+impl fmt::Debug for Snapshot {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Snapshot")
+            .field("flavors", &self.flavors.len())
+            .field("text_bytes", &self.text_bytes())
+            .field("html", &self.html.is_some())
+            .field("file_paths", &self.file_paths.len())
+            .field("bitmap", &self.bitmap.as_ref().map(Vec::len))
+            .field("url_title", &self.url_title.is_some())
+            .field("sensitive", &self.sensitive)
+            .field("source", &self.source)
+            .finish()
+    }
 }
 
 impl Snapshot {
@@ -156,6 +173,20 @@ mod tests {
         };
         assert_eq!(s.text_bytes(), 6);
         assert_eq!(Snapshot::default().text_bytes(), 0);
+    }
+
+    #[test]
+    fn snapshot_debug_hides_content() {
+        let s = Snapshot {
+            text: Some("secret-xyz".into()),
+            file_paths: vec!["/tmp/secret.txt".into()],
+            ..Default::default()
+        };
+        let out = format!("{s:?}");
+        assert!(
+            !out.contains("secret-xyz") && !out.contains("secret.txt"),
+            "{out}"
+        );
     }
 
     fn invalid(s: &Settings) -> String {
