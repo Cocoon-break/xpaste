@@ -4222,6 +4222,19 @@ version = "0.1.0"
 dependencies = [
  "tauri",
  "tauri-build",
+ "xpaste-core",
+ "xpaste-platform",
+]
+
+[[package]]
+name = "xpaste-core"
+version = "0.1.0"
+
+[[package]]
+name = "xpaste-platform"
+version = "0.1.0"
+dependencies = [
+ "xpaste-core",
 ]
 
 [[package]]

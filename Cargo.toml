@@ -1,0 +1,24 @@
+[workspace]
+resolver = "3"
+members = ["src-tauri", "crates/xpaste-core", "crates/xpaste-platform"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+log = "0.4"
+tauri = { version = "2", features = [] }
+xpaste-core = { path = "crates/xpaste-core" }
+xpaste-platform = { path = "crates/xpaste-platform" }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true
