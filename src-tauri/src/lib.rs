@@ -71,7 +71,9 @@ pub fn run() {
         .manage(AppState::new(Settings::default()))
         .invoke_handler(tauri::generate_handler![
             commands::settings::bootstrap,
-            commands::panel::hide_panel
+            commands::panel::hide_panel,
+            commands::panel::open_accessibility_settings,
+            commands::records::paste_text
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

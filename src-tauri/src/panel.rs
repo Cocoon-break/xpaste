@@ -187,6 +187,10 @@ fn on_main(app: &AppHandle, f: impl FnOnce(&AppHandle) + Send + 'static) {
 }
 
 pub fn show(app: &AppHandle, t0: Option<u64>) {
+    app.state::<AppState>().previous_window.store(
+        xpaste_platform::foreground_window().unwrap_or(0),
+        std::sync::atomic::Ordering::Relaxed,
+    );
     on_main(app, move |app| {
         if let Some(w) = window(app)
             && let Err(e) = try_show(app, &w, t0)

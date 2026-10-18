@@ -31,3 +31,8 @@ export interface AppError {
   kind: 'fileMissing' | 'clipboardWrite' | 'hotkeyTaken' | 'invalidSettings' | 'internal';
   message: string;
 }
+
+export type CopyResult =
+  | { result: 'copied' }
+  | { result: 'copiedOnly'; reason: 'needAccessibility' | 'elevated' | 'pasteFailed' }
+  | { result: 'pasted' };
