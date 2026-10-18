@@ -17,7 +17,7 @@ pub fn start(app: AppHandle) {
                 .last_write_seq
                 .load(Ordering::Relaxed)
         {
-            log::debug!("跳过自身写入 seq={seq}");
+            log::info!("跳过自身写入 seq={seq}");
             return;
         }
         match xpaste_platform::read_snapshot() {
