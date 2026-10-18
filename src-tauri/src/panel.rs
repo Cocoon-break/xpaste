@@ -31,40 +31,75 @@ fn window(app: &AppHandle) -> Option<WebviewWindow> {
     w
 }
 
+/// 光标是否落在显示器内。macOS 上 tao 的光标按主屏缩放、显示器按各自缩放换算成物理像素，
+/// 两者不在同一空间，所以都换回点（`points_space`）再比；其他平台物理对物理。
+fn monitor_contains(
+    cursor_phys: (f64, f64),
+    primary_sf: f64,
+    pos_phys: (f64, f64),
+    size_phys: (f64, f64),
+    sf: f64,
+    points_space: bool,
+) -> bool {
+    let (cs, ms) = if points_space {
+        (primary_sf, sf)
+    } else {
+        (1.0, 1.0)
+    };
+    let (cx, cy) = (cursor_phys.0 / cs, cursor_phys.1 / cs);
+    let (x0, y0) = (pos_phys.0 / ms, pos_phys.1 / ms);
+    let (x1, y1) = (
+        (pos_phys.0 + size_phys.0) / ms,
+        (pos_phys.1 + size_phys.1) / ms,
+    );
+    cx >= x0 && cx < x1 && cy >= y0 && cy < y1
+}
+
 /// 鼠标所在显示器；找不到时用主显示器。
 fn cursor_monitor(app: &AppHandle) -> tauri::Result<Option<Monitor>> {
     let c = app.cursor_position()?;
+    let primary = app.primary_monitor()?;
+    let primary_sf = primary.as_ref().map_or(1.0, |m| m.scale_factor());
     let hit = app.available_monitors()?.into_iter().find(|m| {
         let (p, s) = (m.position(), m.size());
-        c.x >= p.x as f64
-            && c.x < p.x as f64 + s.width as f64
-            && c.y >= p.y as f64
-            && c.y < p.y as f64 + s.height as f64
+        monitor_contains(
+            (c.x, c.y),
+            primary_sf,
+            (p.x as f64, p.y as f64),
+            (s.width as f64, s.height as f64),
+            m.scale_factor(),
+            cfg!(target_os = "macos"),
+        )
     });
-    match hit {
-        Some(m) => Ok(Some(m)),
-        None => app.primary_monitor(),
-    }
+    Ok(hit.or(primary))
 }
 
-fn try_show(app: &AppHandle, w: &WebviewWindow, t0: Option<u64>) -> tauri::Result<()> {
+/// 移到鼠标所在屏的工作区；失败只记日志，不影响显示。
+fn place(app: &AppHandle, w: &WebviewWindow) -> tauri::Result<()> {
     let size = app
         .state::<AppState>()
         .settings
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .panel_size;
-    if let Some(m) = cursor_monitor(app)? {
-        let (sf, wa) = (m.scale_factor(), m.work_area());
-        let work = Rect {
-            x: wa.position.x as f64 / sf,
-            y: wa.position.y as f64 / sf,
-            w: wa.size.width as f64 / sf,
-            h: wa.size.height as f64 / sf,
-        };
-        let (x, y) = place_in_work_area(work, size);
-        w.set_size(LogicalSize::new(size.0, size.1))?;
-        w.set_position(LogicalPosition::new(x, y))?;
+    let Some(m) = cursor_monitor(app)? else {
+        return Ok(());
+    };
+    let (sf, wa) = (m.scale_factor(), m.work_area());
+    let work = Rect {
+        x: wa.position.x as f64 / sf,
+        y: wa.position.y as f64 / sf,
+        w: wa.size.width as f64 / sf,
+        h: wa.size.height as f64 / sf,
+    };
+    let (x, y) = place_in_work_area(work, size);
+    w.set_size(LogicalSize::new(size.0, size.1))?;
+    w.set_position(LogicalPosition::new(x, y))
+}
+
+fn try_show(app: &AppHandle, w: &WebviewWindow, t0: Option<u64>) -> tauri::Result<()> {
+    if let Err(e) = place(app, w) {
+        log::warn!("面板定位失败：{e}");
     }
     w.show()?;
     w.set_focus()?;
@@ -135,5 +170,48 @@ mod tests {
         let (x, y) = place_in_work_area(work, SIZE);
         assert_eq!(x, 160.0);
         assert_eq!(y, 80.0); // 25 + 695 − 640，贴底而不是出屏
+    }
+
+    #[test]
+    fn mixed_dpi_macos_hits_external_monitor() {
+        let cursor = (5000.0, 100.0);
+        // 1x 外接屏在 Retina 主屏（1512 pt 宽）右侧
+        assert!(monitor_contains(
+            cursor,
+            2.0,
+            (1512.0, 0.0),
+            (1920.0, 1080.0),
+            1.0,
+            true
+        ));
+        assert!(!monitor_contains(
+            cursor,
+            2.0,
+            (0.0, 0.0),
+            (3024.0, 1964.0),
+            2.0,
+            true
+        ));
+    }
+
+    #[test]
+    fn physical_space_hit_test_windows() {
+        let (pos, size) = ((1920.0, 0.0), (1920.0, 1080.0));
+        assert!(monitor_contains(
+            (2500.0, 100.0),
+            1.5,
+            pos,
+            size,
+            1.0,
+            false
+        ));
+        assert!(!monitor_contains(
+            (1000.0, 100.0),
+            1.5,
+            pos,
+            size,
+            1.0,
+            false
+        ));
     }
 }

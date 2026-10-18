@@ -12,7 +12,7 @@ await onPanelShown(({ t0 }) => {
   });
 });
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') void hidePanel();
+  if (e.key === 'Escape' && !e.isComposing) void hidePanel();
 });
 
 const b = await bootstrap();
