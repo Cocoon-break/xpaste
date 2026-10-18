@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "面板窗口的基础权限",
   "windows": ["panel"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "log:default"]
 }
