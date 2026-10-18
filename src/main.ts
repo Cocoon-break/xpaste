@@ -5,15 +5,19 @@ import { onClipboardChanged, onPanelShown } from './api/events';
 const q = document.querySelector<HTMLInputElement>('#q')!;
 const status = document.querySelector<HTMLElement>('#status')!;
 const axSettings = document.querySelector<HTMLButtonElement>('#axSettings')!;
+let hiddenEvents = 0;
 
 await attachConsole();
 await onPanelShown(({ t0 }) => {
+  void info(`隐藏期间收到 ${hiddenEvents} 个事件；reduced-motion=${matchMedia('(prefers-reduced-motion: reduce)').matches}`);
+  hiddenEvents = 0;
   q.focus();
   requestAnimationFrame(() => {
     if (t0 !== null) void info(`唤起耗时 ${Date.now() - t0} ms`);
   });
 });
 await onClipboardChanged((p) => {
+  hiddenEvents++;
   void info(`剪切板变化 ${p.bytes} B sensitive=${p.sensitive}`);
 });
 document.addEventListener('keydown', (e) => {
