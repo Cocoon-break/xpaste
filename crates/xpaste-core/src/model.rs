@@ -149,7 +149,7 @@ impl fmt::Debug for Snapshot {
             .field("bitmap", &self.bitmap.as_ref().map(Vec::len))
             .field("url_title", &self.url_title.is_some())
             .field("sensitive", &self.sensitive)
-            .field("source", &self.source)
+            .field("source", &self.source.as_ref().map(|a| &a.name))
             .finish()
     }
 }
@@ -180,6 +180,10 @@ mod tests {
         let s = Snapshot {
             text: Some("secret-xyz".into()),
             file_paths: vec!["/tmp/secret.txt".into()],
+            source: Some(AppInfo {
+                id: "C:\\Users\\secret-user\\app.exe".into(),
+                name: "app".into(),
+            }),
             ..Default::default()
         };
         let out = format!("{s:?}");
@@ -187,6 +191,7 @@ mod tests {
             !out.contains("secret-xyz") && !out.contains("secret.txt"),
             "{out}"
         );
+        assert!(!out.contains("secret-user") && out.contains("app"), "{out}");
     }
 
     fn invalid(s: &Settings) -> String {

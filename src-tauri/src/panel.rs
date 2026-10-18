@@ -1,6 +1,9 @@
 use std::sync::OnceLock;
 
-use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Monitor, WebviewWindow};
+use tauri::{
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Monitor, PhysicalPosition,
+    PhysicalSize, WebviewWindow,
+};
 
 use crate::state::AppState;
 
@@ -151,8 +154,22 @@ fn place(app: &AppHandle, w: &WebviewWindow) -> tauri::Result<()> {
         h: wa.size.height as f64 / sf,
     };
     let (x, y) = place_in_work_area(work, size);
-    w.set_size(LogicalSize::new(size.0, size.1))?;
-    w.set_position(LogicalPosition::new(x, y))
+    if cfg!(target_os = "macos") {
+        // macOS 的逻辑坐标就是点，与显示器缩放无关
+        w.set_size(LogicalSize::new(size.0, size.1))?;
+        w.set_position(LogicalPosition::new(x, y))
+    } else {
+        // tao 把 Logical* 按窗口“当前”所在显示器的缩放换回物理像素，而上面按“目标”显示器换算；
+        // 混合 DPI（如主屏 150%、外接 100%）下会落到屏外，所以这里自己按目标缩放换算后传物理值
+        w.set_size(PhysicalSize::new(
+            (size.0 * sf).round() as u32,
+            (size.1 * sf).round() as u32,
+        ))?;
+        w.set_position(PhysicalPosition::new(
+            (x * sf).round() as i32,
+            (y * sf).round() as i32,
+        ))
+    }
 }
 
 fn try_show(app: &AppHandle, w: &WebviewWindow, t0: Option<u64>) -> tauri::Result<()> {

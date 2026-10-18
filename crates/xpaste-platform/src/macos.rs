@@ -11,7 +11,7 @@ use crate::{PasteBlock, PlatformError};
 
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
-    fn AXIsProcessTrusted() -> bool;
+    fn AXIsProcessTrusted() -> u8;
 }
 
 /// `kVK_ANSI_V`
@@ -127,7 +127,7 @@ pub fn write_text(text: &str) -> Result<u64, PlatformError> {
 /// macOS 只看辅助功能权限，忽略 `target`。
 pub fn can_paste(_target: Option<isize>) -> PasteBlock {
     // SAFETY: 无参数的只读查询
-    if unsafe { AXIsProcessTrusted() } {
+    if unsafe { AXIsProcessTrusted() } != 0 {
         PasteBlock::None
     } else {
         PasteBlock::NeedAccessibility

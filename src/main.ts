@@ -5,6 +5,7 @@ import { onClipboardChanged, onPanelShown } from './api/events';
 const q = document.querySelector<HTMLInputElement>('#q')!;
 const status = document.querySelector<HTMLElement>('#status')!;
 const axSettings = document.querySelector<HTMLButtonElement>('#axSettings')!;
+// 阶段 1 临时：测量用，阶段 3 移除
 let hiddenEvents = 0;
 
 await attachConsole();
@@ -29,6 +30,7 @@ document.documentElement.dataset.material = b.platform.material;
 status.textContent = `xPaste · ${b.platform.os} · 最多保存 ${b.settings.maxRecords} 条`;
 await info(`bootstrap 完成，平台 ${b.platform.os}，材质 ${b.platform.material}`);
 
+// 阶段 1 临时：测量用，阶段 3 移除
 const pasteKey = b.platform.os === 'macos' ? '⌘ + V' : 'Ctrl + V';
 document.querySelector('#pasteTest')!.addEventListener('click', async () => {
   try {
