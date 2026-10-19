@@ -1,7 +1,7 @@
 use std::cell::OnceCell;
 use std::path::Path;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{
     CloseHandle, GlobalFree, HANDLE, HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM,
@@ -9,8 +9,8 @@ use windows::Win32::Foundation::{
 use windows::Win32::Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation};
 use windows::Win32::System::DataExchange::{
     AddClipboardFormatListener, CloseClipboard, EmptyClipboard, EnumClipboardFormats,
-    GetClipboardData, GetClipboardOwner, GetClipboardSequenceNumber, OpenClipboard,
-    RegisterClipboardFormatW, SetClipboardData,
+    GetClipboardData, GetClipboardFormatNameW, GetClipboardOwner, GetClipboardSequenceNumber,
+    OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::{
@@ -31,8 +31,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLIPBOARDUPDATE, WNDCLASSW,
 };
 use windows::core::{Error, PCWSTR, PWSTR, w};
+use xpaste_core::capture::MAX_FLAVOR_BYTES;
 use xpaste_core::{AppInfo, Flavor, Snapshot};
 
+use crate::decode::normalize_newlines;
+use crate::winfmt::{
+    bitmap_from_flavors, cf_html_fragment, formats_to_read, parse_hdrop, standard_format_name,
+};
 use crate::{PasteBlock, PlatformError};
 
 pub const OS: &str = "windows";
@@ -164,7 +169,11 @@ fn with_global<R>(_guard: &ClipboardGuard, format: u32, f: impl FnOnce(&[u8]) ->
 }
 
 /// `skip_sensitive` 为真时，敏感内容只返回标记、不读取内容；为假时照常读取，仍标记 `sensitive`。
+///
+/// 读取全部格式（`winfmt::formats_to_read` 筛过的）会触发来源应用的延迟渲染；
+/// 卡顿明显时改为白名单（设计 §15），观测点是超过 100 ms 时的 info 日志。
 pub fn read_snapshot(skip_sensitive: bool) -> Result<Option<Snapshot>, PlatformError> {
+    let started = Instant::now();
     let source = frontmost_app();
     let guard = ClipboardGuard::open()?;
     // SAFETY: 参数为静态宽字符串
@@ -197,31 +206,74 @@ pub fn read_snapshot(skip_sensitive: bool) -> Result<Option<Snapshot>, PlatformE
             ..Default::default()
         }));
     }
-    let text = formats
-        .contains(&u32::from(CF_UNICODETEXT.0))
-        .then(|| {
-            with_global(
-                &guard,
-                u32::from(CF_UNICODETEXT.0),
-                crate::decode::utf16le_cstr,
-            )
-        })
-        .flatten();
+    let named: Vec<(u32, String)> = formats
+        .iter()
+        .filter_map(|&id| Some((id, format_name(id)?)))
+        .collect();
+    let mut flavors = Vec::new();
+    for (id, name) in formats_to_read(&named) {
+        let data = with_global(&guard, id, |b| {
+            if b.len() > MAX_FLAVOR_BYTES {
+                log::debug!("跳过过大的格式 {name} {} 字节", b.len());
+                None
+            } else if id == u32::from(CF_UNICODETEXT.0) {
+                Some(crate::decode::utf16le_cstr(b).1)
+            } else {
+                Some(b.to_vec())
+            }
+        });
+        if let Some(Some(data)) = data {
+            flavors.push(Flavor {
+                item: 0,
+                format: name,
+                data,
+            });
+        }
+    }
     drop(guard);
-    let mut snapshot = Snapshot {
+    let first = |name: &str| flavors.iter().find(|f| f.format == name);
+    let text = first("CF_UNICODETEXT")
+        .map(|f| normalize_newlines(&crate::decode::utf16le_cstr(&f.data).0));
+    let html = first("HTML Format").and_then(|f| cf_html_fragment(&f.data));
+    let mut file_paths = Vec::new();
+    for p in first("CF_HDROP")
+        .map(|f| parse_hdrop(&f.data))
+        .unwrap_or_default()
+    {
+        if !file_paths.contains(&p) {
+            file_paths.push(p);
+        }
+    }
+    let bitmap = file_paths
+        .is_empty()
+        .then(|| bitmap_from_flavors(&flavors))
+        .flatten();
+    let ms = started.elapsed().as_millis();
+    if ms > 100 {
+        let total: usize = flavors.iter().map(|f| f.data.len()).sum();
+        log::info!("读取剪切板 formats={} bytes={total} ms={ms}", flavors.len());
+    }
+    Ok(Some(Snapshot {
+        flavors,
+        text,
+        html,
+        file_paths,
+        bitmap,
         sensitive,
         source,
         ..Default::default()
-    };
-    if let Some((text, data)) = text {
-        snapshot.flavors.push(Flavor {
-            item: 0,
-            format: "CF_UNICODETEXT".into(),
-            data,
-        });
-        snapshot.text = Some(text);
+    }))
+}
+
+/// 格式 id 对应的名字：预定义格式查表，注册格式问系统；私有 / GDI 对象区间取不到名字，返回 `None`。
+fn format_name(id: u32) -> Option<String> {
+    if let Some(name) = standard_format_name(id) {
+        return Some(name.into());
     }
-    Ok(Some(snapshot))
+    let mut buf = [0u16; 256];
+    // SAFETY: buf 是本地缓冲区，长度随切片传入
+    let len = unsafe { GetClipboardFormatNameW(id, &mut buf) };
+    (len > 0).then(|| String::from_utf16_lossy(&buf[..len as usize]))
 }
 
 /// 剪切板所有者窗口所属进程；取不到时用前台窗口。

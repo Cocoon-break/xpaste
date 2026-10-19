@@ -5486,6 +5486,7 @@ dependencies = [
 name = "xpaste-platform"
 version = "0.1.0"
 dependencies = [
+ "image",
  "log",
  "objc2",
  "objc2-app-kit",

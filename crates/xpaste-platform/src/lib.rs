@@ -2,6 +2,7 @@
 
 pub mod decode;
 pub mod error;
+pub mod winfmt;
 pub use error::PlatformError;
 
 /// 模拟粘贴前的检查结果：不是 `None` 时只复制，提示用户手动粘贴。
