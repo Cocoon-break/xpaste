@@ -20,7 +20,7 @@ pub fn run() {
         .setup(|app| {
             let logs = app.path().data_dir()?.join("xPaste").join("logs");
             // Builder::new() 自带 Stdout + LogDir，先清掉，只留下面显式加的目标
-            let mut builder = tauri_plugin_log::Builder::new()
+            let builder = tauri_plugin_log::Builder::new()
                 .clear_targets()
                 .level(log::LevelFilter::Info)
                 .max_file_size(1_000_000)
@@ -28,12 +28,14 @@ pub fn run() {
                     path: logs,
                     file_name: None,
                 }));
-            #[cfg(debug_assertions)]
-            {
-                builder = builder
+            // 开发构建额外输出到终端和 WebView 控制台
+            let builder = if cfg!(debug_assertions) {
+                builder
                     .target(Target::new(TargetKind::Stdout))
-                    .target(Target::new(TargetKind::Webview));
-            }
+                    .target(Target::new(TargetKind::Webview))
+            } else {
+                builder
+            };
             app.handle().plugin(builder.build())?;
             log::info!("xPaste 启动，平台 {}", xpaste_platform::OS);
             #[cfg(target_os = "macos")]

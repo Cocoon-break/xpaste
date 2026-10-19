@@ -1,0 +1,64 @@
+# xPaste 开发入口。CI 调用同样的目标，本地与流水线行为一致。
+# 用法：make help
+
+SHELL := /bin/bash
+.DEFAULT_GOAL := help
+
+# Windows 交叉检查只在装了该 target 时执行（rustup target add x86_64-pc-windows-msvc）
+WIN_TARGET := x86_64-pc-windows-msvc
+HAS_WIN_TARGET := $(shell rustup target list --installed 2>/dev/null | grep -c $(WIN_TARGET))
+
+.PHONY: help install dev fmt lint test-rust test-web test check build build-check release release-app clean
+
+help: ## 列出可用目标
+	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{ printf "  %-14s %s\n", $$1, $$2 }'
+
+install: ## 安装前端依赖
+	pnpm install --frozen-lockfile
+
+dev: ## 启动开发版（热更新）
+	pnpm tauri dev
+
+fmt: ## 格式化 Rust 代码
+	cargo fmt --all
+
+lint: ## 格式检查 + clippy（含 Windows 交叉检查，若已安装 target）+ 版本号一致性
+	cargo fmt --all --check
+	cargo clippy --workspace --all-targets -- -D warnings
+	cargo clippy --workspace --release -- -D warnings
+ifneq ($(HAS_WIN_TARGET),0)
+	cargo clippy -p xpaste-platform --all-targets --target $(WIN_TARGET) -- -D warnings
+endif
+	pnpm check:version
+
+test-rust: ## Rust 单元测试（三个 crate）
+	cargo test --workspace
+
+test-web: ## 前端单元测试（自动发现 src/**/*.test.ts）
+	pnpm test
+
+test: test-rust test-web ## 全部单元测试
+
+check: lint test build ## 全量检查：lint + 测试 + 前端构建（提交前跑这个）
+
+build: ## 构建前端（tsc + vite）
+	pnpm build
+
+build-check: ## 编译应用但不打安装包（CI 用）
+	pnpm tauri build --no-bundle
+
+release: ## 打发布包（未签名）：macOS 产出 .app + .dmg，Windows 产出 NSIS 安装程序
+	pnpm tauri build
+	@$(MAKE) --no-print-directory release-report
+
+release-app: ## 只打 .app（macOS；dmg 脚本依赖 Finder 自动化，受限环境下用这个）
+	pnpm tauri build --bundles app
+	@$(MAKE) --no-print-directory release-report
+
+release-report: ## 列出产物及大小
+	@echo "== 产物 =="
+	@find target/release/bundle -maxdepth 2 \( -name '*.app' -o -name '*.dmg' -o -name '*.exe' -o -name '*.msi' \) -print0 2>/dev/null | xargs -0 -I{} du -sh "{}" || true
+
+clean: ## 清理构建产物
+	cargo clean
+	rm -rf dist

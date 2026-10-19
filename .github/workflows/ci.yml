@@ -1,5 +1,5 @@
 name: CI
-on: { push: { branches: [main] }, pull_request: {} }
+on: { push: { branches: [main, dev] }, pull_request: {} }
 jobs:
   build:
     strategy:
@@ -15,11 +15,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with: { components: "rustfmt, clippy" }
       - uses: swatinem/rust-cache@v2
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm check:version
-      - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
-      - run: pnpm build
-      - run: pnpm test
-      - run: pnpm tauri build --no-bundle
+      - run: make install
+      - run: make check
+      - run: make build-check

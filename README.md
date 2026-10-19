@@ -16,11 +16,17 @@ macOS / Windows 剪切板历史工具。
 
 ## 开发
 
-需要 Node.js、pnpm 和 Rust ≥ 1.90。
+需要 Node.js、pnpm 和 Rust ≥ 1.90。统一通过 `make` 操作，`make help` 列出全部目标：
 
 ```sh
-pnpm install
-pnpm tauri dev     # 开发运行
-pnpm tauri build   # 打包安装包
-pnpm check:version # 校验 package.json 与 Cargo 版本一致（CI 也会执行）
+make install   # 安装依赖
+make dev       # 开发运行
+make check     # 提交前全量检查：格式、clippy、Rust + 前端单元测试、前端构建
+make test      # 只跑单元测试
+make release   # 打发布包（未签名）
 ```
+
+## 分支
+
+- `dev`：日常开发分支，所有改动先进这里。
+- `main`：功能验收通过后才从 `dev` 合并。
