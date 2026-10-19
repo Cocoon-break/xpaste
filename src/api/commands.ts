@@ -2,7 +2,8 @@ import { invoke } from '@tauri-apps/api/core';
 import type { Appearance, Bootstrap, CopyResult, RecordDetail, Settings } from './types';
 
 export const bootstrap = () => invoke<Bootstrap>('bootstrap');
-export const hidePanel = () => invoke<void>('hide_panel');
+/** `animate`：没有开减少动态效果；macOS 系统材质下后端据此原生淡出整个窗口。 */
+export const hidePanel = (animate: boolean) => invoke<void>('hide_panel', { animate });
 export const copy = (id: number, paste: boolean) => invoke<CopyResult>('copy', { id, paste });
 export const copyText = (text: string) => invoke<void>('copy_text', { text });
 export const openAccessibilitySettings = () => invoke<void>('open_accessibility_settings');

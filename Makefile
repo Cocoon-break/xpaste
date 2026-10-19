@@ -50,17 +50,24 @@ build: ## 构建前端（tsc + vite）
 build-check: ## 编译应用但不打安装包（CI 用）
 	pnpm tauri build --no-bundle
 
-release: ## 打发布包（未签名）：macOS 产出 .app + .dmg，Windows 产出 NSIS 安装程序
-	pnpm tauri build
+# CI=true：Tauri 打 dmg 时检测到它会给 bundle_dmg.sh 加 --skip-jenkins，跳过 Finder AppleScript
+# 窗口布局（阶段 1 在这里超时 -1712），无界面环境也能完成；代价是 dmg 打开后没有图标摆位，
+# “应用程序”快捷方式仍在。
+release: ## 打发布包（未签名）：macOS 产出 .dmg（Tauri 打完会清掉 bundle/macos 下的 .app），Windows 产出 NSIS 安装程序
+	CI=true pnpm tauri build
 	@$(MAKE) --no-print-directory release-report
 
-release-app: ## 只打 .app（macOS；dmg 脚本依赖 Finder 自动化，受限环境下用这个）
+release-app: ## 只打 .app（macOS，测量用，比 release 快）
 	pnpm tauri build --bundles app
 	@$(MAKE) --no-print-directory release-report
 
 release-report: ## 列出产物及大小
 	@echo "== 产物 =="
-	@find target/release/bundle -maxdepth 2 \( -name '*.app' -o -name '*.dmg' -o -name '*.exe' -o -name '*.msi' \) -print0 2>/dev/null | xargs -0 -I{} du -sh "{}" || true
+	@find target/release/bundle -maxdepth 2 \( -name '*.app' -o -name '*.dmg' -o -name '*.exe' -o -name '*.msi' \) 2>/dev/null | while read -r f; do \
+	  h=$$(du -sh "$$f" | cut -f1); \
+	  if [ -d "$$f" ]; then echo "$$f  $$h  $$(du -sk "$$f" | cut -f1) KiB"; \
+	  else echo "$$f  $$h  $$(wc -c < "$$f" | tr -d ' ') B"; fi; \
+	done || true
 
 measure: ## macOS 性能与可靠性测量（先 make release-app；离开电脑时运行，约 15 分钟）
 	bash scripts/measure.sh all
