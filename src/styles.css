@@ -535,7 +535,7 @@ dialog > form { display: contents; }
   display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 38px; padding: 5px 6px 5px 8px; border-radius: 10px;
   border: 1px solid var(--line-2); background: var(--well); cursor: text; transition: border-color 160ms ease, box-shadow 160ms ease;
 }
-.apps-box:focus-within { border-color: var(--beam); box-shadow: 0 0 0 3px color-mix(in srgb, var(--beam) 18%, transparent); }
+.apps-box:has(input:focus-visible) { border-color: var(--beam); box-shadow: 0 0 0 3px color-mix(in srgb, var(--beam) 18%, transparent); }
 #ignoreChips { display: contents; }
 .apps-box input { flex: 1 1 140px; width: auto; height: 26px; padding: 0 4px; border: 0; border-radius: 0; background: transparent; text-overflow: ellipsis; }
 .apps-box input:focus-visible { box-shadow: none; }

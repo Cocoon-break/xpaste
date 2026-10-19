@@ -1035,20 +1035,24 @@ function paintChips(from = Infinity) {
     .join('');
   [...ignoreChips.children].slice(from).forEach((c) => fx(c, [{ transform: 'scale(.9)' }, { transform: 'scale(1)' }], { duration: 220, easing: EASE_SPRING }));
 }
-function setAppActive(i: number) {
+// 只有键盘移动才滚动：悬停时滚动会让列表在鼠标下面爬
+function setAppActive(i: number, scroll = true) {
   appActive = i;
   [...ignoreList.children].forEach((li, j) => li.setAttribute('aria-selected', String(j === i)));
   if (i < 0) return ignoreIn.removeAttribute('aria-activedescendant');
   ignoreIn.setAttribute('aria-activedescendant', `app-opt-${i}`);
-  ignoreList.children[i].scrollIntoView({ block: 'nearest' });
+  if (scroll) ignoreList.children[i].scrollIntoView({ block: 'nearest' });
 }
 // 有候选才展开
 function paintAppList(open: boolean) {
+  const wasHidden = ignoreList.hidden;
   appOpts = open ? pickerOptions(allApps, draftIgnored, ignoreIn.value) : [];
   ignoreList.innerHTML = appOpts.map((n, i) => `<li role="option" id="app-opt-${i}" aria-selected="false">${esc(n)}</li>`).join('');
   ignoreList.hidden = appOpts.length === 0;
   ignoreIn.setAttribute('aria-expanded', String(!ignoreList.hidden));
   setAppActive(-1);
+  // 刚展开时整张列表滚入对话框中部滚动区，免得下半截压在页脚下面
+  if (wasHidden && !ignoreList.hidden) ignoreList.scrollIntoView({ block: 'nearest' });
 }
 function addApps(text: string) {
   const from = draftIgnored.length;
@@ -1088,13 +1092,14 @@ ignoreIn.addEventListener('keydown', (e) => {
     paintAppList(!ignoreList.hidden);
   }
 });
-// pointerdown 不抢焦点：点候选时输入框不失焦、列表不先收起
+// 点候选不抢焦点：输入框不失焦、列表不先收起。Chromium / WebView2 只拦 pointerdown 不够，mousedown 也要拦
 ignoreList.addEventListener('pointerdown', (e) => e.preventDefault());
+ignoreList.addEventListener('mousedown', (e) => e.preventDefault());
 // 悬停即高亮：鼠标与键盘共用一个高亮项，Enter 加的就是看到的那项
 ignoreList.addEventListener('pointermove', (e) => {
   const li = (e.target as Element).closest('[role="option"]');
   const i = li ? [...ignoreList.children].indexOf(li) : -1;
-  if (i >= 0 && i !== appActive) setAppActive(i);
+  if (i >= 0 && i !== appActive) setAppActive(i, false);
 });
 ignoreList.addEventListener('click', (e) => {
   const li = (e.target as Element).closest('[role="option"]');
