@@ -35,7 +35,7 @@ test('M20-1 首次打开面板 720ms 上浮缩放 → 光柱 barIn 620ms spring�
   assert.match(ts, /runSearch\('', first \? \{ stagger: true, base: 260 \} : \{\}\)/);
 });
 
-test('M20-2 快捷键唤起 90ms enter / 隐藏 160ms ease-out 淡出（有意偏差：系统材质下淡出只位移不缩放，同 v0.5.1）', () => {
+test('M20-2 快捷键唤起 90ms enter / 隐藏 160ms ease-out 淡出（有意偏差：系统材质下淡出只位移不缩放，同 v0.5.1；系统材质下只有内容淡出，窗口本体 160 ms 后直接消失，原生 alpha 淡出留待合并后补）', () => {
   assert.match(rule('.window[data-shown="true"]'), /transition: opacity 90ms var\(--ease-enter\), transform 120ms var\(--ease-spring\)/);
   assert.match(rule('.window[data-shown="false"]'), /opacity: 0;[^}]*transition: opacity 140ms ease-out, transform 160ms ease-out/);
   assert.match(rule(':root:not([data-material="opaque"]) .window[data-shown="false"]'), /transform: translateY\(10px\);/);
@@ -73,7 +73,7 @@ test('M20-6 切换分类 380ms enter，指示条换色，列表逐行浮现；�
 
 test('M20-7 新记录 300ms enter 行高展开、下方行补位 → 520ms spring 落位 → 类型色闪光；新光柱升起 + ping', () => {
   assert.match(rule('.item'), /transition: grid-template-rows 300ms var\(--ease-enter\)/);
-  assert.match(css, /@starting-style \{\s*\.item\.is-new \{ grid-template-rows: 0fr; \}/);
+  assert.match(css, /@starting-style \{\s*\.item\.is-new \{ grid-template-rows: 0fr; \}\s*\.item\.is-new \.row \{ opacity: 0; transform: translateY\(-12px\) scale\(\.97\); \}\s*\}/);
   assert.match(rule('.item.is-new .row'), /transition: opacity 260ms var\(--ease-enter\) 60ms, transform 520ms var\(--ease-spring\) 60ms; animation: flash 1400ms ease-out 200ms/);
   // 旧 WebKit 没有 @starting-style 的兜底，同样 520ms spring
   assert.match(ts, /fx\(row, \[\{ transform: 'translateY\(-12px\) scale\(\.97\)' \}, \{ transform: 'none' \}\], \{ duration: 520, easing: EASE_SPRING, delay: 60, fill: 'backwards' \}\)/);
@@ -177,20 +177,31 @@ test('原则 3 减少动态效果：CSS 全局规则 + fx() 与直接 WAAPI 调�
   for (const ms of [160, 150, 360]) assert.match(ts, new RegExp(`reduced\\.matches \\? 0 : ${ms}\\)`));
 });
 
-test('原则 4 只动 transform / opacity / filter 与颜色类属性，不过渡布局尺寸（行高 grid-template-rows 除外）', () => {
-  // 只看属性名：过渡取每段的第一个词，关键帧取声明的属性（box-shadow 的 inset 关键字不算）
-  const LAYOUT = /^(?:width|height|top|left|right|bottom|inset|margin[\w-]*|padding[\w-]*|font-size|grid-template-columns|all)$/;
-  const props = (t: string) => t.split(',').map((x) => x.trim().split(/\s+/)[0]);
-  const transitions = [...css.matchAll(/(?:^|[;{\s])transition(?:-property)?:\s*([^;}]+)/g)].map((m) => m[1]);
-  assert.ok(transitions.length > 20);
-  assert.deepEqual(transitions.filter((t) => props(t).some((p) => LAYOUT.test(p))), []);
+test('原则 4 只动 transform / opacity / filter 与颜色类属性（白名单），不过渡布局尺寸（行高 grid-template-rows 只限 .item / .item.is-removing）', () => {
+  const OK = new Set(['none', 'opacity', 'transform', 'filter', 'clip-path', 'color', 'background-color', 'border-color', 'box-shadow', 'visibility', 'stroke-dashoffset']);
+  const ROW_H = new Set(['.item', '.item.is-removing']);
+  // 逗号分段时跳过括号里的逗号（cubic-bezier(.22, 1, …)），每段第一个词是属性
+  const props = (t: string) => t.split(/,(?![^(]*\))/).map((x) => x.trim().split(/\s+/)[0]);
+  const bad: string[] = [];
+  let n = 0;
+  for (const [, raw, body] of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const sel = raw.replace(/\/\*[\s\S]*?\*\//g, '');
+    for (const [, t] of body.matchAll(/(?:^|[;\s])transition(?:-property)?:\s*([^;}]+)/g)) {
+      n++;
+      for (const p of props(t)) if (!OK.has(p) && !(p === 'grid-template-rows' && ROW_H.has(sel.trim()))) bad.push(`${sel.trim()} → ${p}`);
+    }
+  }
+  assert.ok(n > 40, `只解析到 ${n} 条 transition`);
+  assert.deepEqual(bad, []);
+  // 关键帧：flash 的 background 只是颜色（color-mix），不改尺寸
+  const KF_OK = new Set(['opacity', 'transform', 'filter', 'box-shadow', 'background']);
   const kfs = [...css.matchAll(/@keyframes (\w+) \{([\s\S]*?\})\s*\}/g)];
   assert.equal(kfs.length, css.match(/@keyframes /g)!.length);
-  assert.deepEqual(kfs.filter((m) => [...m[2].matchAll(/([\w-]+)\s*:/g)].some((d) => LAYOUT.test(d[1]))).map((m) => m[1]), []);
+  assert.deepEqual(kfs.flatMap((m) => [...m[2].matchAll(/([\w-]+)\s*:/g)].map((d) => d[1]).filter((p) => !KF_OK.has(p)).map((p) => `${m[1]} → ${p}`)), []);
   // main.ts 里内联的过渡与 WAAPI 关键帧
   const inline = [...ts.matchAll(/\.style\.transition = `([^`]*)`/g)].map((m) => m[1]);
   assert.ok(inline.length);
-  assert.deepEqual(inline.filter((t) => props(t).some((p) => LAYOUT.test(p))), []);
+  assert.deepEqual(inline.flatMap(props).filter((p) => !OK.has(p)), []);
   const waapiKeys = [...ts.matchAll(/(?:fx\(\w+(?:\.querySelector\([^)]*\))?, |\.animate\()\[([^\]]*)\]/g)].flatMap((m) => [...m[1].matchAll(/(\w+):/g)].map((k) => k[1]));
   assert.ok(waapiKeys.length > 10);
   assert.deepEqual([...new Set(waapiKeys)].filter((k) => !['transform', 'opacity', 'filter', 'strokeDashoffset'].includes(k)), []);
