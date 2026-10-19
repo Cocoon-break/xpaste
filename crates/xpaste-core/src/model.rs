@@ -168,6 +168,38 @@ impl Snapshot {
     }
 }
 
+/// 待入库的一条记录（设计 5.3）。`Debug` 同 `Snapshot` 脱敏，不输出标题、正文、路径。
+pub struct NewRecord {
+    pub hash: [u8; 32],
+    pub kind: Kind,
+    pub title: String,
+    pub text: Option<String>,
+    pub paths: Vec<PathBuf>,
+    pub link_title: Option<String>,
+    pub lang: Option<&'static str>,
+    pub size: u64,
+    pub meta: Option<serde_json::Value>,
+    pub search_text: String,
+    pub app: Option<AppInfo>,
+    pub flavors: Vec<Flavor>,
+    pub bitmap: Option<Vec<u8>>,
+}
+
+impl fmt::Debug for NewRecord {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NewRecord")
+            .field("kind", &self.kind)
+            .field("size", &self.size)
+            .field("flavors", &self.flavors.len())
+            .field("paths", &self.paths.len())
+            .field("text", &self.text.is_some())
+            .field("bitmap", &self.bitmap.is_some())
+            .field("lang", &self.lang)
+            .field("app", &self.app.as_ref().map(|a| &a.name))
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
