@@ -1,10 +1,11 @@
 import './styles.css';
 import { attachConsole, info } from './api/log';
 import {
-  accessibilityGranted, bootstrap, copy, copyText, deleteRecord, getRecord, hidePanel, openUrl, prunePreview, requestAccessibility, revealFile,
+  accessibilityGranted, bootstrap, clearHistory, copy, copyText, countUnpinned, deleteRecord, getRecord, hidePanel, openUrl, prunePreview, requestAccessibility, revealFile,
   saveSettings, search, setPaused, setPinned, undoDelete,
 } from './api/commands';
 import {
+  onConfirmClear,
   onOpenSettings,
   onPanelHidden,
   onPanelHideRequested,
@@ -574,14 +575,19 @@ function renderTabs(instant: boolean) {
   });
   if (instant) b.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
-// 分类记忆（M06）：写进 settings.lastFilter，失败不提示
+// 分类记忆（M06）：写进 settings.lastFilter，失败不提示。
+// 防抖 300ms：按住 Mod+←/→ 连续切换时只写最后落定的分类；成功后只合并 lastFilter，不回滚同时进行的设置保存
+let filterTimer = 0;
 function persistFilter() {
-  if (S.settings.lastFilter === S.filter) return;
-  const s = { ...S.settings, lastFilter: S.filter };
-  saveSettings(s).then(
-    () => void (S.settings = s),
-    (e: AppError) => void info(`保存分类失败 kind=${e.kind}`),
-  );
+  clearTimeout(filterTimer);
+  filterTimer = window.setTimeout(() => {
+    const f = S.filter;
+    if (S.settings.lastFilter === f) return;
+    saveSettings({ ...S.settings, lastFilter: f }).then(
+      () => void (S.settings = { ...S.settings, lastFilter: f }),
+      (e: AppError) => void info(`保存分类失败 kind=${e.kind}`),
+    );
+  }, 300);
 }
 function setFilter(k: Filter, instant: boolean) {
   if (S.filter === k) return;
@@ -906,9 +912,67 @@ const handlers = {
   },
 };
 
+// —— 确认框 ——
+// 与设置对话框同一套弹入 / 150ms 收起。Esc / 取消 / 遮罩 → false，#cfOk → true；
+// 结果在点击时就交出去（调用方不必等收起动画），面板隐藏时直接 close 也按 false 结算。
+// 同一时间只有一个确认框：已有一个在等待时，新的请求直接得到 false
+const cfDlg = $<HTMLDialogElement>('#confirm'), cfOk = $<HTMLButtonElement>('#cfOk');
+let cfResolve: ((ok: boolean) => void) | null = null, cfReturn: HTMLElement | null = null, cfTimer = 0;
+function confirm({ title, body, ok, danger = false }: { title: string; body: string; ok: string; danger?: boolean }) {
+  if (cfResolve) return Promise.resolve(false);
+  clearTimeout(cfTimer);
+  // 收起途中再次打开：沿用最初的返回焦点
+  if (!cfDlg.open) cfReturn = document.activeElement as HTMLElement | null;
+  $('#cf-title').textContent = title;
+  $('#cfBody').textContent = body;
+  cfOk.textContent = ok;
+  cfOk.className = `btn ${danger ? 'danger' : 'primary'}`;
+  if (!cfDlg.open) cfDlg.showModal();
+  void cfDlg.offsetWidth;
+  cfDlg.classList.add('is-shown');
+  $('#cfCancel').focus();
+  return new Promise<boolean>((r) => (cfResolve = r));
+}
+function settleConfirm(ok: boolean) {
+  cfResolve?.(ok);
+  cfResolve = null;
+}
+function closeConfirm(ok: boolean) {
+  settleConfirm(ok);
+  cfDlg.classList.remove('is-shown');
+  clearTimeout(cfTimer);
+  cfTimer = window.setTimeout(() => cfDlg.close(), reduced.matches ? 0 : 150);
+}
+cfDlg.addEventListener('close', () => {
+  cfDlg.classList.remove('is-shown');
+  settleConfirm(false);
+  if (S.shown && cfReturn?.isConnected) cfReturn.focus({ preventScroll: true });
+  cfReturn = null;
+});
+cfDlg.addEventListener('cancel', (e) => {
+  e.preventDefault();
+  closeConfirm(false);
+});
+let cfDownOnBackdrop = false;
+cfDlg.addEventListener('pointerdown', (e) => (cfDownOnBackdrop = e.target === cfDlg));
+cfDlg.addEventListener('click', (e) => {
+  const t = e.target as Element;
+  if (t.closest('#cfOk')) closeConfirm(true);
+  else if (t.closest('#cfCancel') || (t === cfDlg && cfDownOnBackdrop)) closeConfirm(false);
+});
+// 托盘“清空历史…”：后端已先唤起面板。置顶记录保留；列表由 records-removed 更新，toast 顺带清掉待撤销状态
+async function confirmClear() {
+  try {
+    const n = await countUnpinned();
+    if (n === 0) return toast('没有可删除的记录');
+    if (!(await confirm({ title: '清空历史', body: `将删除 ${n} 条未置顶的记录，置顶记录会保留`, ok: `删除 ${n} 条记录`, danger: true }))) return;
+    toast(`已删除 ${await clearHistory()} 条记录`, { icon: 'trash' });
+  } catch (e) {
+    toast((e as AppError).message);
+  }
+}
+
 // —— 设置 ——
-// Task 5 替换为真正的确认对话框
-const confirm = async (_: { title: string; body: string; ok: string; danger?: boolean }) => true;
 const dlg = $<HTMLDialogElement>('#settings'), form = $<HTMLFormElement>('#settingsForm'), hotkeyIn = $<HTMLInputElement>('#hotkey');
 const hotkeyHelp = $('#hotkeyHelp'), retainIn = $<HTMLSelectElement>('#retain'), limitIn = $<HTMLInputElement>('#limit'), limitErr = $('#limitErr');
 const ignoreIn = $<HTMLInputElement>('#ignore'), sensitiveIn = $<HTMLInputElement>('#sensitive');
@@ -1037,7 +1101,8 @@ hotkeyIn.addEventListener('blur', () => setHotkeyHelp(HOTKEY_IDLE));
 hotkeyIn.addEventListener('keydown', (e) => {
   if (e.key === 'Tab' || e.key === 'Escape') return;
   e.preventDefault();
-  if (['Control', 'Meta', 'Shift', 'Alt'].includes(e.key)) return;
+  // 按住不放的重复事件不重播弹跳与提示
+  if (e.repeat || ['Control', 'Meta', 'Shift', 'Alt'].includes(e.key)) return;
   const h = hotkeyFromEvent({ key: e.key, code: e.code, mod: e.ctrlKey || e.metaKey, alt: e.altKey, shift: e.shiftKey, repeat: e.repeat });
   if (!h) return setHotkeyHelp(`至少需要包含 ${MOD} 或 Alt`);
   pendingHotkey = h;
@@ -1201,6 +1266,7 @@ await onRecordsRemoved((ids) => handlers.removed(ids));
 await onPausedChanged((p) => handlers.paused(p));
 // 托盘“设置…”：后端已先唤起面板
 await onOpenSettings(openSettings);
+await onConfirmClear(() => void confirmClear());
 
 const b = await bootstrap().catch((e: AppError) => {
   // 之后的每次 renderList 都显示这条，不被空列表文案覆盖
