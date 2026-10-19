@@ -27,6 +27,7 @@ import { hotkeyFromEvent, hotkeyLabel } from './hotkey';
 import { keyAction } from './keymap';
 import { nextStep, onboardSteps, type Step } from './onboarding';
 import { applyAdded, applyRemoved, applyUpdated } from './records';
+import { layoutBars, spectrumStat, staggerIndex, xPct, type Layout } from './spectrum';
 import { formToSettings, joinIgnored, optionFromRetention, parseLimit } from './settings-form';
 import {
   armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, nextSelection, UNDO_MS, visible, type UndoState,
@@ -86,7 +87,6 @@ const instantly = (el: HTMLElement, on: boolean, fn: () => void) => {
 };
 const nf2 = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const hf = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
-const DAY = 864e5;
 
 // —— 元素 ——
 const win = $('#win'), list = $('#list'), rowsEl = $('#rows'), ind = $('#ind'), q = $<HTMLInputElement>('#q'), clearQ = $('#clearQ');
@@ -502,49 +502,47 @@ function renderPreview(fade = false) {
 }
 
 // —— 复制频谱 ——
-// 左侧 6% 是“更早”区，其余 94% 映射最近 24 小时
-const xOf = (at: number) => {
-  const age = Date.now() - at;
-  if (age > DAY) return Math.max(1, 5 - ((Math.min(age, 7 * DAY) - DAY) / (6 * DAY)) * 4);
-  return Math.min(99.4, 6 + 94 * (1 - age / DAY));
-};
-const hOf = (r: RecordSummary) => 16 + Math.min(1, Math.log10(Math.max(10, r.size)) / 8) * 84;
+// 每 2px 一列、一列一根光柱（spectrum.ts）；sp 是当前布局，spNow 是布局用的时刻，游标按同一时刻定位
+let sp: Layout = { bars: [], colOf: new Map() };
+let spNow = Date.now();
+let spOn: Element | null = null;
 function renderSpectrum(freshId?: number) {
-  const nowT = Date.now();
-  const sorted = [...S.records.values()].filter((r) => nowT - r.copiedAt <= 7 * DAY).sort((a, b) => a.copiedAt - b.copiedAt);
-  spBars.innerHTML = sorted.map((r, i) =>
-    `<span class="bar${r.id === freshId ? ' fresh' : ''}" data-id="${r.id}" data-type="${r.kind}" style="left:${xOf(r.copiedAt)}%;height:${hOf(r)}%;--i:${i}"></span>`).join('');
-  const ticks: [number, string][] = [[3, '更早'], ...[18, 12, 6].map((h): [number, string] => [6 + 94 * (1 - h / 24), hf.format(nowT - h * 3600e3)]), [100, '现在']];
+  spNow = Date.now();
+  sp = layoutBars(S.records.values(), spNow, spTrack.clientWidth, matches, freshId);
+  const n = sp.bars.length;
+  spBars.innerHTML = sp.bars.map((b, i) =>
+    `<span class="bar${b.dim ? ' dim' : ''}${b.fresh ? ' fresh' : ''}" data-col="${i}" data-type="${b.kind}" style="left:${b.x}%;height:${b.h}%;--i:${staggerIndex(i, n)}"></span>`).join('');
+  spOn = null;
+  const ticks: [number, string][] = [[3, '更早'], ...[18, 12, 6].map((h): [number, string] => [6 + 94 * (1 - h / 24), hf.format(spNow - h * 3600e3)]), [100, '现在']];
   $('#spAxis').innerHTML = ticks.map(([x, l]) => `<span style="left:${x}%">${l}</span>`).join('');
-  const day = sorted.filter((r) => nowT - r.copiedAt <= DAY);
-  const hours: Record<number, number> = {};
-  day.forEach((r) => {
-    const h = new Date(r.copiedAt).getHours();
-    hours[h] = (hours[h] || 0) + 1;
-  });
-  const peak = Object.entries(hours).sort((a, b) => b[1] - a[1])[0];
-  $('#spStat').textContent = `24 小时内复制 ${fmtInt(day.length)} 次${peak && peak[1] > 1 ? ` · 最忙 ${peak[0]} 点（${peak[1]} 次）` : ''}`;
+  const { count, peak } = spectrumStat(S.records.values(), spNow);
+  $('#spStat').textContent = `24 小时内复制 ${fmtInt(count)} 次${peak ? ` · 最忙 ${peak.hour} 点（${peak.n} 次）` : ''}`;
   paintSpectrumSel(false);
 }
+// 只换上一根和这一根的 .on；变暗由布局决定，筛选变化时重绘
 function paintSpectrumSel(animate = true) {
-  spBars.querySelectorAll<HTMLElement>('.bar').forEach((b) => {
-    const r = S.records.get(Number(b.dataset.id));
-    b.classList.toggle('on', r?.id === S.sel);
-    b.classList.toggle('dim', !!r && !matches(r));
-  });
   const r = S.sel === null ? undefined : S.records.get(S.sel);
+  const col = r && sp.colOf.get(r.id);
+  const b = col === undefined ? null : spBars.children[col] ?? null;
+  if (b !== spOn) {
+    spOn?.classList.remove('on');
+    b?.classList.add('on');
+    spOn = b;
+  }
   // 超过 7 天的记录没有光柱，游标不指向空处
-  if (!r || !spBars.querySelector(`.bar[data-id="${r.id}"]`)) {
+  if (!r || !b) {
     spCursor.style.opacity = '0';
     return;
   }
   spCursor.style.transitionDuration = animate && !reduced.matches ? '' : '0ms';
-  spCursor.style.transform = `translateX(${(spTrack.clientWidth * xOf(r.copiedAt)) / 100}px)`;
+  // 用选中记录自己的位置，不用所在列代表记录的
+  spCursor.style.transform = `translateX(${(spTrack.clientWidth * (xPct(spNow - r.copiedAt) ?? 1)) / 100}px)`;
   spCursor.style.opacity = '1';
 }
 const barOf = (e: Event) => {
   const b = (e.target as Element).closest<HTMLElement>('.bar');
-  const r = b ? S.records.get(Number(b.dataset.id)) : undefined;
+  const bar = b ? sp.bars[Number(b.dataset.col)] : undefined;
+  const r = bar && S.records.get(bar.id);
   return b && r ? { b, r } : null;
 };
 spTrack.addEventListener('pointerover', (e) => {
@@ -616,6 +614,8 @@ function setFilter(k: Filter, instant: boolean) {
   // M06 规则 6：切换分类后回到顶部并选中第一条
   list.scrollTop = 0;
   S.sel = null;
+  // 先重绘频谱（变暗随分类变），再由 renderList 的选中移动游标
+  renderSpectrum();
   renderList({ stagger: !instant });
   paintSpectrumSel(!instant);
 }
@@ -646,6 +646,7 @@ function runSearch(v: string, opts: { stagger?: boolean; base?: number } = {}) {
   fetchMatches(v, () => {
     list.scrollTop = 0;
     S.sel = null;
+    renderSpectrum();
     renderList(opts);
   });
 }
@@ -776,7 +777,9 @@ function remove(id: number) {
   }
   // 下方的行与 .item.is-removing 的收起同步上移一行（滚到底时整体按夹紧量修正，见 goneOf）
   paintRows({ glide: `transform 240ms ${EASE_MOVE} 100ms`, glideBusy: `transform 240ms ${EASE_MOVE}` });
-  const bar = spBars.querySelector(`.bar[data-id="${id}"]`);
+  // 光柱只代表这一条时才收起；同列还有别的记录就等删除后的重绘
+  const col = sp.colOf.get(id);
+  const bar = col !== undefined && sp.bars[col].ids.length === 1 ? spBars.children[col] ?? null : null;
   fx(bar, [{ transform: 'scaleY(1)', opacity: 1 }, { transform: 'scaleY(0)', opacity: 0 }], { duration: 260, easing: EASE_MOVE, fill: 'forwards' });
   // 光标目标是下一条补位后的位置：同组时就是被删行的位置，光标停住、下一条滑进来（原型 1384–1393）
   select(next, { scroll: true, indDur: 340 });
@@ -1318,8 +1321,9 @@ const shown = (t0: number | null) => {
   q.value = '';
   q.focus();
   // 隐藏期间不刷新相对时间与分组，唤起时补一次；首次唤起逐行浮现（启动时窗口还不可见，不在那时播）
+  // 空查询同步完成，runSearch 里已按当前宽度与时刻重绘频谱；这里只让游标直接落位、不滑
   runSearch('', first ? { stagger: true, base: 260 } : {});
-  renderSpectrum();
+  paintSpectrumSel(false);
   // 引导没结束就被隐藏过：从当前步继续
   openOnboard();
   if (import.meta.env.DEV && t0 !== null) {
@@ -1622,11 +1626,17 @@ matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
   void root.offsetWidth;
   requestAnimationFrame(() => root.removeAttribute('data-theme-switching'));
 });
+// 列数随轨道宽度变，一帧内的多次 resize 只重排一次频谱
+let spRaf = 0;
 addEventListener('resize', () => {
   renderTabs(true);
   paintRows();
   paintSpectrumSel(false);
   moveInd({ instant: true });
+  if (!spRaf) spRaf = requestAnimationFrame(() => {
+    spRaf = 0;
+    renderSpectrum();
+  });
 });
 setInterval(() => {
   if (S.shown && !menuOpen() && !S.removing.size) {
