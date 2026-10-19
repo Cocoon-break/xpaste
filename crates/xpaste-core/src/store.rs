@@ -1034,6 +1034,7 @@ pub(crate) mod tests {
         // 置顶记录位置不变
         s.set_pinned(a, true).unwrap();
         s.bump_use(a, true, 20).unwrap();
-        assert_eq!(s.list_summaries().unwrap()[0].copied_at, 10);
+        let l = s.list_summaries().unwrap();
+        assert_eq!((l[0].id, l[0].uses, l[0].copied_at), (a, 3, 10));
     }
 }

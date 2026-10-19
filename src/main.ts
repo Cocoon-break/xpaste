@@ -973,7 +973,7 @@ document.addEventListener('keydown', (e) => {
     case 'copy': return void (sel !== null && copyRecord(sel));
     case 'copyIndex': {
       const r = vis()[a.i];
-      if (r) {
+      if (r && !S.removing.has(r.id)) {
         select(r.id);
         copyRecord(r.id);
       }
