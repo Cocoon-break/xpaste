@@ -358,19 +358,22 @@ pub fn remember_size(app: &AppHandle) {
             Err(e) => return log::warn!("读取面板尺寸失败：{e}"),
         };
         let state = app.state::<AppState>();
-        let s = {
-            let mut s = state.settings();
-            // 显示时 place() 按设置改尺寸也会触发 Resized，尺寸没变就不写
-            if s.panel_size == size {
-                return;
-            }
-            s.panel_size = size;
-            s.clone()
-        };
+        // 持 settings 锁写库，并发的 save_settings 不会被这里的旧字段覆盖（锁序 settings → store，无反向路径）
+        let mut s = state.settings();
+        // 显示时 place() 按设置改尺寸也会触发 Resized，尺寸没变就不写
+        if same_size(s.panel_size, size) {
+            return;
+        }
+        s.panel_size = size;
         if let Err(e) = state.store().save_settings(&s) {
             log::warn!("保存面板尺寸失败：{e}");
         }
     });
+}
+
+/// 逻辑尺寸相差不超过 1 px 视为相同（分数缩放下物理像素换算有舍入）。
+fn same_size(a: (f64, f64), b: (f64, f64)) -> bool {
+    (a.0 - b.0).abs() <= 1.0 && (a.1 - b.1).abs() <= 1.0
 }
 
 #[cfg(test)]
@@ -386,6 +389,8 @@ mod tests {
         );
         assert_eq!(size_to_remember((1920, 1280), 2.0, false), None);
         assert_eq!(size_to_remember((1400, 1000), 2.0, true), None); // 700 × 500 < 720 × 520
+        assert!(same_size(SIZE, (960.5, 639.5)));
+        assert!(!same_size(SIZE, (962.0, 640.0)));
     }
 
     #[test]

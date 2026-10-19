@@ -56,10 +56,13 @@ pub fn bootstrap(state: State<'_, AppState>) -> Result<Bootstrap, AppError> {
 }
 
 /// 校验、持久化并生效新设置。不处理快捷键、不清理、不发事件。
-pub fn save_settings_inner(state: &AppState, s: Settings) -> Result<(), AppError> {
+pub fn save_settings_inner(state: &AppState, mut s: Settings) -> Result<(), AppError> {
     s.validate()?;
+    let mut cur = state.settings();
+    // 面板尺寸只由 panel::remember_size 写：持锁取当前值，不用调用方早先的快照
+    s.panel_size = cur.panel_size;
     state.store().save_settings(&s)?;
-    *state.settings() = s;
+    *cur = s;
     Ok(())
 }
 
@@ -122,7 +125,7 @@ pub fn save_settings(
 ) -> Result<(), AppError> {
     settings.validate()?;
     let old = state.settings().clone();
-    // 面板尺寸只由拖动记忆（panel::remember_size）写；前端手里的快照可能是旧的，不让它覆盖
+    // 面板尺寸只由拖动记忆（panel::remember_size）写；这里只为 changed 不含 panelSize，落库时 save_settings_inner 持锁再取
     settings.panel_size = old.panel_size;
     let changed = changed_fields(&old, &settings);
     let hotkey_changed = changed.contains(&"hotkey");
@@ -252,6 +255,15 @@ mod tests {
         assert_eq!(*state.settings(), s);
         assert_eq!(state.store().load_settings(), s);
         assert!(prune_to_settings(&state).is_empty());
+    }
+
+    #[test]
+    fn save_settings_inner_keeps_live_panel_size() {
+        let state = AppState::for_test();
+        state.settings().panel_size = (1000.0, 700.0);
+        save_settings_inner(&state, Settings::default()).unwrap();
+        assert_eq!(state.settings().panel_size, (1000.0, 700.0));
+        assert_eq!(state.store().load_settings().panel_size, (1000.0, 700.0));
     }
 
     #[test]
