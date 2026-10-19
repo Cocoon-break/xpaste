@@ -1,7 +1,12 @@
+mod assets;
 mod clipboard;
+mod clock;
 mod commands;
+mod enrich;
 pub mod error;
+mod events;
 mod hotkey;
+mod housekeeping;
 mod panel;
 pub mod state;
 
@@ -9,7 +14,7 @@ use state::AppState;
 use tauri::{Manager, WindowEvent};
 use tauri_plugin_global_shortcut::ShortcutState;
 use tauri_plugin_log::{Target, TargetKind};
-use xpaste_core::Settings;
+use xpaste_core::Store;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -18,7 +23,8 @@ pub fn run() {
     let builder = builder.plugin(tauri_nspanel::init());
     builder
         .setup(|app| {
-            let logs = app.path().data_dir()?.join("xPaste").join("logs");
+            let data_dir = app.path().data_dir()?.join("xPaste");
+            let logs = data_dir.join("logs");
             // Builder::new() 自带 Stdout + LogDir，先清掉，只留下面显式加的目标
             let builder = tauri_plugin_log::Builder::new()
                 .clear_targets()
@@ -38,15 +44,14 @@ pub fn run() {
             };
             app.handle().plugin(builder.build())?;
             log::info!("xPaste 启动，平台 {}", xpaste_platform::OS);
+            let store = Store::open(&data_dir)?;
+            let settings = store.load_settings();
+            let hotkey = settings.hotkey.clone();
+            let enrich = enrich::start(app.handle().clone());
+            app.manage(AppState::new(settings, store, enrich, data_dir));
+            housekeeping::start(app.handle().clone());
             #[cfg(target_os = "macos")]
             panel::setup_macos(app)?;
-            let hotkey = app
-                .state::<AppState>()
-                .settings
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .hotkey
-                .clone();
             if let Err(e) = hotkey::register(app.handle(), &hotkey) {
                 // 系统通知在阶段 5
                 log::warn!("快捷键注册失败：{e}");
@@ -70,11 +75,21 @@ pub fn run() {
                 panel::hide(window.app_handle());
             }
         })
-        .manage(AppState::new(Settings::default()))
         .invoke_handler(tauri::generate_handler![
             commands::settings::bootstrap,
+            commands::settings::save_settings,
+            commands::settings::prune_preview,
+            commands::settings::set_paused,
+            commands::settings::finish_onboarding,
             commands::panel::hide_panel,
             commands::panel::open_accessibility_settings,
+            commands::records::get_record,
+            commands::records::search,
+            commands::records::set_pinned,
+            commands::records::delete,
+            commands::records::undo_delete,
+            commands::records::clear_history,
+            commands::records::count_unpinned,
             commands::records::paste_text
         ])
         .run(tauri::generate_context!())

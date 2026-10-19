@@ -192,7 +192,7 @@ fn try_show(app: &AppHandle, w: &WebviewWindow, t0: Option<u64>) -> tauri::Resul
         w.show()?;
         w.set_focus()?;
     }
-    w.emit("panel-shown", serde_json::json!({ "t0": t0 }))
+    w.emit(crate::events::PANEL_SHOWN, serde_json::json!({ "t0": t0 }))
 }
 
 /// AppKit 只能在主线程调用；已在主线程时同步执行（hide_panel 命令跑在异步线程上）。

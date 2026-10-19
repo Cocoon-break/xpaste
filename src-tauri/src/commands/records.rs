@@ -4,10 +4,67 @@ use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, State};
+use xpaste_core::RecordDetail;
 use xpaste_platform::PasteBlock;
 
+use crate::clock::now_ms;
 use crate::error::AppError;
+use crate::events::{RECORD_ADDED, RECORD_UPDATED, emit_removed, emit_summary};
 use crate::state::AppState;
+
+#[tauri::command(async)]
+pub fn get_record(state: State<'_, AppState>, id: i64) -> Result<Option<RecordDetail>, AppError> {
+    Ok(state.store().detail(id)?.map(crate::assets::detail_dto))
+}
+
+#[tauri::command(async)]
+pub fn search(state: State<'_, AppState>, q: String) -> Result<Vec<i64>, AppError> {
+    Ok(state.store().search_ids(&q)?)
+}
+
+#[tauri::command(async)]
+pub fn set_pinned(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+    on: bool,
+) -> Result<(), AppError> {
+    state.store().set_pinned(id, on)?;
+    emit_summary(&app, RECORD_UPDATED, id);
+    Ok(())
+}
+
+/// 软删除，5 秒内可撤销，之后彻底删除。
+#[tauri::command(async)]
+pub fn delete(app: AppHandle, state: State<'_, AppState>, id: i64) -> Result<(), AppError> {
+    let now = now_ms();
+    state.store().soft_delete(id, now)?;
+    crate::housekeeping::schedule_purge(&app, id, now);
+    emit_removed(&app, &[id]);
+    Ok(())
+}
+
+#[tauri::command(async)]
+pub fn undo_delete(app: AppHandle, state: State<'_, AppState>, id: i64) -> Result<bool, AppError> {
+    let restored = state.store().undo_delete(id)?;
+    if restored {
+        emit_summary(&app, RECORD_ADDED, id);
+    }
+    Ok(restored)
+}
+
+/// 清空非置顶记录，返回删除条数。
+#[tauri::command(async)]
+pub fn clear_history(app: AppHandle, state: State<'_, AppState>) -> Result<u32, AppError> {
+    let ids = state.store().clear_unpinned()?;
+    emit_removed(&app, &ids);
+    Ok(ids.len() as u32)
+}
+
+#[tauri::command(async)]
+pub fn count_unpinned(state: State<'_, AppState>) -> Result<u32, AppError> {
+    Ok(state.store().count_unpinned()?)
+}
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "result", rename_all = "camelCase")]

@@ -454,6 +454,26 @@ impl Store {
         Ok(())
     }
 
+    /// 该应用的未删除记录 id（补全图标后逐条刷新前端）。
+    pub fn ids_for_app(&self, app_id: &str) -> Result<Vec<i64>, CoreError> {
+        ids_in(
+            &self.conn,
+            "SELECT id FROM records WHERE app_id = ?1 AND deleted_at IS NULL",
+            &[&app_id],
+        )
+    }
+
+    /// 按最多条数删最旧的非置顶记录（设置里调小上限时）。
+    pub fn prune_capacity(&mut self, max_records: u32) -> Result<Vec<i64>, CoreError> {
+        self.delete_where(
+            &format!(
+                "id IN (SELECT id FROM records WHERE {LIVE_UNPINNED}
+                 ORDER BY copied_at DESC, id DESC LIMIT -1 OFFSET ?1)"
+            ),
+            &[&max_records],
+        )
+    }
+
     fn summary_row(&self, row: &Row) -> rusqlite::Result<RecordSummary> {
         let id: i64 = row.get(0)?;
         let kind: String = row.get(1)?;
@@ -641,7 +661,7 @@ pub(crate) mod tests {
     }
 
     use crate::capture::build_record;
-    use crate::{Flavor, Kind, NewRecord, Snapshot, detect};
+    use crate::{AppInfo, Flavor, Kind, NewRecord, Snapshot, detect};
 
     fn mem() -> Store {
         Store::open_in_memory(&tmp()).unwrap()
@@ -720,6 +740,47 @@ pub(crate) mod tests {
         assert_eq!(removed.len(), 1);
         assert_eq!(s.list_summaries().unwrap().len(), 3);
         assert!(s.list_summaries().unwrap().iter().any(|r| r.id == first));
+    }
+    #[test]
+    fn prune_capacity_removes_oldest_unpinned() {
+        let mut s = mem();
+        for i in 0..5 {
+            s.insert_or_merge(&rec(&format!("t{i}")), i, 500).unwrap();
+        }
+        let oldest: Vec<i64> = s.list_summaries().unwrap()[3..]
+            .iter()
+            .map(|r| r.id)
+            .collect();
+        let mut removed = s.prune_capacity(3).unwrap();
+        removed.sort();
+        let mut want = oldest;
+        want.sort();
+        assert_eq!(removed, want);
+        assert_eq!(s.list_summaries().unwrap().len(), 3);
+    }
+    #[test]
+    fn ids_for_app_lists_live_records_of_that_app() {
+        let mut s = mem();
+        let app = |id: &str| {
+            Some(AppInfo {
+                id: id.into(),
+                name: id.into(),
+            })
+        };
+        let mut a = rec("a");
+        a.app = app("x");
+        let mut b = rec("b");
+        b.app = app("x");
+        let mut c = rec("c");
+        c.app = app("y");
+        let ids: Vec<i64> = [a, b, c]
+            .iter()
+            .map(|r| match s.insert_or_merge(r, 1, 500).unwrap().0 {
+                Upsert::Added(id) | Upsert::Merged(id) => id,
+            })
+            .collect();
+        s.soft_delete(ids[1], 2).unwrap();
+        assert_eq!(s.ids_for_app("x").unwrap(), [ids[0]]);
     }
     #[test]
     fn insert_is_atomic() {
