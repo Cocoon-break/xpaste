@@ -5,7 +5,7 @@ use std::io::Cursor;
 use std::path::PathBuf;
 
 use image::codecs::bmp::BmpDecoder;
-use image::{DynamicImage, ImageFormat, RgbaImage};
+use image::{DynamicImage, ImageDecoder, ImageFormat, RgbaImage};
 use xpaste_core::Flavor;
 
 /// 系统预定义格式（`CF_*`）：id 与名字。`GetClipboardFormatNameW` 取不到这些名字。
@@ -110,9 +110,16 @@ pub fn parse_hdrop(bytes: &[u8]) -> Vec<PathBuf> {
     names.into_iter().map(PathBuf::from).collect()
 }
 
+/// 头部声称的尺寸超过这个字节数就不解码（与 image 默认 reader 的上限一致）：
+/// `from_decoder` 按头部一次性分配缓冲区，伪造的 65535×65535 头会要十几 GB。
+const MAX_DIB_DECODED_BYTES: u64 = 512 << 20;
+
 /// `CF_DIB` / `CF_DIBV5`（无文件头的 BMP）转 PNG。
 pub fn dib_to_png(dib: &[u8]) -> Option<Vec<u8>> {
     let decoder = BmpDecoder::new_without_file_header(Cursor::new(dib)).ok()?;
+    if decoder.total_bytes() > MAX_DIB_DECODED_BYTES {
+        return None;
+    }
     encode_png(DynamicImage::from_decoder(decoder).ok()?.to_rgba8())
 }
 
@@ -277,6 +284,14 @@ mod tests {
         let png = dib_to_png(&dib(2, 1, 32, &[0, 0, 255, 0, 0, 255, 0, 0])).unwrap();
         assert_eq!(px(&png, 1, 0), [0, 255, 0, 255]);
         assert_eq!(dib_to_png(&[1, 2, 3]), None);
+    }
+    #[test]
+    fn dib_to_png_rejects_huge_header_before_allocating() {
+        let huge = dib(65535, 65535, 32, &[]);
+        // 头部本身合法，确保是字节上限而不是解析失败让它返回 None
+        let decoder = BmpDecoder::new_without_file_header(Cursor::new(&huge)).unwrap();
+        assert!(decoder.total_bytes() > MAX_DIB_DECODED_BYTES);
+        assert_eq!(dib_to_png(&huge), None);
     }
     #[test]
     fn bgra_to_png_treats_all_zero_alpha_as_opaque() {
