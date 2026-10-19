@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { grade, hexInfo, isHex } from './color.ts';
+import { contrast, grade, hexInfo, isHex } from './color.ts';
 
 test('AC-M08-02 #6F8BFF 的 RGB', () => assert.equal(hexInfo('#6F8BFF').rgb, 'rgb(111, 139, 255)'));
 
@@ -19,4 +19,9 @@ test('isHex 拒绝 CSS 注入', () => {
   assert.ok(isHex(' #fff '));
   assert.ok(!isHex('#fff; background:url(x)'));
   assert.ok(!isHex('red'));
+});
+
+test('contrast 与 hexInfo 一致', () => {
+  assert.equal(contrast('#FFFFFF', '#000000').toFixed(2), '21.00');
+  assert.equal(contrast('#000000', '#FFFFFF').toFixed(2), '21.00');
 });

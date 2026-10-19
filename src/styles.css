@@ -47,7 +47,7 @@
     --glass-3: rgb(20 30 80 / .06);
     --line: rgb(30 45 110 / .09);
     --line-2: rgb(30 45 110 / .16);
-    --fg: #111632; --muted: #545C7C; --faint: #8790AE;
+    --fg: #111632; --muted: #545C7C; --faint: #7A83A1;
     --c-text: #0891B2; --c-link: #3B5BDB; --c-code: #0D9488; --c-color: #C026D3;
     --c-image: #D97706; --c-video: #E03131; --c-file: #7C3AED; --c-fav: #4D7C0F;
     --beam: #0E7FA3; --beam-hover: #0B6A88; --on-beam: #FFFFFF; --on-pill: #FFFFFF; --danger: #D6334F; --danger-hover: #B82640; --on-danger: #FFFFFF;
@@ -72,7 +72,7 @@
   --glass-3: rgb(20 30 80 / .06);
   --line: rgb(30 45 110 / .09);
   --line-2: rgb(30 45 110 / .16);
-  --fg: #111632; --muted: #545C7C; --faint: #8790AE;
+  --fg: #111632; --muted: #545C7C; --faint: #7A83A1;
   --c-text: #0891B2; --c-link: #3B5BDB; --c-code: #0D9488; --c-color: #C026D3;
   --c-image: #D97706; --c-video: #E03131; --c-file: #7C3AED; --c-fav: #4D7C0F;
   --beam: #0E7FA3; --beam-hover: #0B6A88; --on-beam: #FFFFFF; --on-pill: #FFFFFF; --danger: #D6334F; --danger-hover: #B82640; --on-danger: #FFFFFF;
@@ -390,8 +390,8 @@ mark { background: var(--mark-bg); color: var(--mark-fg); border-radius: 3px; pa
 /* —— 预览 —— */
 .preview { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-height: 0; background: var(--preview-bg); }
 .phead { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px 12px 18px; border-bottom: 1px solid var(--line); }
-.tchip { display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 10px; border-radius: 999px; font-size: 12.5px; color: var(--tc); background: color-mix(in srgb, var(--tc) 12%, transparent); border: 1px solid color-mix(in srgb, var(--tc) 30%, transparent); white-space: nowrap; }
-.tchip .ic { width: 14px; height: 14px; }
+.tchip { display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 10px; border-radius: 999px; font-size: 12.5px; color: var(--fg); background: color-mix(in srgb, var(--tc) 12%, transparent); border: 1px solid color-mix(in srgb, var(--tc) 30%, transparent); white-space: nowrap; }
+.tchip .ic { width: 14px; height: 14px; color: var(--tc); } /* 类型色只给图标与底色，文字用 --fg（M21） */
 .chip { font: 11px var(--font-mono); padding: 2px 7px; border-radius: 5px; background: var(--glass-2); border: 1px solid var(--line-2); color: var(--muted); white-space: nowrap; }
 .ptype { display: flex; gap: 8px; align-items: center; min-width: 0; flex-wrap: wrap; }
 .pact { display: flex; gap: 6px; }
@@ -407,7 +407,7 @@ mark { background: var(--mark-bg); color: var(--mark-fg); border-radius: 3px; pa
 .p-link a { color: var(--c-link); font: 13px/1.7 var(--font-mono); overflow-wrap: anywhere; text-underline-offset: 3px; text-decoration-color: color-mix(in srgb, var(--c-link) 40%, transparent); }
 .p-link a .ic { display: inline; width: 13px; height: 13px; vertical-align: -2px; }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
-.chip.ok { color: var(--c-code); border-color: color-mix(in srgb, var(--c-code) 35%, transparent); }
+.chip.ok { color: var(--fg); border-color: color-mix(in srgb, var(--c-code) 35%, transparent); }
 .p-code {
   margin: 0; padding: 14px 0; overflow: auto; counter-reset: ln;
   font: 13px/1.75 var(--font-mono); background: var(--well-2); border: 1px solid var(--line-2); border-radius: 12px;
