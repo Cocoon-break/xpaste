@@ -1003,4 +1003,37 @@ pub(crate) mod tests {
         };
         assert!(b > a, "{b} <= {a}");
     }
+
+    #[test]
+    fn three_external_copies_count_two_uses() {
+        // AC-M11-02 口径：首次复制生成记录不计使用，第 4 次外部复制才进入“常用”
+        let mut s = mem();
+        for t in 1..=3 {
+            s.insert_or_merge(&rec("a"), t, 500).unwrap();
+        }
+        assert_eq!(s.list_summaries().unwrap()[0].uses, 2);
+        s.insert_or_merge(&rec("a"), 4, 500).unwrap();
+        assert_eq!(s.list_summaries().unwrap()[0].uses, 3);
+    }
+
+    #[test]
+    fn bump_use_moves_only_unpinned_when_enabled() {
+        let mut s = mem();
+        let (Upsert::Added(a), _) = s.insert_or_merge(&rec("a"), 1, 500).unwrap() else {
+            panic!()
+        };
+        s.insert_or_merge(&rec("b"), 2, 500).unwrap();
+        // AC-M09-08：关闭“复制后移到顶部”，次数 +1 但位置不变
+        s.bump_use(a, false, 9).unwrap();
+        let l = s.list_summaries().unwrap();
+        assert_eq!((l[1].id, l[1].uses, l[1].copied_at), (a, 1, 1));
+        // M09 规则 5：开启时回到最前
+        s.bump_use(a, true, 10).unwrap();
+        let l = s.list_summaries().unwrap();
+        assert_eq!((l[0].id, l[0].uses, l[0].copied_at), (a, 2, 10));
+        // 置顶记录位置不变
+        s.set_pinned(a, true).unwrap();
+        s.bump_use(a, true, 20).unwrap();
+        assert_eq!(s.list_summaries().unwrap()[0].copied_at, 10);
+    }
 }
