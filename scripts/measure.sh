@@ -2,12 +2,13 @@
 # macOS 性能与可靠性测量（make measure）。兼容 macOS 自带 bash 3.2。
 # 用法：bash scripts/measure.sh <startup|latency|summon|search|crash|idle|all>
 # 被测程序 $APP 每次都用 mktemp -d 下种子目录的新副本作数据目录（XPASTE_DATA_DIR），
-# 不碰真实数据目录，只比较真实库的修改时间。结果写 target/measure/<时间>.txt。
+# 不碰真实数据目录，只比较真实库（含 -wal、-shm）的修改时间与大小。结果写 target/measure/<时间>.txt。
+# 按键用 osascript 经 System Events 发送，运行脚本的终端要有“辅助功能”权限。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 APP=${APP:-target/release/bundle/macos/xPaste.app/Contents/MacOS/xPaste}
-REAL_DB="$HOME/Library/Application Support/xPaste/xpaste.db"
+REAL_DIR="$HOME/Library/Application Support/xPaste"
 USAGE="用法：bash scripts/measure.sh <startup|latency|summon|search|crash|idle|all>"
 case ${1:-} in
   startup | latency | summon | search | crash | idle) STEPS=$1 ;;
@@ -16,6 +17,28 @@ case ${1:-} in
 esac
 
 # —— 公共前置 ——
+# 键盘鼠标已空闲的毫秒数
+hid_idle_ms() { ioreg -c IOHIDSystem | awk '/HIDIdleTime/ { v = int($NF / 1000000) } END { print v + 0 }'; }
+# 真实库三个文件的修改时间与大小（不存在的跳过），只 stat 不打开
+db_snap() {
+  local f
+  for f in xpaste.db xpaste.db-wal xpaste.db-shm; do
+    [[ -e $REAL_DIR/$f ]] && stat -f '%N %Fm %z' "$REAL_DIR/$f"
+  done
+  return 0
+}
+# LaunchAgents 的文件名，加上 xPaste plist 的修改时间、大小与内容摘要（正式版 set_autostart 写这里）
+agents_snap() {
+  (
+    cd "$HOME/Library/LaunchAgents" 2>/dev/null || exit 0
+    shopt -s nullglob nocaseglob
+    ls -A
+    for f in *xpaste*; do
+      stat -f '%N %Fm %z' "$f"
+      shasum "$f"
+    done
+  ) || true
+}
 [[ $(uname) == Darwin ]] || { echo "只支持 macOS" >&2; exit 1; }
 [[ -x $APP ]] || { echo "找不到 ${APP}，请先 make release-app" >&2; exit 1; }
 # xpaste 是开发版进程名，它也会抢 ⌘⇧V
@@ -25,7 +48,7 @@ if pgrep -x xPaste >/dev/null || pgrep -x xpaste >/dev/null; then
 fi
 # 需要按键的子命令只在离开电脑时运行（idle 也要唤起一次）。合成按键会重置空闲时间，所以只在开头检查
 case " $STEPS " in *" summon "* | *" search "* | *" crash "* | *" idle "*)
-  idle_s=$(ioreg -c IOHIDSystem | awk '/HIDIdleTime/ { v = int($NF / 1000000000) } END { print v + 0 }')
+  idle_s=$(($(hid_idle_ms) / 1000))
   if ((idle_s < 20)); then
     echo "请在离开电脑时运行（键盘鼠标已空闲 ${idle_s} 秒，需要 ≥ 20 秒）" >&2
     exit 1
@@ -37,6 +60,7 @@ mkdir -p target/measure
 OUT=target/measure/$(date +%Y%m%d-%H%M%S).txt
 # tee 忽略 Ctrl-C，中断时 finish 的输出仍能写进结果文件
 exec > >(trap '' INT; exec tee "$OUT") 2>&1
+echo "注意：结束时只恢复剪切板里的文本（图片、文件等不恢复），运行期间复制的任何内容都会在结束时被覆盖"
 
 cargo build -q -p xpaste-core --release --example seed
 SEED=target/release/examples/seed
@@ -44,9 +68,11 @@ SEED=target/release/examples/seed
 ROOT=$(mktemp -d)
 CLIP=$(pbpaste; printf x)
 CLIP=${CLIP%x}
-REAL_MTIME=$(stat -f %m "$REAL_DB" 2>/dev/null || true)
-AGENTS=$(ls "$HOME/Library/LaunchAgents" 2>/dev/null || true)
+REAL_SNAP=$(db_snap)
+AGENTS=$(agents_snap)
 PID="" KIDS_DONE="" BEFORE="" T0=0 DIR="" RUNS=0 DOC="" TE_OURS="" WATCH=""
+# TOUCHED：当前子命令的日志里出现「设置已保存」（有人操作了测量实例），本子命令各项不判定；TOUCHED_ANY：整次运行失败
+TOUCHED="" TOUCHED_ANY="" LAST_KEY=0
 : >"$ROOT/pids"
 : >"$ROOT/net.log"
 
@@ -77,14 +103,17 @@ finish() {
   fi
   echo "结果 网络连接 次数=$(printf '%s' "$net" | grep -c .) 目标=0"
   [[ -z $net ]] || echo "$net" | sed 's/^/  /'
-  if [[ -z $REAL_MTIME ]]; then
+  if [[ $(db_snap) != "$REAL_SNAP" ]]; then
+    echo "失败：真实数据库（xpaste.db / -wal / -shm）的修改时间或大小变了" && rc=1
+  elif [[ -z $REAL_SNAP ]]; then
     echo "真实数据库不存在，未比较"
-  elif [[ $(stat -f %m "$REAL_DB" 2>/dev/null) == "$REAL_MTIME" ]]; then
-    echo "真实数据库未改动"
   else
-    echo "失败：真实数据库修改时间变了" && rc=1
+    echo "真实数据库未改动"
   fi
-  if [[ $(ls "$HOME/Library/LaunchAgents" 2>/dev/null) == "$AGENTS" ]]; then
+  if [[ -n $TOUCHED_ANY ]]; then
+    echo "失败（测量实例被操作）：日志里出现「设置已保存」，受影响的项不判定" && rc=1
+  fi
+  if [[ $(agents_snap) == "$AGENTS" ]]; then
     echo "LaunchAgents 未改动"
   else
     echo "失败：~/Library/LaunchAgents 有变化" && rc=1
@@ -163,6 +192,10 @@ stop_app() {
     echo "  注意：5 秒后仍有归属的 WebKit 进程存活（可能不是被测程序的）"
   fi
   grep -hE 'XPASTE_TIMING|bootstrap 返回|设置已保存|\[(WARN|ERROR)\]' "$DIR"/logs/*.log 2>/dev/null | sed 's/^/  日志 /' || true
+  if (($(log_count 设置已保存) > 0)); then
+    TOUCHED=1 TOUCHED_ANY=1
+    echo "失败（测量实例被操作）：日志里有「设置已保存」，本子命令各项不判定"
+  fi
   if pgrep -x xPaste >/dev/null; then
     echo "失败：xPaste 退出后仍有残留进程"
     return 1
@@ -180,7 +213,10 @@ watch_net() {
 watch_net &
 WATCH=$!
 
-key() { osascript -e "tell application \"System Events\" to $1"; }
+key() {
+  osascript -e "tell application \"System Events\" to $1"
+  LAST_KEY=$(ms)
+}
 HOTKEY='key code 9 using {command down, shift down}'
 
 open_doc() {
@@ -209,15 +245,15 @@ front_ok() {
 summary() {
   local name=$1 unit=$2 target=$3 mode=$4 min=$5
   shift 5
-  printf '%s\n' "$@" | awk -v name="$name" -v u="$unit" -v t="$target" -v mode="$mode" -v min="$min" '
+  printf '%s\n' "$@" | awk -v name="$name" -v u="$unit" -v t="$target" -v mode="$mode" -v min="$min" -v void="$TOUCHED" '
     NF { a[++n] = $1 + 0 }
     END {
-      if (n == 0) { printf "结果 %s n=0 目标=%s%s 达标=否\n", name, t, u; exit }
+      if (n == 0) { printf "结果 %s n=0 目标=%s%s 达标=%s\n", name, t, u, void ? "不判定" : "否"; exit }
       for (i = 2; i <= n; i++) { v = a[i]; for (j = i - 1; j >= 1 && a[j] > v; j--) a[j + 1] = a[j]; a[j + 1] = v }
       med = (n % 2) ? a[(n + 1) / 2] : (a[n / 2] + a[n / 2 + 1]) / 2
       max = a[n]
       p = a[int((95 * n + 99) / 100)]
-      if (t == "-") ok = "不判定"
+      if (t == "-" || void) ok = "不判定"
       else if (n < min) ok = "否"
       else if (mode == "lt") ok = (max < t) ? "是" : "否"
       else if (max <= t) ok = "是"
@@ -359,6 +395,7 @@ run_crash() {
   wait_log 'bootstrap 返回 3 条记录' || ok=否
   integrity=$(q 'pragma integrity_check')
   [[ $integrity == ok ]] || ok=否
+  [[ -z $TOUCHED ]] || ok=不判定
   echo "结果 强杀恢复 bootstrap=$(log_count 'bootstrap 返回 3 条记录') integrity_check=$integrity 达标=$ok"
 
   # 置顶第一条并复制，正常退出后再启动，两次导出应一致
@@ -384,6 +421,7 @@ run_crash() {
   ok=是
   [[ $a == "$b" ]] || ok=否
   [[ $(q 'select count(*) from records where pinned = 1') == 1 && $(q 'select sum(uses) from records') -ge 1 ]] || ok=否
+  [[ -z $TOUCHED ]] || ok=不判定
   echo "结果 退出持久化 前后一致=$([[ $a == "$b" ]] && echo 是 || echo 否) 达标=$ok"
   echo "  退出前："
   echo "$a" | sed 's/^/    /'
@@ -392,7 +430,7 @@ run_crash() {
 }
 
 run_idle() {
-  local i pids npids fp="" rss="" cpu="" line f
+  local i pids npids fp="" rss="" cpu="" line f idle since
   seed 5000
   launch
   wait_log 'bootstrap 返回 5000 条记录'
@@ -413,6 +451,13 @@ run_idle() {
     if ! kill -0 "$PID" 2>/dev/null; then
       echo "失败：被测程序已退出"
       break
+    fi
+    # 合成按键会重置空闲时间：空闲时间比距脚本最后一次按键的时间短（留 2 秒余量），说明有人碰了电脑
+    idle=$(hid_idle_ms) since=$(($(ms) - LAST_KEY))
+    if ((idle + 2000 < since)); then
+      echo "第 $i 次采样作废：键盘鼠标只空闲了 $((idle / 1000)) 秒，距脚本最后一次按键已 $((since / 1000)) 秒（有人碰了电脑）"
+      if ((i < 6)); then sleep 10; fi
+      continue
     fi
     line=$(ps -o pid=,rss=,pcpu= -p "$pids" | awk '{ k++; r += $2; c += $3 } END { printf "%d %.1f %.1f", k, r / 1024, c }' || true)
     # shellcheck disable=SC2046
@@ -440,5 +485,6 @@ run_idle() {
 echo "xPaste 测量 $(date '+%F %T')  $APP"
 for step in $STEPS; do
   echo "== $step =="
+  TOUCHED=""
   "run_$step"
 done

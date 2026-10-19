@@ -9,11 +9,11 @@ macOS / Windows 剪切板历史工具。
 
 ## 安装
 
-**macOS 13 及以上**（Apple 芯片）：打开 `xPaste_<版本>_aarch64.dmg`，把 xPaste 拖进“应用程序”。安装包未签名，第一次打开会被系统拦下，任选一种方式放行：
+**macOS 13 及以上**（Apple 芯片）：打开 `xPaste_<版本>_aarch64.dmg`，把 xPaste 拖进“应用程序”。安装包未签名（只有链接器自带的临时签名），从浏览器下载的安装包带隔离属性，第一次打开会被系统拦下，可能提示“xPaste”已损坏，无法打开，而且没有“仍要打开”。这不是文件坏了，按下面的顺序放行：
 
-- 在访达的“应用程序”里右键 xPaste →“打开”，在弹窗里再点“打开”；
-- 或先双击打开一次，再到系统设置 → 隐私与安全性，在页面底部点“仍要打开”；
-- 或在终端运行 `xattr -dr com.apple.quarantine /Applications/xPaste.app`。
+1. 在终端运行 `xattr -dr com.apple.quarantine /Applications/xPaste.app`（去掉隔离属性），再正常打开。这一步在各版本 macOS 上都有效。
+2. 如果弹窗不是“已损坏”而是“无法验证开发者”，也可以先双击打开一次，再到系统设置 → 隐私与安全性，在页面底部点“仍要打开”（出现这个按钮时才行）。
+3. 仅 macOS 13–14：在访达的“应用程序”里按住 Control 点按 xPaste →“打开”，在弹窗里再点“打开”。macOS 15 起这个方法不再能绕过拦截。
 
 **Windows 10 21H2 / Windows 11**（x64）：运行 `xPaste_<版本>_x64-setup.exe`，装到当前用户目录（`%LOCALAPPDATA%\xPaste`），不需要管理员权限。SmartScreen 提示“Windows 已保护你的电脑”时，点“更多信息 → 仍要运行”。系统没有 WebView2 运行时（部分 Windows 10）时，安装程序会在线下载，需要联网。
 
@@ -25,15 +25,15 @@ macOS / Windows 剪切板历史工具。
   - macOS：`~/Library/Application Support/xPaste/`
   - Windows：`%APPDATA%\xPaste\`
 - 卸载：
-  - macOS：从菜单栏图标选“退出 xPaste”，把应用拖进废纸篓。要删数据，手动删除上面的数据目录，以及 `~/Library/LaunchAgents/` 下 xPaste 的 plist（开过“开机时启动”才有）。
+  - macOS：从菜单栏图标选“退出 xPaste”，把应用拖进废纸篓。要删数据，手动删除上面的数据目录、`~/Library/LaunchAgents/` 下 xPaste 的 plist（开过“开机时启动”才有），以及 WebView 留下的 `~/Library/WebKit/com.xpaste.app` 和 `~/Library/Caches/com.xpaste.app`。
   - Windows：在“设置 → 应用”里卸载。要删历史数据，在卸载确认页勾选“删除应用程序数据”。
 
 ## 已知限制
 
 **性能**（阶段 8 测量：macOS 27、Apple M1、release 构建、5000 条记录，见[验收记录](docs/验收记录.md)“测量摘要（阶段 8）”）
 
-- 唤起到第一帧 166 ms（中位数，最大 183 ms），目标 100 ms：5000 条时每次显示都同步重渲染列表。记录少（百条左右）时多在 100 ms 以内。
-- 空闲内存约 266 MB 以上（footprint，含 3 个 WebKit 子进程），目标 150 MB。那次采样被打断，待重测（阶段8-空闲测量）。
+- 唤起到第一帧 166 ms（中位数，最大 183 ms），目标 100 ms：5000 条时变慢，可能是每次显示同步重渲染列表。记录少（百条左右）时多在 100 ms 以内。
+- 空闲内存与 CPU 待重测（阶段8-空闲测量）：那次采样被打断，内存 footprint（含 3 个 WebKit 子进程）最小样本 265.8 MB，均在操作期间或刚结束时采得，目标 150 MB；CPU 样本同样无效，目标 < 1%。
 - 启动后第一次唤起时，第一个搜索按键约 110 ms（目标 50 ms），之后 20–40 ms。
 - Windows 的性能还没有测。
 
@@ -53,6 +53,7 @@ macOS / Windows 剪切板历史工具。
 - 卸载时无法询问是否删除数据（拖进废纸篓没有卸载程序），数据要手动删，见“快速上手”。
 - 开机启动用 LaunchAgent（`~/Library/LaunchAgents/` 下的 plist），不是 SMAppService；系统设置的“登录项”里同样显示 xPaste。
 - 开发版（`xpaste`）与正式版（`xPaste`）在“辅助功能”列表里是两个条目，要分别授权。重新构建开发版后签名会变，要删掉旧条目再添加。
+- 未签名包每次升级后，临时签名的身份都会变，“辅助功能”授权多半要删掉旧条目再重新添加。
 - 自动粘贴按物理键位发送 `⌘ + V`（`kVK_ANSI_V`）：Dvorak 等 V 不在这个键位上的键盘布局下，可能粘贴失败。
 - 毛玻璃材质下，隐藏与显示的整窗淡入淡出改过之后还没在实机上目视确认（阶段7-T7-a）。主线程卡顿时，面板可能在淡出完成前就消失。
 
@@ -61,6 +62,7 @@ macOS / Windows 剪切板历史工具。
 - Windows 端的代码还没有在 Windows 上编译和验收过（仓库还没有远端，CI 没有运行过），以下几条来自实现与审查。
 - 覆盖安装时选了“安装前卸载”，或者卸载时保留数据再重新安装：设置里“开机时启动”仍显示开启，但卸载已经删掉注册表 Run 值，实际不会开机启动。在设置里关掉保存、再打开保存即可恢复（自动重新同步是后续工作）。
 - 从托盘图标或托盘菜单打开面板时没有可粘贴的目标窗口，Enter 只复制并提示。
+- 目标窗口以管理员身份运行而 xPaste 不是时，系统拦截模拟按键，Enter 只复制并提示（规格说明 M09 规则 3）。
 - 托盘左键单击按松开计：面板隐藏后 300 ms 内的单击不重新显示；按住超过 300 ms 再松开，会把面板重新打开。
 - Windows 10 上面板为不透明背景，不用 Acrylic。
 - 链接标题只取浏览器复制时附带 HTML 里的锚文本，不解析 Firefox 的 `text/x-moz-url`。
@@ -87,13 +89,13 @@ macOS / Windows 剪切板历史工具。
 
 ## 开发
 
-需要 Node.js、pnpm 和 Rust ≥ 1.90。统一通过 `make` 操作，`make help` 列出全部目标：
+需要 Node.js、pnpm 和 Rust ≥ 1.90。CI 用 Node 25（与开发机一致），它已于 2026-06 停止维护，下一次升级选 24 LTS 或 26。统一通过 `make` 操作，`make help` 列出全部目标：
 
 ```sh
 make install       # 安装依赖
 make dev           # 开发运行
 make dev-isolated  # 开发运行，数据目录隔离在 .xpaste-dev/，开启唤起与搜索计时（自动化验收用这个）
-make measure       # macOS 性能与可靠性测量（先 make release-app；离开电脑时运行，约 15 分钟）
+make measure       # macOS 性能与可靠性测量（先 make release-app；离开电脑时运行，约 15 分钟；终端要有“辅助功能”权限，脚本用 osascript 发按键）
 make check         # 提交前全量检查：格式、clippy、Rust + 前端单元测试、前端构建
 make test          # 只跑单元测试
 make release       # 打发布包（未签名）
