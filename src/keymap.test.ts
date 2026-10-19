@@ -46,3 +46,13 @@ test('Shift+F10 打开菜单；焦点在按钮上时字符不转搜索', () => {
 
 test('Mod+→ 切换分类', () =>
   assert.deepEqual(keyAction(ev({ key: 'ArrowRight', mod: true }), ctx()), { t: 'filter', d: 1 }));
+
+test('按住不重复触发删除、复制、置顶', () => {
+  assert.equal(keyAction(ev({ key: 'Backspace', repeat: true }), ctx()), null);
+  assert.equal(keyAction(ev({ key: 'Delete', repeat: true }), ctx()), null);
+  assert.equal(keyAction(ev({ key: 'Enter', repeat: true }), ctx()), null);
+  assert.equal(keyAction(ev({ key: 'p', mod: true, repeat: true }), ctx()), null);
+});
+
+test('菜单打开时 Tab 关闭菜单', () =>
+  assert.deepEqual(keyAction(ev({ key: 'Tab' }), ctx({ menuOpen: true })), { t: 'menuClose' }));

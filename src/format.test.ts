@@ -16,6 +16,8 @@ test('rel 的边界', () => {
   const now = new Date(2026, 9, 19, 10).getTime();
   assert.equal(rel(now - 44_000, now), '刚刚');
   assert.equal(rel(now - 2 * 60_000, now), '2分钟前');
+  assert.equal(rel(now - 59 * 60_000 - 45_000, now), '59分钟前'); // 不四舍五入成“60分钟前”
+  assert.equal(rel(now - 50_000, now), '1分钟前');
   assert.equal(rel(now - 3 * 3_600_000, now), '3小时前');
   assert.equal(rel(now - 3 * 3_600_000 - 59 * 60_000, now), '3小时前'); // 同日按整小时截断
   assert.equal(rel(new Date(2026, 9, 18, 10, 6).getTime(), now), '昨天'); // 不足 24 小时但跨日

@@ -32,3 +32,9 @@ test('copyToast：粘贴成功不提示，首次达 3 次提示常用', () => {
   assert.equal(copyToast({ result: 'copied' }, 'macos', false), '已复制');
   assert.equal(copyToast({ result: 'copiedOnly', reason: 'needAccessibility' }, 'macos', false), '已复制，在目标应用中按 ⌘ + V 粘贴');
 });
+
+test('copyToast：仅复制且首次进入常用时两句合并', () =>
+  assert.equal(
+    copyToast({ result: 'copiedOnly', reason: 'elevated' }, 'windows', true),
+    '这条已经用了 3 次，已加入“常用”；在目标应用中按 Ctrl + V 粘贴',
+  ));

@@ -32,18 +32,19 @@ export const keyAction = (e: KeyEv, c: KeyCtx): Action => {
   const k = e.key, lk = k.toLowerCase();
   const vert = k === 'ArrowDown' ? 1 : k === 'ArrowUp' ? -1 : 0;
   if (c.menuOpen) {
-    if (k === 'Escape') return { t: 'menuClose' };
+    if (k === 'Escape' || k === 'Tab') return { t: 'menuClose' };
     return vert ? { t: 'menuMove', d: vert } : null;
   }
   if (e.mod && k === ',') return null; // 设置窗口不在本阶段
   if (vert) return { t: 'move', d: vert, instant: e.repeat };
-  if (k === 'Enter' && !e.mod && !c.onControl) return { t: 'copy' };
+  // 按住不连发：删除、复制（次数 +1）、置顶（来回翻转）都只认第一次按下
+  if (k === 'Enter' && !e.mod && !c.onControl && !e.repeat) return { t: 'copy' };
   const digit = /^Digit([1-9])$/.exec(e.code);
   if (digit && e.mod) return { t: 'copyIndex', i: Number(digit[1]) - 1 };
-  if (e.mod && lk === 'p') return { t: 'pin' };
+  if (e.mod && lk === 'p') return e.repeat ? null : { t: 'pin' };
   if (e.mod && (k === 'ArrowLeft' || k === 'ArrowRight')) return { t: 'filter', d: k === 'ArrowRight' ? 1 : -1 };
   if (e.mod && !e.shift && lk === 'z' && c.canUndo && !(c.inSearch && c.searchHasText)) return { t: 'undo' };
-  if ((k === 'Delete' || k === 'Backspace') && !c.searchHasText && c.hasSel && !c.onControl) return { t: 'delete' };
+  if ((k === 'Delete' || k === 'Backspace') && !c.searchHasText && c.hasSel && !c.onControl && !e.repeat) return { t: 'delete' };
   if (k === 'Escape') return c.searchHasText ? { t: 'clearSearch' } : { t: 'hide' };
   if ((k === 'ContextMenu' || (e.shift && k === 'F10')) && c.hasSel) return { t: 'menu' };
   if (k.length === 1 && !c.inSearch && !c.onControl && !e.mod && !e.alt) return { t: 'focusSearch' };

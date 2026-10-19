@@ -29,7 +29,7 @@ const midnight = (t: number) => new Date(t).setHours(0, 0, 0, 0);
 export const rel = (t: number, now = Date.now()): string => {
   const age = now - t;
   if (age < 45_000) return '刚刚';
-  if (age < 3_600_000) return rtf.format(-Math.round(age / 60_000), 'minute');
+  if (age < 3_600_000) return rtf.format(-Math.max(1, Math.floor(age / 60_000)), 'minute');
   // 日差四舍五入以吸收夏令时的 23 / 25 小时
   const dayDiff = Math.round((midnight(now) - midnight(t)) / 86_400_000);
   if (dayDiff === 0) return rtf.format(-Math.max(1, Math.trunc(age / 3_600_000)), 'hour');

@@ -21,9 +21,11 @@ export function needsAccessibility(r: CopyResult): boolean {
   return r.result === 'copiedOnly' && r.reason === 'needAccessibility';
 }
 
+const FAV = '这条已经用了 3 次，已加入“常用”';
+
 /** 操作“复制”后的提示条文案；已粘贴（面板已隐藏）时不提示。 */
 export function copyToast(r: CopyResult, os: PlatformInfo['os'], becameFav: boolean): string | null {
   if (r.result === 'pasted') return null;
-  if (r.result === 'copied' && becameFav) return '这条已经用了 3 次，已加入“常用”';
+  if (becameFav) return r.result === 'copied' ? FAV : `${FAV}；在目标应用中按 ${pasteKey(os)} 粘贴`;
   return copyStatus(r, os);
 }
