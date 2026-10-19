@@ -7,14 +7,16 @@ use objc2::AllocAnyThread;
 use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2_app_kit::{
-    NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard, NSPasteboardItem,
-    NSPasteboardTypeFileURL, NSPasteboardTypeHTML, NSPasteboardTypeString, NSWorkspace,
+    NSApplicationActivationPolicy, NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard,
+    NSPasteboardItem, NSPasteboardTypeFileURL, NSPasteboardTypeHTML, NSPasteboardTypeString,
+    NSWorkspace,
 };
 use objc2_av_foundation::{AVAssetImageGenerator, AVAssetTrack, AVMediaTypeVideo, AVURLAsset};
 use objc2_core_graphics::{CGEvent, CGEventFlags, CGEventTapLocation};
 use objc2_core_media::{CMFormatDescription, CMTime};
 use objc2_foundation::{
-    NSArray, NSData, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString, NSURL, ns_string,
+    NSArray, NSData, NSDictionary, NSFileManager, NSNumber, NSPoint, NSRect, NSSize, NSString,
+    NSURL, ns_string,
 };
 use xpaste_core::{AppInfo, Flavor, Snapshot, VideoMeta};
 
@@ -322,6 +324,44 @@ pub fn frontmost_app() -> Option<AppInfo> {
     })
 }
 
+/// 选择器候选：前台类（Regular）运行中应用的 `localizedName`，加上常见应用目录下一层 `*.app` 的显示名
+///（去掉 `.app`）。与 `frontmost_app().name` 同口径；可重复、无序，由前端去重。
+pub fn installed_apps() -> Vec<String> {
+    const DIRS: [&str; 5] = [
+        "/Applications",
+        "/Applications/Utilities",
+        "/System/Applications",
+        "/System/Applications/Utilities",
+        "/System/Library/CoreServices/Applications",
+    ];
+    let home = std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Applications"));
+    let bundles: Vec<PathBuf> = DIRS
+        .iter()
+        .map(PathBuf::from)
+        .chain(home)
+        .filter_map(|d| std::fs::read_dir(d).ok())
+        .flatten()
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "app"))
+        .collect();
+    autoreleasepool(|_| {
+        let running = NSWorkspace::sharedWorkspace().runningApplications();
+        let fm = NSFileManager::defaultManager();
+        running
+            .iter()
+            .filter(|a| a.activationPolicy() == NSApplicationActivationPolicy::Regular)
+            .filter_map(|a| a.localizedName().map(|s| s.to_string()))
+            .chain(bundles.iter().filter_map(|p| {
+                let name = fm
+                    .displayNameAtPath(&NSString::from_str(p.to_str()?))
+                    .to_string();
+                Some(name.strip_suffix(".app").map(str::to_owned).unwrap_or(name))
+            }))
+            .filter(|n| !n.trim().is_empty())
+            .collect()
+    })
+}
+
 /// 清空剪切板后写入纯文本，返回写入后的 `changeCount`。
 pub fn write_text(text: &str) -> Result<u64, PlatformError> {
     autoreleasepool(|_| {
@@ -401,6 +441,17 @@ mod tests {
         assert_eq!(oriented_size(1920.0, 1080.0, 0.0, 1.0), (1080, 1920)); // 竖拍 90°
         assert_eq!(oriented_size(1920.0, 1080.0, 0.0, -1.0), (1080, 1920)); // 270°
         assert_eq!(oriented_size(1920.0, 1080.0, -1.0, 0.0), (1920, 1080)); // 180°
+    }
+
+    #[test]
+    fn installed_apps_lists_display_names() {
+        let apps = installed_apps();
+        assert!(
+            apps.iter().any(|n| n == "Safari"),
+            "{} 项里没有 Safari",
+            apps.len()
+        );
+        assert!(apps.iter().all(|n| !n.is_empty() && !n.ends_with(".app")));
     }
 
     #[test]
