@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 
 const read = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8');
 const css = read('./styles.css'), ts = read('./main.ts'), keymap = read('./keymap.ts'), html = read('../index.html');
+const panelRs = read('../src-tauri/src/panel.rs');
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 /** 选择器（精确，整条规则的开头）对应的所有声明块，拼在一起 */
 const rule = (sel: string) => {
@@ -35,7 +36,7 @@ test('M20-1 首次打开面板 720ms 上浮缩放 → 光柱 barIn 620ms spring�
   assert.match(ts, /runSearch\('', first \? \{ stagger: true, base: 260 \} : \{\}\)/);
 });
 
-test('M20-2 快捷键唤起 90ms enter / 托盘单击 320ms spring / 隐藏 160ms ease-out 淡出（有意偏差：系统材质下只位移不缩放，同 v0.5.1）', () => {
+test('M20-2 快捷键唤起 90ms enter / 托盘单击 320ms spring / 隐藏 160ms ease-out 淡出；macOS 系统材质下透明度由窗口 alpha 承担（进入 90ms、退出 160ms），内容只位移（有意偏差：系统材质下只位移不缩放，同 v0.5.1）', () => {
   // 鼠标唤起（托盘单击）240 / 320ms；键盘唤起 data-instant 90 / 120ms
   assert.match(rule('.window[data-shown="true"]'), /transition: opacity 240ms var\(--ease-enter\), transform 320ms var\(--ease-spring\)/);
   assert.match(rule('.window[data-instant][data-shown="true"]'), /transition-duration: 90ms, 120ms;/);
@@ -50,6 +51,10 @@ test('M20-2 快捷键唤起 90ms enter / 托盘单击 320ms spring / 隐藏 160m
   // 原生淡出时内容不自己淡出，只位移，窗口 alpha 单独承担整体淡出（不匹配 Windows Mica：nativeFade 要求 macOS）
   assert.match(ts, /root\.toggleAttribute\('data-native-fade', nativeFade\(\)\);/);
   assert.match(rule(':root[data-native-fade] .window[data-shown="false"]'), /opacity: 1;/);
+  // 系统材质的透明度在窗口 alpha 上：退出 1 → 0 160ms，进入 0 → 1 90ms（托盘 240ms），内容位移照 CSS 120 / 160ms
+  assert.match(panelRs, /\(macos && material != "opaque" && animate\)\.then_some\(160\)/);
+  assert.match(panelRs, /\.map\(\|_\| if trigger == Trigger::Tray \{ 240 \} else \{ 90 \}\)/);
+  assert.match(panelRs, /let start = if fade_in\.is_some\(\) \{ 0\.0 \} else \{ 1\.0 \};/);
 });
 
 test('M20-3 选中项切换 130ms move，换类型色；按住方向键 0ms', () => {

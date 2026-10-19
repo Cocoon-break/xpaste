@@ -1477,7 +1477,8 @@ const hidden = () => {
 
 // 键盘与隐藏按钮在 bootstrap 之前接线：读取失败的错误页也能 Esc / 关闭
 // 前端发起的隐藏先播 160ms 淡出；失焦隐藏由后端直接做，没有淡出。
-// macOS 系统材质的底板不归网页画：立即调 hide_panel，后端在同样的 160ms 内把整个窗口 alpha 淡到 0，与内容淡出并行
+// macOS 系统材质的底板不归网页画：内容只位移（data-native-fade），立即调 hide_panel，后端在 160ms 内把整个窗口 alpha 淡到 0；
+// 唤起时后端同样把 alpha 从 0 淡入（90ms，托盘 240ms）
 let hideTimer = 0;
 const nativeFade = () => S.platform.os === 'macos' && S.platform.material === 'glass';
 const hide = () => {

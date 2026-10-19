@@ -171,7 +171,7 @@ kbd {
   background: var(--spectrum); opacity: .7; border-radius: 1px;
 }
 /* 显隐由 Tauri 负责。前端发起的隐藏先把 data-shown 置 false 播 160ms 淡出再隐藏窗口
-   （macOS 系统材质下窗口 alpha 由后端同时淡出）；唤起时 shown() 按来源设 data-instant：
+   （macOS 系统材质下见下面 data-native-fade：内容只位移，透明度由窗口 alpha 承担）；唤起时 shown() 按来源设 data-instant：
    快捷键与再次启动照原型 data-instant 打开的时长（90 / 120ms），托盘单击是鼠标唤起（240 / 320ms 弹性回位）；
    首次唤起另有 .boot 编排 */
 .window[data-shown="false"] { opacity: 0; transform: scale(.965) translateY(10px); transition: opacity 140ms ease-out, transform 160ms ease-out; }
@@ -181,7 +181,8 @@ kbd {
 /* 系统材质由窗口外层提供圆角，内层缩放会让两层圆角错位：只位移 */
 :root:not([data-material="opaque"]) .window.boot { animation-name: panelInGlass; }
 :root:not([data-material="opaque"]) .window[data-shown="false"] { transform: translateY(10px); }
-/* macOS 系统材质：窗口 alpha 在 160ms 内淡出整个面板（panel.rs hide_animated），内容只位移不自己淡出，
+/* macOS 系统材质：内容只位移、不自己变透明，整个面板的透明度由窗口 alpha 承担——隐藏 160ms 淡到 0
+   （panel.rs hide_animated），唤起 90ms（托盘 240ms）从 0 淡入（try_show / fade_in_ms）；
    否则内容透明度 × 窗口 alpha 会让内容先消失、只剩底板 */
 :root[data-native-fade] .window[data-shown="false"] { opacity: 1; }
 .window.boot .sel-ind { animation: fadeIn 400ms ease 300ms both; }

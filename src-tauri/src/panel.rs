@@ -222,8 +222,17 @@ fn try_show(
     if let Err(e) = place(app, w) {
         log::warn!("面板定位失败：{e}");
     }
-    // 淡出途中重新唤起：打断 alpha 动画，立即不透明
-    if let Err(e) = animate_alpha(w, 1.0, 0.0) {
+    // 隐藏状态下唤起（系统材质）：先把 alpha 置 0 再上屏，上屏后淡入；已可见（淡出途中重新唤起）立即不透明，
+    // 同时打断进行中的淡出。隐藏时 hide() 已在 orderOut 后把 alpha 复位为 1，这里在上屏前覆盖，不会闪一帧
+    let hidden = !w.is_visible().unwrap_or(true);
+    let fade_in = fade_in_ms(
+        cfg!(target_os = "macos"),
+        material(),
+        hidden && !reduce_motion(),
+        trigger,
+    );
+    let start = if fade_in.is_some() { 0.0 } else { 1.0 };
+    if let Err(e) = animate_alpha(w, start, 0.0) {
         log::warn!("复位面板透明度失败：{e}");
     }
     #[cfg(target_os = "macos")]
@@ -241,6 +250,12 @@ fn try_show(
     {
         w.show()?;
         w.set_focus()?;
+    }
+    if let Some(ms) = fade_in
+        && let Err(e) = animate_alpha(w, 1.0, ms as f64 / 1000.0)
+    {
+        log::warn!("面板淡入失败：{e}");
+        let _ = animate_alpha(w, 1.0, 0.0);
     }
     w.emit(
         crate::events::PANEL_SHOWN,
@@ -268,10 +283,28 @@ fn animate_alpha(w: &WebviewWindow, alpha: f64, secs: f64) -> tauri::Result<()> 
     Ok(())
 }
 
-/// 其他平台不做原生淡出（`fade_out_ms` 恒为 `None`），alpha 始终为 1。
+/// 其他平台不做原生淡入淡出（`fade_out_ms` / `fade_in_ms` 恒为 `None`），alpha 始终为 1。
 #[cfg(not(target_os = "macos"))]
 fn animate_alpha(_: &WebviewWindow, _: f64, _: f64) -> tauri::Result<()> {
     Ok(())
+}
+
+/// 系统设置“减弱动态效果”（与网页的 prefers-reduced-motion 同源）。只在主线程调用。
+#[cfg(target_os = "macos")]
+#[allow(deprecated, unexpected_cfgs)] // 同 animate_alpha
+fn reduce_motion() -> bool {
+    use tauri_nspanel::cocoa::base::{BOOL, YES, id};
+    use tauri_nspanel::objc::{class, msg_send, sel, sel_impl};
+    unsafe {
+        let ws: id = msg_send![class!(NSWorkspace), sharedWorkspace];
+        let r: BOOL = msg_send![ws, accessibilityDisplayShouldReduceMotion];
+        r == YES
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn reduce_motion() -> bool {
+    false
 }
 
 /// AppKit 只能在主线程调用；已在主线程时同步执行（hide_panel 命令跑在异步线程上）。
@@ -310,13 +343,20 @@ fn show_panel(app: &AppHandle, t0: Option<u64>, trigger: Trigger) {
 }
 
 /// 前端发起的隐藏是否由原生把整个窗口淡出（毫秒）：只有 macOS 系统材质、且没有开减少动态效果。
-/// 系统材质的底板不归网页画，网页内容淡出时它保持不透明；不透明材质的底板随内容一起淡出，不需要。
+/// 系统材质的底板不归网页画，网页淡不掉它；这时网页内容只位移、不自己变透明（`data-native-fade`），
+/// 整个面板由窗口 alpha 淡出。不透明材质的底板由网页画，随内容一起淡出，不需要。
 pub fn fade_out_ms(macos: bool, material: &str, animate: bool) -> Option<u64> {
     (macos && material != "opaque" && animate).then_some(160)
 }
 
-/// 前端发起的隐藏（`hide_panel`）。macOS 系统材质下前端不等内容淡出、立即调到这里，
-/// 窗口 alpha 在同样的 160 ms 内淡到 0，与内容淡出并行，播完再隐藏；其他情况前端已播完淡出，直接隐藏。
+/// 唤起时是否由窗口 alpha 0 → 1 淡入（毫秒），与 `fade_out_ms` 对称：只在隐藏状态下唤起时
+/// （`animate` 已含“隐藏中”与减少动态效果）。键盘唤起 90 ms（M20“90 ms enter”），托盘单击 240 ms（鼠标时长）。
+pub fn fade_in_ms(macos: bool, material: &str, animate: bool, trigger: Trigger) -> Option<u64> {
+    fade_out_ms(macos, material, animate).map(|_| if trigger == Trigger::Tray { 240 } else { 90 })
+}
+
+/// 前端发起的隐藏（`hide_panel`）。macOS 系统材质下前端不等、立即调到这里：网页内容只下移，
+/// 窗口 alpha 在 160 ms 内把整个面板淡到 0，播完再隐藏；其他情况前端已播完内容淡出，直接隐藏。
 pub fn hide_animated(app: &AppHandle, animate: bool) {
     let Some(ms) = fade_out_ms(cfg!(target_os = "macos"), material(), animate) else {
         return hide(app);
@@ -616,6 +656,17 @@ mod tests {
             toggle_action(true, hide_pending(0, 9), false, Trigger::Hotkey, 0),
             ToggleAction::Reshow
         );
+    }
+
+    #[test]
+    fn native_fade_in_mirrors_fade_out() {
+        use Trigger::*;
+        assert_eq!(fade_in_ms(true, "glass", true, Hotkey), Some(90));
+        assert_eq!(fade_in_ms(true, "glass", true, Relaunch), Some(90));
+        assert_eq!(fade_in_ms(true, "glass", true, Tray), Some(240));
+        assert_eq!(fade_in_ms(true, "glass", false, Hotkey), None); // 已可见（淡出途中重新唤起）或减少动态效果
+        assert_eq!(fade_in_ms(true, "opaque", true, Hotkey), None);
+        assert_eq!(fade_in_ms(false, "glass", true, Hotkey), None);
     }
 
     #[test]
