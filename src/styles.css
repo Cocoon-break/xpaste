@@ -165,12 +165,16 @@ kbd {
   content: ""; position: absolute; left: 24px; right: 24px; top: -1px; height: 1px;
   background: var(--spectrum); opacity: .7; border-radius: 1px;
 }
-/* 显隐由 Tauri 负责；这里只做快捷键唤起的 90ms 淡入，首次唤起另有 .boot 编排 */
-.window[data-shown="false"] { opacity: 0; }
-.window[data-shown="true"] { transition: opacity 90ms var(--ease-enter); }
+/* 显隐由 Tauri 负责。前端发起的隐藏先把 data-shown 置 false 播 160ms 淡出再隐藏窗口；
+   唤起总是快捷键，照原型 data-instant 打开的时长（90 / 120ms），首次唤起另有 .boot 编排 */
+.window[data-shown="false"] { opacity: 0; transform: scale(.965) translateY(10px); transition: opacity 140ms ease-out, transform 160ms ease-out; }
+.window[data-shown="true"] { transform: none; transition: opacity 90ms var(--ease-enter), transform 120ms var(--ease-spring); }
 .window.boot { animation: panelIn 720ms var(--ease-enter) both; }
+/* 系统材质由窗口外层提供圆角，内层缩放会让两层圆角错位：只位移 */
+:root:not([data-material="opaque"]) .window.boot { animation-name: panelInGlass; }
 .window.boot .sel-ind { animation: fadeIn 400ms ease 300ms both; }
 @keyframes panelIn { from { opacity: 0; transform: scale(.94) translateY(24px); } }
+@keyframes panelInGlass { from { opacity: 0; transform: translateY(8px); } }
 .glow { /* 跟随指针的描边高光，只改这一层的变量 */
   position: absolute; inset: -1px; border-radius: inherit; padding: 1px; pointer-events: none; z-index: 3;
   background: radial-gradient(260px circle at var(--mx, 50%) var(--my, -200px), var(--glow-a), var(--glow-b) 40%, transparent 70%);
@@ -367,11 +371,12 @@ mark { background: var(--mark-bg); color: var(--mark-fg); border-radius: 3px; pa
 .row.beam::after {
   content: ""; position: absolute; inset: 0; pointer-events: none;
   background: linear-gradient(100deg, transparent 25%, color-mix(in srgb, var(--tc) 40%, transparent) 50%, transparent 75%);
-  transform: translateX(-100%); animation: beam 760ms var(--ease-move) forwards;
+  transform: translateX(-100%); animation: beam 760ms var(--ease-move) var(--beam-at, 0ms) forwards; /* 整行重绘后接着扫 */
 }
 @keyframes beam { to { transform: translateX(100%); } }
 .row.lift { z-index: 2; }
 
+.trunc { margin: 12px 0 0; font-size: 12px; color: var(--faint); }
 .empty { display: grid; justify-items: center; gap: 12px; padding: 56px 16px; text-align: center; color: var(--muted); }
 .empty .ring { width: 56px; height: 56px; border-radius: 16px; display: grid; place-items: center; color: var(--faint); border: 1px dashed var(--line-2); }
 .empty p { margin: 0; max-width: 30ch; text-wrap: balance; overflow-wrap: anywhere; }
