@@ -172,5 +172,37 @@
         <button class="btn primary" type="button" id="cfOk"></button>
       </footer>
     </dialog>
+
+    <dialog id="onboard" aria-labelledby="ob-title" tabindex="-1">
+      <header class="dlg-head">
+        <h2 id="ob-title">欢迎使用 xPaste</h2>
+        <button class="btn icon ghost" type="button" data-close aria-label="关闭引导"><span data-icon="x"></span></button>
+      </header>
+      <div class="dlg-body" data-step="hotkey" hidden>
+        <p class="ob-lead" style="--i:0">在任意应用里按 <kbd id="obKey"></kbd> 唤起面板</p>
+        <div style="--i:1">
+          <p class="help" data-try>现在就试一次</p>
+          <p class="ob-ok" data-ok hidden><span data-icon="check"></span>成功，以后随时按它找回复制过的内容</p>
+        </div>
+      </div>
+      <div class="dlg-body" data-step="accessibility" hidden>
+        <p class="ob-lead" style="--i:0">自动粘贴需要“辅助功能”权限</p>
+        <p class="help" style="--i:1">授权后按 Enter 会直接粘贴到上一个应用；不授权也能用，按 Enter 只复制</p>
+        <div style="--i:2">
+          <button class="btn sm" type="button" id="obGrant" data-try>前往授权</button>
+          <p class="ob-ok" data-ok hidden><span data-icon="check"></span>已授予</p>
+        </div>
+      </div>
+      <div class="dlg-body" data-step="autostart" hidden>
+        <div class="switches" style="--i:0">
+          <label class="switch"><span><b>开机时启动</b><small>登录系统后在后台待命</small></span><input type="checkbox" id="obAutostart"></label>
+        </div>
+      </div>
+      <footer class="dlg-foot">
+        <span class="steps" id="obDots" role="img"></span>
+        <button class="btn" type="button" id="obSkip"></button>
+        <button class="btn primary" type="button" id="obNext"></button>
+      </footer>
+    </dialog>
   </body>
 </html>

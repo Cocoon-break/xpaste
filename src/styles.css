@@ -565,6 +565,16 @@ dialog > form { display: contents; }
 #confirm { width: min(380px, calc(100% - 32px)); }
 #cfBody { margin: 0; font-size: 13px; line-height: 1.6; color: var(--muted); }
 .dlg-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 22px 18px; border-top: 1px solid var(--line); }
+/* 首次启动引导：每步一个 .dlg-body，切步时显示的那个重放 rowIn；步骤点在页脚左侧 */
+#onboard { width: min(420px, calc(100% - 32px)); }
+#onboard:focus { outline: none; }
+.ob-lead { margin: 0; font-size: 14px; line-height: 1.6; }
+.ob-lead kbd { font-size: 12px; height: 22px; padding: 0 7px; color: var(--fg); }
+.ob-ok { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 13px; color: var(--c-code); }
+.ob-ok .ic { width: 16px; height: 16px; }
+.steps { display: flex; gap: 6px; align-items: center; margin-right: auto; }
+.steps i { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); opacity: .45; transition: background-color 200ms ease, opacity 200ms ease; }
+.steps i.on { background: var(--beam); opacity: 1; }
 
 /* —— 窄窗口（720–760px）：列表与预览上下叠放 —— */
 @media (max-width: 760px) {

@@ -1,11 +1,12 @@
 import './styles.css';
 import { attachConsole, info } from './api/log';
 import {
-  accessibilityGranted, bootstrap, clearHistory, copy, copyText, countUnpinned, deleteRecord, getRecord, hidePanel, openUrl, prunePreview, requestAccessibility, revealFile,
-  saveSettings, search, setPaused, setPinned, undoDelete,
+  accessibilityGranted, bootstrap, clearHistory, copy, copyText, countUnpinned, deleteRecord, finishOnboarding, getRecord, hidePanel, openUrl, prunePreview,
+  requestAccessibility, revealFile, saveSettings, search, setPaused, setPinned, undoDelete,
 } from './api/commands';
 import {
   onConfirmClear,
+  onHotkeyPressed,
   onOpenSettings,
   onPanelHidden,
   onPanelHideRequested,
@@ -24,6 +25,7 @@ import {
 } from './format';
 import { hotkeyFromEvent, hotkeyLabel } from './hotkey';
 import { keyAction } from './keymap';
+import { nextStep, onboardSteps, type Step } from './onboarding';
 import { applyAdded, applyRemoved, applyUpdated } from './records';
 import { formToSettings, joinIgnored, optionFromRetention, parseLimit } from './settings-form';
 import {
@@ -1151,6 +1153,120 @@ async function submitSettings() {
 }
 $('#settingsBtn').addEventListener('click', openSettings);
 
+// —— 首次启动引导（M18） ——
+// 与设置对话框同一套弹入 / 150ms 收起 / 遮罩规则。每步一个 .dlg-body，切步时新显示的那个重放 rowIn。
+// 关闭按钮、Esc、遮罩、“完成”都算结束（不再显示）；面板隐藏时直接 close 不算，下次唤起从当前步继续
+const obDlg = $<HTMLDialogElement>('#onboard'), obNext = $<HTMLButtonElement>('#obNext'), obSkip = $<HTMLButtonElement>('#obSkip');
+const obDots = $('#obDots'), obAuto = $<HTMLInputElement>('#obAutostart');
+let obSteps: Step[] = [], obStep: Step | null = null, obOk = false, obPoll = 0, obTimer = 0, obReturn: HTMLElement | null = null;
+const obSection = () => obDlg.querySelector<HTMLElement>(`[data-step="${obStep}"]`)!;
+// 开机启动步没有成功态
+function paintObOk(pop: boolean) {
+  const sec = obSection(), ok = sec.querySelector<HTMLElement>('[data-ok]');
+  if (!ok) return;
+  sec.querySelector<HTMLElement>('[data-try]')!.hidden = obOk;
+  ok.hidden = !obOk;
+  if (!pop || !obOk) return;
+  fx(ok, [{ opacity: 0 }, { opacity: 1 }], { duration: 200, easing: 'ease-out' });
+  fx(ok.querySelector('.ic'), [{ transform: 'scale(.3)' }, { transform: 'scale(1)' }], { duration: 420, easing: EASE_SPRING });
+}
+function obSucceed() {
+  if (obOk) return;
+  obOk = true;
+  clearInterval(obPoll);
+  paintObOk(true);
+  obNext.disabled = false;
+  obNext.focus();
+}
+async function pollAx() {
+  if (await accessibilityGranted().catch(() => false)) {
+    if (obStep === 'accessibility' && obDlg.open) obSucceed();
+  }
+}
+function paintOb() {
+  const step = obStep!, last = nextStep(obSteps, step) === null;
+  obDlg.querySelectorAll<HTMLElement>('[data-step]').forEach((el) => (el.hidden = el.dataset.step !== step));
+  obDots.querySelectorAll('i').forEach((d, i) => d.classList.toggle('on', obSteps[i] === step));
+  obDots.setAttribute('aria-label', `第 ${obSteps.indexOf(step) + 1} 步，共 ${obSteps.length} 步`);
+  obNext.textContent = last ? '完成' : '下一步';
+  obNext.disabled = !last && !obOk;
+  obSkip.hidden = last;
+  obSkip.textContent = step === 'hotkey' ? '跳过这一步' : '跳过';
+  paintObOk(false);
+  clearInterval(obPoll);
+  if (step === 'accessibility' && !obOk) {
+    void pollAx();
+    obPoll = window.setInterval(() => void pollAx(), 1000);
+  }
+  // 热键步没有可用的按钮：聚焦对话框本身，免得 Enter 落到关闭按钮上结束引导
+  (step === 'accessibility' && !obOk ? $('#obGrant') : obNext.disabled ? obDlg : obNext).focus();
+}
+function startOnboarding() {
+  obSteps = onboardSteps(S.platform.os);
+  obStep = obSteps[0];
+  obOk = false;
+  obDots.innerHTML = obSteps.map(() => '<i></i>').join('');
+  $('#obKey').textContent = hotkeyLabel(S.settings.hotkey, S.platform.os);
+  obAuto.checked = S.settings.launchAtLogin;
+}
+function openOnboard() {
+  if (!obStep || obDlg.classList.contains('is-shown')) return;
+  clearTimeout(obTimer);
+  if (!obDlg.open) {
+    obReturn = document.activeElement as HTMLElement | null;
+    obDlg.showModal();
+  }
+  void obDlg.offsetWidth;
+  obDlg.classList.add('is-shown');
+  paintOb();
+}
+function obAdvance(skip: boolean) {
+  // 结束后的 150ms 收起途中还能点到按钮
+  if (!obStep) return;
+  const n = nextStep(obSteps, obStep);
+  if (!n) return void finishOnboard();
+  if (!skip && !obOk) return;
+  obStep = n;
+  obOk = false;
+  paintOb();
+}
+async function finishOnboard() {
+  if (!obStep) return;
+  obStep = null;
+  clearInterval(obPoll);
+  obDlg.classList.remove('is-shown');
+  clearTimeout(obTimer);
+  obTimer = window.setTimeout(() => obDlg.close(), reduced.matches ? 0 : 150);
+  const s = { ...S.settings, launchAtLogin: obAuto.checked };
+  try {
+    await saveSettings(s);
+    S.settings = s;
+  } catch (e) {
+    void info(`引导：保存开机启动失败：${(e as AppError).message}`);
+  }
+  await finishOnboarding().catch((e: AppError) => void info(`引导：结束引导失败：${e.message}`));
+}
+obDlg.addEventListener('close', () => {
+  if (obDlg.open) return;
+  obDlg.classList.remove('is-shown');
+  clearInterval(obPoll);
+  if (S.shown && obReturn?.isConnected) obReturn.focus({ preventScroll: true });
+  obReturn = null;
+});
+obDlg.addEventListener('cancel', (e) => {
+  e.preventDefault();
+  void finishOnboard();
+});
+let obDownOnBackdrop = false;
+obDlg.addEventListener('pointerdown', (e) => (obDownOnBackdrop = e.target === obDlg));
+obDlg.addEventListener('click', (e) => {
+  const t = e.target as Element;
+  if (t.closest('[data-close]') || (t === obDlg && obDownOnBackdrop)) void finishOnboard();
+  else if (t.closest('#obNext')) obAdvance(false);
+  else if (t.closest('#obSkip')) obAdvance(true);
+  else if (t.closest('#obGrant')) void requestAccessibility().catch((err: AppError) => toast(err.message));
+});
+
 // —— 面板显隐 ——
 let booted = false;
 const shown = (t0: number | null) => {
@@ -1170,6 +1286,8 @@ const shown = (t0: number | null) => {
   // 隐藏期间不刷新相对时间与分组，唤起时补一次；首次唤起逐行浮现（启动时窗口还不可见，不在那时播）
   runSearch('', first ? { stagger: true, base: 260 } : {});
   renderSpectrum();
+  // 引导没结束就被隐藏过：从当前步继续
+  openOnboard();
   if (import.meta.env.DEV && t0 !== null) {
     requestAnimationFrame(() => void info(`唤起耗时 ${Date.now() - t0} ms`));
   }
@@ -1269,6 +1387,10 @@ await onPausedChanged((p) => handlers.paused(p));
 // 托盘“设置…”：后端已先唤起面板
 await onOpenSettings(openSettings);
 await onConfirmClear(() => void confirmClear());
+// 引导中按唤起快捷键（或再次启动应用）：面板不隐藏，只在“试按快捷键”这一步算成功
+await onHotkeyPressed(() => {
+  if (obStep === 'hotkey' && obDlg.open) obSucceed();
+});
 
 const b = await bootstrap().catch((e: AppError) => {
   // 之后的每次 renderList 都显示这条，不被空列表文案覆盖
@@ -1292,7 +1414,12 @@ document.querySelectorAll('.mod').forEach((k) => (k.textContent = MOD));
 $('.modp').textContent = `${MOD} P`;
 await info(`bootstrap 完成，平台 ${b.platform.os}，材质 ${b.platform.material}`);
 // 首次启动后端在 setup 里就显示了面板，那时页面还没订阅，panel-shown 已丢失，这里补上
-if (b.firstRun && !S.shown) shown(null);
+if (b.firstRun) {
+  startOnboarding();
+  // shown() 末尾会打开引导；panel-shown 已先到时直接打开
+  if (S.shown) openOnboard();
+  else shown(null);
+}
 
 // —— 事件 ——
 q.addEventListener('input', (e) => {
