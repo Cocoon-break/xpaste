@@ -41,19 +41,14 @@ pub async fn paste_text(
         AppError::ClipboardWrite
     })?;
     let target = Some(state.previous_window.load(Ordering::Relaxed)).filter(|&h| h != 0);
-    match xpaste_platform::can_paste(target) {
-        PasteBlock::NeedAccessibility => Ok(CopyResult::CopiedOnly {
-            reason: "needAccessibility",
-        }),
-        PasteBlock::Elevated => Ok(CopyResult::CopiedOnly { reason: "elevated" }),
-        // Windows 不知道目标窗口时不盲发 Ctrl+V；面板尚未隐藏，直接给降级提示
-        PasteBlock::None if cfg!(windows) && target.is_none() => {
-            log::warn!("模拟粘贴跳过：没有记录到目标窗口");
-            Ok(CopyResult::CopiedOnly {
-                reason: "pasteFailed",
-            })
+    match plan_paste(xpaste_platform::can_paste(target), target, cfg!(windows)) {
+        PastePlan::CopyOnly(reason) => {
+            if reason == REASON_PASTE_FAILED {
+                log::warn!("模拟粘贴跳过：没有记录到目标窗口");
+            }
+            Ok(CopyResult::CopiedOnly { reason })
         }
-        PasteBlock::None => {
+        PastePlan::Paste => {
             crate::panel::hide(&app);
             match paste_on_main(&app, target).await {
                 Ok(()) => {
@@ -64,11 +59,30 @@ pub async fn paste_text(
                     log::warn!("模拟粘贴失败：{e}");
                     crate::panel::reshow(&app);
                     Ok(CopyResult::CopiedOnly {
-                        reason: "pasteFailed",
+                        reason: REASON_PASTE_FAILED,
                     })
                 }
             }
         }
+    }
+}
+
+const REASON_PASTE_FAILED: &str = "pasteFailed";
+
+/// 写入剪切板之后的决定：直接降级（面板保持可见），还是隐藏面板去粘贴。
+#[derive(Debug, PartialEq, Eq)]
+enum PastePlan {
+    CopyOnly(&'static str),
+    Paste,
+}
+
+fn plan_paste(block: PasteBlock, target: Option<isize>, windows: bool) -> PastePlan {
+    match block {
+        PasteBlock::NeedAccessibility => PastePlan::CopyOnly("needAccessibility"),
+        PasteBlock::Elevated => PastePlan::CopyOnly("elevated"),
+        // Windows 不知道目标窗口时不盲发 Ctrl+V（M09 失败处理：不粘贴到错误位置）
+        PasteBlock::None if windows && target.is_none() => PastePlan::CopyOnly(REASON_PASTE_FAILED),
+        PasteBlock::None => PastePlan::Paste,
     }
 }
 
@@ -94,6 +108,32 @@ async fn paste_on_main(app: &AppHandle, target: Option<isize>) -> Result<(), Str
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn blocked_paste_degrades_with_matching_reason() {
+        // AC-M09-05 / AC-M09-06：权限不足时只复制，原因与前端 CopyResult.reason 一致
+        assert_eq!(
+            plan_paste(PasteBlock::NeedAccessibility, None, false),
+            PastePlan::CopyOnly("needAccessibility")
+        );
+        assert_eq!(
+            plan_paste(PasteBlock::Elevated, Some(1), true),
+            PastePlan::CopyOnly("elevated")
+        );
+    }
+
+    #[test]
+    fn windows_never_pastes_blind_but_macos_needs_no_target() {
+        assert_eq!(
+            plan_paste(PasteBlock::None, None, true),
+            PastePlan::CopyOnly("pasteFailed")
+        );
+        assert_eq!(
+            plan_paste(PasteBlock::None, Some(42), true),
+            PastePlan::Paste
+        );
+        assert_eq!(plan_paste(PasteBlock::None, None, false), PastePlan::Paste);
+    }
 
     #[test]
     fn copy_result_matches_frontend_type() {
