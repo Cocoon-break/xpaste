@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { RecordSummary } from './api/types.ts';
-import { applyAdded, applyRemoved, applyUpdated, sorted, type Records } from './records.ts';
+import { applyAdded, applyRemoved, applyUpdated, type Records } from './records.ts';
+import { visible } from './view.ts';
 
 const rec = (id: number, copiedAt: number, pinned = false): RecordSummary => ({
   id,
@@ -21,7 +22,7 @@ test('applyAdded 新增后按复制时间倒序', () => {
   const m: Records = new Map();
   applyAdded(m, rec(1, 10));
   applyAdded(m, rec(2, 20));
-  assert.deepEqual(sorted(m).map((r) => r.id), [2, 1]);
+  assert.deepEqual(visible(m, 'all', null).map((r) => r.id), [2, 1]);
 });
 
 test('applyUpdated 替换已有项，id 不存在时插入', () => {
@@ -29,7 +30,7 @@ test('applyUpdated 替换已有项，id 不存在时插入', () => {
   applyUpdated(m, { ...rec(1, 30), uses: 1 });
   applyUpdated(m, rec(9, 5));
   assert.equal(m.get(1)?.uses, 1);
-  assert.deepEqual(sorted(m).map((r) => r.id), [1, 9]);
+  assert.deepEqual(visible(m, 'all', null).map((r) => r.id), [1, 9]);
 });
 
 test('applyRemoved 删除已有项，不存在的 id 无副作用', () => {
@@ -38,8 +39,8 @@ test('applyRemoved 删除已有项，不存在的 id 无副作用', () => {
   assert.deepEqual([...m.keys()], [1]);
 });
 
-test('sorted 置顶优先，同时间按 id 倒序', () => {
+test('visible 置顶优先，同时间按 id 倒序', () => {
   const m: Records = new Map();
   for (const r of [rec(1, 50), rec(2, 10, true), rec(3, 50), rec(4, 99)]) applyAdded(m, r);
-  assert.deepEqual(sorted(m).map((r) => r.id), [2, 4, 3, 1]);
+  assert.deepEqual(visible(m, 'all', null).map((r) => r.id), [2, 4, 3, 1]);
 });

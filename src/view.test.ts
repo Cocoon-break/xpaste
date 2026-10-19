@@ -1,0 +1,75 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import type { RecordSummary } from './api/types.ts';
+import {
+  armUndo, canUndo, counts, cycleFilter, ensureSelection, groupOf, groups, isStale, nextSelection, visible,
+} from './view.ts';
+
+const mk = (id: number, over: Partial<RecordSummary>): RecordSummary => ({
+  id, kind: 'text', title: '', app: null, copiedAt: 0, uses: 0, pinned: false,
+  size: 0, lang: null, thumb: null, durationSec: null, ...over,
+});
+
+test('visible：分类 ∩ 搜索 → 置顶优先、时间倒序', () => {
+  const m = new Map([mk(1, { copiedAt: 10 }), mk(2, { copiedAt: 20, pinned: true }), mk(3, { copiedAt: 30, kind: 'code' })].map((r) => [r.id, r]));
+  assert.deepEqual(visible(m, 'all', null).map((r) => r.id), [2, 3, 1]);
+  assert.deepEqual(visible(m, 'code', null).map((r) => r.id), [3]);
+  assert.deepEqual(visible(m, 'all', new Set([1])).map((r) => r.id), [1]);
+});
+
+test('常用视图按次数降序', () => {
+  const m = new Map([mk(1, { uses: 3, copiedAt: 1 }), mk(2, { uses: 5 }), mk(3, { uses: 2 })].map((r) => [r.id, r]));
+  assert.deepEqual(visible(m, 'fav', null).map((r) => r.id), [2, 1]);
+});
+
+test('groupOf 今天/昨天/更早/置顶', () => {
+  const now = new Date(2026, 9, 19, 12).getTime();
+  assert.equal(groupOf(mk(1, { copiedAt: now - 3_600_000 }), 'all', now), '今天');
+  assert.equal(groupOf(mk(1, { copiedAt: new Date(2026, 9, 18, 23).getTime() }), 'all', now), '昨天');
+  assert.equal(groupOf(mk(1, { copiedAt: now - 3 * 86_400_000 }), 'all', now), '更早');
+  assert.equal(groupOf(mk(1, { pinned: true, copiedAt: 0 }), 'all', now), '置顶');
+  assert.equal(groupOf(mk(1, {}), 'fav', now), '按使用次数排序');
+});
+
+test('groups 按 groupOf 切成连续分组', () => {
+  const now = new Date(2026, 9, 19, 12).getTime();
+  const vis = [mk(1, { pinned: true }), mk(2, { copiedAt: now }), mk(3, { copiedAt: now - 1 })];
+  assert.deepEqual(groups(vis, 'all', now).map((g) => [g.name, g.rows.map((r) => r.id)]), [['置顶', [1]], ['今天', [2, 3]]]);
+});
+
+test('counts 不受搜索影响且常用按阈值', () => {
+  const m = new Map([mk(1, { uses: 3 }), mk(2, { kind: 'code' })].map((r) => [r.id, r]));
+  assert.deepEqual(counts(m), { all: 2, fav: 1, text: 1, link: 0, code: 1, color: 0, image: 0, video: 0, file: 0 });
+});
+
+test('nextSelection 下一条、否则上一条、否则 null', () => {
+  const vis = [mk(1, {}), mk(2, {}), mk(3, {})];
+  assert.equal(nextSelection(vis, 2), 3);
+  assert.equal(nextSelection(vis, 3), 2);
+  assert.equal(nextSelection([mk(1, {})], 1), null);
+});
+
+test('ensureSelection 选中项被过滤掉时回到第一条', () => {
+  assert.equal(ensureSelection([mk(5, {})], 9), 5);
+  assert.equal(ensureSelection([mk(5, {})], 5), 5);
+  assert.equal(ensureSelection([], 5), null);
+});
+
+test('cycleFilter 循环 9 个分类', () => {
+  assert.equal(cycleFilter('file', 1), 'all');
+  assert.equal(cycleFilter('all', -1), 'file');
+});
+
+test('isStale', () => {
+  assert.ok(isStale(1, 2));
+  assert.ok(!isStale(2, 2));
+});
+
+test('undo 只保留最后一条且 5 秒后失效', () => {
+  const u1 = armUndo(null, 1, 'a', 0);
+  const u2 = armUndo(u1, 2, 'b', 1000);
+  assert.equal(u2?.id, 2);
+  assert.ok(canUndo(u2, 5999));
+  assert.ok(!canUndo(u2, 6000));
+  assert.ok(!canUndo(null, 0));
+});
