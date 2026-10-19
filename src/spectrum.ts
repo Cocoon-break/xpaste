@@ -55,6 +55,11 @@ export function layoutBars(recs: Iterable<RecordSummary>, now: number, widthPx: 
   return { bars, colOf };
 }
 
+/** 两次布局的列是否一样（列数与每列包含的记录都相同）：一样就能原地改光柱，让 dim/on 的过渡播出来 */
+export const sameColumns = (a: Layout, b: Layout) =>
+  a.bars.length === b.bars.length &&
+  a.bars.every((x, i) => x.ids.length === b.bars[i].ids.length && x.ids.every((id, j) => id === b.bars[i].ids[j]));
+
 /** 24 小时内条数，及按本地小时计的最忙时段（最多一次的小时 > 1 次才给；并列取较早的小时） */
 export function spectrumStat(recs: Iterable<RecordSummary>, now: number): { count: number; peak: { hour: number; n: number } | null } {
   const hours = new Array<number>(24).fill(0);

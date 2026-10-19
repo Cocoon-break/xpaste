@@ -27,7 +27,7 @@ import { hotkeyFromEvent, hotkeyLabel } from './hotkey';
 import { keyAction } from './keymap';
 import { nextStep, onboardSteps, type Step } from './onboarding';
 import { applyAdded, applyRemoved, applyUpdated } from './records';
-import { layoutBars, spectrumStat, staggerIndex, xPct, type Layout } from './spectrum';
+import { layoutBars, sameColumns, spectrumStat, staggerIndex, xPct, type Layout } from './spectrum';
 import { formToSettings, joinIgnored, optionFromRetention, parseLimit } from './settings-form';
 import {
   armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, nextSelection, UNDO_MS, visible, type UndoState,
@@ -508,10 +508,28 @@ let spNow = Date.now();
 let spOn: Element | null = null;
 function renderSpectrum(freshId?: number) {
   spNow = Date.now();
-  sp = layoutBars(S.records.values(), spNow, spTrack.clientWidth, matches, freshId);
-  const n = sp.bars.length;
-  spBars.innerHTML = sp.bars.map((b, i) =>
-    `<span class="bar${b.dim ? ' dim' : ''}${b.fresh ? ' fresh' : ''}" data-col="${i}" data-type="${b.kind}" style="left:${b.x}%;height:${b.h}%;--i:${staggerIndex(i, n)}"></span>`).join('');
+  // 删除中的记录不参与布局，否则重绘会把正在收起的光柱拉回来
+  const recs = [...S.records.values()].filter((r) => !S.removing.has(r.id));
+  const next = layoutBars(recs, spNow, spTrack.clientWidth, matches, freshId);
+  const cls = (b: Layout['bars'][number]) => `bar${b.dim ? ' dim' : ''}${b.fresh ? ' fresh' : ''}`;
+  const n = next.bars.length;
+  if (sameColumns(sp, next) && spBars.children.length === n) {
+    // 列没变（切分类、搜索、时间小幅流逝）：原地改，.dim/.on 的 200ms 过渡照常播放（原型同样是原地切类）
+    next.bars.forEach((b, i) => {
+      const el = spBars.children[i] as HTMLElement;
+      el.className = cls(b);
+      el.dataset.type = b.kind;
+      el.style.left = b.x + '%';
+      el.style.height = b.h + '%';
+    });
+  } else {
+    spBars.innerHTML = next.bars.map((b, i) =>
+      `<span class="${cls(b)}" data-col="${i}" data-type="${b.kind}" style="left:${b.x}%;height:${b.h}%;--i:${staggerIndex(i, n)}"></span>`).join('');
+    // 悬停的光柱已被替换，提示条不再对应
+    spTip.classList.remove('show');
+  }
+  sp = next;
+  // className 重写会去掉 .on，两条路径都由 paintSpectrumSel 重新标记
   spOn = null;
   const ticks: [number, string][] = [[3, '更早'], ...[18, 12, 6].map((h): [number, string] => [6 + 94 * (1 - h / 24), hf.format(spNow - h * 3600e3)]), [100, '现在']];
   $('#spAxis').innerHTML = ticks.map(([x, l]) => `<span style="left:${x}%">${l}</span>`).join('');

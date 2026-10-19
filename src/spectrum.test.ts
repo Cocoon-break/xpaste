@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Kind, RecordSummary } from './api/types.ts';
-import { DAY, hPct, layoutBars, spectrumStat, staggerIndex, xPct } from './spectrum.ts';
+import { DAY, hPct, layoutBars, sameColumns, spectrumStat, staggerIndex, xPct } from './spectrum.ts';
 
 const R = (id: number, at: number, size = 100, kind: Kind = 'text'): RecordSummary =>
   ({ id, kind, title: 't', app: null, copiedAt: at, uses: 0, pinned: false, size, lang: null, thumb: null, durationSec: null });
@@ -51,4 +51,12 @@ test('spectrumStat_counts_24h_and_peak_hour', () => {
 });
 test('staggerIndex 把升起压在 21 步内', () => {
   assert.equal(staggerIndex(5, 10), 5); assert.equal(staggerIndex(0, 450), 0); assert.equal(staggerIndex(449, 450), 20);
+});
+test('sameColumns_true_when_only_dim_changes', () => {
+  const recs = [R(1, now - 1000), R(2, now - 2000, 1e6), R(3, now - 6 * 3600e3, 10, 'code')];
+  const all = layoutBars(recs, now, 900, () => true);
+  assert.equal(sameColumns(all, layoutBars(recs, now, 900, (r) => r.kind === 'code')), true);
+  assert.equal(sameColumns(all, layoutBars(recs.slice(1), now, 900, () => true)), false); // 列内记录变了
+  assert.equal(sameColumns(all, layoutBars([...recs, R(4, now - 12 * 3600e3)], now, 900, () => true)), false); // 列数变了
+  assert.equal(sameColumns(all, layoutBars(recs, now, 2, () => true)), false); // 宽度变窄合并成一列
 });
