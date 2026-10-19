@@ -145,7 +145,7 @@ pub fn setup(app: &App) -> tauri::Result<()> {
                     ..
                 } = event
             {
-                panel::toggle(tray.app_handle(), None);
+                panel::toggle(tray.app_handle(), None, panel::Trigger::Tray);
             }
         })
         .build(app)?;

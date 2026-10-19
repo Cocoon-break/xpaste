@@ -1,5 +1,5 @@
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::Duration;
 
 use tauri::{
@@ -66,6 +66,43 @@ pub fn setup_macos(app: &tauri::App) -> Result<(), crate::error::AppError> {
         Err(e) => log::warn!("毛玻璃不可用：{e}"),
     }
     Ok(())
+}
+
+/// Windows 材质选择：Mica 成功即毛玻璃；Windows 10 不支持 Mica 时直接不透明
+/// （Acrylic 在 Windows 10 上拖动缩放会卡顿）；其他错误再试 Acrylic，仍失败则不透明。
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn windows_material(
+    mica: Result<(), window_vibrancy::Error>,
+    acrylic: impl FnOnce() -> Result<(), window_vibrancy::Error>,
+) -> &'static str {
+    match mica {
+        Ok(()) => "glass",
+        Err(window_vibrancy::Error::UnsupportedPlatformVersion(_)) => "opaque",
+        Err(e) => {
+            log::debug!("Mica 不可用：{e}");
+            match acrylic() {
+                Ok(()) => "glass",
+                Err(e) => {
+                    log::debug!("Acrylic 不可用：{e}");
+                    "opaque"
+                }
+            }
+        }
+    }
+}
+
+/// 铺 Windows 系统材质。`dark: None` 跟随窗口主题，`apply_theme` 的 `set_theme` 会同步 Mica 明暗。
+#[cfg(windows)]
+pub fn setup_windows(app: &tauri::App) {
+    use window_vibrancy::{apply_acrylic, apply_mica};
+    let Some(w) = window(app.handle()) else {
+        return;
+    };
+    let m = windows_material(apply_mica(&w, None), || apply_acrylic(&w, None));
+    if m == "opaque" {
+        log::info!("系统材质不可用，使用不透明背景");
+    }
+    let _ = MATERIAL.set(m);
 }
 
 /// 逻辑像素的矩形区域。
@@ -163,14 +200,15 @@ fn place(app: &AppHandle, w: &WebviewWindow) -> tauri::Result<()> {
         w.set_position(LogicalPosition::new(x, y))
     } else {
         // tao 把 Logical* 按窗口“当前”所在显示器的缩放换回物理像素，而上面按“目标”显示器换算；
-        // 混合 DPI（如主屏 150%、外接 100%）下会落到屏外，所以这里自己按目标缩放换算后传物理值
-        w.set_size(PhysicalSize::new(
-            (size.0 * sf).round() as u32,
-            (size.1 * sf).round() as u32,
-        ))?;
+        // 混合 DPI（如主屏 150%、外接 100%）下会落到屏外，所以这里自己按目标缩放换算后传物理值。
+        // 先移后定尺寸：跨缩放比例移动会触发 WM_DPICHANGED，tao 按系统建议矩形缩放窗口，最终尺寸以这里为准
         w.set_position(PhysicalPosition::new(
             (x * sf).round() as i32,
             (y * sf).round() as i32,
+        ))?;
+        w.set_size(PhysicalSize::new(
+            (size.0 * sf).round() as u32,
+            (size.1 * sf).round() as u32,
         ))
     }
 }
@@ -236,7 +274,10 @@ pub fn hide(app: &AppHandle) {
         // NSPanel 上 hide 即 orderOut:
         let Some(w) = window(app) else { return };
         match w.hide() {
-            Ok(()) => crate::events::emit(app, crate::events::PANEL_HIDDEN, ()),
+            Ok(()) => {
+                LAST_HIDE_MS.store(crate::clock::now_ms(), Ordering::Relaxed);
+                crate::events::emit(app, crate::events::PANEL_HIDDEN, ())
+            }
             Err(e) => log::warn!("隐藏面板失败：{e}"),
         }
     });
@@ -248,45 +289,86 @@ static REQ_SEQ: AtomicU64 = AtomicU64::new(1);
 /// 前端淡出 160 ms 后调 `hide_panel`；超过这个时间窗口仍可见，说明前端没响应。
 const HIDE_FALLBACK: Duration = Duration::from_millis(400);
 
+/// 最近一次成功隐藏的时间（Unix 毫秒）；`i64::MIN` 表示从未隐藏。
+static LAST_HIDE_MS: AtomicI64 = AtomicI64::new(i64::MIN);
+/// 隐藏后这段时间内的托盘单击不再唤起：这次按下已让面板失焦隐藏。
+pub const TRAY_AFTER_HIDE_MS: u64 = 300;
+
+/// `toggle` 的来源。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Trigger {
+    Hotkey,
+    Tray,
+    /// 再次启动（第二实例 / macOS 重开 .app）
+    Relaunch,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum ToggleAction {
-    Show,
+    /// `then_hotkey`：显示后再通知前端“快捷键已按下”（引导中按快捷键唤起）
+    Show {
+        then_hotkey: bool,
+    },
+    /// 淡出途中重新唤起，不重记目标窗口（此时前台是面板自己）
+    Reshow,
     RequestHide,
     /// 引导中面板不隐藏，通知前端“快捷键已按下”
     HotkeyPressed,
+    Ignore,
 }
 
-/// 淡出途中再按一次视为重新唤起；引导中可见时不隐藏。
-pub fn toggle_action(visible: bool, hide_pending: bool, onboarding: bool) -> ToggleAction {
-    match (visible, hide_pending, onboarding) {
-        (false, _, _) | (true, true, _) => ToggleAction::Show,
-        (true, false, true) => ToggleAction::HotkeyPressed,
-        (true, false, false) => ToggleAction::RequestHide,
+/// 淡出途中再按一次视为重新唤起；引导中可见时快捷键不隐藏，托盘与再次启动不算试按；
+/// 托盘单击刚让面板失焦隐藏时不再唤起。
+pub fn toggle_action(
+    visible: bool,
+    hide_pending: bool,
+    onboarding: bool,
+    trigger: Trigger,
+    ms_since_hide: u64,
+) -> ToggleAction {
+    if visible && hide_pending {
+        ToggleAction::Reshow
+    } else if visible && onboarding && trigger == Trigger::Hotkey {
+        ToggleAction::HotkeyPressed
+    } else if visible {
+        ToggleAction::RequestHide
+    } else if trigger == Trigger::Tray && ms_since_hide < TRAY_AFTER_HIDE_MS {
+        ToggleAction::Ignore
+    } else {
+        ToggleAction::Show {
+            then_hotkey: onboarding && trigger == Trigger::Hotkey,
+        }
     }
 }
 
 /// 以窗口实际可见性为准切换。可见时不直接隐藏，请前端先播淡出再调 `hide_panel`；
 /// 前端失效时由兜底线程隐藏。
-pub fn toggle(app: &AppHandle, t0: Option<u64>) {
+pub fn toggle(app: &AppHandle, t0: Option<u64>, trigger: Trigger) {
     let Some(w) = window(app) else { return };
     let visible = match w.is_visible() {
         Ok(v) => v,
         Err(e) => return log::warn!("读取面板可见性失败：{e}"),
     };
     let onboarding = app.state::<AppState>().onboarding.load(Ordering::SeqCst);
-    match toggle_action(visible, HIDE_REQ.load(Ordering::Relaxed) != 0, onboarding) {
-        ToggleAction::Show => {
+    // 时钟回拨（差为负）当作很久以前隐藏，宁可漏挡一次也不让托盘失灵
+    let since = crate::clock::now_ms().saturating_sub(LAST_HIDE_MS.load(Ordering::Relaxed));
+    let since = u64::try_from(since).unwrap_or(u64::MAX);
+    let hide_pending = HIDE_REQ.load(Ordering::Relaxed) != 0;
+    match toggle_action(visible, hide_pending, onboarding, trigger, since) {
+        ToggleAction::Show { then_hotkey } => {
             show(app, t0);
             // 引导中先切到别的应用（面板失焦隐藏）再按快捷键，也算试按成功。
             // 排在 show 的主线程任务之后发，前端先收到 panel-shown、重新打开引导，再收到这个
-            if onboarding {
+            if then_hotkey {
                 on_main(app, |app| {
                     crate::events::emit(app, crate::events::HOTKEY_PRESSED, ())
                 });
             }
         }
+        ToggleAction::Reshow => show_panel(app, t0),
         ToggleAction::RequestHide => request_hide(app),
         ToggleAction::HotkeyPressed => crate::events::emit(app, crate::events::HOTKEY_PRESSED, ()),
+        ToggleAction::Ignore => {}
     }
 }
 
@@ -394,14 +476,51 @@ mod tests {
     }
 
     #[test]
-    fn toggle_keeps_panel_during_onboarding() {
+    fn toggle_action_by_trigger() {
+        use Trigger::*;
+        let show = |then_hotkey| ToggleAction::Show { then_hotkey };
         assert_eq!(
-            toggle_action(true, false, true),
+            toggle_action(true, false, true, Hotkey, 9999),
             ToggleAction::HotkeyPressed
         );
-        assert_eq!(toggle_action(true, false, false), ToggleAction::RequestHide);
-        assert_eq!(toggle_action(true, true, false), ToggleAction::Show);
-        assert_eq!(toggle_action(false, false, true), ToggleAction::Show);
+        assert_eq!(
+            toggle_action(true, false, true, Tray, 9999),
+            ToggleAction::RequestHide
+        ); // 托盘不算试按
+        assert_eq!(
+            toggle_action(true, false, true, Relaunch, 9999),
+            ToggleAction::RequestHide
+        );
+        assert_eq!(
+            toggle_action(true, true, false, Hotkey, 9999),
+            ToggleAction::Reshow
+        );
+        assert_eq!(
+            toggle_action(false, false, false, Tray, 120),
+            ToggleAction::Ignore
+        );
+        assert_eq!(toggle_action(false, false, false, Tray, 300), show(false));
+        assert_eq!(toggle_action(false, false, false, Hotkey, 120), show(false));
+        assert_eq!(toggle_action(false, false, true, Hotkey, 9999), show(true));
+        assert_eq!(toggle_action(false, false, true, Tray, 9999), show(false));
+    }
+    #[test]
+    fn windows_material_falls_back_but_win10_stays_opaque() {
+        use window_vibrancy::Error as E;
+        let never = || -> Result<(), E> { panic!("Windows 10 不试 Acrylic") };
+        assert_eq!(windows_material(Ok(()), never), "glass");
+        assert_eq!(
+            windows_material(Err(E::UnsupportedPlatformVersion("win10")), never),
+            "opaque"
+        );
+        assert_eq!(
+            windows_material(Err(E::NotMainThread("x")), || Ok(())),
+            "glass"
+        );
+        assert_eq!(
+            windows_material(Err(E::NotMainThread("x")), || Err(E::NotMainThread("y"))),
+            "opaque"
+        );
     }
 
     #[test]

@@ -135,12 +135,13 @@ fn set_autostart(app: &AppHandle, on: bool) {
     }
 }
 
-#[tauri::command(async)]
-pub fn save_settings(
-    app: AppHandle,
-    state: State<'_, AppState>,
+/// 校验 → 按 `hotkey_action` 注册新快捷键（失败恢复旧快捷键）→ 持久化（失败也恢复）；返回变化的字段名。
+/// `register` 是唯一注入点（正式为 `hotkey::register`），测试借此模拟快捷键被占用。
+pub fn commit_settings(
+    state: &AppState,
     mut settings: Settings,
-) -> Result<(), AppError> {
+    mut register: impl FnMut(&str) -> Result<(), AppError>,
+) -> Result<Vec<&'static str>, AppError> {
     settings.validate()?;
     let old = state.settings().clone();
     // 面板尺寸只由拖动记忆（panel::remember_size）写；这里只为 changed 不含 panelSize，落库时 save_settings_inner 持锁再取
@@ -148,27 +149,39 @@ pub fn save_settings(
     let changed = changed_fields(&old, &settings);
     let action = hotkey_action(changed.contains(&"hotkey"), crate::tray::hotkey_failed());
     let hotkey_changed = action == HotkeyAction::Register;
+    // register 会先注销全部快捷键，失败时要把旧的注册回去
+    let restore = |register: &mut dyn FnMut(&str) -> Result<(), AppError>| {
+        if let Err(e) = register(&old.hotkey) {
+            log::warn!("恢复原快捷键失败：{e}");
+        }
+    };
+    if hotkey_changed && let Err(e) = register(&settings.hotkey) {
+        restore(&mut register);
+        return Err(e);
+    }
+    if let Err(e) = save_settings_inner(state, settings) {
+        if hotkey_changed {
+            restore(&mut register);
+        }
+        return Err(e);
+    }
+    Ok(changed)
+}
+
+#[tauri::command(async)]
+pub fn save_settings(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    settings: Settings,
+) -> Result<(), AppError> {
     let (hotkey, appearance, launch) = (
         settings.hotkey.clone(),
         settings.appearance,
         settings.launch_at_login,
     );
-    // register 会先注销全部快捷键，失败时要把旧的注册回去
-    let restore = |app: &AppHandle| {
-        if let Err(e) = crate::hotkey::register(app, &old.hotkey) {
-            log::warn!("恢复原快捷键失败：{e}");
-        }
-    };
-    if hotkey_changed && let Err(e) = crate::hotkey::register(&app, &hotkey) {
-        restore(&app);
-        return Err(e);
-    }
-    if let Err(e) = save_settings_inner(&state, settings) {
-        if hotkey_changed {
-            restore(&app);
-        }
-        return Err(e);
-    }
+    let changed = commit_settings(&state, settings, |s| crate::hotkey::register(&app, s))?;
+    // 快捷键改了必为 Register，与 commit_settings 内一致；没改时只决定是否尽力重试
+    let action = hotkey_action(changed.contains(&"hotkey"), crate::tray::hotkey_failed());
     log::info!("设置已保存 changed=[{}]", changed.join(", "));
     // 设置已持久化并生效：以下步骤失败不回滚、不算保存失败（都只记日志）
     let removed = prune_to_settings(&state);
@@ -323,6 +336,48 @@ mod tests {
         assert_eq!(hotkey_action(true, true), HotkeyAction::Register);
         assert_eq!(hotkey_action(false, true), HotkeyAction::RetryBestEffort);
         assert_eq!(hotkey_action(false, false), HotkeyAction::None);
+    }
+
+    #[test]
+    fn hotkey_taken_restores_old_hotkey_and_keeps_settings() {
+        let state = AppState::for_test();
+        let old = state.settings().clone();
+        let new = Settings {
+            hotkey: "CommandOrControl+Alt+C".into(),
+            max_records: 1000,
+            ..Settings::default()
+        };
+        let mut calls = Vec::new();
+        let r = commit_settings(&state, new, |s| {
+            calls.push(s.to_string());
+            if s == "CommandOrControl+Alt+C" {
+                Err(AppError::HotkeyTaken)
+            } else {
+                Ok(())
+            }
+        });
+        assert!(matches!(r, Err(AppError::HotkeyTaken)));
+        assert_eq!(*state.settings(), old);
+        assert_eq!(state.store().load_settings(), old);
+        assert_eq!(calls.first().unwrap(), "CommandOrControl+Alt+C");
+        assert_eq!(calls.last().unwrap(), "CommandOrControl+Shift+V");
+    }
+
+    #[test]
+    fn unchanged_hotkey_is_not_reregistered() {
+        let state = AppState::for_test();
+        let new = Settings {
+            max_records: 1000,
+            ..Settings::default()
+        };
+        let mut calls = 0;
+        let changed = commit_settings(&state, new, |_| {
+            calls += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(calls, 0);
+        assert_eq!(changed, ["maxRecords"]);
     }
 
     #[test]

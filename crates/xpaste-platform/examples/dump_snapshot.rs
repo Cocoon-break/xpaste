@@ -1,5 +1,5 @@
 //! 打印当前剪切板快照的结构（格式名、字节数、各字段有无），不打印内容。
-//! 运行：`cargo run -p xpaste-platform --example dump_snapshot [-- --icon <bundle id>]`
+//! 运行：`cargo run -p xpaste-platform --example dump_snapshot [-- --icon <bundle id 或 exe 路径>]`
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
