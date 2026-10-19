@@ -531,7 +531,11 @@ impl Store {
             size: row.get::<_, i64>(8)? as u64,
             lang: row.get(9)?,
             thumb: existing(self.dir.join("thumbs").join(format!("{id}.png"))),
-            duration_sec: meta.as_ref().and_then(|m| m.get("duration")?.as_f64()),
+            // 平台读不出时长时写 0：未知值不显示，这里统一当作没有
+            duration_sec: meta
+                .as_ref()
+                .and_then(|m| m.get("duration")?.as_f64())
+                .filter(|&d| d > 0.0),
         })
     }
 
@@ -756,6 +760,20 @@ pub(crate) mod tests {
         );
         std::fs::remove_file(&f).unwrap();
         assert_eq!(s.detail(id).unwrap().unwrap().video.unwrap().src, None); // AC-M08-05
+    }
+
+    #[test]
+    fn zero_duration_is_unknown() {
+        let mut s = mem();
+        let (Upsert::Added(id), _) = s
+            .insert_or_merge(&rec_files(&["/x/a.mp4"]), 1, 500)
+            .unwrap()
+        else {
+            panic!()
+        };
+        s.set_meta(id, &serde_json::json!({ "duration": 0.0 }))
+            .unwrap();
+        assert_eq!(s.detail(id).unwrap().unwrap().summary.duration_sec, None);
     }
 
     #[test]

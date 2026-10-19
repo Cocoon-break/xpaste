@@ -521,6 +521,10 @@ function renderSpectrum(freshId?: number) {
       el.dataset.type = b.kind;
       el.style.left = b.x + '%';
       el.style.height = b.h + '%';
+      // 撤销删除时光柱还在原列，但 remove() 的收起动画 fill: forwards 仍压着它：取消脚本动画，CSS 过渡照常
+      el.getAnimations().forEach((a) => {
+        if (!(a instanceof CSSAnimation) && !(a instanceof CSSTransition)) a.cancel();
+      });
     });
   } else {
     spBars.innerHTML = next.bars.map((b, i) =>
@@ -816,7 +820,8 @@ function remove(id: number) {
     (err: AppError) => {
       S.removing.delete(id);
       ownEcho.delete(id);
-      bar?.getAnimations().forEach((a) => a.cancel());
+      // 重绘把光柱补回来：没重建过时原地路径取消收起动画，删除途中重建过时按新布局补上
+      renderSpectrum();
       paintRows({ glide: ENTER_GLIDE });
       select(id, { scroll: true });
       toast(err.message);
@@ -919,6 +924,8 @@ const handlers = {
     details.delete(s.id);
     applyUpdated(S.records, s);
     renderTabs(true);
+    // 选中视频的补全到了：正文重取以显示封面与标签；正在播放（已有 <video>）时不打断
+    if (s.id === bodyFor && s.kind === 'video' && !pbody.querySelector('video')) bodyFor = null;
     // 去重命中会改 copiedAt，需要重新排序；选中项的头部与信息栏随 select 刷新，不重取详情
     renderList();
     renderSpectrum(prev && prev.copiedAt !== s.copiedAt ? s.id : undefined);
@@ -1695,8 +1702,19 @@ pbody.addEventListener('click', (e) => {
     // 容器认得但解码不了（例如 mov 里的 ProRes）：换回封面并说明；已切走的旧正文不管
     vid.addEventListener('error', () => {
       const fig = vid.closest('figure');
-      if (vid.isConnected && fig) fig.outerHTML = videoHTML(d, true);
+      if (!vid.isConnected || !fig) return;
+      const had = document.activeElement === vid;
+      fig.outerHTML = videoHTML(d, true);
+      // 焦点随 <video> 一起消失会落到 body：交还搜索框
+      if (had) q.focus({ preventScroll: true });
     }, { once: true });
+    // WebKit 在这里不会用空格切换播放；Enter 由 keymap 让给 video，不复制
+    vid.addEventListener('keydown', (e) => {
+      if (e.key !== ' ') return;
+      e.preventDefault();
+      if (vid.paused) vid.play().catch(() => {});
+      else vid.pause();
+    });
     // 同步调用，仍在用户手势内；被拒绝（自动播放策略等）时留给用户点控件
     vid.play().catch(() => {});
     vid.focus();
