@@ -10,6 +10,11 @@ export const PANEL_HIDDEN = 'panel-hidden';
 
 export const onPanelHidden = (cb: () => void): Promise<UnlistenFn> => listen(PANEL_HIDDEN, () => cb());
 
+/** 快捷键 / 托盘要隐藏面板：前端淡出后调 `hide_panel`；后端 400 ms 后仍可见会自己隐藏。 */
+export const PANEL_HIDE_REQUESTED = 'panel-hide-requested';
+
+export const onPanelHideRequested = (cb: () => void): Promise<UnlistenFn> => listen(PANEL_HIDE_REQUESTED, () => cb());
+
 export const RECORD_ADDED = 'record-added';
 export const RECORD_UPDATED = 'record-updated';
 export const RECORDS_REMOVED = 'records-removed';

@@ -56,3 +56,6 @@ test('按住不重复触发删除、复制、置顶', () => {
 
 test('菜单打开时 Tab 关闭菜单', () =>
   assert.deepEqual(keyAction(ev({ key: 'Tab' }), ctx({ menuOpen: true })), { t: 'menuClose' }));
+
+test('按住 Mod+数字不连续复制', () =>
+  assert.equal(keyAction(ev({ code: 'Digit3', mod: true, repeat: true }), ctx()), null));

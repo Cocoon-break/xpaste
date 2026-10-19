@@ -1,4 +1,6 @@
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use tauri::{
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Monitor, PhysicalPosition,
@@ -217,6 +219,7 @@ pub fn reshow(app: &AppHandle) {
 }
 
 fn show_panel(app: &AppHandle, t0: Option<u64>) {
+    HIDE_REQ.store(0, Ordering::Relaxed);
     on_main(app, move |app| {
         if let Some(w) = window(app)
             && let Err(e) = try_show(app, &w, t0)
@@ -227,6 +230,7 @@ fn show_panel(app: &AppHandle, t0: Option<u64>) {
 }
 
 pub fn hide(app: &AppHandle) {
+    HIDE_REQ.store(0, Ordering::Relaxed);
     on_main(app, |app| {
         // NSPanel 上 hide 即 orderOut:
         let Some(w) = window(app) else { return };
@@ -237,14 +241,37 @@ pub fn hide(app: &AppHandle) {
     });
 }
 
-/// 以窗口实际可见性为准切换，不另存状态。
+/// 待处理的隐藏请求编号，0 表示没有；`show_panel` / `hide` 时清零。
+static HIDE_REQ: AtomicU64 = AtomicU64::new(0);
+static REQ_SEQ: AtomicU64 = AtomicU64::new(1);
+/// 前端淡出 160 ms 后调 `hide_panel`；超过这个时间窗口仍可见，说明前端没响应。
+const HIDE_FALLBACK: Duration = Duration::from_millis(400);
+
+/// 以窗口实际可见性为准切换。可见时不直接隐藏，请前端先播淡出再调 `hide_panel`；
+/// 淡出途中再按一次视为重新唤起。前端失效时由兜底线程隐藏。
 pub fn toggle(app: &AppHandle, t0: Option<u64>) {
     let Some(w) = window(app) else { return };
     match w.is_visible() {
-        Ok(true) => hide(app),
+        Ok(true) if HIDE_REQ.load(Ordering::Relaxed) != 0 => show(app, t0),
+        Ok(true) => request_hide(app),
         Ok(false) => show(app, t0),
         Err(e) => log::warn!("读取面板可见性失败：{e}"),
     }
+}
+
+fn request_hide(app: &AppHandle) {
+    let req = REQ_SEQ.fetch_add(1, Ordering::Relaxed);
+    HIDE_REQ.store(req, Ordering::Relaxed);
+    crate::events::emit(app, crate::events::PANEL_HIDE_REQUESTED, ());
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(HIDE_FALLBACK);
+        // 期间隐藏过或重新唤起过（编号已变）就不再动
+        if HIDE_REQ.load(Ordering::Relaxed) == req {
+            log::warn!("前端未响应隐藏请求，后端直接隐藏");
+            hide(&app);
+        }
+    });
 }
 
 #[cfg(test)]

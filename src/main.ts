@@ -5,6 +5,7 @@ import {
 } from './api/commands';
 import {
   onPanelHidden,
+  onPanelHideRequested,
   onPanelShown,
   onPausedChanged,
   onRecordAdded,
@@ -182,7 +183,8 @@ const padTop = () => parseFloat(getComputedStyle(list).paddingTop) || 0;
 type Gone = { tops: number[]; over: number };
 const goneOf = (): Gone => {
   const tops = [...S.removing].flatMap((id) => topOf(S.cells, id) ?? []);
-  const over = tops.length ? Math.max(0, list.scrollTop - (list.scrollHeight - tops.length * ROW_H - list.clientHeight)) : 0;
+  // 删除后的最大滚动量不小于 0：不满一屏（或溢出不足）时不夹紧
+  const over = tops.length ? Math.max(0, list.scrollTop - Math.max(0, list.scrollHeight - tops.length * ROW_H - list.clientHeight)) : 0;
   return { tops, over };
 };
 const shiftUp = (top: number, g: Gone) => top + g.over - g.tops.filter((t) => t < top).length * ROW_H;
@@ -294,9 +296,9 @@ const ENTER_GLIDE = `transform 300ms ${EASE_ENTER}`;
 
 // 选中光标：独立一层滑动，内容即时
 let indShown = false;
-function moveInd({ instant = false, dur = 130, ease = EASE_MOVE, top }: { instant?: boolean; dur?: number; ease?: string; top?: number } = {}) {
+function moveInd({ instant = false, dur = 130, ease = EASE_MOVE }: { instant?: boolean; dur?: number; ease?: string } = {}) {
   const r = S.sel === null ? undefined : S.records.get(S.sel);
-  const t = top ?? (r ? shownTop(r.id) : undefined);
+  const t = r ? shownTop(r.id) : undefined;
   if (!r || t === undefined) {
     ind.style.opacity = '0';
     indShown = false;
@@ -310,8 +312,8 @@ function moveInd({ instant = false, dur = 130, ease = EASE_MOVE, top }: { instan
   indShown = true;
 }
 
-type SelectOpts = { scroll?: boolean; glide?: boolean; instant?: boolean; fade?: boolean; indTop?: number; indDur?: number; indEase?: string };
-function select(id: number | null, { scroll = false, glide = true, instant = false, fade = true, indTop, indDur, indEase }: SelectOpts = {}) {
+type SelectOpts = { scroll?: boolean; glide?: boolean; instant?: boolean; fade?: boolean; indDur?: number; indEase?: string };
+function select(id: number | null, { scroll = false, glide = true, instant = false, fade = true, indDur, indEase }: SelectOpts = {}) {
   const changed = S.sel !== id;
   S.sel = id;
   const top = id === null ? undefined : shownTop(id);
@@ -324,7 +326,7 @@ function select(id: number | null, { scroll = false, glide = true, instant = fal
     }
   }
   markSel();
-  moveInd({ instant: !glide || instant, top: indTop, dur: indDur, ease: indEase });
+  moveInd({ instant: !glide || instant, dur: indDur, ease: indEase });
   renderPreview(changed && fade && !instant);
   paintSpectrumSel(!instant);
 }
@@ -918,6 +920,8 @@ const hidden = () => {
 // 前端发起的隐藏先播 160ms 淡出；失焦隐藏由后端直接做，没有淡出
 let hideTimer = 0;
 const hide = () => {
+  // 首次唤起编排的动画会压住淡出（原型 setPanel 同样先去掉 boot）
+  win.classList.remove('boot');
   win.dataset.shown = 'false';
   clearTimeout(hideTimer);
   hideTimer = window.setTimeout(() => void hidePanel().catch((err: AppError) => {
@@ -983,6 +987,7 @@ await attachConsole();
 // 先订阅再 bootstrap，避免两者之间的事件丢失
 await onPanelShown(({ t0 }) => shown(t0));
 await onPanelHidden(hidden);
+await onPanelHideRequested(hide);
 await onRecordAdded((s) => handlers.added(s));
 await onRecordUpdated((s) => handlers.updated(s));
 await onRecordsRemoved((ids) => handlers.removed(ids));
@@ -1147,6 +1152,8 @@ if (matchMedia('(hover: hover) and (pointer: fine)').matches) {
 matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
   if (root.dataset.theme) return;
   root.setAttribute('data-theme-switching', '');
+  // 先让“关过渡”生效，再由新的配色 token 重算样式
+  void root.offsetWidth;
   requestAnimationFrame(() => root.removeAttribute('data-theme-switching'));
 });
 addEventListener('resize', () => {

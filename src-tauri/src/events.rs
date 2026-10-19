@@ -7,6 +7,8 @@ use crate::state::AppState;
 
 pub const PANEL_SHOWN: &str = "panel-shown";
 pub const PANEL_HIDDEN: &str = "panel-hidden";
+/// 快捷键 / 托盘要隐藏面板：前端播完淡出后调 `hide_panel`，400 ms 内没隐藏则后端兜底。
+pub const PANEL_HIDE_REQUESTED: &str = "panel-hide-requested";
 pub const RECORD_ADDED: &str = "record-added";
 pub const RECORD_UPDATED: &str = "record-updated";
 pub const RECORDS_REMOVED: &str = "records-removed";
