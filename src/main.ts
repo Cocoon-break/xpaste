@@ -1,6 +1,7 @@
 import { attachConsole, info } from './api/log';
 import { bootstrap, hidePanel, openAccessibilitySettings, pasteText } from './api/commands';
 import { onClipboardChanged, onPanelShown } from './api/events';
+import { copyStatus, needsAccessibility } from './copy-status';
 
 const q = document.querySelector<HTMLInputElement>('#q')!;
 const status = document.querySelector<HTMLElement>('#status')!;
@@ -31,16 +32,11 @@ status.textContent = `xPaste · ${b.platform.os} · 最多保存 ${b.settings.ma
 await info(`bootstrap 完成，平台 ${b.platform.os}，材质 ${b.platform.material}`);
 
 // 阶段 1 临时：测量用，阶段 3 移除
-const pasteKey = b.platform.os === 'macos' ? '⌘ + V' : 'Ctrl + V';
 document.querySelector('#pasteTest')!.addEventListener('click', async () => {
   try {
     const r = await pasteText('xPaste 粘贴测试 ' + Date.now());
-    axSettings.hidden = !(r.result === 'copiedOnly' && r.reason === 'needAccessibility');
-    if (r.result === 'copiedOnly') {
-      status.textContent = `已复制，在目标应用中按 ${pasteKey} 粘贴`;
-    } else {
-      status.textContent = r.result === 'pasted' ? '已粘贴' : '已复制';
-    }
+    axSettings.hidden = !needsAccessibility(r);
+    status.textContent = copyStatus(r, b.platform.os);
   } catch (err) {
     status.textContent = (err as { message?: string }).message ?? String(err);
   }

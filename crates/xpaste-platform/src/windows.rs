@@ -188,11 +188,7 @@ pub fn read_snapshot() -> Result<Option<Snapshot>, PlatformError> {
     }
     let sensitive = formats.contains(&exclude)
         || (formats.contains(&history)
-            && with_global(&guard, history, |b| {
-                b.first_chunk::<4>().map(|&v| u32::from_ne_bytes(v))
-            })
-            .flatten()
-                == Some(0));
+            && with_global(&guard, history, crate::decode::dword_is_zero) == Some(true));
     if sensitive {
         return Ok(Some(Snapshot {
             sensitive: true,
@@ -203,20 +199,11 @@ pub fn read_snapshot() -> Result<Option<Snapshot>, PlatformError> {
     let text = formats
         .contains(&u32::from(CF_UNICODETEXT.0))
         .then(|| {
-            with_global(&guard, u32::from(CF_UNICODETEXT.0), |b| {
-                let wide: Vec<u16> = b
-                    .as_chunks::<2>()
-                    .0
-                    .iter()
-                    .map(|&c| u16::from_ne_bytes(c))
-                    .take_while(|&c| c != 0)
-                    .collect();
-                // 原始 UTF-16LE 字节（截到首个 NUL），供日后原样写回
-                (
-                    String::from_utf16_lossy(&wide),
-                    b[..wide.len() * 2].to_vec(),
-                )
-            })
+            with_global(
+                &guard,
+                u32::from(CF_UNICODETEXT.0),
+                crate::decode::utf16le_cstr,
+            )
         })
         .flatten();
     drop(guard);

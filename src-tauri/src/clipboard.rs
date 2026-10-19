@@ -9,15 +9,21 @@ use crate::state::AppState;
 
 pub const CLIPBOARD_CHANGED: &str = "clipboard-changed";
 
+/// 这次变化是否由 xPaste 自己写入引起（M01 规则 5）。
+/// `writing`：正在写入中（Windows 上 WM_CLIPBOARDUPDATE 可能早于 last_write 写入到达）；
+/// `last_write`：上次写入后的序号，`u64::MAX` 表示从未写过。
+pub fn is_self_write(seq: u64, last_write: u64, writing: bool) -> bool {
+    writing || seq == last_write
+}
+
 pub fn start(app: AppHandle) {
     xpaste_platform::watch(move |seq| {
         let state = app.state::<AppState>();
-        // Windows 上 WM_CLIPBOARDUPDATE 可能早于 last_write_seq 写入到达
-        if state.writing.load(Ordering::SeqCst) {
-            log::info!("跳过自身写入（写入中）");
-            return;
-        }
-        if seq == state.last_write_seq.load(Ordering::SeqCst) {
+        if is_self_write(
+            seq,
+            state.last_write_seq.load(Ordering::SeqCst),
+            state.writing.load(Ordering::SeqCst),
+        ) {
             log::info!("跳过自身写入 seq={seq}");
             return;
         }
@@ -40,4 +46,21 @@ pub fn start(app: AppHandle) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_self_write;
+
+    #[test]
+    fn skips_while_writing_or_on_matching_seq() {
+        assert!(is_self_write(5, 1, true));
+        assert!(is_self_write(7, 7, false));
+    }
+
+    #[test]
+    fn never_written_sentinel_does_not_match_seq_zero() {
+        assert!(!is_self_write(0, u64::MAX, false));
+        assert!(!is_self_write(8, 7, false));
+    }
 }
