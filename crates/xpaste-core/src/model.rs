@@ -148,7 +148,7 @@ pub struct AppInfo {
 
 /// 平台层读到的一次剪切板内容。`sensitive` 为 true 时不含任何内容。
 /// `Debug` 只输出长度与标记，不输出内容、路径、标题。
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Snapshot {
     pub flavors: Vec<Flavor>,
     pub text: Option<String>,

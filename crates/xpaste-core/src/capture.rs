@@ -1,8 +1,17 @@
-//! 采集管线：由快照计算入库字段（设计 5.3）。
+//! 采集管线：过滤快照并入库（设计 5.2），由快照计算入库字段（设计 5.3）。
 
 use std::path::Path;
 
 use crate::{Kind, NewRecord, Snapshot, detect};
+
+#[cfg(feature = "store")]
+use crate::store::{Store, Upsert};
+#[cfg(feature = "store")]
+use crate::{CoreError, Settings};
+
+pub const MAX_TEXT_BYTES: usize = 5 * 1024 * 1024;
+pub const MAX_BITMAP_BYTES: usize = 50 * 1024 * 1024;
+pub const MAX_FLAVOR_BYTES: usize = 50 * 1024 * 1024;
 
 const TITLE_MAX_CHARS: usize = 200;
 const EMPTY_TITLE: &str = "(空)";
@@ -79,6 +88,83 @@ pub fn build_record(snapshot: Snapshot, kind: Kind, now_ms: i64) -> NewRecord {
         flavors,
         bitmap,
     }
+}
+
+#[cfg(feature = "store")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Skip {
+    Paused,
+    Sensitive,
+    IgnoredApp,
+    TooLarge,
+    Empty,
+}
+
+/// 第二个元素是被容量清理删除的 id。
+#[cfg(feature = "store")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Outcome {
+    Skipped(Skip),
+    Added(i64, Vec<i64>),
+    Merged(i64, Vec<i64>),
+}
+
+/// 设计 5.2 的 1–7 步：依次过滤，通过后识别类型、去重入库。
+#[cfg(feature = "store")]
+pub fn process(
+    mut snapshot: Snapshot,
+    settings: &Settings,
+    paused: bool,
+    store: &mut Store,
+    now_ms: i64,
+) -> Result<Outcome, CoreError> {
+    let skip = if paused {
+        Some(Skip::Paused)
+    } else if snapshot.sensitive && settings.skip_sensitive {
+        Some(Skip::Sensitive)
+    } else if is_ignored(&snapshot, &settings.ignored_apps) {
+        Some(Skip::IgnoredApp)
+    } else if snapshot.text_bytes() > MAX_TEXT_BYTES
+        || snapshot
+            .bitmap
+            .as_ref()
+            .is_some_and(|b| b.len() > MAX_BITMAP_BYTES)
+    {
+        Some(Skip::TooLarge)
+    } else if !snapshot.has_presentable_content() {
+        Some(Skip::Empty)
+    } else {
+        None
+    };
+    if let Some(s) = skip {
+        return Ok(Outcome::Skipped(s));
+    }
+
+    let kind = detect::kind(&snapshot);
+    snapshot.flavors.retain(|f| {
+        let keep = f.data.len() <= MAX_FLAVOR_BYTES;
+        if !keep {
+            log::debug!("丢弃过大的 flavor：{} {} 字节", f.format, f.data.len());
+        }
+        keep
+    });
+    let record = build_record(snapshot, kind, now_ms);
+    Ok(
+        match store.insert_or_merge(&record, now_ms, settings.max_records)? {
+            (Upsert::Added(id), removed) => Outcome::Added(id, removed),
+            (Upsert::Merged(id), removed) => Outcome::Merged(id, removed),
+        },
+    )
+}
+
+/// 按应用名称匹配，去首尾空白、不区分大小写（含非 ASCII）。
+#[cfg(feature = "store")]
+fn is_ignored(snapshot: &Snapshot, ignored: &[String]) -> bool {
+    let Some(app) = &snapshot.source else {
+        return false;
+    };
+    let name = app.name.trim().to_lowercase();
+    !name.is_empty() && ignored.iter().any(|i| i.trim().to_lowercase() == name)
 }
 
 fn non_blank(t: Option<&str>) -> Option<String> {
@@ -247,5 +333,132 @@ mod tests {
             build_record(snap("git status"), Kind::Code, 0).lang,
             Some("Shell")
         );
+    }
+
+    #[cfg(feature = "store")]
+    mod process {
+        use super::snap;
+        use crate::capture::*;
+        use crate::store::tests::tmp;
+        use crate::{AppInfo, Flavor, Settings, Store};
+
+        fn mem() -> Store {
+            Store::open_in_memory(&tmp()).unwrap()
+        }
+        fn run(s: Snapshot, cfg: &Settings, paused: bool) -> Outcome {
+            process(s, cfg, paused, &mut mem(), 1).unwrap()
+        }
+
+        #[test]
+        fn skips_when_paused() {
+            assert!(matches!(
+                run(snap("a"), &Settings::default(), true),
+                Outcome::Skipped(Skip::Paused)
+            ));
+        }
+        #[test]
+        fn skips_sensitive_when_enabled_records_when_disabled() {
+            let mut s = Snapshot {
+                sensitive: true,
+                ..snap("pw")
+            };
+            assert!(matches!(
+                run(s.clone(), &Settings::default(), false),
+                Outcome::Skipped(Skip::Sensitive)
+            ));
+            let cfg = Settings {
+                skip_sensitive: false,
+                ..Default::default()
+            };
+            s.sensitive = true;
+            assert!(matches!(run(s, &cfg, false), Outcome::Added(..)));
+        }
+        #[test]
+        fn skips_ignored_app_case_insensitively() {
+            let mut s = snap("x");
+            s.source = Some(AppInfo {
+                id: "p".into(),
+                name: "1PASSWORD".into(),
+            });
+            assert!(matches!(
+                run(s, &Settings::default(), false),
+                Outcome::Skipped(Skip::IgnoredApp)
+            ));
+        }
+        #[test]
+        fn ignored_app_match_trims_and_handles_non_ascii() {
+            let cfg = Settings {
+                ignored_apps: vec![" KeePass ".into(), "Ärger".into()],
+                ..Default::default()
+            };
+            for name in ["keepass", "ärger "] {
+                let mut s = snap("x");
+                s.source = Some(AppInfo {
+                    id: "p".into(),
+                    name: name.into(),
+                });
+                assert!(
+                    matches!(run(s, &cfg, false), Outcome::Skipped(Skip::IgnoredApp)),
+                    "{name}"
+                );
+            }
+        }
+        #[test]
+        fn skips_oversized_text_and_bitmap() {
+            assert!(matches!(
+                run(
+                    snap(&"x".repeat(MAX_TEXT_BYTES + 1)),
+                    &Settings::default(),
+                    false
+                ),
+                Outcome::Skipped(Skip::TooLarge)
+            ));
+            let s = Snapshot {
+                bitmap: Some(vec![0; MAX_BITMAP_BYTES + 1]),
+                ..Default::default()
+            };
+            assert!(matches!(
+                run(s, &Settings::default(), false),
+                Outcome::Skipped(Skip::TooLarge)
+            ));
+        }
+        #[test]
+        fn skips_snapshot_without_presentable_content() {
+            let mut s = Snapshot::default();
+            s.flavors.push(Flavor {
+                item: 0,
+                format: "com.private".into(),
+                data: vec![1],
+            });
+            assert!(matches!(
+                run(s, &Settings::default(), false),
+                Outcome::Skipped(Skip::Empty)
+            ));
+        }
+        #[test]
+        fn adds_then_merges() {
+            let mut st = mem();
+            let cfg = Settings::default();
+            let a = process(snap("a"), &cfg, false, &mut st, 1).unwrap();
+            let b = process(snap("a"), &cfg, false, &mut st, 2).unwrap();
+            assert!(matches!(a, Outcome::Added(..)));
+            assert!(matches!(b, Outcome::Merged(..)));
+        }
+        #[test]
+        fn oversized_flavor_is_dropped_not_record() {
+            let mut s = snap("a");
+            s.flavors.push(Flavor {
+                item: 0,
+                format: "huge".into(),
+                data: vec![0; MAX_FLAVOR_BYTES + 1],
+            });
+            let mut st = mem();
+            let Outcome::Added(id, _) =
+                process(s, &Settings::default(), false, &mut st, 1).unwrap()
+            else {
+                panic!()
+            };
+            assert!(st.flavors(id).unwrap().iter().all(|f| f.format != "huge"));
+        }
     }
 }

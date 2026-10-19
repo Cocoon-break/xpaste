@@ -16,7 +16,7 @@ use crate::{
 const MIGRATIONS: &[&str] = &[r"
 CREATE TABLE apps (id TEXT PRIMARY KEY, name TEXT NOT NULL, icon_path TEXT);
 CREATE TABLE records (
-  id INTEGER PRIMARY KEY, hash BLOB NOT NULL UNIQUE, kind TEXT NOT NULL, title TEXT NOT NULL,
+  id INTEGER PRIMARY KEY AUTOINCREMENT, hash BLOB NOT NULL UNIQUE, kind TEXT NOT NULL, title TEXT NOT NULL,
   text TEXT, paths TEXT, link_title TEXT, lang TEXT, size INTEGER NOT NULL, meta TEXT,
   search_text TEXT NOT NULL, app_id TEXT REFERENCES apps(id), copied_at INTEGER NOT NULL,
   uses INTEGER NOT NULL DEFAULT 0, pinned INTEGER NOT NULL DEFAULT 0, deleted_at INTEGER);
@@ -307,7 +307,7 @@ impl Store {
     pub fn flavors(&self, id: i64) -> Result<Vec<Flavor>, CoreError> {
         let mut stmt = self.conn.prepare(
             "SELECT item, format, data, file FROM flavors WHERE record_id = ?1
-             ORDER BY item, format",
+             ORDER BY rowid",
         )?;
         let rows = stmt
             .query_map([id], |row| {
@@ -564,14 +564,14 @@ fn migrate(conn: &mut Connection) -> Result<(), CoreError> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU32, Ordering::SeqCst};
 
     static COUNTER: AtomicU32 = AtomicU32::new(0);
 
-    fn tmp() -> PathBuf {
+    pub(crate) fn tmp() -> PathBuf {
         std::env::temp_dir().join(format!(
             "xpaste-test-{}-{}",
             std::process::id(),
@@ -589,7 +589,7 @@ mod tests {
         }
         let tables: Vec<String> = s
             .conn
-            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
             .unwrap()
             .query_map([], |r| r.get(0))
             .unwrap()
@@ -869,5 +869,40 @@ mod tests {
         s.soft_delete(id, 1).unwrap();
         s.purge_if_deleted_at(id, 1).unwrap();
         assert!(!img.exists());
+    }
+    #[test]
+    fn flavors_keep_insertion_order() {
+        let mut s = mem();
+        let mut r = rec("a");
+        r.flavors = ["b", "a"]
+            .map(|f| Flavor {
+                item: 0,
+                format: f.into(),
+                data: vec![],
+            })
+            .into();
+        let (Upsert::Added(id), _) = s.insert_or_merge(&r, 1, 500).unwrap() else {
+            panic!()
+        };
+        let got: Vec<String> = s
+            .flavors(id)
+            .unwrap()
+            .into_iter()
+            .map(|f| f.format)
+            .collect();
+        assert_eq!(got, ["b", "a"]);
+    }
+    #[test]
+    fn ids_are_not_reused() {
+        let mut s = mem();
+        let (Upsert::Added(a), _) = s.insert_or_merge(&rec("a"), 1, 500).unwrap() else {
+            panic!()
+        };
+        s.soft_delete(a, 1).unwrap();
+        s.purge_if_deleted_at(a, 1).unwrap();
+        let (Upsert::Added(b), _) = s.insert_or_merge(&rec("b"), 2, 500).unwrap() else {
+            panic!()
+        };
+        assert!(b > a, "{b} <= {a}");
     }
 }
