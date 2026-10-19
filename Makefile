@@ -8,7 +8,7 @@ SHELL := /bin/bash
 WIN_TARGET := x86_64-pc-windows-msvc
 HAS_WIN_TARGET := $(shell rustup target list --installed 2>/dev/null | grep -c $(WIN_TARGET))
 
-.PHONY: help install dev fmt lint test-rust test-web test check build build-check release release-app icons clean
+.PHONY: help install dev fmt lint test-rust test-web test check build build-check release release-app icons fonts clean
 
 help: ## 列出可用目标
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{ printf "  %-14s %s\n", $$1, $$2 }'
@@ -69,6 +69,9 @@ icons: ## 从 docs/brand 的 SVG 重新生成应用图标和托盘图标（需�
 	magick $$tmp/s{16,24,32,48,64,256}.png src-tauri/icons/icon.ico && \
 	mkdir -p src-tauri/icons/tray && \
 	for f in macos macos-paused windows windows-paused; do rsvg-convert docs/brand/tray-$$f.svg -o src-tauri/icons/tray/$$f.png; done
+
+fonts: ## 重新下载内置字体（latin 子集 woff2）与 OFL 许可证到 src/fonts
+	bash scripts/fetch-fonts.sh
 
 clean: ## 清理构建产物
 	cargo clean
