@@ -159,6 +159,13 @@ impl Snapshot {
     pub fn text_bytes(&self) -> usize {
         self.text.as_ref().map_or(0, String::len)
     }
+
+    /// 有可展示内容：文本非空、有文件引用或有位图（设计 5.2 第 5 步）。
+    pub fn has_presentable_content(&self) -> bool {
+        self.text.as_deref().is_some_and(|t| !t.is_empty())
+            || !self.file_paths.is_empty()
+            || self.bitmap.is_some()
+    }
 }
 
 #[cfg(test)]
