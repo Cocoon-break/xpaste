@@ -225,7 +225,7 @@ pub struct VideoProps<'a> {
 }
 
 /// 属性值换算成 `VideoMeta`：时长换成秒，帧率换成帧（两位小数，缺失记 0），
-/// 方向为 90° / 270° 时交换宽高，编码经 `codec_label`。没有宽或高（或为 0）视为没有视频轨，返回 `None`。
+/// 方向为 90° / 270° 时交换宽高，编码经 `codec_label`（`Compression` 认不出时用 `FourCC`，都没有记空串）。没有宽或高（或为 0）视为没有视频轨，返回 `None`。
 pub fn video_meta_from_props(p: &VideoProps) -> Option<VideoMeta> {
     let (w, h) = (p.w.filter(|&v| v > 0)?, p.h.filter(|&v| v > 0)?);
     let (w, h) = if matches!(p.orientation, Some(90 | 270)) {
@@ -236,6 +236,7 @@ pub fn video_meta_from_props(p: &VideoProps) -> Option<VideoMeta> {
     let code = p
         .compression
         .map(subtype_fourcc)
+        .filter(|s| !s.is_empty())
         .or_else(|| p.fourcc.map(fourcc_text))
         .unwrap_or_default();
     Some(VideoMeta {
@@ -545,6 +546,12 @@ mod tests {
             codec(Some("{e06d8026-db46-11cf-b4d1-00805f6cbbea}"), None),
             ""
         );
+        let vp90 = Some(u32::from_le_bytes(*b"VP90"));
+        assert_eq!(
+            codec(Some("{e06d8026-db46-11cf-b4d1-00805f6cbbea}"), vp90),
+            "VP9"
+        );
+        assert_eq!(codec(Some(""), vp90), "VP9");
         assert_eq!(codec(Some("MP4V"), None), "MPEG-4");
         assert_eq!(codec(None, None), "");
         // 时长、帧率缺失记 0；没有尺寸视为没有视频轨

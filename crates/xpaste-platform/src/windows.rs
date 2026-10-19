@@ -8,6 +8,7 @@ use windows::Win32::Foundation::{
     CloseHandle, GlobalFree, HANDLE, HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, PROPERTYKEY,
     RPC_E_CHANGED_MODE, SIZE, WPARAM,
 };
+use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, DeleteObject, GetDC, GetDIBits,
     GetObjectW, HBITMAP, ReleaseDC,
@@ -798,7 +799,7 @@ pub fn video_poster(path: &Path, max_px: u32) -> Option<Vec<u8>> {
     }
 }
 
-/// 选择器候选：有可见、带标题顶层窗口的进程（本进程除外），加上开始菜单快捷方式指向的 exe，
+/// 选择器候选：有可见（未被 DWM 隐藏）、带标题顶层窗口的进程（本进程除外），加上开始菜单快捷方式指向的 exe，
 /// 名称与 `frontmost_app().name` 同口径。可重复、无序，由前端去重。
 pub fn installed_apps() -> Vec<String> {
     let mut pids: Vec<u32> = Vec::new();
@@ -809,26 +810,41 @@ pub fn installed_apps() -> Vec<String> {
             LPARAM(&mut pids as *mut Vec<u32> as isize),
         )
     };
-    // SAFETY: 无参数
-    let me = unsafe { GetCurrentProcessId() };
-    pids.retain(|&p| p != me);
     pids.sort_unstable();
     pids.dedup();
     let linked = ComGuard::init().map_or_else(Vec::new, |_com| start_menu_targets());
-    pids.into_iter()
+    // 同一个 exe 只读一次版本资源
+    let mut exes: Vec<String> = pids
+        .into_iter()
         .filter_map(exe_of_pid)
         .chain(linked)
-        .map(|exe| app_name(&exe))
+        .collect();
+    exes.sort_unstable();
+    exes.dedup();
+    exes.iter()
+        .map(|exe| app_name(exe))
         .filter(|n| !n.trim().is_empty())
         .collect()
 }
 
 extern "system" fn push_window_pid(hwnd: HWND, lparam: LPARAM) -> BOOL {
-    // SAFETY: lparam 是 installed_apps 传入的 &mut Vec<u32>，EnumWindows 返回前一直有效
+    // SAFETY: lparam 是 installed_apps 传入的 &mut Vec<u32>，EnumWindows 返回前一直有效；cloaked 指向本地变量
     unsafe {
+        let mut cloaked = 0u32;
+        // 先排除本进程：对本进程 UI 线程的窗口取标题会跨线程发 WM_GETTEXTLENGTH，没有超时；
+        // 再排除被 DWM 隐藏（cloaked）的窗口，如其他虚拟桌面上的、挂起的 UWP 窗口
         if IsWindowVisible(hwnd).as_bool()
-            && GetWindowTextLengthW(hwnd) > 0
             && let Some(pid) = window_pid(hwnd)
+            && pid != GetCurrentProcessId()
+            && !(DwmGetWindowAttribute(
+                hwnd,
+                DWMWA_CLOAKED,
+                (&mut cloaked as *mut u32).cast(),
+                size_of::<u32>() as u32,
+            )
+            .is_ok()
+                && cloaked != 0)
+            && GetWindowTextLengthW(hwnd) > 0
         {
             (*(lparam.0 as *mut Vec<u32>)).push(pid);
         }

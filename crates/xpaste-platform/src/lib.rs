@@ -23,8 +23,8 @@ pub fn codec_label(fourcc: &str) -> String {
         "avc1" | "avc3" | "h264" | "x264" => "H.264",
         "hvc1" | "hev1" | "hevc" | "h265" => "HEVC",
         "apcn" | "apch" | "apcs" | "apco" | "ap4h" | "ap4x" => "ProRes",
-        "vp08" => "VP8",
-        "vp09" => "VP9",
+        "vp08" | "vp80" => "VP8",
+        "vp09" | "vp90" => "VP9",
         "av01" => "AV1",
         "mp4v" => "MPEG-4",
         "jpeg" | "mjpg" | "mjpa" => "Motion JPEG",
@@ -59,6 +59,8 @@ mod tests {
         assert_eq!(codec_label("hev1"), "HEVC");
         assert_eq!(codec_label("apch"), "ProRes");
         assert_eq!(codec_label("vp09"), "VP9");
+        assert_eq!(codec_label("VP80"), "VP8");
+        assert_eq!(codec_label("VP90"), "VP9");
         assert_eq!(codec_label(" xyz "), "XYZ");
         assert_eq!(codec_label(""), "");
     }
