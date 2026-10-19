@@ -63,6 +63,15 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn asset_url_windows_matches_convert_file_src() {
+        assert_eq!(
+            asset_url(Path::new(r"C:\Users\a b\图.png")),
+            "http://asset.localhost/C%3A%5CUsers%5Ca%20b%5C%E5%9B%BE.png"
+        );
+    }
+
     #[cfg(not(windows))]
     #[test]
     fn detail_dto_converts_video_src() {

@@ -1,18 +1,33 @@
 use std::cell::OnceCell;
-use std::path::Path;
+use std::os::windows::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{
-    CloseHandle, GlobalFree, HANDLE, HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM,
+    CloseHandle, GlobalFree, HANDLE, HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, PROPERTYKEY,
+    RPC_E_CHANGED_MODE, SIZE, WPARAM,
 };
+use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, DeleteObject, GetDC, GetDIBits,
     GetObjectW, HBITMAP, ReleaseDC,
 };
 use windows::Win32::Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation};
+use windows::Win32::Storage::EnhancedStorage::{
+    PKEY_Media_Duration, PKEY_Video_Compression, PKEY_Video_FourCC, PKEY_Video_FrameHeight,
+    PKEY_Video_FrameRate, PKEY_Video_FrameWidth, PKEY_Video_Orientation,
+};
 use windows::Win32::Storage::FileSystem::{
     GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
+};
+use windows::Win32::System::Com::StructuredStorage::{
+    PROPVARIANT, PropVariantClear, PropVariantToStringAlloc, PropVariantToUInt32,
+    PropVariantToUInt64,
+};
+use windows::Win32::System::Com::{
+    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree,
+    CoUninitialize, IPersistFile, STGM_READ,
 };
 use windows::Win32::System::DataExchange::{
     AddClipboardFormatListener, CloseClipboard, EmptyClipboard, EnumClipboardFormats,
@@ -28,25 +43,33 @@ use windows::Win32::System::Threading::{
     GetCurrentProcess, GetCurrentProcessId, OpenProcess, OpenProcessToken, PROCESS_NAME_WIN32,
     PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
+use windows::Win32::System::Variant::VT_EMPTY;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
     VIRTUAL_KEY, VK_CONTROL,
 };
-use windows::Win32::UI::Shell::SHDefExtractIconW;
-use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyIcon, DispatchMessageW, GetClassNameW,
-    GetForegroundWindow, GetIconInfo, GetMessageW, GetWindowThreadProcessId, HICON, HWND_MESSAGE,
-    ICONINFO, MSG, RegisterClassW, SetForegroundWindow, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WM_CLIPBOARDUPDATE, WNDCLASSW,
+use windows::Win32::UI::Shell::PropertiesSystem::{
+    GPS_DEFAULT, IPropertyStore, SHGetPropertyStoreFromParsingName,
 };
-use windows::core::{Error, PCWSTR, PWSTR, w};
+use windows::Win32::UI::Shell::{
+    IShellItemImageFactory, IShellLinkW, SHCreateItemFromParsingName, SHDefExtractIconW,
+    SIIGBF_THUMBNAILONLY, ShellLink,
+};
+use windows::Win32::UI::WindowsAndMessaging::{
+    CreateWindowExW, DefWindowProcW, DestroyIcon, DispatchMessageW, EnumWindows, GetClassNameW,
+    GetForegroundWindow, GetIconInfo, GetMessageW, GetWindowTextLengthW, GetWindowThreadProcessId,
+    HICON, HWND_MESSAGE, ICONINFO, IsWindowVisible, MSG, RegisterClassW, SetForegroundWindow,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLIPBOARDUPDATE, WNDCLASSW,
+};
+use windows::core::{BOOL, Error, Interface, PCWSTR, PWSTR, w};
 use xpaste_core::capture::MAX_FLAVOR_BYTES;
 use xpaste_core::{AppInfo, Flavor, Snapshot};
 
 use crate::decode::normalize_newlines;
 use crate::winfmt::{
-    bgra_to_png, bitmap_from_flavors, cf_html_fragment, file_description_query, formats_to_read,
-    is_shell_tray_class, parse_hdrop, standard_format_id, standard_format_name, write_bytes,
+    VideoProps, bgra_to_png, bgra_to_png_within, bitmap_from_flavors, cf_html_fragment,
+    file_description_query, formats_to_read, is_shell_tray_class, parse_hdrop, standard_format_id,
+    standard_format_name, video_meta_from_props, write_bytes,
 };
 use crate::{PasteBlock, PlatformError};
 
@@ -301,13 +324,24 @@ fn app_of_window(hwnd: HWND) -> Option<AppInfo> {
     if hwnd.is_invalid() {
         return None;
     }
+    let id = exe_of_pid(window_pid(hwnd)?)?;
+    Some(AppInfo {
+        name: app_name(&id),
+        id,
+    })
+}
+
+fn window_pid(hwnd: HWND) -> Option<u32> {
     let mut pid = 0u32;
-    // SAFETY: pid 指向本地变量；进程句柄用完即关
+    // SAFETY: pid 指向本地变量；hwnd 失效时调用失败、pid 保持 0
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid as *mut u32)) };
+    (pid != 0).then_some(pid)
+}
+
+/// 进程的 exe 完整路径。
+fn exe_of_pid(pid: u32) -> Option<String> {
+    // SAFETY: 进程句柄用完即关；buf 是本地缓冲区，len 为其容量
     unsafe {
-        GetWindowThreadProcessId(hwnd, Some(&mut pid as *mut u32));
-        if pid == 0 {
-            return None;
-        }
         let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
         let mut buf = [0u16; 1024];
         let mut len = buf.len() as u32;
@@ -319,14 +353,17 @@ fn app_of_window(hwnd: HWND) -> Option<AppInfo> {
         );
         let _ = CloseHandle(process);
         ok.ok()?;
-        let id = String::from_utf16_lossy(&buf[..len as usize]);
-        let name = file_description(&id).unwrap_or_else(|| {
-            Path::new(&id)
-                .file_stem()
-                .map_or_else(|| id.clone(), |s| s.to_string_lossy().into_owned())
-        });
-        Some(AppInfo { id, name })
+        Some(String::from_utf16_lossy(&buf[..len as usize]))
     }
+}
+
+/// 应用名称（`frontmost_app().name` 与 `installed_apps` 共用）：`FileDescription`，没有时用不带扩展名的文件名。
+fn app_name(exe: &str) -> String {
+    file_description(exe).unwrap_or_else(|| {
+        Path::new(exe)
+            .file_stem()
+            .map_or_else(|| exe.to_owned(), |s| s.to_string_lossy().into_owned())
+    })
 }
 
 /// exe 版本资源里的 `FileDescription`（按第一个语言 / 代码页取）；没有或为空时返回 `None`。
@@ -440,7 +477,8 @@ pub fn app_icon(app_id: &str) -> Option<Vec<u8>> {
     unsafe {
         let png = GetIconInfo(icon, &mut info)
             .ok()
-            .and_then(|()| icon_bitmap_to_png(info.hbmColor));
+            .and_then(|()| bitmap_bgra(info.hbmColor))
+            .and_then(|(w, h, px)| bgra_to_png(w, h, &px));
         if !info.hbmMask.is_invalid() {
             let _ = DeleteObject(info.hbmMask.into());
         }
@@ -452,8 +490,8 @@ pub fn app_icon(app_id: &str) -> Option<Vec<u8>> {
     }
 }
 
-/// 图标彩色位图读成自上而下的 32 位 BGRA 再转 PNG。位图由调用方释放。
-fn icon_bitmap_to_png(color: HBITMAP) -> Option<Vec<u8>> {
+/// 位图读成自上而下的 32 位 BGRA，返回（宽，高，像素）。位图由调用方释放。
+fn bitmap_bgra(color: HBITMAP) -> Option<(u32, u32, Vec<u8>)> {
     if color.is_invalid() {
         return None;
     }
@@ -502,10 +540,7 @@ fn icon_bitmap_to_png(color: HBITMAP) -> Option<Vec<u8>> {
         ReleaseDC(None, dc);
         n
     };
-    if lines != h as i32 {
-        return None;
-    }
-    bgra_to_png(w, h, &bgra)
+    (lines == h as i32).then_some((w, h, bgra))
 }
 
 /// 清空剪切板后写入 `CF_UNICODETEXT`，返回写入后的序号。
@@ -657,15 +692,215 @@ pub fn foreground_window() -> Option<isize> {
     }
 }
 
-// —— 阶段 7 新增，阶段 6 实现 ——
-pub fn video_meta(_path: &Path) -> Option<xpaste_core::VideoMeta> {
-    None
+/// 当前线程的 COM 初始化（MTA）。线程已是 STA（`RPC_E_CHANGED_MODE`）时 COM 照样可用，但不归本对象配对；
+/// 只有本次 `CoInitializeEx` 成功（含 `S_FALSE`）才在离开作用域时 `CoUninitialize`。
+/// 必须先于任何 COM 对象声明，让 COM 对象先释放。
+struct ComGuard(bool);
+
+impl ComGuard {
+    fn init() -> Option<Self> {
+        // SAFETY: 保留参数传 None
+        let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        if hr.is_ok() {
+            Some(Self(true))
+        } else if hr == RPC_E_CHANGED_MODE {
+            Some(Self(false))
+        } else {
+            log::debug!("COM 初始化失败：{hr:?}");
+            None
+        }
+    }
 }
 
-pub fn video_poster(_path: &Path, _max_px: u32) -> Option<Vec<u8>> {
-    None
+impl Drop for ComGuard {
+    fn drop(&mut self) {
+        if self.0 {
+            // SAFETY: 与本线程上成功的 CoInitializeEx 配对
+            unsafe { CoUninitialize() }
+        }
+    }
 }
 
+/// 以 NUL 结尾的宽字符路径（按 OsStr 原样转换，不经 UTF-8）。
+fn wide_path(path: &Path) -> Vec<u16> {
+    path.as_os_str().encode_wide().chain([0]).collect()
+}
+
+/// 读一个属性并交给 `f` 转换；属性不存在或为 `VT_EMPTY` 时返回 `None`。PROPVARIANT 用完即清。
+fn prop<T>(
+    store: &IPropertyStore,
+    key: &PROPERTYKEY,
+    f: impl FnOnce(&PROPVARIANT) -> Option<T>,
+) -> Option<T> {
+    // SAFETY: GetValue 成功后 PROPVARIANT 归本函数所有，读完 PropVariantClear；
+    // vt 是联合体里所有变体共有的头部字段
+    unsafe {
+        let mut v = store.GetValue(key).ok()?;
+        let out = (v.Anonymous.Anonymous.vt != VT_EMPTY)
+            .then(|| f(&v))
+            .flatten();
+        let _ = PropVariantClear(&mut v);
+        out
+    }
+}
+
+fn prop_u32(store: &IPropertyStore, key: &PROPERTYKEY) -> Option<u32> {
+    // SAFETY: v 由 prop 保证有效
+    prop(store, key, |v| unsafe { PropVariantToUInt32(v) }.ok())
+}
+
+/// 属性库读时长、尺寸、方向、帧率与编码，换算见 `winfmt::video_meta_from_props`。
+/// 打不开或没有视频尺寸时返回 None。
+pub fn video_meta(path: &Path) -> Option<xpaste_core::VideoMeta> {
+    let _com = ComGuard::init()?;
+    let wide = wide_path(path);
+    // SAFETY: wide 以 NUL 结尾，调用期间有效
+    let store: IPropertyStore =
+        unsafe { SHGetPropertyStoreFromParsingName(PCWSTR(wide.as_ptr()), None, GPS_DEFAULT) }
+            .ok()?;
+    // SAFETY: v 由 prop 保证有效；PropVariantToStringAlloc 分配的字符串读完 CoTaskMemFree
+    let compression = prop(&store, &PKEY_Video_Compression, |v| unsafe {
+        let p = PropVariantToStringAlloc(v).ok()?;
+        let s = p.to_string().ok();
+        CoTaskMemFree(Some(p.0 as *const _));
+        s
+    });
+    video_meta_from_props(&VideoProps {
+        // SAFETY: v 由 prop 保证有效
+        duration_100ns: prop(&store, &PKEY_Media_Duration, |v| {
+            unsafe { PropVariantToUInt64(v) }.ok()
+        }),
+        w: prop_u32(&store, &PKEY_Video_FrameWidth),
+        h: prop_u32(&store, &PKEY_Video_FrameHeight),
+        frame_rate_milli: prop_u32(&store, &PKEY_Video_FrameRate),
+        orientation: prop_u32(&store, &PKEY_Video_Orientation),
+        compression: compression.as_deref(),
+        fourcc: prop_u32(&store, &PKEY_Video_FourCC),
+    })
+}
+
+/// 封面：系统缩略图（`SIIGBF_THUMBNAILONLY`，取帧位置由系统决定），长边不超过 `max_px`，PNG。
+/// 没有缩略图处理程序的格式（系统不认识的编码）返回 None。
+pub fn video_poster(path: &Path, max_px: u32) -> Option<Vec<u8>> {
+    let _com = ComGuard::init()?;
+    let wide = wide_path(path);
+    let side = i32::try_from(max_px).ok()?;
+    // SAFETY: wide 以 NUL 结尾，调用期间有效
+    let factory: IShellItemImageFactory =
+        unsafe { SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None) }.ok()?;
+    // SAFETY: GetImage 成功返回的位图归本函数所有，读完 DeleteObject
+    unsafe {
+        let bitmap = factory
+            .GetImage(SIZE { cx: side, cy: side }, SIIGBF_THUMBNAILONLY)
+            .ok()?;
+        let png = bitmap_bgra(bitmap).and_then(|(w, h, px)| bgra_to_png_within(w, h, &px, max_px));
+        let _ = DeleteObject(bitmap.into());
+        png
+    }
+}
+
+/// 选择器候选：有可见（未被 DWM 隐藏）、带标题顶层窗口的进程（本进程除外），加上开始菜单快捷方式指向的 exe，
+/// 名称与 `frontmost_app().name` 同口径。可重复、无序，由前端去重。
 pub fn installed_apps() -> Vec<String> {
-    Vec::new()
+    let mut pids: Vec<u32> = Vec::new();
+    // SAFETY: 回调只在 EnumWindows 返回前经 lparam 访问 pids
+    let _ = unsafe {
+        EnumWindows(
+            Some(push_window_pid),
+            LPARAM(&mut pids as *mut Vec<u32> as isize),
+        )
+    };
+    pids.sort_unstable();
+    pids.dedup();
+    let linked = ComGuard::init().map_or_else(Vec::new, |_com| start_menu_targets());
+    // 同一个 exe 只读一次版本资源
+    let mut exes: Vec<String> = pids
+        .into_iter()
+        .filter_map(exe_of_pid)
+        .chain(linked)
+        .collect();
+    exes.sort_unstable();
+    exes.dedup();
+    exes.iter()
+        .map(|exe| app_name(exe))
+        .filter(|n| !n.trim().is_empty())
+        .collect()
+}
+
+extern "system" fn push_window_pid(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    // SAFETY: lparam 是 installed_apps 传入的 &mut Vec<u32>，EnumWindows 返回前一直有效；cloaked 指向本地变量
+    unsafe {
+        let mut cloaked = 0u32;
+        // 先排除本进程：对本进程 UI 线程的窗口取标题会跨线程发 WM_GETTEXTLENGTH，没有超时；
+        // 再排除被 DWM 隐藏（cloaked）的窗口，如其他虚拟桌面上的、挂起的 UWP 窗口
+        if IsWindowVisible(hwnd).as_bool()
+            && let Some(pid) = window_pid(hwnd)
+            && pid != GetCurrentProcessId()
+            && !(DwmGetWindowAttribute(
+                hwnd,
+                DWMWA_CLOAKED,
+                (&mut cloaked as *mut u32).cast(),
+                size_of::<u32>() as u32,
+            )
+            .is_ok()
+                && cloaked != 0)
+            && GetWindowTextLengthW(hwnd) > 0
+        {
+            (*(lparam.0 as *mut Vec<u32>)).push(pid);
+        }
+    }
+    true.into()
+}
+
+/// 开始菜单（全体用户与当前用户）里 `.lnk` 指向的、存在的 `.exe`。调用方已初始化 COM。
+fn start_menu_targets() -> Vec<String> {
+    let mut links = Vec::new();
+    for var in ["ProgramData", "APPDATA"] {
+        if let Some(root) = std::env::var_os(var) {
+            collect_links(
+                &PathBuf::from(root).join(r"Microsoft\Windows\Start Menu\Programs"),
+                &mut links,
+            );
+        }
+    }
+    links.iter().filter_map(|l| link_target(l)).collect()
+}
+
+/// 递归收集 `.lnk`；不跟随符号链接与联接点，避免循环。
+fn collect_links(dir: &Path, out: &mut Vec<PathBuf>) {
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if entry.file_type().is_ok_and(|t| t.is_dir()) {
+            collect_links(&path, out);
+        } else if path
+            .extension()
+            .is_some_and(|x| x.eq_ignore_ascii_case("lnk"))
+        {
+            out.push(path);
+        }
+    }
+}
+
+/// 快捷方式的目标；不是存在的 `.exe`（帮助文档、网址、安装程序公告的快捷方式等）时返回 None。
+fn link_target(lnk: &Path) -> Option<String> {
+    let wide = wide_path(lnk);
+    let mut buf = [0u16; 1024];
+    // SAFETY: wide 以 NUL 结尾、buf 是本地缓冲区，调用期间有效；不要 WIN32_FIND_DATAW，传 null；
+    // 两个 COM 对象在本函数返回前释放
+    unsafe {
+        let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).ok()?;
+        link.cast::<IPersistFile>()
+            .ok()?
+            .Load(PCWSTR(wide.as_ptr()), STGM_READ)
+            .ok()?;
+        link.GetPath(&mut buf, std::ptr::null_mut(), 0).ok()?;
+    }
+    let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    let target = String::from_utf16_lossy(&buf[..end]);
+    let path = Path::new(&target);
+    (path
+        .extension()
+        .is_some_and(|x| x.eq_ignore_ascii_case("exe"))
+        && path.is_file())
+    .then_some(target)
 }

@@ -6,9 +6,10 @@ use std::io::Cursor;
 use std::path::PathBuf;
 
 use image::codecs::bmp::BmpDecoder;
+use image::imageops::FilterType;
 use image::{DynamicImage, ImageDecoder, ImageFormat, RgbaImage};
-use xpaste_core::Flavor;
 use xpaste_core::capture::MAX_FLAVOR_BYTES;
+use xpaste_core::{Flavor, VideoMeta};
 
 /// 系统预定义格式（`CF_*`）：id 与名字。`GetClipboardFormatNameW` 取不到这些名字。
 pub const STANDARD_FORMATS: [(u32, &str); 22] = [
@@ -139,6 +140,24 @@ pub fn dib_to_png(dib: &[u8]) -> Option<Vec<u8>> {
 
 /// 自上而下的 BGRA 像素转 PNG；长度必须正好是 `w * h * 4`。
 pub fn bgra_to_png(w: u32, h: u32, bgra: &[u8]) -> Option<Vec<u8>> {
+    encode_png(bgra_image(w, h, bgra)?)
+}
+
+/// 同 `bgra_to_png`，长边超过 `max_px` 时按比例缩小到不超过 `max_px`。
+pub fn bgra_to_png_within(w: u32, h: u32, bgra: &[u8], max_px: u32) -> Option<Vec<u8>> {
+    let img = opaque_if_no_alpha(bgra_image(w, h, bgra)?);
+    if w.max(h) <= max_px {
+        return encode_png(img);
+    }
+    let max = max_px.max(1);
+    encode_png(
+        DynamicImage::ImageRgba8(img)
+            .resize(max, max, FilterType::Triangle)
+            .to_rgba8(),
+    )
+}
+
+fn bgra_image(w: u32, h: u32, bgra: &[u8]) -> Option<RgbaImage> {
     if (w as usize).checked_mul(h as usize)?.checked_mul(4)? != bgra.len() {
         return None;
     }
@@ -148,7 +167,7 @@ pub fn bgra_to_png(w: u32, h: u32, bgra: &[u8]) -> Option<Vec<u8>> {
         .iter()
         .flat_map(|&[b, g, r, a]| [r, g, b, a])
         .collect();
-    encode_png(RgbaImage::from_raw(w, h, rgba)?)
+    RgbaImage::from_raw(w, h, rgba)
 }
 
 /// 已读出的 flavor 中有 `PNG` 时原样返回；否则第一个 `CF_DIBV5` / `CF_DIB` 转成 PNG。
@@ -187,11 +206,85 @@ pub fn is_shell_tray_class(class: &str) -> bool {
     )
 }
 
+/// 视频文件属性库（`IPropertyStore`）里读到的原始值，读不到的为 `None`。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct VideoProps<'a> {
+    /// `System.Media.Duration`，100 ns 单位
+    pub duration_100ns: Option<u64>,
+    /// `System.Video.FrameWidth` / `FrameHeight`
+    pub w: Option<u32>,
+    pub h: Option<u32>,
+    /// `System.Video.FrameRate`，每千秒的帧数
+    pub frame_rate_milli: Option<u32>,
+    /// `System.Video.Orientation`，度
+    pub orientation: Option<u32>,
+    /// `System.Video.Compression`：子类型 GUID 字符串或编码名
+    pub compression: Option<&'a str>,
+    /// `System.Video.FourCC`
+    pub fourcc: Option<u32>,
+}
+
+/// 属性值换算成 `VideoMeta`：时长换成秒，帧率换成帧（两位小数，缺失记 0），
+/// 方向为 90° / 270° 时交换宽高，编码经 `codec_label`（`Compression` 认不出时用 `FourCC`，都没有记空串）。没有宽或高（或为 0）视为没有视频轨，返回 `None`。
+pub fn video_meta_from_props(p: &VideoProps) -> Option<VideoMeta> {
+    let (w, h) = (p.w.filter(|&v| v > 0)?, p.h.filter(|&v| v > 0)?);
+    let (w, h) = if matches!(p.orientation, Some(90 | 270)) {
+        (h, w)
+    } else {
+        (w, h)
+    };
+    let code = p
+        .compression
+        .map(subtype_fourcc)
+        .filter(|s| !s.is_empty())
+        .or_else(|| p.fourcc.map(fourcc_text))
+        .unwrap_or_default();
+    Some(VideoMeta {
+        duration_sec: p.duration_100ns.map_or(0.0, |d| d as f64 / 1e7),
+        w,
+        h,
+        fps: p
+            .frame_rate_milli
+            .map_or(0.0, |f| (f64::from(f) / 10.0).round() / 100.0),
+        codec: crate::codec_label(&code),
+    })
+}
+
+/// FourCC 子类型 GUID（`{XXXXXXXX-0000-0010-8000-00AA00389B71}`）还原成 4 个字符；
+/// 其他 GUID 返回空串，不是 GUID 的原样返回（去首尾空白）。
+fn subtype_fourcc(s: &str) -> String {
+    let s = s.trim();
+    let Some(guid) = s.strip_prefix('{').and_then(|g| g.strip_suffix('}')) else {
+        return s.to_owned();
+    };
+    match guid.to_ascii_uppercase().split_once('-') {
+        Some((head, "0000-0010-8000-00AA00389B71")) if head.len() == 8 => {
+            u32::from_str_radix(head, 16).map_or_else(|_| String::new(), fourcc_text)
+        }
+        _ => String::new(),
+    }
+}
+
+/// FourCC 数值（小端，首字符在最低字节）转文本；含不可打印字符时返回空串。
+fn fourcc_text(v: u32) -> String {
+    let b = v.to_le_bytes();
+    if b.iter().all(|c| c.is_ascii_graphic() || *c == b' ') {
+        String::from_utf8_lossy(&b).trim().to_owned()
+    } else {
+        String::new()
+    }
+}
+
 /// 很多程序写 32 位 DIB 时 alpha 全填 0：全零视为不透明，否则图片整张透明。
-fn encode_png(mut img: RgbaImage) -> Option<Vec<u8>> {
+fn opaque_if_no_alpha(mut img: RgbaImage) -> RgbaImage {
     if img.pixels().all(|p| p[3] == 0) {
         img.pixels_mut().for_each(|p| p[3] = 255);
     }
+    img
+}
+
+fn encode_png(img: RgbaImage) -> Option<Vec<u8>> {
+    let img = opaque_if_no_alpha(img);
     let mut out = Vec::new();
     img.write_to(&mut Cursor::new(&mut out), ImageFormat::Png)
         .ok()?;
@@ -400,5 +493,98 @@ mod tests {
         }
         assert!(!is_shell_tray_class("Notepad"));
         assert!(!is_shell_tray_class("shell_traywnd")); // 类名区分大小写
+    }
+
+    #[test]
+    fn video_meta_from_props_converts_units_and_codec() {
+        let base = VideoProps {
+            duration_100ns: Some(30_000_000),
+            w: Some(640),
+            h: Some(360),
+            frame_rate_milli: Some(30_000),
+            compression: Some("{34363248-0000-0010-8000-00AA00389B71}"),
+            ..Default::default()
+        };
+        assert_eq!(
+            video_meta_from_props(&base),
+            Some(VideoMeta {
+                duration_sec: 3.0,
+                w: 640,
+                h: 360,
+                fps: 30.0,
+                codec: "H.264".into(),
+            })
+        );
+        // 竖拍：交换宽高；29.97 帧；小写 GUID
+        let m = video_meta_from_props(&VideoProps {
+            orientation: Some(90),
+            frame_rate_milli: Some(29_970),
+            compression: Some(" {31435648-0000-0010-8000-00aa00389b71} "),
+            ..base
+        })
+        .unwrap();
+        assert_eq!(
+            (m.w, m.h, m.fps, m.codec.as_str()),
+            (360, 640, 29.97, "HEVC")
+        );
+        // 没有 Compression 时用 FourCC；非 FourCC 子类型记空串；纯文本照常转换
+        let codec = |compression, fourcc| {
+            video_meta_from_props(&VideoProps {
+                compression,
+                fourcc,
+                ..base
+            })
+            .unwrap()
+            .codec
+        };
+        assert_eq!(codec(None, Some(u32::from_le_bytes(*b"WMV3"))), "WMV");
+        assert_eq!(
+            codec(Some("{00000016-0000-0010-8000-00AA00389B71}"), None),
+            ""
+        );
+        assert_eq!(
+            codec(Some("{e06d8026-db46-11cf-b4d1-00805f6cbbea}"), None),
+            ""
+        );
+        let vp90 = Some(u32::from_le_bytes(*b"VP90"));
+        assert_eq!(
+            codec(Some("{e06d8026-db46-11cf-b4d1-00805f6cbbea}"), vp90),
+            "VP9"
+        );
+        assert_eq!(codec(Some(""), vp90), "VP9");
+        assert_eq!(codec(Some("MP4V"), None), "MPEG-4");
+        assert_eq!(codec(None, None), "");
+        // 时长、帧率缺失记 0；没有尺寸视为没有视频轨
+        let m = video_meta_from_props(&VideoProps {
+            duration_100ns: None,
+            frame_rate_milli: None,
+            ..base
+        })
+        .unwrap();
+        assert_eq!((m.duration_sec, m.fps), (0.0, 0.0));
+        assert_eq!(video_meta_from_props(&VideoProps { w: None, ..base }), None);
+        assert_eq!(
+            video_meta_from_props(&VideoProps { h: Some(0), ..base }),
+            None
+        );
+    }
+
+    #[test]
+    fn bgra_to_png_within_caps_long_edge() {
+        // 4 × 2 的红色，alpha 全 0（按不透明处理，缩放后颜色不能变黑）
+        let px: Vec<u8> = [0, 0, 255, 0].repeat(8);
+        let decode = |png: Vec<u8>| image::load_from_memory(&png).unwrap().to_rgba8();
+        let small = decode(bgra_to_png_within(4, 2, &px, 2).unwrap());
+        assert_eq!(small.dimensions(), (2, 1));
+        assert_eq!(small.get_pixel(0, 0).0, [255, 0, 0, 255]);
+        assert_eq!(
+            decode(bgra_to_png_within(4, 2, &px, 8).unwrap()).dimensions(),
+            (4, 2)
+        );
+        assert_eq!(
+            decode(bgra_to_png_within(4, 2, &px, 4).unwrap()).dimensions(),
+            (4, 2)
+        );
+        assert!(bgra_to_png_within(4, 2, &px[4..], 8).is_none());
     }
 }
