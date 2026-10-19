@@ -492,6 +492,7 @@ mark { background: var(--mark-bg); color: var(--mark-fg); border-radius: 3px; pa
 .toast-undo circle { fill: none; stroke-width: 2; }
 .toast-undo .trk { stroke: color-mix(in srgb, var(--beam) 22%, transparent); }
 .toast-undo .prg { stroke: currentColor; stroke-dasharray: 44; stroke-linecap: round; }
+#toastAct { padding-right: 10px; }
 
 /* —— 设置对话框 —— */
 dialog {
