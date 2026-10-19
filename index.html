@@ -131,8 +131,9 @@
             </div>
           </div>
           <div class="field" style="--i:2">
-            <label for="ignore">不记录这些应用</label>
-            <input id="ignore" name="ignore" autocomplete="off" spellcheck="false" value="1Password, 钥匙串访问" placeholder="例如：1Password, KeePass…">
+            <label for="ignore" id="ignoreLabel">不记录这些应用</label>
+            <div class="apps-box" id="ignoreBox"><span id="ignoreChips"></span><input id="ignore" role="combobox" aria-expanded="false" aria-controls="ignoreList" aria-autocomplete="list" autocomplete="off" spellcheck="false" placeholder="搜索已安装或正在运行的应用，回车添加"></div>
+            <ul class="apps-list" id="ignoreList" role="listbox" aria-labelledby="ignoreLabel" hidden></ul>
           </div>
           <div class="switches" style="--i:3">
             <label class="switch"><span><b>跳过密码与验证码</b><small>来自密码管理器或被标记为敏感的内容不会被记录</small></span><input type="checkbox" id="sensitive" name="sensitive" checked></label>

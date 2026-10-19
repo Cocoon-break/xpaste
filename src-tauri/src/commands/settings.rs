@@ -239,6 +239,14 @@ pub fn finish_onboarding(app: AppHandle) -> Result<(), AppError> {
     Ok(())
 }
 
+/// 设置里“不记录这些应用”的候选（M15 P1）。日志只记条数，不记名称
+#[tauri::command(async)]
+pub fn installed_apps() -> Result<Vec<String>, AppError> {
+    let apps = xpaste_platform::installed_apps();
+    log::info!("应用列表 {} 项", apps.len());
+    Ok(apps)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

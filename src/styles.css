@@ -530,6 +530,27 @@ dialog > form { display: contents; }
 .field select option { background: var(--pop-solid); color: var(--fg); }
 .field input:focus-visible, .field select:focus-visible { outline: none; border-color: var(--beam); box-shadow: 0 0 0 3px color-mix(in srgb, var(--beam) 18%, transparent); }
 #hotkey { font-family: var(--font-mono); cursor: pointer; }
+/* 不记录这些应用：芯片 + 组合框，外框代替输入框描边与焦点环；候选列表在文档流内，不会被中部滚动区裁掉 */
+.apps-box {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 38px; padding: 5px 6px 5px 8px; border-radius: 10px;
+  border: 1px solid var(--line-2); background: var(--well); cursor: text; transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+.apps-box:focus-within { border-color: var(--beam); box-shadow: 0 0 0 3px color-mix(in srgb, var(--beam) 18%, transparent); }
+#ignoreChips { display: contents; }
+.apps-box input { flex: 1 1 140px; width: auto; height: 26px; padding: 0 4px; border: 0; border-radius: 0; background: transparent; text-overflow: ellipsis; }
+.apps-box input:focus-visible { box-shadow: none; }
+.app-chip { display: inline-flex; align-items: center; gap: 3px; padding-right: 3px; cursor: default; }
+.app-chip button { width: 14px; height: 14px; padding: 0; border: 0; border-radius: 3px; background: transparent; color: var(--faint); display: grid; place-items: center; cursor: pointer; transition: color 120ms ease, background-color 120ms ease; }
+.app-chip button .ic { width: 10px; height: 10px; }
+@media (hover: hover) and (pointer: fine) { .app-chip button:hover { color: var(--fg); background: var(--glass-3); } }
+.apps-list {
+  margin: 0; padding: 4px; list-style: none; max-height: calc(8 * 30px + 10px); overflow-y: auto; overscroll-behavior: contain;
+  border: 1px solid var(--line-2); border-radius: 10px; background: var(--pop-solid); box-shadow: var(--shadow-pop);
+  transition: opacity 140ms ease-out, transform 140ms ease-out;
+}
+@starting-style { .apps-list { opacity: 0; transform: translateY(-4px); } }
+.apps-list li { height: 30px; line-height: 30px; padding: 0 9px; border-radius: 7px; font-size: 13px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.apps-list li[aria-selected="true"] { background: color-mix(in srgb, var(--beam) 12%, transparent); }
 .help { margin: 0; font-size: 12px; color: var(--faint); }
 .err { margin: 0; font-size: 12px; color: var(--danger); }
 .field input[aria-invalid="true"] { border-color: var(--danger); }

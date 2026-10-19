@@ -1,7 +1,7 @@
 import './styles.css';
 import { attachConsole, info } from './api/log';
 import {
-  accessibilityGranted, bootstrap, clearHistory, copy, copyText, countUnpinned, deleteRecord, finishOnboarding, getRecord, hidePanel, openUrl, previewAppearance, prunePreview,
+  accessibilityGranted, bootstrap, clearHistory, copy, copyText, countUnpinned, deleteRecord, finishOnboarding, getRecord, hidePanel, installedApps, openUrl, previewAppearance, prunePreview,
   requestAccessibility, revealFile, saveSettings, search, setPaused, setPinned, undoDelete,
 } from './api/commands';
 import {
@@ -28,7 +28,7 @@ import { keyAction } from './keymap';
 import { nextStep, onboardSteps, type Step } from './onboarding';
 import { applyAdded, applyRemoved, applyUpdated } from './records';
 import { layoutBars, sameColumns, spectrumStat, staggerIndex, xPct, type Layout } from './spectrum';
-import { formToSettings, joinIgnored, optionFromRetention, parseLimit } from './settings-form';
+import { addIgnored, formToSettings, optionFromRetention, parseLimit, pickerOptions, removeIgnored } from './settings-form';
 import {
   armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, nextSelection, UNDO_MS, visible, type UndoState,
 } from './view';
@@ -1025,6 +1025,90 @@ const themeOpts = [...themeSeg.querySelectorAll<HTMLElement>('[data-theme-opt]')
 const HOTKEY_IDLE = '点击输入框，然后按下新的组合键';
 let pendingHotkey = '', dlgReturn: HTMLElement | null = null, closeTimer = 0, saving = false;
 
+// 不记录这些应用：芯片 + 组合框（M15 P1）。草稿只在保存时写回，取消 / Esc / 遮罩丢弃
+const ignoreBox = $('#ignoreBox'), ignoreChips = $('#ignoreChips'), ignoreList = $('#ignoreList');
+let draftIgnored: string[] = [], allApps: string[] = [], appOpts: string[] = [], appActive = -1, escClosedList = false;
+// from 起的芯片是新加的：弹入
+function paintChips(from = Infinity) {
+  ignoreChips.innerHTML = draftIgnored
+    .map((n, i) => `<span class="chip app-chip">${esc(n)}<button type="button" data-rm="${i}" aria-label="移除 ${esc(n)}">${svg('x')}</button></span>`)
+    .join('');
+  [...ignoreChips.children].slice(from).forEach((c) => fx(c, [{ transform: 'scale(.9)' }, { transform: 'scale(1)' }], { duration: 220, easing: EASE_SPRING }));
+}
+function setAppActive(i: number) {
+  appActive = i;
+  [...ignoreList.children].forEach((li, j) => li.setAttribute('aria-selected', String(j === i)));
+  if (i < 0) return ignoreIn.removeAttribute('aria-activedescendant');
+  ignoreIn.setAttribute('aria-activedescendant', `app-opt-${i}`);
+  ignoreList.children[i].scrollIntoView({ block: 'nearest' });
+}
+// 有候选才展开
+function paintAppList(open: boolean) {
+  appOpts = open ? pickerOptions(allApps, draftIgnored, ignoreIn.value) : [];
+  ignoreList.innerHTML = appOpts.map((n, i) => `<li role="option" id="app-opt-${i}" aria-selected="false">${esc(n)}</li>`).join('');
+  ignoreList.hidden = appOpts.length === 0;
+  ignoreIn.setAttribute('aria-expanded', String(!ignoreList.hidden));
+  setAppActive(-1);
+}
+function addApps(text: string) {
+  const from = draftIgnored.length;
+  draftIgnored = addIgnored(draftIgnored, text);
+  ignoreIn.value = '';
+  paintChips(from);
+  paintAppList(true);
+}
+ignoreIn.addEventListener('focus', () => paintAppList(true));
+ignoreIn.addEventListener('input', () => paintAppList(true));
+ignoreIn.addEventListener('blur', () => paintAppList(false));
+ignoreIn.addEventListener('keydown', (e) => {
+  // 输入法组字中的回车 / 方向键归输入法
+  if (e.isComposing || e.keyCode === 229) return;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (ignoreList.hidden) paintAppList(true);
+    const n = appOpts.length, d = e.key === 'ArrowDown' ? 1 : -1;
+    if (n) setAppActive(appActive < 0 ? (d > 0 ? 0 : n - 1) : (appActive + d + n) % n);
+  } else if (e.key === 'Enter') {
+    // 有高亮加高亮项，否则加输入的文字；输入为空且无高亮时照常提交
+    if (appActive >= 0) addApps(appOpts[appActive]);
+    else if (ignoreIn.value.trim()) addApps(ignoreIn.value);
+    else return;
+    e.preventDefault();
+  } else if (e.key === 'Escape' && !ignoreList.hidden) {
+    // 列表展开时 Esc 只收起列表；旧 WebKit 仍会触发对话框的 cancel，在那里按此标记拦下
+    e.preventDefault();
+    e.stopPropagation();
+    paintAppList(false);
+    escClosedList = true;
+    setTimeout(() => (escClosedList = false));
+  } else if (e.key === 'Backspace' && !ignoreIn.value && draftIgnored.length) {
+    e.preventDefault();
+    draftIgnored = draftIgnored.slice(0, -1);
+    paintChips();
+    paintAppList(!ignoreList.hidden);
+  }
+});
+// pointerdown 不抢焦点：点候选时输入框不失焦、列表不先收起
+ignoreList.addEventListener('pointerdown', (e) => e.preventDefault());
+// 悬停即高亮：鼠标与键盘共用一个高亮项，Enter 加的就是看到的那项
+ignoreList.addEventListener('pointermove', (e) => {
+  const li = (e.target as Element).closest('[role="option"]');
+  const i = li ? [...ignoreList.children].indexOf(li) : -1;
+  if (i >= 0 && i !== appActive) setAppActive(i);
+});
+ignoreList.addEventListener('click', (e) => {
+  const li = (e.target as Element).closest('[role="option"]');
+  if (li) addApps(appOpts[[...ignoreList.children].indexOf(li)]);
+});
+ignoreBox.addEventListener('click', (e) => {
+  const b = (e.target as Element).closest<HTMLElement>('[data-rm]');
+  if (b) {
+    draftIgnored = removeIgnored(draftIgnored, draftIgnored[Number(b.dataset.rm)]);
+    paintChips();
+  }
+  if (b || e.target === ignoreBox) ignoreIn.focus();
+});
+
 // 外观：点选即预览（原型 setTheme，新主题从被点按钮处圆形扩散），保存才持久化，关闭不保存时还原
 // 圆形扩散要先等窗口主题生效（见 applyAppearance），等待期间以待切的模式为准
 let themePending: Appearance | null = null;
@@ -1120,7 +1204,18 @@ function openSettings() {
   limitIn.value = String(st.maxRecords);
   limitErr.hidden = true;
   limitIn.removeAttribute('aria-invalid');
-  ignoreIn.value = joinIgnored(st.ignoredApps);
+  draftIgnored = [...st.ignoredApps];
+  ignoreIn.value = '';
+  paintChips();
+  paintAppList(false);
+  // 每次打开都重取（期间可能装了新应用）；取不到只记日志，照样能手输
+  void installedApps().then(
+    (a) => {
+      allApps = a;
+      if (document.activeElement === ignoreIn) paintAppList(true);
+    },
+    (e: AppError) => void info(`读取应用列表失败 kind=${e.kind}`),
+  );
   sensitiveIn.checked = st.skipSensitive;
   moveTopIn.checked = st.moveToTop;
   autostartIn.checked = st.launchAtLogin;
@@ -1148,7 +1243,7 @@ dlg.addEventListener('close', () => {
 });
 dlg.addEventListener('cancel', (e) => {
   e.preventDefault();
-  closeSettings();
+  if (!escClosedList) closeSettings();
 });
 // 遮罩点击才关：在输入框里拖选文字、松手落到遮罩上不算（那次 click 的目标也是 dialog）
 let downOnBackdrop = false;
@@ -1182,7 +1277,7 @@ async function submitSettings() {
   limitIn.setAttribute('aria-invalid', String(limit === null));
   if (limit === null) return limitIn.focus();
   const s = formToSettings(S.settings, {
-    hotkey: pendingHotkey, retain: retainIn.value, limit, ignored: ignoreIn.value, skipSensitive: sensitiveIn.checked,
+    hotkey: pendingHotkey, retain: retainIn.value, limit, ignored: addIgnored(draftIgnored, ignoreIn.value), skipSensitive: sensitiveIn.checked,
     moveToTop: moveTopIn.checked, launchAtLogin: autostartIn.checked, appearance: themeMode(),
   });
   saving = true;
