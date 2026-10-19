@@ -1,6 +1,6 @@
 import './styles.css';
 import { attachConsole, info } from './api/log';
-import { bootstrap, hidePanel } from './api/commands';
+import { bootstrap, copyText, getRecord, hidePanel, openUrl, revealFile, search } from './api/commands';
 import {
   onPanelHidden,
   onPanelShown,
@@ -9,7 +9,14 @@ import {
   onRecordsRemoved,
   onRecordUpdated,
 } from './api/events';
-import type { RecordSummary } from './api/types';
+import type { AppError, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
+import { grade, hexInfo, isHex } from './color';
+import {
+  esc, FAV_MIN, FILTERS, FL, fmtBytes, fmtDateTime, fmtDur, fmtInt, hl, hlCode, host, isFav, isHttpUrl, LABEL, rel, truncate,
+  type Filter,
+} from './format';
+import { counts, ensureSelection, groups, inFilter, isStale, visible, type UndoState } from './view';
+import { layout, range, ROW_H, scrollTo, topOf, type Cell } from './virtual-list';
 
 const I = {
   text: '<path d="M4 5.5h12M4 10h12M4 14.5h7"/>',
@@ -48,11 +55,474 @@ document.querySelectorAll<HTMLElement>('[data-icon]').forEach((el) => {
 
 const $ = <T extends HTMLElement = HTMLElement>(s: string) => document.querySelector<T>(s)!;
 const root = document.documentElement;
-const win = $('#win');
-const q = $<HTMLInputElement>('#q');
-const menu = $('#menu');
+const reduced = matchMedia('(prefers-reduced-motion: reduce)');
+const EASE_ENTER = 'cubic-bezier(.22,1,.36,1)', EASE_MOVE = 'cubic-bezier(.25,1,.5,1)', EASE_SPRING = 'cubic-bezier(.34,1.56,.64,1)';
+const fx = (el: Element | null, kf: Keyframe[], opts: KeyframeAnimationOptions) => {
+  if (el && !reduced.matches) el.animate(kf, opts);
+};
+// 先关过渡再改状态（键盘触发、重建后定位）
+const instantly = (el: HTMLElement, on: boolean, fn: () => void) => {
+  if (on) el.setAttribute('data-instant', '');
+  fn();
+  if (on) {
+    void el.offsetWidth;
+    el.removeAttribute('data-instant');
+  }
+};
+const nf2 = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const hf = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+const DAY = 864e5;
 
-// 记录与暂停事件的处理函数，列表、预览等由后续任务填充
+// —— 元素 ——
+const win = $('#win'), list = $('#list'), rowsEl = $('#rows'), ind = $('#ind'), q = $<HTMLInputElement>('#q'), clearQ = $('#clearQ');
+const tabs = $('#tabs'), tabsBase = $('#tabsBase'), tabsOver = $('#tabsOver');
+const ptype = $('#ptype'), pbody = $('#pbody'), pmeta = $('#pmeta'), countEl = $('#count');
+const pinBtn = $<HTMLButtonElement>('#pinBtn'), copyBtn = $<HTMLButtonElement>('#copyBtn');
+const moreBtn = $<HTMLButtonElement>('#moreBtn'), delBtn = $<HTMLButtonElement>('#delBtn');
+const menu = $('#menu'), toastEl = $('#toast'), toastMsg = $('#toastMsg');
+const spBars = $('#spBars'), spTrack = $('#spTrack'), spCursor = $('#spCursor'), spTip = $('#spTip');
+
+// —— 状态 ——
+const S = {
+  records: new Map<number, RecordSummary>(),
+  filter: 'all' as Filter,
+  q: '',
+  matchIds: null as Set<number> | null,
+  sel: null as number | null,
+  detail: null as RecordDetail | null,
+  undo: null as UndoState,
+  removing: new Set<number>(),
+  menuFor: null as number | null,
+  newId: null as number | null,
+  shown: false,
+  settings: {} as Settings,
+  platform: {} as PlatformInfo,
+  paused: false,
+  cells: [] as Cell[],
+  total: 0,
+};
+const menuOpen = () => menu.dataset.open === 'true';
+
+// —— 数据视图 ——
+const vis = () => visible(S.records, S.filter, S.matchIds);
+const matches = (r: RecordSummary) => inFilter(r, S.filter) && (S.matchIds === null || S.matchIds.has(r.id));
+const rowEl = (id: number | null) => (id === null ? null : document.getElementById('opt-' + id));
+const source = (r: RecordSummary) => r.app?.name ?? '未知来源';
+
+const thumb = (r: RecordSummary) =>
+  r.kind === 'color' && isHex(r.title) ? `<span class="thumb swatch-thumb" style="background:${esc(r.title)}"></span>`
+  : r.kind === 'image' && r.thumb ? `<span class="thumb"><img src="${esc(r.thumb)}" alt="" width="36" height="36"></span>`
+  : r.kind === 'video' && r.thumb ? `<span class="thumb"><img src="${esc(r.thumb)}" alt="" width="36" height="36"><span class="play">${svg('play')}</span></span>`
+  : `<span class="thumb">${svg(r.kind)}</span>`;
+
+const metaLine = (r: RecordSummary) => {
+  const parts = [esc(source(r)), rel(r.copiedAt), r.kind === 'video' && r.durationSec !== null ? fmtDur(r.durationSec) : fmtBytes(r.size)];
+  if (isFav(r)) parts.push(`<span class="uses">用过 ${fmtInt(r.uses)} 次</span>`);
+  return parts.join(' · ');
+};
+
+const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id === S.newId) => `
+    <div class="item${isNew ? ' is-new' : ''}${S.removing.has(r.id) ? ' is-removing' : ''}${stagger ? ' stg' : ''}" data-id="${r.id}" style="--i:${i}">
+      <div class="row" role="option" id="opt-${r.id}" aria-selected="false" data-type="${r.kind}">
+        <div class="row-in">
+          ${thumb(r)}
+          <div class="main">
+            <div class="title${r.kind === 'code' || r.kind === 'color' ? ' mono' : ''}">${hl(r.title, S.q)}</div>
+            <div class="meta">${metaLine(r)}</div>
+          </div>
+          <div class="tail">
+            ${r.pinned ? `<span class="pin-mark">${svg('pinFill')}</span>` : ''}${i < 9 ? `<kbd class="idx">${i + 1}</kbd>` : ''}
+            <span class="qa" aria-hidden="true">
+              <button type="button" tabindex="-1" data-qa="pin" title="${r.pinned ? '取消置顶' : '置顶'}">${svg(r.pinned ? 'pinFill' : 'pin')}</button>
+              <button type="button" tabindex="-1" data-qa="copy" title="复制">${svg('copy')}</button>
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>`;
+
+function setCount(n: number, total: number) {
+  const html = `${fmtInt(n)}<small>/ ${fmtInt(total)}</small>`;
+  if (countEl.innerHTML === html) return;
+  countEl.innerHTML = html;
+  fx(countEl, [{ transform: 'translateY(6px)', opacity: 0, filter: 'blur(3px)' }, { transform: 'none', opacity: 1, filter: 'blur(0)' }], { duration: 260, easing: EASE_ENTER });
+}
+
+function emptyHTML() {
+  const qq = S.q.trim(), f = S.filter;
+  const msg = qq ? `没有匹配“${esc(qq)}”的${f === 'all' ? '' : FL[f]}记录`
+    : f === 'fav' ? `还没有常用记录。同一条内容复制 ${FAV_MIN} 次以上就会出现在这里`
+    : `还没有${f === 'all' ? '' : FL[f]}记录，复制一次就会出现在这里`;
+  return `<div class="empty"><span class="ring">${svg(qq ? 'search' : f === 'fav' ? 'star' : 'inbox')}</span><p>${msg}</p>
+      ${qq || f !== 'all' ? '<button class="btn sm" type="button" data-act="reset">清除搜索与筛选</button>' : ''}</div>`;
+}
+
+// —— 虚拟列表 ——
+// 只渲染 range() 内的 cell；按 key 复用元素，HTML 不变时只改位置，悬停与动画类不闪。
+// 一次性的入场类（stg、is-new）不计入比较，之后的重绘不会打断动画
+let painted = new Map<string, { el: HTMLElement; h: string }>();
+// cell 的 top 相对 .list-inner，滚动容器还有上内边距
+const padTop = () => parseFloat(getComputedStyle(list).paddingTop) || 0;
+function paintRows(stagger = false) {
+  const [a, b] = range(S.cells, list.scrollTop - padTop(), list.clientHeight);
+  const next = new Map<string, { el: HTMLElement; h: string }>();
+  for (let i = a; i < b; i++) {
+    const c = S.cells[i];
+    const r = c.kind === 'row' ? S.records.get(c.id) : undefined;
+    if (c.kind === 'row' && !r) continue;
+    const key = c.kind === 'head' ? 'h' + c.name : 'r' + c.id;
+    const h = r && c.kind === 'row' ? rowHTML(r, c.index, false, false)
+      : c.kind === 'head' ? `<div class="ghead" id="gh${c.gi}">${esc(c.name)}<span>${c.count}</span></div>` : '';
+    let p = painted.get(key);
+    if (!p) {
+      const el = document.createElement('div');
+      el.className = 'vrow';
+      p = { el, h: '' };
+    }
+    if (r && c.kind === 'row' && (stagger || r.id === S.newId)) p.el.innerHTML = rowHTML(r, c.index, stagger);
+    else if (p.h !== h) p.el.innerHTML = h;
+    p.h = h;
+    p.el.style.transform = `translateY(${c.top}px)`;
+    // ponytail: 新元素追加在末尾，DOM 顺序不严格等于视觉顺序；行不可聚焦，读屏走 aria-activedescendant
+    if (!p.el.isConnected) rowsEl.append(p.el);
+    next.set(key, p);
+  }
+  for (const [k, p] of painted) if (!next.has(k)) p.el.remove();
+  painted = next;
+  markSel();
+}
+
+// aria-activedescendant 只指向已渲染的行
+function markSel() {
+  rowsEl.querySelectorAll('.row[aria-selected="true"]').forEach((r) => r.setAttribute('aria-selected', 'false'));
+  const r = rowEl(S.sel);
+  r?.setAttribute('aria-selected', 'true');
+  q.setAttribute('aria-activedescendant', r ? r.id : '');
+}
+
+let paintRaf = 0;
+const schedulePaint = () => {
+  if (!paintRaf) paintRaf = requestAnimationFrame(() => {
+    paintRaf = 0;
+    paintRows();
+  });
+};
+
+function renderList({ scroll = false, stagger = false, base = 0 } = {}) {
+  const v = vis();
+  setCount(v.length, S.records.size);
+  rowsEl.style.setProperty('--base', base + 'ms');
+  if (!v.length) {
+    S.cells = [];
+    S.total = 0;
+    painted.clear();
+    rowsEl.style.height = '';
+    rowsEl.innerHTML = emptyHTML();
+    select(null);
+    return;
+  }
+  ({ cells: S.cells, total: S.total } = layout(groups(v, S.filter)));
+  rowsEl.querySelector('.empty')?.remove();
+  rowsEl.style.height = S.total + 'px';
+  paintRows(stagger);
+  S.sel = ensureSelection(v, S.sel);
+  select(S.sel, { scroll, glide: false, fade: false });
+}
+
+// 选中光标：独立一层滑动，内容即时
+let indShown = false;
+function moveInd({ instant = false, dur = 130, top }: { instant?: boolean; dur?: number; top?: number } = {}) {
+  const r = S.sel === null ? undefined : S.records.get(S.sel);
+  const t = top ?? (r ? topOf(S.cells, r.id) : undefined);
+  if (!r || t === undefined) {
+    ind.style.opacity = '0';
+    indShown = false;
+    return;
+  }
+  ind.dataset.type = r.kind;
+  const d = instant || !indShown || reduced.matches ? 0 : dur;
+  ind.style.transition = `transform ${d}ms ${EASE_MOVE}, opacity 160ms ease`;
+  ind.style.transform = `translateY(${t}px)`;
+  ind.style.opacity = '1';
+  indShown = true;
+}
+
+type SelectOpts = { scroll?: boolean; glide?: boolean; instant?: boolean; fade?: boolean; indTop?: number; indDur?: number };
+function select(id: number | null, { scroll = false, glide = true, instant = false, fade = true, indTop, indDur }: SelectOpts = {}) {
+  const changed = S.sel !== id;
+  S.sel = id;
+  const top = id === null ? undefined : topOf(S.cells, id);
+  if (scroll && top !== undefined) {
+    const st = scrollTo(top + padTop(), ROW_H, list.scrollTop, list.clientHeight);
+    // 先同步滚动并重绘，保证 aria-activedescendant 指向的行已在 DOM 中
+    if (st !== list.scrollTop) {
+      list.scrollTop = st;
+      paintRows();
+    }
+  }
+  markSel();
+  moveInd({ instant: !glide || instant, top: indTop, dur: indDur });
+  renderPreview(changed && fade && !instant);
+  paintSpectrumSel(!instant);
+}
+
+// 键盘上下移动；Task 8 的键盘分发调用它
+function move(d: 1 | -1, instant: boolean) {
+  const v = vis().filter((r) => !S.removing.has(r.id));
+  if (!v.length) return;
+  const i = v.findIndex((r) => r.id === S.sel);
+  const n = Math.max(0, Math.min(v.length - 1, i + d));
+  select(v[n].id, { scroll: true, instant });
+}
+
+function setPin(on: boolean, instant: boolean) {
+  const sw = pinBtn.querySelector<HTMLElement>('.swap')!, st = on ? 'b' : 'a';
+  if (sw.dataset.state === st) return;
+  instantly(sw, instant, () => {
+    sw.dataset.state = st;
+  });
+  pinBtn.setAttribute('aria-pressed', String(on));
+  pinBtn.setAttribute('aria-label', on ? '取消置顶' : '置顶');
+}
+
+// —— 预览 ——
+const gradeHTML = (c: number) => {
+  const g = grade(c);
+  return `<em class="${g === '不达标' ? 'fail' : 'pass'}">${g}</em>`;
+};
+const MISSING = '原文件已移动或删除';
+
+function bodyHTML(d: RecordDetail): string {
+  const text = d.text ?? '';
+  const trunc = d.truncated ? '<p class="trunc">仅显示前 200 KB，复制时为完整内容</p>' : '';
+  switch (d.kind) {
+    case 'text':
+      return `<div class="p-text">${esc(text)}</div>${trunc}`;
+    case 'link': {
+      const h = host(text);
+      const href = isHttpUrl(text) ? ` href="${esc(text)}" target="_blank" rel="noopener noreferrer"` : '';
+      return `<div class="p-link"><div class="lk-card"><span class="lk-fav">${esc((h.replace(/^www\./, '')[0] || '?').toUpperCase())}</span><div><div class="lk-title">${esc(d.linkTitle || h)}</div><div class="lk-host">${esc(h)}</div></div></div>
+          <a${href}>${esc(text)} ${svg('open')}</a>
+          <div class="chips">${text.startsWith('https:') ? '<span class="chip ok">HTTPS</span>' : '<span class="chip">HTTP</span>'}<span class="chip">${esc(h)}</span></div></div>`;
+    }
+    case 'code':
+      return `<pre class="p-code" translate="no"><code>${text.split('\n').map((l) => `<span class="ln">${hlCode(l) || ' '}</span>`).join('')}</code></pre>${trunc}`;
+    case 'color': {
+      if (!isHex(text)) return `<div class="p-text">${esc(text)}</div>`;
+      const c = hexInfo(text);
+      const ink = c.onBlack > c.onWhite ? '#06080F' : '#FFFFFF';
+      return `<div class="p-color"><div class="swatch" style="background:${c.hex};--sw:${c.hex};color:${ink}"><b>${c.hex}</b></div>
+          <ul class="cvals">${[['HEX', c.hex], ['RGB', c.rgb], ['HSL', c.hsl]].map(([k, v]) =>
+            `<li><span class="k">${k}</span><code>${esc(v)}</code><button class="btn sm" type="button" data-copy="${esc(v)}">复制</button></li>`).join('')}</ul>
+          <div class="contrast"><div>放在白色背景上<b>${nf2.format(c.onWhite)} : 1${gradeHTML(c.onWhite)}</b></div><div>放在黑色背景上<b>${nf2.format(c.onBlack)} : 1${gradeHTML(c.onBlack)}</b></div></div></div>`;
+    }
+    case 'image': {
+      const im = d.image;
+      if (!im) return `<div class="p-empty">${MISSING}</div>`;
+      const wh = im.w && im.h ? ` width="${im.w}" height="${im.h}"` : '';
+      return `<figure class="p-img"><img src="${esc(im.src)}"${wh} alt="${esc(d.title)}"></figure>`;
+    }
+    case 'video':
+    case 'file': {
+      const reveal = S.platform.os === 'macos' ? '在访达中显示' : '在资源管理器中显示';
+      // 视频本阶段不内联播放：类型图标作封面占位，列出文件名与路径
+      return d.files.map((f, i) => `<div class="p-file"><span class="big">${svg(d.kind)}</span><div><div class="fname">${esc(f.name)}</div><code class="fpath">${esc(f.path)}</code>
+          <div class="chips">${f.ext ? `<span class="chip">${esc(f.ext.toUpperCase())}</span>` : ''}${d.kind === 'video' && d.durationSec !== null ? `<span class="chip">${fmtDur(d.durationSec)}</span>` : ''}<span class="chip">${fmtBytes(f.size)}</span></div>
+          ${d.kind === 'file' ? `<div><button class="btn sm" type="button" data-reveal="${i}"${f.exists ? '' : ' disabled'}>${reveal}</button></div>` : ''}
+          ${f.exists ? '' : `<div class="fpath">${MISSING}</div>`}</div></div>`).join('');
+    }
+  }
+}
+
+function metaHTML(r: RecordSummary, d: RecordDetail | null) {
+  const meta: [string, string][] = [['来源', esc(source(r))], ['复制于', fmtDateTime(r.copiedAt)], ['大小', fmtBytes(r.size)], ['使用', `${fmtInt(r.uses)} 次`]];
+  if (r.kind === 'video' && r.durationSec !== null) meta.push(['时长', fmtDur(r.durationSec)]);
+  if (d) {
+    const t = d.text ?? '', more = d.truncated ? '+' : '';
+    if (r.kind === 'text') meta.push(['字符', fmtInt([...t].length) + more]);
+    if (r.kind === 'code') meta.push(['行数', fmtInt(t.split('\n').length) + more]);
+    if (r.kind === 'image' && d.image?.w) meta.push(['尺寸', `${d.image.w} × ${d.image.h}`]);
+    if (r.kind === 'link') meta.push(['域名', esc(host(t))]);
+  }
+  return meta.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('');
+}
+
+// 摘要立即渲染；正文异步取详情，序号过期的结果丢弃。同一条只取一次（摘要更新只刷新头部与信息栏）
+let detailSeq = 0, bodyFor: number | null = null;
+function renderPreview(fade = false) {
+  const r = S.sel === null ? undefined : S.records.get(S.sel);
+  [pinBtn, copyBtn, moreBtn, delBtn].forEach((b) => (b.disabled = !r));
+  $('#selHint').textContent = r ? `已选中：${truncate(r.title, 18)}` : '没有选中的记录';
+  if (!r) {
+    ++detailSeq;
+    bodyFor = null;
+    S.detail = null;
+    ptype.innerHTML = '';
+    pmeta.innerHTML = '';
+    pbody.innerHTML = '<div class="p-empty">在左侧选择一条记录查看完整内容</div>';
+    return;
+  }
+  ptype.innerHTML = `<span class="tchip" data-type="${r.kind}">${svg(r.kind)}${LABEL[r.kind]}</span>`
+    + (isFav(r) ? `<span class="tchip" data-type="fav">${svg('star')}常用</span>` : '')
+    + (r.lang ? `<span class="chip">${esc(r.lang)}</span>` : '');
+  setPin(r.pinned, true);
+  pmeta.innerHTML = metaHTML(r, S.detail?.id === r.id ? S.detail : null);
+  if (bodyFor === r.id) return;
+  bodyFor = r.id;
+  S.detail = null;
+  const seq = ++detailSeq;
+  getRecord(r.id).then(
+    (d) => {
+      if (isStale(seq, detailSeq)) return;
+      S.detail = d;
+      pbody.innerHTML = d ? bodyHTML(d) : '';
+      pbody.scrollTop = 0;
+      const cur = d && S.records.get(d.id);
+      if (cur) pmeta.innerHTML = metaHTML(cur, d);
+      if (fade) fx(pbody, [{ opacity: 0.35, transform: 'translateY(4px)', filter: 'blur(2px)' }, { opacity: 1, transform: 'none', filter: 'blur(0)' }], { duration: 180, easing: EASE_ENTER });
+    },
+    (e: AppError) => {
+      if (!isStale(seq, detailSeq)) bodyFor = null;
+      void info(`get_record 失败 id=${r.id} kind=${e.kind}`);
+    },
+  );
+}
+
+// —— 复制频谱 ——
+// 左侧 6% 是“更早”区，其余 94% 映射最近 24 小时
+const xOf = (at: number) => {
+  const age = Date.now() - at;
+  if (age > DAY) return Math.max(1, 5 - ((Math.min(age, 7 * DAY) - DAY) / (6 * DAY)) * 4);
+  return Math.min(99.4, 6 + 94 * (1 - age / DAY));
+};
+const hOf = (r: RecordSummary) => 16 + Math.min(1, Math.log10(Math.max(10, r.size)) / 8) * 84;
+function renderSpectrum(freshId?: number) {
+  const nowT = Date.now();
+  const sorted = [...S.records.values()].filter((r) => nowT - r.copiedAt <= 7 * DAY).sort((a, b) => a.copiedAt - b.copiedAt);
+  spBars.innerHTML = sorted.map((r, i) =>
+    `<span class="bar${r.id === freshId ? ' fresh' : ''}" data-id="${r.id}" data-type="${r.kind}" style="left:${xOf(r.copiedAt)}%;height:${hOf(r)}%;--i:${i}"></span>`).join('');
+  const ticks: [number, string][] = [[3, '更早'], ...[18, 12, 6].map((h): [number, string] => [6 + 94 * (1 - h / 24), hf.format(nowT - h * 3600e3)]), [100, '现在']];
+  $('#spAxis').innerHTML = ticks.map(([x, l]) => `<span style="left:${x}%">${l}</span>`).join('');
+  const day = sorted.filter((r) => nowT - r.copiedAt <= DAY);
+  const hours: Record<number, number> = {};
+  day.forEach((r) => {
+    const h = new Date(r.copiedAt).getHours();
+    hours[h] = (hours[h] || 0) + 1;
+  });
+  const peak = Object.entries(hours).sort((a, b) => b[1] - a[1])[0];
+  $('#spStat').textContent = `24 小时内复制 ${fmtInt(day.length)} 次${peak && peak[1] > 1 ? ` · 最忙 ${peak[0]} 点（${peak[1]} 次）` : ''}`;
+  paintSpectrumSel(false);
+}
+function paintSpectrumSel(animate = true) {
+  spBars.querySelectorAll<HTMLElement>('.bar').forEach((b) => {
+    const r = S.records.get(Number(b.dataset.id));
+    b.classList.toggle('on', r?.id === S.sel);
+    b.classList.toggle('dim', !!r && !matches(r));
+  });
+  const r = S.sel === null ? undefined : S.records.get(S.sel);
+  if (!r) {
+    spCursor.style.opacity = '0';
+    return;
+  }
+  spCursor.style.transitionDuration = animate && !reduced.matches ? '' : '0ms';
+  spCursor.style.transform = `translateX(${(spTrack.clientWidth * xOf(r.copiedAt)) / 100}px)`;
+  spCursor.style.opacity = '1';
+}
+const barOf = (e: Event) => {
+  const b = (e.target as Element).closest<HTMLElement>('.bar');
+  const r = b ? S.records.get(Number(b.dataset.id)) : undefined;
+  return b && r ? { b, r } : null;
+};
+spTrack.addEventListener('pointerover', (e) => {
+  const hit = barOf(e);
+  if (!hit) return;
+  spTip.dataset.type = hit.r.kind;
+  spTip.innerHTML = `<i></i>${esc(hit.r.title)}<span>${rel(hit.r.copiedAt)}</span>`;
+  spTip.style.left = Math.max(0, Math.min(spTrack.clientWidth - spTip.offsetWidth, hit.b.offsetLeft - spTip.offsetWidth / 2)) + 'px';
+  spTip.classList.add('show');
+});
+spTrack.addEventListener('pointerout', (e) => {
+  if (!(e.relatedTarget as Element | null)?.closest?.('.bar')) spTip.classList.remove('show');
+});
+spTrack.addEventListener('click', (e) => {
+  const hit = barOf(e);
+  if (!hit || S.removing.has(hit.r.id)) return;
+  if (!matches(hit.r)) {
+    S.filter = 'all';
+    q.value = '';
+    renderTabs(false);
+    runSearch('', { stagger: true });
+  }
+  select(hit.r.id, { scroll: true, indDur: 260 });
+});
+
+// —— 分类标签 ——
+const tabColor = (k: string) => (k === 'all' ? 'var(--beam)' : `var(--c-${k})`);
+function renderTabs(instant: boolean) {
+  const c = counts(S.records);
+  const html = (real: boolean) => FILTERS.map(([k, l]) => {
+    const mark = k === 'fav' ? svg('star', 'star') : '<i class="dot"></i>';
+    const tag = real ? `button type="button" class="tab" data-f="${k}" aria-pressed="${S.filter === k}"` : 'span class="tab"';
+    return `<${tag} data-type="${k}">${mark}${l}<span class="n">${c[k]}</span></${real ? 'button' : 'span'}>${k === 'fav' ? '<span class="tabs-sep"></span>' : ''}`;
+  }).join('');
+  tabsBase.innerHTML = html(true);
+  tabsOver.innerHTML = html(false);
+  // 颜色带的色标对齐到每个标签中心，指示条停在哪就是哪个类型的颜色
+  const stops = [...tabsBase.querySelectorAll<HTMLElement>('.tab')].map((b) => `${tabColor(b.dataset.f!)} ${b.offsetLeft + b.offsetWidth / 2}px`);
+  tabsOver.style.background = `linear-gradient(90deg, ${stops.join(', ')})`;
+  const b = tabsBase.querySelector<HTMLElement>(`[data-f="${S.filter}"]`)!;
+  const l = b.offsetLeft, r = tabs.offsetWidth - l - b.offsetWidth;
+  instantly(tabsOver, instant, () => {
+    tabsOver.style.clipPath = `inset(0 ${r}px 0 ${l}px round 999px)`;
+  });
+  if (instant) b.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+// lastFilter 的持久化在阶段 5（设置保存）
+function setFilter(k: Filter, instant: boolean) {
+  if (S.filter === k) return;
+  S.filter = k;
+  renderTabs(instant);
+  list.scrollTop = 0;
+  renderList({ stagger: !instant });
+  paintSpectrumSel(!instant);
+}
+
+// —— 搜索 ——
+// 每次输入都查后端，不防抖；序号丢弃先发后到的结果
+let searchSeq = 0;
+function runSearch(v: string, opts: { stagger?: boolean } = {}) {
+  S.q = v;
+  clearQ.hidden = !v;
+  const seq = ++searchSeq;
+  if (!v.trim()) {
+    S.matchIds = null;
+    list.scrollTop = 0;
+    renderList(opts);
+    return;
+  }
+  search(v).then(
+    (ids) => {
+      if (isStale(seq, searchSeq)) return;
+      S.matchIds = new Set(ids);
+      list.scrollTop = 0;
+      renderList(opts);
+    },
+    (e: AppError) => void info(`search 失败 kind=${e.kind}`),
+  );
+}
+
+// —— 提示条 ——
+// 最小版本；撤销变体由 Task 8 扩展
+let toastTimer = 0;
+function toast(msg: string) {
+  $('#toastIc').innerHTML = svg('check');
+  toastMsg.textContent = msg;
+  toastEl.dataset.open = 'true';
+  clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => (toastEl.dataset.open = 'false'), 2400);
+}
+
+// 记录与暂停事件的处理函数，由 Task 8 填充
 const handlers = {
   added: (_s: RecordSummary) => {},
   updated: (_s: RecordSummary) => {},
@@ -60,8 +530,10 @@ const handlers = {
   paused: (_p: boolean) => {},
 };
 
+// —— 面板显隐 ——
 let booted = false;
 const shown = (t0: number | null) => {
+  S.shown = true;
   win.dataset.shown = 'true';
   if (!booted) {
     // 首次唤起才播放 720ms 编排；之后的快捷键唤起只做 90ms 淡入
@@ -71,12 +543,16 @@ const shown = (t0: number | null) => {
   }
   q.value = '';
   q.focus();
+  // 隐藏期间不刷新相对时间与分组，唤起时补一次
+  runSearch('');
+  renderSpectrum();
   if (import.meta.env.DEV && t0 !== null) {
     requestAnimationFrame(() => void info(`唤起耗时 ${Date.now() - t0} ms`));
   }
 };
 // 一次隐藏可能收到两次 panel-hidden，这里只写状态，重复调用无副作用
 const hidden = () => {
+  S.shown = false;
   win.dataset.shown = 'false';
   menu.dataset.open = 'false';
   (document.activeElement as HTMLElement | null)?.blur();
@@ -92,6 +568,13 @@ await onRecordsRemoved((ids) => handlers.removed(ids));
 await onPausedChanged((p) => handlers.paused(p));
 
 const b = await bootstrap();
+S.settings = b.settings;
+S.platform = b.platform;
+S.paused = b.paused;
+// 订阅后到达的事件比快照新，快照不覆盖已有条目
+// ponytail: 快照之后、返回之前被删除的记录会被快照带回，下次 records-removed 或重启时消失
+for (const r of b.records) if (!S.records.has(r.id)) S.records.set(r.id, r);
+S.filter = FILTERS.some(([k]) => k === b.settings.lastFilter) ? (b.settings.lastFilter as Filter) : 'all';
 if (b.settings.appearance === 'system') delete root.dataset.theme;
 else root.dataset.theme = b.settings.appearance;
 root.dataset.material = b.platform.material;
@@ -100,7 +583,90 @@ document.querySelectorAll('.mod').forEach((k) => (k.textContent = MOD));
 $('.modp').textContent = `${MOD} P`;
 await info(`bootstrap 完成，平台 ${b.platform.os}，材质 ${b.platform.material}`);
 
-// 临时：Esc 隐藏，键盘逻辑由后续任务接管
+// —— 事件 ——
+q.addEventListener('input', (e) => {
+  if ((e as InputEvent).isComposing) return;
+  runSearch(q.value);
+});
+q.addEventListener('compositionend', () => runSearch(q.value));
+clearQ.addEventListener('click', () => {
+  q.value = '';
+  runSearch('');
+  q.focus();
+});
+tabsBase.addEventListener('click', (e) => {
+  const t = (e.target as Element).closest<HTMLElement>('[data-f]');
+  if (t) setFilter(t.dataset.f as Filter, e.detail === 0);
+});
+list.addEventListener('scroll', schedulePaint, { passive: true });
+list.addEventListener('click', (e) => {
+  if (!(e.target as Element).closest('[data-act="reset"]')) return;
+  q.value = '';
+  S.filter = 'all';
+  renderTabs(false);
+  runSearch('', { stagger: true });
+  q.focus();
+});
+
+pbody.addEventListener('click', (e) => {
+  const t = e.target as Element;
+  const a = t.closest('a');
+  if (a) {
+    // 链接只交给系统浏览器打开，WebView 不导航
+    e.preventDefault();
+    const u = a.getAttribute('href');
+    if (u && isHttpUrl(u)) openUrl(u).catch((err: AppError) => toast(err.message));
+    return;
+  }
+  const rv = t.closest<HTMLElement>('[data-reveal]');
+  if (rv) {
+    const f = S.detail?.files[Number(rv.dataset.reveal)];
+    // 后端的 fileMissing 文案是“无法粘贴”，这里按 kind 给自己的文案
+    if (f) revealFile(f.path).catch((err: AppError) => toast(err.kind === 'fileMissing' ? MISSING : err.message));
+    return;
+  }
+  const btn = t.closest<HTMLElement>('[data-copy]');
+  if (!btn) return;
+  const v = btn.dataset.copy!;
+  copyText(v).then(
+    () => {
+      btn.textContent = '已复制';
+      fx(btn, [{ transform: 'scale(.9)' }, { transform: 'scale(1)' }], { duration: 320, easing: EASE_SPRING });
+      setTimeout(() => (btn.textContent = '复制'), 1200);
+      toast(`已复制 ${v}`);
+    },
+    (err: AppError) => toast(err.message),
+  );
+});
+
+addEventListener('resize', () => {
+  renderTabs(true);
+  paintRows();
+  paintSpectrumSel(false);
+  moveInd({ instant: true });
+});
+setInterval(() => {
+  if (S.shown && !menuOpen() && !S.removing.size) {
+    paintRows();
+    renderSpectrum();
+  }
+}, 60e3);
+
+renderTabs(true);
+renderSpectrum();
+renderList({ stagger: true, base: 260 });
+void document.fonts?.ready.then(() => {
+  renderTabs(true);
+  moveInd({ instant: true });
+  paintSpectrumSel(false);
+});
+
+// 临时：Esc 隐藏、↑↓ 选择，完整键盘分发由 Task 8 接管
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && !e.isComposing) void hidePanel();
+  if (e.isComposing) return;
+  if (e.key === 'Escape') void hidePanel();
+  else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    move(e.key === 'ArrowDown' ? 1 : -1, e.repeat);
+  }
 });
