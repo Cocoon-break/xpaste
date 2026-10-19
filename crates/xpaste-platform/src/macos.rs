@@ -12,7 +12,7 @@ use objc2_app_kit::{
 };
 use objc2_core_graphics::{CGEvent, CGEventFlags, CGEventTapLocation};
 use objc2_foundation::{
-    NSArray, NSData, NSDictionary, NSPoint, NSRect, NSSize, NSString, NSURL, ns_string,
+    NSArray, NSData, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString, NSURL, ns_string,
 };
 use xpaste_core::{AppInfo, Flavor, Snapshot};
 
@@ -21,6 +21,7 @@ use crate::{PasteBlock, PlatformError};
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
     fn AXIsProcessTrusted() -> u8;
+    fn AXIsProcessTrustedWithOptions(options: *const NSDictionary<NSString, NSNumber>) -> u8;
 }
 
 /// `kVK_ANSI_V`
@@ -260,6 +261,18 @@ pub fn paste(_target: Option<isize>) -> Result<(), PlatformError> {
         CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&event));
     }
     Ok(())
+}
+
+/// 未授权时弹出系统辅助功能授权对话框并把本应用加入列表；已授权时无操作。须在主线程调用。
+pub fn request_accessibility() {
+    autoreleasepool(|_| {
+        // `kAXTrustedCheckOptionPrompt` 的值
+        let key = NSString::from_str("AXTrustedCheckOptionPrompt");
+        let yes = NSNumber::new_bool(true);
+        let options = NSDictionary::from_slices(&[&*key], &[&*yes]);
+        // SAFETY: NSDictionary 与 CFDictionaryRef 免费桥接，options 在调用期间存活
+        unsafe { AXIsProcessTrustedWithOptions(Retained::as_ptr(&options)) };
+    })
 }
 
 pub fn open_accessibility_settings() {

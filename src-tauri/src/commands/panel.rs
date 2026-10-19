@@ -16,6 +16,13 @@ pub fn open_accessibility_settings(app: AppHandle) -> Result<(), AppError> {
     Ok(())
 }
 
+/// 触发系统辅助功能授权对话框（已授权或非 macOS 无操作）。AppKit 调用切到主线程。
+#[tauri::command(async)]
+pub fn request_accessibility(app: AppHandle) -> Result<(), AppError> {
+    app.run_on_main_thread(xpaste_platform::request_accessibility)?;
+    Ok(())
+}
+
 /// 只认小写 http/https 前缀（与 detect 的链接判定一致）。
 pub fn url_is_openable(url: &str) -> bool {
     url.starts_with("http://") || url.starts_with("https://")

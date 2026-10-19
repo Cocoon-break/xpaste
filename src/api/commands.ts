@@ -6,6 +6,7 @@ export const hidePanel = () => invoke<void>('hide_panel');
 export const copy = (id: number, paste: boolean) => invoke<CopyResult>('copy', { id, paste });
 export const copyText = (text: string) => invoke<void>('copy_text', { text });
 export const openAccessibilitySettings = () => invoke<void>('open_accessibility_settings');
+export const requestAccessibility = () => invoke<void>('request_accessibility');
 export const openUrl = (url: string) => invoke<void>('open_url', { url });
 export const revealFile = (path: string) => invoke<void>('reveal_file', { path });
 

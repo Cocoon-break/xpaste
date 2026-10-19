@@ -410,6 +410,8 @@ pub fn paste(target: Option<isize>) -> Result<(), PlatformError> {
     Ok(())
 }
 
+pub fn request_accessibility() {}
+
 pub fn open_accessibility_settings() {}
 
 pub fn foreground_window() -> Option<isize> {

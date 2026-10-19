@@ -1,7 +1,8 @@
 import './styles.css';
 import { attachConsole, info } from './api/log';
 import {
-  bootstrap, copy, copyText, deleteRecord, getRecord, hidePanel, openUrl, revealFile, search, setPaused, setPinned, undoDelete,
+  bootstrap, copy, copyText, deleteRecord, getRecord, hidePanel, openUrl, requestAccessibility, revealFile, search, setPaused, setPinned,
+  undoDelete,
 } from './api/commands';
 import {
   onPanelHidden,
@@ -14,7 +15,7 @@ import {
 } from './api/events';
 import type { AppError, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
 import { grade, hexInfo, isHex } from './color';
-import { copyToast } from './copy-status';
+import { copyToast, needsAccessibility } from './copy-status';
 import {
   esc, FAV_MIN, FILTERS, FL, fmtBytes, fmtDateTime, fmtDur, fmtInt, hl, hlCode, host, isFav, isHttpUrl, LABEL, rel, truncate,
   type Filter,
@@ -87,7 +88,7 @@ const tabs = $('#tabs'), tabsBase = $('#tabsBase'), tabsOver = $('#tabsOver');
 const ptype = $('#ptype'), pbody = $('#pbody'), pmeta = $('#pmeta'), countEl = $('#count');
 const pinBtn = $<HTMLButtonElement>('#pinBtn'), copyBtn = $<HTMLButtonElement>('#copyBtn');
 const moreBtn = $<HTMLButtonElement>('#moreBtn'), delBtn = $<HTMLButtonElement>('#delBtn');
-const menu = $('#menu'), toastEl = $('#toast'), toastMsg = $('#toastMsg'), undoBtn = $<HTMLButtonElement>('#undoBtn'), pauseBtn = $('#pauseBtn');
+const menu = $('#menu'), toastEl = $('#toast'), toastMsg = $('#toastMsg'), undoBtn = $<HTMLButtonElement>('#undoBtn'), toastAct = $<HTMLButtonElement>('#toastAct'), pauseBtn = $('#pauseBtn');
 const spBars = $('#spBars'), spTrack = $('#spTrack'), spCursor = $('#spCursor'), spTip = $('#spTip');
 
 // —— 状态 ——
@@ -613,14 +614,19 @@ function runSearch(v: string, opts: { stagger?: boolean; base?: number } = {}) {
 }
 
 // —— 提示条 ——
-// 连续触发时只换文字、不重播弹入；非撤销提示会顶掉未完成的撤销
+// 连续触发时只换文字、不重播弹入；非撤销提示会顶掉未完成的撤销。undo 与 action 不同时出现
+type ToastAction = { label: string; run: () => void };
 let toastTimer = 0;
-function toast(msg: string, { undo = false, icon = 'check' as keyof typeof I } = {}) {
+let toastRun: (() => void) | null = null;
+function toast(msg: string, { undo = false, icon = 'check' as keyof typeof I, action = undefined as ToastAction | undefined } = {}) {
   if (!undo) S.undo = null;
   $('#toastIc').innerHTML = svg(icon);
   if (toastEl.dataset.open === 'true') fx(toastMsg, [{ opacity: 0, transform: 'translateY(4px)', filter: 'blur(2px)' }, { opacity: 1, transform: 'none', filter: 'blur(0)' }], { duration: 180, easing: EASE_ENTER });
   toastMsg.textContent = msg;
   undoBtn.hidden = !undo;
+  toastAct.hidden = !action;
+  toastRun = action?.run ?? null;
+  if (action) toastAct.textContent = action.label;
   toastEl.dataset.open = 'true';
   if (undo) {
     const ring = $('#ring');
@@ -631,7 +637,7 @@ function toast(msg: string, { undo = false, icon = 'check' as keyof typeof I } =
   toastTimer = window.setTimeout(() => {
     toastEl.dataset.open = 'false';
     if (undo) S.undo = null;
-  }, undo ? UNDO_MS : 2400);
+  }, undo || action ? UNDO_MS : 2400);
 }
 
 // —— 操作 ——
@@ -648,7 +654,14 @@ function copyRecord(id: number) {
       const uses = Math.max(cur?.uses ?? 0, before.uses + 1);
       const fav = !isFav(before) && uses >= FAV_MIN;
       const msg = copyToast(res, S.platform.os, fav);
-      if (msg) toast(msg, { icon: fav ? 'star' : 'check' });
+      if (msg) {
+        toast(msg, {
+          icon: fav ? 'star' : 'check',
+          action: needsAccessibility(res)
+            ? { label: '前往授权', run: () => void requestAccessibility().catch((e: AppError) => toast(e.message, { icon: 'copy' })) }
+            : undefined,
+        });
+      }
       if (!S.shown || res.result === 'pasted') return;
       const sw = copyBtn.querySelector<HTMLElement>('.swap')!;
       sw.dataset.state = 'b';
@@ -1095,6 +1108,11 @@ document.addEventListener('pointerdown', (e) => {
   if (menuOpen() && !menu.contains(t) && !moreBtn.contains(t)) closeMenu(false);
 }, true);
 undoBtn.addEventListener('click', undo);
+toastAct.addEventListener('click', () => {
+  toastRun?.();
+  toastEl.dataset.open = 'false';
+  clearTimeout(toastTimer);
+});
 pauseBtn.addEventListener('click', () => setPaused(!S.paused).catch((err: AppError) => toast(err.message)));
 
 pbody.addEventListener('click', (e) => {

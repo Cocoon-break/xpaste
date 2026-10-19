@@ -94,6 +94,7 @@ pub fn run() {
             commands::settings::finish_onboarding,
             commands::panel::hide_panel,
             commands::panel::open_accessibility_settings,
+            commands::panel::request_accessibility,
             commands::panel::open_url,
             commands::panel::reveal_file,
             commands::records::get_record,
