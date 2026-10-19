@@ -31,3 +31,13 @@ export const onRecordsRemoved = (cb: (ids: number[]) => void): Promise<UnlistenF
 
 export const onPausedChanged = (cb: (paused: boolean) => void): Promise<UnlistenFn> =>
   listen<boolean>(PAUSED_CHANGED, (e) => cb(e.payload));
+
+/** 托盘“设置…”：面板显示后打开设置弹窗。 */
+export const OPEN_SETTINGS = 'open-settings';
+
+export const onOpenSettings = (cb: () => void): Promise<UnlistenFn> => listen(OPEN_SETTINGS, () => cb());
+
+/** 托盘“清空历史…”：面板显示后打开清空确认。 */
+export const CONFIRM_CLEAR = 'confirm-clear';
+
+export const onConfirmClear = (cb: () => void): Promise<UnlistenFn> => listen(CONFIRM_CLEAR, () => cb());

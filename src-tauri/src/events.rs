@@ -13,6 +13,10 @@ pub const RECORD_ADDED: &str = "record-added";
 pub const RECORD_UPDATED: &str = "record-updated";
 pub const RECORDS_REMOVED: &str = "records-removed";
 pub const PAUSED_CHANGED: &str = "paused-changed";
+/// 托盘“设置…”：面板显示后打开设置弹窗。
+pub const OPEN_SETTINGS: &str = "open-settings";
+/// 托盘“清空历史…”：面板显示后打开清空确认。
+pub const CONFIRM_CLEAR: &str = "confirm-clear";
 
 pub fn emit<S: Serialize + Clone>(app: &AppHandle, event: &str, payload: S) {
     if let Err(e) = app.emit(event, payload) {

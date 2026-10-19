@@ -1,7 +1,7 @@
 use std::sync::atomic::Ordering;
 
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use xpaste_core::{RecordSummary, Settings};
 
 use crate::clock::now_ms;
@@ -123,10 +123,16 @@ pub fn prune_preview(
         .prune_preview(retention_days, max_records, now_ms())?)
 }
 
+/// 命令与托盘菜单共用：写暂停标志、更新托盘、通知前端。
+pub fn set_paused_inner(app: &AppHandle, on: bool) {
+    app.state::<AppState>().paused.store(on, Ordering::SeqCst);
+    crate::tray::set_paused(app, on);
+    emit(app, PAUSED_CHANGED, on);
+}
+
 #[tauri::command(async)]
-pub fn set_paused(app: AppHandle, state: State<'_, AppState>, on: bool) -> Result<(), AppError> {
-    state.paused.store(on, Ordering::SeqCst);
-    emit(&app, PAUSED_CHANGED, on);
+pub fn set_paused(app: AppHandle, on: bool) -> Result<(), AppError> {
+    set_paused_inner(&app, on);
     Ok(())
 }
 

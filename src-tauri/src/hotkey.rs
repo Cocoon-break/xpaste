@@ -16,7 +16,6 @@ pub fn register(app: &AppHandle, shortcut: &str) -> Result<(), AppError> {
 
 /// 快捷键字符串 → 显示标签（如 `⌘ + Shift + V`）；规则与前端 `hotkeyLabel` 一致。
 // 托盘接入前只有测试在用
-#[cfg_attr(not(test), expect(dead_code))]
 pub fn label(shortcut: &str) -> String {
     let mac = cfg!(target_os = "macos");
     let (mut m, mut a, mut s, mut key) = (false, false, false, String::new());

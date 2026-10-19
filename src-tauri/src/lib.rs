@@ -16,11 +16,16 @@ use std::path::PathBuf;
 use tauri::{Manager, WindowEvent};
 use tauri_plugin_global_shortcut::ShortcutState;
 use tauri_plugin_log::{Target, TargetKind};
+use tauri_plugin_notification::NotificationExt;
 use xpaste_core::Store;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default();
+    // 单实例插件必须第一个注册：再次启动时切换已运行实例的面板
+    let builder =
+        tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            panel::toggle(app, None)
+        }));
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_nspanel::init());
     builder
@@ -63,13 +68,23 @@ pub fn run() {
                 log::warn!("托盘图标创建失败：{e}");
             }
             if let Err(e) = hotkey::register(app.handle(), &hotkey) {
-                // 系统通知在阶段 5
                 log::warn!("快捷键注册失败：{e}");
+                if let Err(e) = app
+                    .notification()
+                    .builder()
+                    .title("xPaste")
+                    .body("唤起快捷键被其他应用占用，请在设置中更换")
+                    .show()
+                {
+                    log::warn!("发送快捷键注册失败通知失败：{e}");
+                }
+                tray::mark_hotkey_failed(app.handle());
             }
             clipboard::start(app.handle().clone());
             Ok(())
         })
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
