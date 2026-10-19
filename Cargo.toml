@@ -12,8 +12,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 log = "0.4"
+rusqlite = { version = "0.40", features = ["bundled"] }
 tauri = { version = "2", features = [] }
-xpaste-core = { path = "crates/xpaste-core" }
+# 默认不带 store：平台层只用模型类型，Windows 交叉 clippy 无需编译 SQLite
+xpaste-core = { path = "crates/xpaste-core", default-features = false }
 xpaste-platform = { path = "crates/xpaste-platform" }
 
 [profile.release]

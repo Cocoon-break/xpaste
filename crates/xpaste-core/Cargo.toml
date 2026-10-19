@@ -8,3 +8,9 @@ rust-version.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+log.workspace = true
+rusqlite = { workspace = true, optional = true }
+
+[features]
+default = ["store"]
+store = ["dep:rusqlite"]

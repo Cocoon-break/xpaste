@@ -2,6 +2,10 @@
 
 pub mod error;
 pub mod model;
+#[cfg(feature = "store")]
+pub mod store;
 
 pub use error::CoreError;
 pub use model::*;
+#[cfg(feature = "store")]
+pub use store::Store;

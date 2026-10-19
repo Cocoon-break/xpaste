@@ -23,7 +23,7 @@ impl AppError {
             Self::ClipboardWrite => "clipboardWrite",
             Self::HotkeyTaken => "hotkeyTaken",
             Self::Core(CoreError::InvalidSettings(_)) => "invalidSettings",
-            Self::Tauri(_) => "internal",
+            Self::Core(_) | Self::Tauri(_) => "internal",
         }
     }
 }
@@ -70,10 +70,9 @@ mod tests {
 
     #[test]
     fn core_error_other_maps_to_internal() {
-        // 阶段 2 给 CoreError 加 Db 变体后，把这里换成真实变体；现在用 Tauri 错误代表“其他内部错误”
-        let e: AppError = tauri::Error::WebviewLabelAlreadyExists("panel".into()).into();
+        let e: AppError = CoreError::Db(rusqlite::Error::QueryReturnedNoRows).into();
         let v = serde_json::to_value(e).unwrap();
         assert_eq!(v["kind"], "internal");
-        assert!(v["message"].as_str().unwrap().contains("panel"));
+        assert!(!v["message"].as_str().unwrap().is_empty());
     }
 }
