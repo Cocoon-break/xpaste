@@ -3,8 +3,8 @@ import type { Bootstrap, CopyResult, RecordDetail, Settings } from './types';
 
 export const bootstrap = () => invoke<Bootstrap>('bootstrap');
 export const hidePanel = () => invoke<void>('hide_panel');
-// 阶段 1 临时命令，阶段 4 由 copy 替换
-export const pasteText = (text: string) => invoke<CopyResult>('paste_text', { text });
+export const copy = (id: number, paste: boolean) => invoke<CopyResult>('copy', { id, paste });
+export const copyText = (text: string) => invoke<void>('copy_text', { text });
 export const openAccessibilitySettings = () => invoke<void>('open_accessibility_settings');
 export const openUrl = (url: string) => invoke<void>('open_url', { url });
 export const revealFile = (path: string) => invoke<void>('reveal_file', { path });

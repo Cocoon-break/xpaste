@@ -1,12 +1,11 @@
 import { attachConsole, info } from './api/log';
-import { bootstrap, hidePanel, openAccessibilitySettings, pasteText } from './api/commands';
+import { bootstrap, hidePanel, openAccessibilitySettings } from './api/commands';
 import {
   onPanelShown,
   onRecordAdded,
   onRecordUpdated,
   onRecordsRemoved,
 } from './api/events';
-import { copyStatus, needsAccessibility } from './copy-status';
 import { applyAdded, applyRemoved, applyUpdated, sorted, type Records } from './records';
 
 const q = document.querySelector<HTMLInputElement>('#q')!;
@@ -63,14 +62,4 @@ await onRecordsRemoved((ids) => {
   render();
 });
 
-// 阶段 1 临时：测量用，阶段 3 移除
-document.querySelector('#pasteTest')!.addEventListener('click', async () => {
-  try {
-    const r = await pasteText('xPaste 粘贴测试 ' + Date.now());
-    axSettings.hidden = !needsAccessibility(r);
-    status.textContent = copyStatus(r, b.platform.os);
-  } catch (err) {
-    status.textContent = (err as { message?: string }).message ?? String(err);
-  }
-});
 axSettings.addEventListener('click', () => void openAccessibilitySettings());

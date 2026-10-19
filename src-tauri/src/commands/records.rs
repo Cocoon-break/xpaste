@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
-use xpaste_core::{ImageInfo, Kind, RecordDetail};
-use xpaste_platform::PasteBlock;
+use xpaste_core::{Flavor, ImageInfo, Kind, RecordDetail};
+use xpaste_platform::{PasteBlock, PlatformError};
 
 use crate::clock::now_ms;
 use crate::error::AppError;
@@ -95,34 +95,31 @@ pub fn count_unpinned(state: State<'_, AppState>) -> Result<u32, AppError> {
 #[derive(Debug, Serialize)]
 #[serde(tag = "result", rename_all = "camelCase")]
 pub enum CopyResult {
-    /// 只复制不粘贴（阶段 4 的 copy 命令用）
-    #[allow(dead_code)]
     Copied,
-    CopiedOnly {
-        reason: &'static str,
-    },
+    CopiedOnly { reason: &'static str },
     Pasted,
 }
 
-// 阶段 1 临时命令，阶段 4 由 copy 替换
-/// 写剪切板；能模拟粘贴就隐藏面板并粘贴到上一个应用，否则只复制并说明原因（面板保持或重新显示）。
-/// 阶段 4 的 copy 遵循同一规则：返回 `CopiedOnly` 时面板必须可见，用户才能看到降级提示。
+/// 写回记录的原始 flavor；`paste` 时能模拟粘贴就隐藏面板并粘贴到上一个应用，
+/// 否则只复制并说明原因。返回 `CopiedOnly` 时面板必须可见，用户才能看到降级提示（设计 8.5）。
 #[tauri::command(async)]
-pub async fn paste_text(
+pub async fn copy(
     app: AppHandle,
     state: State<'_, AppState>,
-    text: String,
+    id: i64,
+    paste: bool,
 ) -> Result<CopyResult, AppError> {
-    state.writing.store(true, Ordering::SeqCst);
-    let written = xpaste_platform::write_text(&text);
-    if let Ok(seq) = written {
-        state.last_write_seq.store(seq, Ordering::SeqCst);
-    }
-    state.writing.store(false, Ordering::SeqCst);
-    written.map_err(|e| {
-        log::warn!("写入剪切板失败 bytes={}：{e}", text.len());
-        AppError::ClipboardWrite
+    let flavors = precheck(&state, id)?;
+    let bytes: usize = flavors.iter().map(|f| f.data.len()).sum();
+    write_marked(&state, || xpaste_platform::write(&flavors)).inspect_err(|_| {
+        log::warn!("写入剪切板失败 id={id} bytes={bytes}");
     })?;
+    let move_to_top = state.settings().move_to_top;
+    state.store().bump_use(id, move_to_top, now_ms())?;
+    emit_summary(&app, RECORD_UPDATED, id);
+    if !paste {
+        return Ok(CopyResult::Copied);
+    }
     let target = Some(state.previous_window.load(Ordering::Relaxed)).filter(|&h| h != 0);
     match plan_paste(xpaste_platform::can_paste(target), target, cfg!(windows)) {
         PastePlan::CopyOnly(reason) => {
@@ -135,11 +132,11 @@ pub async fn paste_text(
             crate::panel::hide(&app);
             match paste_on_main(&app, target).await {
                 Ok(()) => {
-                    log::info!("已模拟粘贴 bytes={}", text.len());
+                    log::info!("已模拟粘贴 id={id} bytes={bytes}");
                     Ok(CopyResult::Pasted)
                 }
                 Err(e) => {
-                    log::warn!("模拟粘贴失败：{e}");
+                    log::warn!("模拟粘贴失败 id={id}：{e}");
                     crate::panel::reshow(&app);
                     Ok(CopyResult::CopiedOnly {
                         reason: REASON_PASTE_FAILED,
@@ -148,6 +145,47 @@ pub async fn paste_text(
             }
         }
     }
+}
+
+/// 只写一段文本（颜色格式按钮用）：不隐藏面板、不改记录；监听线程视为自身写入，不产生新记录。
+#[tauri::command(async)]
+pub fn copy_text(state: State<'_, AppState>, text: String) -> Result<(), AppError> {
+    write_marked(&state, || xpaste_platform::write_text(&text)).inspect_err(|_| {
+        log::warn!("写入剪切板失败 bytes={}", text.len());
+    })
+}
+
+/// 设计 8.5 第 1–2 步：记录存在、文件都在、有可写回的 flavor。任何一步不满足都不碰剪切板。
+fn precheck(state: &AppState, id: i64) -> Result<Vec<Flavor>, AppError> {
+    let store = state.store();
+    let detail = store
+        .detail(id)?
+        .ok_or_else(|| AppError::Invalid("记录不存在".into()))?;
+    if detail.files.iter().any(|f| !f.exists) {
+        return Err(AppError::FileMissing);
+    }
+    let flavors = store.flavors(id)?;
+    if flavors.is_empty() {
+        return Err(AppError::ClipboardWrite);
+    }
+    Ok(flavors)
+}
+
+/// 写剪切板期间置 `writing`，成功后记下序号，让监听线程跳过这次自身写入。
+fn write_marked(
+    state: &AppState,
+    f: impl FnOnce() -> Result<u64, PlatformError>,
+) -> Result<(), AppError> {
+    state.writing.store(true, Ordering::SeqCst);
+    let written = f();
+    if let Ok(seq) = written {
+        state.last_write_seq.store(seq, Ordering::SeqCst);
+    }
+    state.writing.store(false, Ordering::SeqCst);
+    written.map(drop).map_err(|e| {
+        log::warn!("写剪切板出错：{e}");
+        AppError::ClipboardWrite
+    })
 }
 
 const REASON_PASTE_FAILED: &str = "pasteFailed";
@@ -191,6 +229,73 @@ async fn paste_on_main(app: &AppHandle, target: Option<isize>) -> Result<(), Str
 mod tests {
     use super::*;
     use serde_json::json;
+    use xpaste_core::{Snapshot, capture::build_record, detect};
+
+    fn insert(state: &AppState, snap: Snapshot) -> i64 {
+        let kind = detect::kind(&snap);
+        let (up, _) = state
+            .store()
+            .insert_or_merge(&build_record(snap, kind, 0), 0, 500)
+            .unwrap();
+        match up {
+            xpaste_core::store::Upsert::Added(id) | xpaste_core::store::Upsert::Merged(id) => id,
+        }
+    }
+
+    fn insert_file_record(state: &AppState, path: &str) -> i64 {
+        insert(
+            state,
+            Snapshot {
+                file_paths: vec![path.into()],
+                ..Default::default()
+            },
+        )
+    }
+
+    /// 平台层采集时总带 flavor；这里只给文本，入库后没有 flavor 行。
+    fn insert_text_record_without_flavors(state: &AppState) -> i64 {
+        insert(
+            state,
+            Snapshot {
+                text: Some("x".into()),
+                ..Default::default()
+            },
+        )
+    }
+
+    #[test]
+    fn copy_refuses_when_a_file_is_missing() {
+        let state = AppState::for_test();
+        let id = insert_file_record(&state, "/nonexistent/xpaste-missing.txt");
+        assert!(matches!(precheck(&state, id), Err(AppError::FileMissing)));
+    }
+
+    #[test]
+    fn copy_refuses_record_without_flavors() {
+        let state = AppState::for_test();
+        let id = insert_text_record_without_flavors(&state);
+        assert!(matches!(
+            precheck(&state, id),
+            Err(AppError::ClipboardWrite)
+        ));
+    }
+
+    #[test]
+    fn copy_refuses_unknown_record() {
+        let state = AppState::for_test();
+        assert!(matches!(precheck(&state, 999), Err(AppError::Invalid(_))));
+    }
+
+    #[test]
+    fn write_marked_sets_sequence_and_clears_writing_on_error() {
+        let state = AppState::for_test();
+        let r = write_marked(&state, || Err(PlatformError::Unsupported));
+        assert!(matches!(r, Err(AppError::ClipboardWrite)));
+        assert!(!state.writing.load(Ordering::SeqCst));
+        assert_eq!(state.last_write_seq.load(Ordering::SeqCst), u64::MAX);
+        write_marked(&state, || Ok(7)).unwrap();
+        assert_eq!(state.last_write_seq.load(Ordering::SeqCst), 7);
+    }
 
     #[test]
     fn blocked_paste_degrades_with_matching_reason() {
