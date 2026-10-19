@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <!-- 暂停记录时的 Windows 托盘图标：光谱亮条换成琥珀色暂停符号 -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#232C5C"/><stop offset="1" stop-color="#070A14"/></linearGradient>
+  </defs>
+  <rect x="1" y="1" width="30" height="30" rx="7" fill="url(#bg)" stroke="#AABEFF" stroke-opacity=".35"/>
+  <rect x="9" y="8" width="14" height="18" rx="3.5" fill="none" stroke="#EAF0FF" stroke-width="2"/>
+  <rect x="12.5" y="5.5" width="7" height="4.5" rx="2.25" fill="#EAF0FF"/>
+  <rect x="12.75" y="13.5" width="2.5" height="8" rx="1.25" fill="#FFB84D"/>
+  <rect x="16.75" y="13.5" width="2.5" height="8" rx="1.25" fill="#FFB84D"/>
+</svg>

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <!-- Windows 托盘 / icon.ico 小尺寸（16–32px）用的简化版：深色玻璃底 + 剪切板 + 光谱亮条 -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#232C5C"/><stop offset="1" stop-color="#070A14"/></linearGradient>
+    <linearGradient id="spec" gradientUnits="userSpaceOnUse" x1="11.5" y1="0" x2="20.5" y2="0">
+      <stop offset="0" stop-color="#8FE3FF"/><stop offset=".35" stop-color="#6F8BFF"/><stop offset=".65" stop-color="#FF6FD8"/><stop offset="1" stop-color="#FFB84D"/>
+    </linearGradient>
+  </defs>
+  <rect x="1" y="1" width="30" height="30" rx="7" fill="url(#bg)" stroke="#AABEFF" stroke-opacity=".35"/>
+  <rect x="9" y="8" width="14" height="18" rx="3.5" fill="none" stroke="#EAF0FF" stroke-width="2"/>
+  <rect x="12.5" y="5.5" width="7" height="4.5" rx="2.25" fill="#EAF0FF"/>
+  <rect x="11.5" y="15" width="9" height="3" rx="1.5" fill="url(#spec)"/>
+  <rect x="11.5" y="20.5" width="5" height="2" rx="1" fill="#EAF0FF" opacity=".45"/>
+</svg>

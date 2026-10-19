@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36">
+  <!-- macOS 菜单栏模板图：只用黑色 + 透明度，系统按菜单栏明暗自动反色。36px = 18pt @2x -->
+  <defs>
+    <mask id="gap" maskUnits="userSpaceOnUse" x="0" y="0" width="36" height="36">
+      <rect width="36" height="36" fill="#fff"/><rect x="11" y="1.5" width="14" height="9" rx="4.5" fill="#000"/>
+    </mask>
+  </defs>
+  <rect x="7.5" y="6.5" width="21" height="26" rx="5" fill="none" stroke="#000" stroke-width="3" mask="url(#gap)"/>
+  <rect x="12.5" y="3" width="11" height="6" rx="3"/>
+  <rect x="11.5" y="13" width="10" height="3" rx="1.5" opacity=".5"/>
+  <rect x="11.5" y="18.5" width="13" height="3.5" rx="1.75"/>
+  <rect x="11.5" y="24.5" width="7" height="3" rx="1.5" opacity=".5"/>
+</svg>

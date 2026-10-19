@@ -9,6 +9,7 @@ mod hotkey;
 mod housekeeping;
 mod panel;
 pub mod state;
+mod tray;
 
 use state::AppState;
 use tauri::{Manager, WindowEvent};
@@ -52,6 +53,9 @@ pub fn run() {
             housekeeping::start(app.handle().clone());
             #[cfg(target_os = "macos")]
             panel::setup_macos(app)?;
+            if let Err(e) = tray::setup(app) {
+                log::warn!("托盘图标创建失败：{e}");
+            }
             if let Err(e) = hotkey::register(app.handle(), &hotkey) {
                 // 系统通知在阶段 5
                 log::warn!("快捷键注册失败：{e}");

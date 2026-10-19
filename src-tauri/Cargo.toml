@@ -18,7 +18,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { workspace = true, features = ["macos-private-api", "protocol-asset"] }
+tauri = { workspace = true, features = ["macos-private-api", "protocol-asset", "tray-icon"] }
 xpaste-core = { workspace = true, features = ["store"] }
 xpaste-platform.workspace = true
 serde.workspace = true

@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>xPaste Logo 方案</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=Geist:wght@400;500&family=JetBrains+Mono:wght@400&display=swap">
+<style>
+/* 视觉语言沿用 docs/xpaste-prototype.html：墨色底 + 极光 + 颗粒 + 毛玻璃卡片 + 类型光谱 */
+:root {
+  color-scheme: dark;
+  --ink: #06080F; --glass: rgb(15 19 34 / .68); --well: rgb(0 0 0 / .22);
+  --line: rgb(170 190 255 / .09); --line-2: rgb(170 190 255 / .17);
+  --fg: #EAF0FF; --muted: #9AA4CB; --faint: #646E94;
+  --c-text: #8FE3FF; --c-link: #6F8BFF; --c-code: #4FE3C1; --c-color: #FF6FD8; --c-image: #FFB84D; --c-video: #FF6B6B; --c-file: #B48CFF;
+  --au-1: rgb(124 147 255 / .55); --au-2: rgb(255 111 216 / .32); --au-3: rgb(79 227 193 / .30); --au-op: .5; --grain-op: .07;
+  --shadow: 0 50px 120px -30px rgb(0 0 0 / .85), inset 0 1px 0 rgb(255 255 255 / .07);
+  --icon-shadow: 0 28px 50px -18px rgb(0 0 0 / .9);
+  --spectrum: linear-gradient(90deg, var(--c-text), var(--c-link) 28%, var(--c-code) 44%, var(--c-color) 58%, var(--c-image) 72%, var(--c-video) 86%, var(--c-file));
+  --font-display: "Unbounded", "Geist", "PingFang SC", sans-serif;
+  --font-ui: "Geist", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --ink: #EDF0F8; --glass: rgb(255 255 255 / .62); --well: rgb(20 30 80 / .04);
+  --line: rgb(30 45 110 / .09); --line-2: rgb(30 45 110 / .16);
+  --fg: #111632; --muted: #545C7C; --faint: #8790AE;
+  --c-text: #0891B2; --c-link: #3B5BDB; --c-code: #0D9488; --c-color: #C026D3; --c-image: #D97706; --c-video: #E03131; --c-file: #7C3AED;
+  --au-1: rgb(111 139 255 / .42); --au-2: rgb(255 111 216 / .28); --au-3: rgb(79 227 193 / .34); --au-op: .9; --grain-op: .05;
+  --shadow: 0 40px 100px -30px rgb(40 50 110 / .35), inset 0 1px 0 rgb(255 255 255 / .9);
+  --icon-shadow: 0 24px 44px -18px rgb(30 40 100 / .55);
+}
+* { box-sizing: border-box; margin: 0; }
+html { background: var(--ink); }
+body { min-height: 100vh; font: 14px/1.5 var(--font-ui); color: var(--fg); padding: 56px 16px 96px; -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+.aurora { position: fixed; inset: 0; z-index: -2; overflow: hidden; pointer-events: none; }
+.aurora i { position: absolute; width: 70vmax; height: 70vmax; border-radius: 50%; opacity: var(--au-op); animation: drift 26s ease-in-out infinite alternate; }
+.aurora i:nth-child(1) { left: -20vmax; top: -30vmax; background: radial-gradient(closest-side, var(--au-1), transparent); }
+.aurora i:nth-child(2) { right: -25vmax; top: -10vmax; background: radial-gradient(closest-side, var(--au-2), transparent); animation-duration: 32s; }
+.aurora i:nth-child(3) { left: 10vmax; bottom: -45vmax; background: radial-gradient(closest-side, var(--au-3), transparent); animation-duration: 38s; }
+@keyframes drift { 50% { transform: translate3d(8vmax, 5vmax, 0) scale(1.12); } 100% { transform: translate3d(-6vmax, 9vmax, 0) scale(.94); } }
+@media (prefers-reduced-motion: reduce) { .aurora i { animation: none; } }
+.grain { position: fixed; inset: 0; z-index: -1; pointer-events: none; opacity: var(--grain-op); mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+
+.page { max-width: 1120px; margin: 0 auto; display: grid; gap: 28px; }
+header { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
+h1 { font: 700 34px/1 var(--font-display); letter-spacing: -.02em; }
+header p { color: var(--muted); font-size: 13px; margin-top: 10px; }
+.theme { font: 500 13px var(--font-ui); color: var(--fg); background: var(--glass); border: 1px solid var(--line-2); border-radius: 10px; padding: 8px 14px; cursor: pointer; backdrop-filter: blur(20px); }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 18px; }
+.card { position: relative; background: var(--glass); backdrop-filter: blur(28px) saturate(1.4); -webkit-backdrop-filter: blur(28px) saturate(1.4);
+  border: 1px solid var(--line-2); border-radius: 20px; box-shadow: var(--shadow); padding: 22px; display: grid; gap: 20px; }
+.card::before { content: ""; position: absolute; left: 24px; right: 24px; top: -1px; height: 1px; background: var(--spectrum); opacity: .7; }
+.hero { display: grid; place-items: center; padding: 34px 0 30px; border-radius: 14px; background: var(--well); border: 1px solid var(--line); }
+.hero svg { width: 168px; height: 168px; filter: drop-shadow(var(--icon-shadow)); transition: transform .5s cubic-bezier(.34,1.56,.64,1); }
+.card:hover .hero svg { transform: translateY(-4px) scale(1.03); }
+.uses { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.uses .s64 { width: 64px; height: 64px; } .uses .s32 { width: 32px; height: 32px; } .uses .s16 { width: 16px; height: 16px; }
+.tray { display: inline-flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; border-radius: 7px; background: var(--well); border: 1px solid var(--line);
+  font: 400 11px var(--font-mono); color: var(--muted); }
+.tray svg { width: 16px; height: 16px; color: var(--fg); }
+.lock { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.lock svg { width: 30px; height: 30px; }
+.lock span { font: 700 21px/1 var(--font-display); letter-spacing: -.02em; }
+.meta h2 { font: 700 16px var(--font-display); letter-spacing: -.01em; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.meta h2 small { font: 400 11px var(--font-mono); color: var(--faint); letter-spacing: .08em; }
+.meta h2 em { font: 500 11px var(--font-ui); font-style: normal; color: var(--c-code); padding: 1px 8px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--c-code) 30%, transparent); background: color-mix(in srgb, var(--c-code) 10%, transparent); }
+.meta p { margin-top: 8px; font-size: 13.5px; line-height: 1.7; color: var(--muted); }
+.meta p b { color: var(--fg); font-weight: 500; }
+footer { font-size: 12px; color: var(--faint); }
+@media (max-width: 420px) { .grid { grid-template-columns: 1fr; } .lock { margin-left: 0; } }
+</style>
+</head>
+<body>
+<div class="aurora" aria-hidden="true"><i></i><i></i><i></i></div>
+<div class="grain" aria-hidden="true"></div>
+<div class="page">
+  <header>
+    <div>
+      <h1>xPaste · Logo</h1>
+      <p>第二轮 · 按原型视觉语言重做：墨色玻璃底 + 极光 + 类型光谱发光 · 2026-10-19</p>
+    </div>
+    <button class="theme" id="theme" type="button">切换明暗背景</button>
+  </header>
+  <main class="grid" id="grid"></main>
+  <footer>每个方案依次展示：应用图标 · 64 / 32 / 16px · 菜单栏单色模板图标 · 字标组合。图标本身只做暗色一版（与应用默认主题一致），切换背景用来检查它放在亮色桌面上的效果。</footer>
+</div>
+
+<script>
+// 颜色全部取自原型暗色 token。图标坐标系 0..100。
+const C = { text: "#8FE3FF", link: "#6F8BFF", code: "#4FE3C1", color: "#FF6FD8", image: "#FFB84D", video: "#FF6B6B", file: "#B48CFF", fg: "#EAF0FF", line: "#AABEFF" };
+const SPEC = [[0, C.text], [.28, C.link], [.44, C.code], [.58, C.color], [.72, C.image], [.86, C.video], [1, C.file]];
+const stops = a => a.map(([o, c, op = 1]) => `<stop offset="${o}" stop-color="${c}" stop-opacity="${op}"/>`).join("");
+const lin = (id, x1, y1, x2, y2, a) => `<linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}">${stops(a)}</linearGradient>`;
+
+// 应用图标底板：墨色渐变 + 三团极光 + 顶部高光 + 发丝描边，对应原型窗口的玻璃质感
+function tile(id, glyph) {
+  return `<defs>
+    <linearGradient id="${id}bg" x1="0" y1="0" x2="0" y2="1">${stops([[0, "#151B38"], [1, "#04060C"]])}</linearGradient>
+    <radialGradient id="${id}a1" cx=".12" cy=".02" r=".8">${stops([[0, "#7C93FF", .4], [1, "#7C93FF", 0]])}</radialGradient>
+    <radialGradient id="${id}a2" cx="1.02" cy=".42" r=".62">${stops([[0, "#FF6FD8", .24], [1, "#FF6FD8", 0]])}</radialGradient>
+    <radialGradient id="${id}a3" cx=".3" cy="1.08" r=".72">${stops([[0, "#4FE3C1", .22], [1, "#4FE3C1", 0]])}</radialGradient>
+    <linearGradient id="${id}hl" x1="0" y1="0" x2="0" y2="1">${stops([[0, "#fff", .14], [.42, "#fff", 0]])}</linearGradient>
+    ${lin(id + "rim", 0, 0, 100, 0, SPEC)}
+    <clipPath id="${id}clip"><rect width="100" height="100" rx="22.5"/></clipPath>
+    <filter id="${id}glow" filterUnits="userSpaceOnUse" x="0" y="0" width="100" height="100" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="4.5" result="wide"/>
+      <feColorMatrix in="wide" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 .7 0" result="wideSoft"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="1.3" result="tight"/>
+      <feMerge><feMergeNode in="wideSoft"/><feMergeNode in="tight"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <g clip-path="url(#${id}clip)">
+    <rect width="100" height="100" fill="url(#${id}bg)"/>
+    <rect width="100" height="100" fill="url(#${id}a1)"/>
+    <rect width="100" height="100" fill="url(#${id}a2)"/>
+    <rect width="100" height="100" fill="url(#${id}a3)"/>
+    ${glyph}
+    <rect width="100" height="100" fill="url(#${id}hl)"/>
+  </g>
+  <rect x=".5" y=".5" width="99" height="99" rx="22" fill="none" stroke="${C.line}" stroke-opacity=".2"/>
+  <rect x="24" y="0" width="52" height=".9" fill="url(#${id}rim)" opacity=".75"/>`;
+}
+
+// 每个图形 g(id, mono)：mono=true 时输出菜单栏用的单色模板（currentColor、无发光）
+const logos = [
+  {
+    name: "Spectrum", tag: "光柱", rec: true,
+    why: "<b>把原型的“复制频谱”直接做成图标</b>：五根光柱是五种内容类型，越高代表内容越大，从底部渐隐、顶端发光，和面板里的光柱同一画法。原型页头字标旁已经在用这组光柱，换成它品牌和界面完全统一。",
+    g: (id, m) => {
+      const bars = [[28, 24, C.text], [39, 38, C.link], [50, 30, C.code], [61, 48, C.color], [72, 34, C.image]];
+      const base = 75;
+      return `<defs>${bars.map(([, h, c], i) => lin(`${id}p${i}`, 0, base - h, 0, base, [[0, m ? "currentColor" : c], [1, m ? "currentColor" : c, m ? 1 : .3]])).join("")}</defs>
+        ${m ? "" : `<rect x="21" y="${base + 3}" width="58" height=".8" rx=".4" fill="${C.line}" opacity=".28"/>`}
+        <g ${m ? "" : `filter="url(#${id}glow)"`}>${bars.map(([x, h], i) => `<rect x="${x - 3.6}" y="${base - h}" width="7.2" height="${h}" rx="3.6" fill="url(#${id}p${i})"/>`).join("")}</g>`;
+    }
+  },
+  {
+    name: "Neon X", tag: "霓虹交叉", rec: true,
+    why: "<b>两道霓虹光束交叉成 x</b>：青→蓝一道压在粉→琥珀一道上面，下层在交叉处断开，表示“新内容覆盖粘贴”。两道光束的配色就是原型光谱的两端，中间有一条白色亮芯，在菜单栏 16px 下也清楚。",
+    g: (id, m) => `<defs>
+        ${lin(id + "b1", 28, 28, 72, 72, [[0, m ? "currentColor" : C.text], [1, m ? "currentColor" : C.link]])}
+        ${lin(id + "b2", 72, 28, 28, 72, [[0, m ? "currentColor" : C.color], [1, m ? "currentColor" : C.image]])}
+        <mask id="${id}m" maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="100"><rect width="100" height="100" fill="#fff"/><line x1="28" y1="28" x2="72" y2="72" stroke="#000" stroke-width="${m ? 25 : 21}" stroke-linecap="round"/></mask>
+      </defs>
+      <g ${m ? "" : `filter="url(#${id}glow)"`} stroke-linecap="round" fill="none">
+        <g mask="url(#${id}m)"><line x1="72" y1="28" x2="28" y2="72" stroke="url(#${id}b2)" stroke-width="${m ? 12 : 9}"/>${m ? "" : `<line x1="72" y1="28" x2="28" y2="72" stroke="#fff" stroke-opacity=".75" stroke-width="2.2"/>`}</g>
+        <line x1="28" y1="28" x2="72" y2="72" stroke="url(#${id}b1)" stroke-width="${m ? 12 : 9}"/>${m ? "" : `<line x1="28" y1="28" x2="72" y2="72" stroke="#fff" stroke-opacity=".8" stroke-width="2.2"/>`}
+      </g>`
+  },
+  {
+    name: "Prism X", tag: "玻璃 · 交点发光",
+    why: "<b>两块毛玻璃条交叉成 x</b>，只有交点亮起光谱色：复制和粘贴在这一点相遇。玻璃条对应面板的毛玻璃材质，交点是视觉焦点，整体克制、精致，适合官网和安装包大图。",
+    g: (id, m) => `<defs>
+        <linearGradient id="${id}gl" x1="0" y1="0" x2="1" y2="1">${stops([[0, "#fff", .22], [1, "#fff", .05]])}</linearGradient>
+        ${lin(id + "core", 42, 42, 58, 58, [[0, m ? "currentColor" : C.text], [.5, m ? "currentColor" : C.color], [1, m ? "currentColor" : C.image]])}
+      </defs>
+      ${[45, -45].map(r => `<rect x="41.5" y="17" width="17" height="66" rx="8.5" transform="rotate(${r} 50 50)" fill="${m ? "none" : `url(#${id}gl)`}" stroke="${m ? "currentColor" : "#CFDBFF"}" stroke-opacity="${m ? 1 : .45}" stroke-width="${m ? 4 : 1}"/>`).join("")}
+      <rect x="42.5" y="42.5" width="15" height="15" rx="2.5" transform="rotate(45 50 50)" fill="url(#${id}core)" ${m ? "" : `filter="url(#${id}glow)"`}/>`
+  },
+  {
+    name: "Glass Clip", tag: "玻璃剪切板",
+    why: "<b>一块悬浮的毛玻璃剪切板</b>，里面三行记录，中间被选中的那行亮起光谱色，对应原型粘贴时扫过列表行的“光束”。图形最直白，用户第一眼就知道是剪切板工具。",
+    g: (id, m) => `<defs>
+        ${lin(id + "s", 34, 0, 66, 0, m ? [[0, "currentColor"], [1, "currentColor"]] : SPEC)}
+        <radialGradient id="${id}blob" cx=".5" cy=".5" r=".5">${stops([[0, C.link, .6], [1, C.link, 0]])}</radialGradient>
+        <linearGradient id="${id}gl" x1="0" y1="0" x2="1" y2="1">${stops([[0, "#fff", .2], [1, "#fff", .04]])}</linearGradient>
+      </defs>
+      ${m ? "" : `<circle cx="54" cy="58" r="30" fill="url(#${id}blob)"/>`}
+      <rect x="26" y="23" width="48" height="58" rx="10" fill="${m ? "none" : `url(#${id}gl)`}" stroke="${m ? "currentColor" : "#CFDBFF"}" stroke-opacity="${m ? 1 : .5}" stroke-width="${m ? 6 : 1}"/>
+      <rect x="39" y="18" width="22" height="10" rx="5" fill="${m ? "currentColor" : C.fg}"/>
+      <rect x="34" y="41" width="22" height="4.5" rx="2.25" fill="${m ? "currentColor" : C.fg}" opacity="${m ? .5 : .35}"/>
+      <rect x="34" y="51.5" width="32" height="5.5" rx="2.75" fill="url(#${id}s)" ${m ? "" : `filter="url(#${id}glow)"`}/>
+      <rect x="34" y="63" width="15" height="4.5" rx="2.25" fill="${m ? "currentColor" : C.fg}" opacity="${m ? .5 : .35}"/>`
+  },
+  {
+    name: "24h Dial", tag: "环形频谱",
+    why: "<b>把 24 小时频谱卷成一个表盘</b>：24 个刻度对应 24 小时，亮起的彩色刻度是那个小时里的复制，越长内容越大；中心的光点是“现在”，对应频谱右端的“现在”标记。科技感最强，像一块仪表。",
+    g: (id, m) => {
+      const hits = { 1: [10, C.text], 4: [15, C.link], 7: [8, C.code], 10: [13, C.image], 13: [17, C.color], 15: [9, C.file], 18: [14, C.video], 21: [11, C.code], 23: [18, C.text] };
+      const tick = (i, len, attrs) => {
+        const a = (i * 15 - 90) * Math.PI / 180, r1 = 17, r2 = 17 + len;
+        return `<line x1="${(50 + r1 * Math.cos(a)).toFixed(2)}" y1="${(50 + r1 * Math.sin(a)).toFixed(2)}" x2="${(50 + r2 * Math.cos(a)).toFixed(2)}" y2="${(50 + r2 * Math.sin(a)).toFixed(2)}" ${attrs}/>`;
+      };
+      const all = [...Array(24).keys()];
+      return `<g stroke-linecap="round">
+          ${all.filter(i => !hits[i]).map(i => tick(i, 3.5, `stroke="${m ? "currentColor" : C.line}" stroke-opacity="${m ? .45 : .3}" stroke-width="2.4"`)).join("")}
+          <g ${m ? "" : `filter="url(#${id}glow)"`}>${all.filter(i => hits[i]).map(i => tick(i, hits[i][0], `stroke="${m ? "currentColor" : hits[i][1]}" stroke-width="3.2"`)).join("")}</g>
+        </g>
+        ${m ? "" : `<circle cx="50" cy="50" r="8" fill="none" stroke="${C.code}" stroke-opacity=".4" stroke-width="1.2"/>`}
+        <circle cx="50" cy="50" r="4.2" fill="${m ? "currentColor" : C.code}" ${m ? "" : `filter="url(#${id}glow)"`}/>`;
+    }
+  },
+  {
+    name: "Stack", tag: "层叠卡片 · 光谱描边",
+    why: "<b>三张向后退的玻璃卡片</b>代表历史记录，最前面那张描着光谱边、里面一道光束，代表正要粘贴的那一条。层次感强、偏“产品图标”风格，和 macOS / Windows 常见的工具类图标放在一起最协调。",
+    g: (id, m) => `<defs>
+        ${lin(id + "s", 23, 0, 77, 0, m ? [[0, "currentColor"], [1, "currentColor"]] : SPEC)}
+      </defs>
+      <rect x="35" y="21" width="30" height="30" rx="7" fill="none" stroke="${m ? "currentColor" : C.line}" stroke-opacity="${m ? .4 : .3}" stroke-width="${m ? 3.5 : 1.3}"/>
+      <rect x="29" y="28" width="42" height="34" rx="8" fill="${m ? "none" : "#121936"}" stroke="${m ? "currentColor" : C.line}" stroke-opacity="${m ? .7 : .5}" stroke-width="${m ? 3.5 : 1.3}"/>
+      <rect x="23" y="36" width="54" height="40" rx="9.5" fill="${m ? "none" : "#0D1226"}" stroke="url(#${id}s)" stroke-width="${m ? 5 : 2.2}" ${m ? "" : `filter="url(#${id}glow)"`}/>
+      <rect x="33" y="53" width="34" height="6" rx="3" fill="url(#${id}s)" ${m ? "" : `filter="url(#${id}glow)"`}/>`
+  },
+];
+
+let uid = 0;
+const icon = (l, cls) => { const id = "i" + uid++ + "-"; return `<svg class="${cls}" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">${tile(id, l.g(id, false))}</svg>`; };
+const mono = l => { const id = "i" + uid++ + "-"; return `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">${l.g(id, true)}</svg>`; };
+
+document.getElementById("grid").innerHTML = logos.map((l, i) => `
+  <article class="card">
+    <div class="hero">${icon(l, "")}</div>
+    <div class="uses">
+      ${icon(l, "s64")}${icon(l, "s32")}${icon(l, "s16")}
+      <span class="tray">${mono(l)}10:24</span>
+      <div class="lock">${icon(l, "")}<span>xPaste</span></div>
+    </div>
+    <div class="meta">
+      <h2>${String(i + 1).padStart(2, "0")} ${l.name} <small>${l.tag}</small>${l.rec ? "<em>推荐</em>" : ""}</h2>
+      <p>${l.why}</p>
+    </div>
+  </article>`).join("");
+
+document.getElementById("theme").onclick = () => {
+  const r = document.documentElement;
+  r.dataset.theme = r.dataset.theme === "light" ? "dark" : "light";
+};
+</script>
+</body>
+</html>

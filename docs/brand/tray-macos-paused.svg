@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36">
+  <!-- 暂停记录时的菜单栏模板图：三行记录换成暂停符号 -->
+  <defs>
+    <mask id="gap" maskUnits="userSpaceOnUse" x="0" y="0" width="36" height="36">
+      <rect width="36" height="36" fill="#fff"/><rect x="11" y="1.5" width="14" height="9" rx="4.5" fill="#000"/>
+    </mask>
+  </defs>
+  <rect x="7.5" y="6.5" width="21" height="26" rx="5" fill="none" stroke="#000" stroke-width="3" mask="url(#gap)"/>
+  <rect x="12.5" y="3" width="11" height="6" rx="3"/>
+  <rect x="13.75" y="14" width="3" height="11" rx="1.5"/>
+  <rect x="19.25" y="14" width="3" height="11" rx="1.5"/>
+</svg>

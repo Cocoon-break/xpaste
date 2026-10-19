@@ -8,7 +8,7 @@ SHELL := /bin/bash
 WIN_TARGET := x86_64-pc-windows-msvc
 HAS_WIN_TARGET := $(shell rustup target list --installed 2>/dev/null | grep -c $(WIN_TARGET))
 
-.PHONY: help install dev fmt lint test-rust test-web test check build build-check release release-app clean
+.PHONY: help install dev fmt lint test-rust test-web test check build build-check release release-app icons clean
 
 help: ## 列出可用目标
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{ printf "  %-14s %s\n", $$1, $$2 }'
@@ -58,6 +58,17 @@ release-app: ## 只打 .app（macOS；dmg 脚本依赖 Finder 自动化，受限
 release-report: ## 列出产物及大小
 	@echo "== 产物 =="
 	@find target/release/bundle -maxdepth 2 \( -name '*.app' -o -name '*.dmg' -o -name '*.exe' -o -name '*.msi' \) -print0 2>/dev/null | xargs -0 -I{} du -sh "{}" || true
+
+icons: ## 从 docs/brand 的 SVG 重新生成应用图标和托盘图标（需要 rsvg-convert、ImageMagick）
+	@tmp=$$(mktemp -d) && trap 'rm -rf $$tmp' EXIT && \
+	rsvg-convert -w 1024 -h 1024 docs/brand/xpaste-logo.svg -o $$tmp/logo.png && \
+	pnpm tauri icon $$tmp/logo.png && \
+	rm -rf src-tauri/icons/android src-tauri/icons/ios src-tauri/icons/64x64.png && \
+	for s in 16 24 32; do rsvg-convert -w $$s -h $$s docs/brand/tray-windows.svg -o $$tmp/s$$s.png; done && \
+	for s in 48 64 256; do rsvg-convert -w $$s -h $$s docs/brand/xpaste-logo.svg -o $$tmp/s$$s.png; done && \
+	magick $$tmp/s{16,24,32,48,64,256}.png src-tauri/icons/icon.ico && \
+	mkdir -p src-tauri/icons/tray && \
+	for f in macos macos-paused windows windows-paused; do rsvg-convert docs/brand/tray-$$f.svg -o src-tauri/icons/tray/$$f.png; done
 
 clean: ## 清理构建产物
 	cargo clean
