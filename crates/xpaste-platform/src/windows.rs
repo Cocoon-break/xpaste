@@ -14,7 +14,7 @@ use windows::Win32::System::DataExchange::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::{
-    GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock,
+    GMEM_MOVEABLE, GMEM_ZEROINIT, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock,
 };
 use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::System::Threading::{
@@ -36,7 +36,8 @@ use xpaste_core::{AppInfo, Flavor, Snapshot};
 
 use crate::decode::normalize_newlines;
 use crate::winfmt::{
-    bitmap_from_flavors, cf_html_fragment, formats_to_read, parse_hdrop, standard_format_name,
+    bitmap_from_flavors, cf_html_fragment, formats_to_read, parse_hdrop, standard_format_id,
+    standard_format_name,
 };
 use crate::{PasteBlock, PlatformError};
 
@@ -318,10 +319,63 @@ fn app_of_window(hwnd: HWND) -> Option<AppInfo> {
     }
 }
 
-/// 多格式写回在阶段 6 实现。
+/// 清空剪切板后按 `format` 名逐个写回，返回写入后的序号；`item` 在 Windows 上忽略
+/// （多文件本来就在一个 `CF_HDROP` 里）。只写 `read_snapshot` 存下的 HGLOBAL 格式，GDI 句柄格式读时已滤掉。
+///
+/// `OpenClipboard(None)` 后 `EmptyClipboard` 会把剪切板所有者设为空，文档说此时 `SetClipboardData`
+/// 可能失败；若 Windows 上往返验收（`阶段6-W1`）失败，改为用监听线程的 message-only 窗口作所有者。
 pub fn write(flavors: &[Flavor]) -> Result<u64, PlatformError> {
-    let _ = flavors;
-    Err(PlatformError::Unsupported)
+    if flavors.iter().all(|f| f.format.is_empty()) {
+        return Err(PlatformError::Clipboard("没有可写入的格式".into()));
+    }
+    let guard = ClipboardGuard::open()?;
+    // SAFETY: 剪切板已打开
+    unsafe { EmptyClipboard() }
+        .map_err(|e| PlatformError::Clipboard(format!("清空剪切板失败：{e}")))?;
+    let mut written = 0;
+    for f in flavors.iter().filter(|f| !f.format.is_empty()) {
+        let id = standard_format_id(&f.format).unwrap_or_else(|| {
+            let wide: Vec<u16> = f.format.encode_utf16().chain([0]).collect();
+            // SAFETY: wide 以 NUL 结尾，调用期间有效
+            unsafe { RegisterClipboardFormatW(PCWSTR(wide.as_ptr())) }
+        });
+        if id == 0 {
+            log::debug!("跳过无法注册的格式 {}", f.format);
+            continue;
+        }
+        match set_global(&guard, id, &f.data) {
+            Ok(()) => written += 1,
+            Err(e) => log::debug!("写入格式 {} 失败：{e}", f.format),
+        }
+    }
+    drop(guard);
+    if written == 0 {
+        return Err(PlatformError::Clipboard("写入剪切板失败".into()));
+    }
+    Ok(change_count())
+}
+
+/// 把 `bytes` 拷进新分配的全局内存块并 `SetClipboardData`。调用方必须持有 `ClipboardGuard` 且已 `EmptyClipboard`。
+/// 空数据也至少分配 1 字节（清零）：`GlobalAlloc(GMEM_MOVEABLE, 0)` 得到的块锁不住，标记类格式只看存在与否。
+fn set_global(_guard: &ClipboardGuard, id: u32, bytes: &[u8]) -> Result<(), PlatformError> {
+    let err = |what: &str, e: Error| PlatformError::Clipboard(format!("{what}：{e}"));
+    // SAFETY: 剪切板已打开；内存块不小于拷贝长度；SetClipboardData 成功后所有权归系统，失败时自行释放
+    unsafe {
+        let hglobal = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, bytes.len().max(1))
+            .map_err(|e| err("分配内存失败", e))?;
+        let ptr = GlobalLock(hglobal) as *mut u8;
+        if ptr.is_null() {
+            let _ = GlobalFree(Some(hglobal));
+            return Err(PlatformError::Clipboard("锁定内存失败".into()));
+        }
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
+        let _ = GlobalUnlock(hglobal);
+        if let Err(e) = SetClipboardData(id, Some(HANDLE(hglobal.0))) {
+            let _ = GlobalFree(Some(hglobal));
+            return Err(err("写入剪切板失败", e));
+        }
+    }
+    Ok(())
 }
 
 /// 应用图标在阶段 6 实现。
@@ -332,26 +386,16 @@ pub fn app_icon(app_id: &str) -> Option<Vec<u8>> {
 
 /// 清空剪切板后写入 `CF_UNICODETEXT`，返回写入后的序号。
 pub fn write_text(text: &str) -> Result<u64, PlatformError> {
-    let wide: Vec<u16> = text.encode_utf16().chain([0]).collect();
-    let bytes = wide.len() * 2;
-    let err = |what: &str, e: Error| PlatformError::Clipboard(format!("{what}：{e}"));
+    let bytes: Vec<u8> = text
+        .encode_utf16()
+        .chain([0])
+        .flat_map(u16::to_le_bytes)
+        .collect();
     let guard = ClipboardGuard::open()?;
-    // SAFETY: 剪切板已打开；内存块大小与拷贝长度一致；SetClipboardData 成功后所有权归系统，失败时自行释放
-    unsafe {
-        EmptyClipboard().map_err(|e| err("清空剪切板失败", e))?;
-        let hglobal = GlobalAlloc(GMEM_MOVEABLE, bytes).map_err(|e| err("分配内存失败", e))?;
-        let ptr = GlobalLock(hglobal) as *mut u16;
-        if ptr.is_null() {
-            let _ = GlobalFree(Some(hglobal));
-            return Err(PlatformError::Clipboard("锁定内存失败".into()));
-        }
-        std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr, wide.len());
-        let _ = GlobalUnlock(hglobal);
-        if let Err(e) = SetClipboardData(u32::from(CF_UNICODETEXT.0), Some(HANDLE(hglobal.0))) {
-            let _ = GlobalFree(Some(hglobal));
-            return Err(err("写入剪切板失败", e));
-        }
-    }
+    // SAFETY: 剪切板已打开
+    unsafe { EmptyClipboard() }
+        .map_err(|e| PlatformError::Clipboard(format!("清空剪切板失败：{e}")))?;
+    set_global(&guard, u32::from(CF_UNICODETEXT.0), &bytes)?;
     drop(guard);
     Ok(change_count())
 }
