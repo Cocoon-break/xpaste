@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { keyAction, type KeyCtx, type KeyEv } from './keymap.ts';
 
 const ctx = (o: Partial<KeyCtx> = {}): KeyCtx => ({
-  inSearch: true, onControl: false, searchHasText: false, menuOpen: false, hasSel: true, canUndo: false, ...o,
+  inSearch: true, onControl: false, searchHasText: false, menuOpen: false, hasSel: true, canUndo: false, dialogOpen: false, ...o,
 });
 const ev = (o: Partial<KeyEv>): KeyEv => ({ key: '', code: '', mod: false, alt: false, shift: false, repeat: false, ...o });
 
@@ -59,3 +59,11 @@ test('菜单打开时 Tab 关闭菜单', () =>
 
 test('按住 Mod+数字不连续复制', () =>
   assert.equal(keyAction(ev({ code: 'Digit3', mod: true, repeat: true }), ctx()), null));
+
+test('dialog_open_blocks_panel_actions', () => {
+  const c = ctx({ dialogOpen: true, hasSel: true });
+  for (const k of ['Escape', 'Delete', 'Enter']) assert.equal(keyAction(ev({ key: k }), c), null);
+  assert.equal(keyAction(ev({ key: '1', code: 'Digit1', mod: true }), c), null);
+});
+
+test('Mod+, 打开设置', () => assert.deepEqual(keyAction(ev({ key: ',', mod: true }), ctx()), { t: 'settings' }));

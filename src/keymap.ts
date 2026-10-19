@@ -7,6 +7,8 @@ export type KeyCtx = {
   menuOpen: boolean;
   hasSel: boolean;
   canUndo: boolean;
+  /** 任一 <dialog> 打开：面板按键全部交给对话框（Esc 由对话框的 cancel 处理） */
+  dialogOpen: boolean;
 };
 
 /** `mod = ctrlKey || metaKey` */
@@ -26,16 +28,18 @@ export type Action =
   | { t: 'hide' }
   | { t: 'menu' }
   | { t: 'focusSearch' }
+  | { t: 'settings' }
   | null;
 
 export const keyAction = (e: KeyEv, c: KeyCtx): Action => {
   const k = e.key, lk = k.toLowerCase();
   const vert = k === 'ArrowDown' ? 1 : k === 'ArrowUp' ? -1 : 0;
+  if (c.dialogOpen) return null;
   if (c.menuOpen) {
     if (k === 'Escape' || k === 'Tab') return { t: 'menuClose' };
     return vert ? { t: 'menuMove', d: vert } : null;
   }
-  if (e.mod && k === ',') return null; // 设置窗口不在本阶段
+  if (e.mod && k === ',') return e.repeat ? null : { t: 'settings' };
   if (vert) return { t: 'move', d: vert, instant: e.repeat };
   // 按住不连发：删除、复制（次数 +1）、置顶（来回翻转）都只认第一次按下
   if (k === 'Enter' && !e.mod && !c.onControl && !e.repeat) return { t: 'copy' };

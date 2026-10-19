@@ -959,6 +959,7 @@ document.addEventListener('keydown', (e) => {
       menuOpen: menuOpen(),
       hasSel: S.sel !== null,
       canUndo: canUndo(S.undo, Date.now()),
+      dialogOpen: !!document.querySelector('dialog[open]'),
     },
   );
   if (!a) return;
