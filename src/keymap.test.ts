@@ -29,6 +29,9 @@ test('Mod+Z 搜索框有字时交给输入框', () => {
   assert.deepEqual(keyAction(ev({ key: 'z', mod: true }), ctx({ canUndo: true })), { t: 'undo' });
 });
 
+test('Mod+Shift+Z 不触发撤销', () =>
+  assert.equal(keyAction(ev({ key: 'Z', mod: true, shift: true }), ctx({ canUndo: true })), null));
+
 test('菜单打开时只有 Esc 和 ↑↓', () => {
   assert.deepEqual(keyAction(ev({ key: 'Escape' }), ctx({ menuOpen: true })), { t: 'menuClose' });
   assert.deepEqual(keyAction(ev({ key: 'ArrowUp' }), ctx({ menuOpen: true })), { t: 'menuMove', d: -1 });

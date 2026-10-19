@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { RecordSummary } from './api/types.ts';
+import { rel } from './format.ts';
 import {
   armUndo, canUndo, counts, cycleFilter, ensureSelection, groupOf, groups, isStale, nextSelection, visible,
 } from './view.ts';
@@ -29,6 +30,16 @@ test('groupOf 今天/昨天/更早/置顶', () => {
   assert.equal(groupOf(mk(1, { copiedAt: now - 3 * 86_400_000 }), 'all', now), '更早');
   assert.equal(groupOf(mk(1, { pinned: true, copiedAt: 0 }), 'all', now), '置顶');
   assert.equal(groupOf(mk(1, {}), 'fav', now), '按使用次数排序');
+});
+
+test('rel 与 groupOf 对同一条记录不矛盾', () => {
+  const now = new Date(2026, 9, 19, 10).getTime();
+  const older = new Date(2026, 9, 17, 22).getTime();
+  const yday = new Date(2026, 9, 18, 10, 6).getTime();
+  assert.equal(groupOf(mk(1, { copiedAt: older }), 'all', now), '更早');
+  assert.equal(rel(older, now), '前天');
+  assert.equal(groupOf(mk(1, { copiedAt: yday }), 'all', now), '昨天');
+  assert.equal(rel(yday, now), '昨天');
 });
 
 test('groups 按 groupOf 切成连续分组', () => {

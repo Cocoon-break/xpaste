@@ -42,7 +42,7 @@ export const keyAction = (e: KeyEv, c: KeyCtx): Action => {
   if (digit && e.mod) return { t: 'copyIndex', i: Number(digit[1]) - 1 };
   if (e.mod && lk === 'p') return { t: 'pin' };
   if (e.mod && (k === 'ArrowLeft' || k === 'ArrowRight')) return { t: 'filter', d: k === 'ArrowRight' ? 1 : -1 };
-  if (e.mod && lk === 'z' && c.canUndo && !(c.inSearch && c.searchHasText)) return { t: 'undo' };
+  if (e.mod && !e.shift && lk === 'z' && c.canUndo && !(c.inSearch && c.searchHasText)) return { t: 'undo' };
   if ((k === 'Delete' || k === 'Backspace') && !c.searchHasText && c.hasSel && !c.onControl) return { t: 'delete' };
   if (k === 'Escape') return c.searchHasText ? { t: 'clearSearch' } : { t: 'hide' };
   if ((k === 'ContextMenu' || (e.shift && k === 'F10')) && c.hasSel) return { t: 'menu' };

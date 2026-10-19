@@ -11,14 +11,16 @@ test('hl 转义正则元字符并高亮', () => {
 test('esc 转义五个字符', () =>
   assert.equal(esc(`<img onerror="x" src='y'>&`), '&lt;img onerror=&quot;x&quot; src=&#39;y&#39;&gt;&amp;'));
 
-// Intl.RelativeTimeFormat('zh-CN') 的实际输出不带空格，且 numeric: 'auto' 下 -2 天为“前天”
+// Intl.RelativeTimeFormat('zh-CN') 的实际输出不带空格；跨日按本地日历日差
 test('rel 的边界', () => {
-  const now = 1_700_000_000_000;
+  const now = new Date(2026, 9, 19, 10).getTime();
   assert.equal(rel(now - 44_000, now), '刚刚');
   assert.equal(rel(now - 2 * 60_000, now), '2分钟前');
   assert.equal(rel(now - 3 * 3_600_000, now), '3小时前');
-  assert.equal(rel(now - 2 * 86_400_000, now), '前天');
-  assert.equal(rel(now - 5 * 86_400_000, now), '5天前');
+  assert.equal(rel(now - 3 * 3_600_000 - 59 * 60_000, now), '3小时前'); // 同日按整小时截断
+  assert.equal(rel(new Date(2026, 9, 18, 10, 6).getTime(), now), '昨天'); // 不足 24 小时但跨日
+  assert.equal(rel(new Date(2026, 9, 17, 22).getTime(), now), '前天'); // 36 小时，日历日差 2
+  assert.equal(rel(new Date(2026, 9, 14, 23).getTime(), now), '5天前');
 });
 
 test('fmtBytes / fmtDur', () => {

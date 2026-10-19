@@ -23,12 +23,17 @@ const dtf = new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', ho
 export const fmtInt = (n: number): string => nf.format(n);
 export const fmtDateTime = (t: number): string => dtf.format(t);
 
+const midnight = (t: number) => new Date(t).setHours(0, 0, 0, 0);
+
+/** 与 view.ts 的 groupOf 一致：跨日按本地日历日差（昨天 / 前天 / N天前），同日按整小时。 */
 export const rel = (t: number, now = Date.now()): string => {
-  const s = (t - now) / 1000;
-  if (s > -45) return '刚刚';
-  if (s > -3600) return rtf.format(Math.round(s / 60), 'minute');
-  if (s > -86400) return rtf.format(Math.round(s / 3600), 'hour');
-  return rtf.format(Math.round(s / 86400), 'day');
+  const age = now - t;
+  if (age < 45_000) return '刚刚';
+  if (age < 3_600_000) return rtf.format(-Math.round(age / 60_000), 'minute');
+  // 日差四舍五入以吸收夏令时的 23 / 25 小时
+  const dayDiff = Math.round((midnight(now) - midnight(t)) / 86_400_000);
+  if (dayDiff === 0) return rtf.format(-Math.max(1, Math.trunc(age / 3_600_000)), 'hour');
+  return rtf.format(-dayDiff, 'day');
 };
 
 const pad = (n: number) => String(n).padStart(2, '0');
