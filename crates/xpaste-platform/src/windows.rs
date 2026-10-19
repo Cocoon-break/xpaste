@@ -1,18 +1,31 @@
 use std::cell::OnceCell;
+use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{
-    CloseHandle, GlobalFree, HANDLE, HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM,
+    CloseHandle, GlobalFree, HANDLE, HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, PROPERTYKEY,
+    RPC_E_CHANGED_MODE, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, DeleteObject, GetDC, GetDIBits,
     GetObjectW, HBITMAP, ReleaseDC,
 };
 use windows::Win32::Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation};
+use windows::Win32::Storage::EnhancedStorage::{
+    PKEY_Media_Duration, PKEY_Video_Compression, PKEY_Video_FourCC, PKEY_Video_FrameHeight,
+    PKEY_Video_FrameRate, PKEY_Video_FrameWidth, PKEY_Video_Orientation,
+};
 use windows::Win32::Storage::FileSystem::{
     GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
+};
+use windows::Win32::System::Com::StructuredStorage::{
+    PROPVARIANT, PropVariantClear, PropVariantToStringAlloc, PropVariantToUInt32,
+    PropVariantToUInt64,
+};
+use windows::Win32::System::Com::{
+    COINIT_MULTITHREADED, CoInitializeEx, CoTaskMemFree, CoUninitialize,
 };
 use windows::Win32::System::DataExchange::{
     AddClipboardFormatListener, CloseClipboard, EmptyClipboard, EnumClipboardFormats,
@@ -28,9 +41,13 @@ use windows::Win32::System::Threading::{
     GetCurrentProcess, GetCurrentProcessId, OpenProcess, OpenProcessToken, PROCESS_NAME_WIN32,
     PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
+use windows::Win32::System::Variant::VT_EMPTY;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
     VIRTUAL_KEY, VK_CONTROL,
+};
+use windows::Win32::UI::Shell::PropertiesSystem::{
+    GPS_DEFAULT, IPropertyStore, SHGetPropertyStoreFromParsingName,
 };
 use windows::Win32::UI::Shell::SHDefExtractIconW;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -45,8 +62,9 @@ use xpaste_core::{AppInfo, Flavor, Snapshot};
 
 use crate::decode::normalize_newlines;
 use crate::winfmt::{
-    bgra_to_png, bitmap_from_flavors, cf_html_fragment, file_description_query, formats_to_read,
-    is_shell_tray_class, parse_hdrop, standard_format_id, standard_format_name, write_bytes,
+    VideoProps, bgra_to_png, bitmap_from_flavors, cf_html_fragment, file_description_query,
+    formats_to_read, is_shell_tray_class, parse_hdrop, standard_format_id, standard_format_name,
+    video_meta_from_props, write_bytes,
 };
 use crate::{PasteBlock, PlatformError};
 
@@ -657,9 +675,91 @@ pub fn foreground_window() -> Option<isize> {
     }
 }
 
-// —— 阶段 7 新增，阶段 6 实现 ——
-pub fn video_meta(_path: &Path) -> Option<xpaste_core::VideoMeta> {
-    None
+/// 当前线程的 COM 初始化（MTA）。线程已是 STA（`RPC_E_CHANGED_MODE`）时 COM 照样可用，但不归本对象配对；
+/// 只有本次 `CoInitializeEx` 成功（含 `S_FALSE`）才在离开作用域时 `CoUninitialize`。
+/// 必须先于任何 COM 对象声明，让 COM 对象先释放。
+struct ComGuard(bool);
+
+impl ComGuard {
+    fn init() -> Option<Self> {
+        // SAFETY: 保留参数传 None
+        let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        if hr.is_ok() {
+            Some(Self(true))
+        } else if hr == RPC_E_CHANGED_MODE {
+            Some(Self(false))
+        } else {
+            log::debug!("COM 初始化失败：{hr:?}");
+            None
+        }
+    }
+}
+
+impl Drop for ComGuard {
+    fn drop(&mut self) {
+        if self.0 {
+            // SAFETY: 与本线程上成功的 CoInitializeEx 配对
+            unsafe { CoUninitialize() }
+        }
+    }
+}
+
+/// 以 NUL 结尾的宽字符路径（按 OsStr 原样转换，不经 UTF-8）。
+fn wide_path(path: &Path) -> Vec<u16> {
+    path.as_os_str().encode_wide().chain([0]).collect()
+}
+
+/// 读一个属性并交给 `f` 转换；属性不存在或为 `VT_EMPTY` 时返回 `None`。PROPVARIANT 用完即清。
+fn prop<T>(
+    store: &IPropertyStore,
+    key: &PROPERTYKEY,
+    f: impl FnOnce(&PROPVARIANT) -> Option<T>,
+) -> Option<T> {
+    // SAFETY: GetValue 成功后 PROPVARIANT 归本函数所有，读完 PropVariantClear；
+    // vt 是联合体里所有变体共有的头部字段
+    unsafe {
+        let mut v = store.GetValue(key).ok()?;
+        let out = (v.Anonymous.Anonymous.vt != VT_EMPTY)
+            .then(|| f(&v))
+            .flatten();
+        let _ = PropVariantClear(&mut v);
+        out
+    }
+}
+
+fn prop_u32(store: &IPropertyStore, key: &PROPERTYKEY) -> Option<u32> {
+    // SAFETY: v 由 prop 保证有效
+    prop(store, key, |v| unsafe { PropVariantToUInt32(v) }.ok())
+}
+
+/// 属性库读时长、尺寸、方向、帧率与编码，换算见 `winfmt::video_meta_from_props`。
+/// 打不开或没有视频尺寸时返回 None。
+pub fn video_meta(path: &Path) -> Option<xpaste_core::VideoMeta> {
+    let _com = ComGuard::init()?;
+    let wide = wide_path(path);
+    // SAFETY: wide 以 NUL 结尾，调用期间有效
+    let store: IPropertyStore =
+        unsafe { SHGetPropertyStoreFromParsingName(PCWSTR(wide.as_ptr()), None, GPS_DEFAULT) }
+            .ok()?;
+    // SAFETY: v 由 prop 保证有效；PropVariantToStringAlloc 分配的字符串读完 CoTaskMemFree
+    let compression = prop(&store, &PKEY_Video_Compression, |v| unsafe {
+        let p = PropVariantToStringAlloc(v).ok()?;
+        let s = p.to_string().ok();
+        CoTaskMemFree(Some(p.0 as *const _));
+        s
+    });
+    video_meta_from_props(&VideoProps {
+        // SAFETY: v 由 prop 保证有效
+        duration_100ns: prop(&store, &PKEY_Media_Duration, |v| {
+            unsafe { PropVariantToUInt64(v) }.ok()
+        }),
+        w: prop_u32(&store, &PKEY_Video_FrameWidth),
+        h: prop_u32(&store, &PKEY_Video_FrameHeight),
+        frame_rate_milli: prop_u32(&store, &PKEY_Video_FrameRate),
+        orientation: prop_u32(&store, &PKEY_Video_Orientation),
+        compression: compression.as_deref(),
+        fourcc: prop_u32(&store, &PKEY_Video_FourCC),
+    })
 }
 
 pub fn video_poster(_path: &Path, _max_px: u32) -> Option<Vec<u8>> {
