@@ -8,8 +8,7 @@ use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::ProtocolObject;
 use objc2_app_kit::{
     NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard, NSPasteboardItem,
-    NSPasteboardTypeFileURL, NSPasteboardTypeHTML, NSPasteboardTypePNG, NSPasteboardTypeString,
-    NSPasteboardTypeTIFF, NSWorkspace,
+    NSPasteboardTypeFileURL, NSPasteboardTypeHTML, NSPasteboardTypeString, NSWorkspace,
 };
 use objc2_core_graphics::{CGEvent, CGEventFlags, CGEventTapLocation};
 use objc2_foundation::{
@@ -82,9 +81,13 @@ pub fn read_snapshot() -> Result<Option<Snapshot>, PlatformError> {
         };
         let mut seen = HashSet::new();
         for (i, item) in items.iter().enumerate() {
-            for uti in item.types().iter() {
-                let format = uti.to_string();
-                if !seen.insert((i, format.clone())) {
+            let types = item.types();
+            let names: Vec<String> = types.iter().map(|t| t.to_string()).collect();
+            for (uti, format) in types.iter().zip(names.iter().cloned()) {
+                // 先按类型名过滤：dataForType 会触发来源应用的延迟渲染
+                if crate::decode::should_skip_uti(&format, &names)
+                    || !seen.insert((i, format.clone()))
+                {
                     continue;
                 }
                 if let Some(data) = item.dataForType(&uti) {
@@ -102,13 +105,11 @@ pub fn read_snapshot() -> Result<Option<Snapshot>, PlatformError> {
                 .find_map(|item| item.stringForType(uti).map(|s| s.to_string()))
         };
         // SAFETY: AppKit 导出的常量，进程内一直有效
-        let (text_type, html_type, file_type, png_type, tiff_type) = unsafe {
+        let (text_type, html_type, file_type) = unsafe {
             (
                 NSPasteboardTypeString,
                 NSPasteboardTypeHTML,
                 NSPasteboardTypeFileURL,
-                NSPasteboardTypePNG,
-                NSPasteboardTypeTIFF,
             )
         };
         snapshot.text = first_string(text_type).map(|t| crate::decode::normalize_newlines(&t));
@@ -130,25 +131,23 @@ pub fn read_snapshot() -> Result<Option<Snapshot>, PlatformError> {
             }
         }
         if snapshot.file_paths.is_empty() {
-            snapshot.bitmap = read_bitmap(&items, png_type, tiff_type);
+            snapshot.bitmap = read_bitmap(&snapshot.flavors);
         }
         Ok(Some(snapshot))
     })
 }
 
-/// 第一个 PNG 原样返回；否则第一个 TIFF 转成 PNG。
-fn read_bitmap(
-    items: &NSArray<NSPasteboardItem>,
-    png_type: &NSString,
-    tiff_type: &NSString,
-) -> Option<Vec<u8>> {
-    if let Some(png) = items.iter().find_map(|item| item.dataForType(png_type)) {
-        return Some(png.to_vec());
+/// 已读出的 flavor 中第一个 PNG 原样返回；否则第一个 TIFF 转成 PNG。
+fn read_bitmap(flavors: &[Flavor]) -> Option<Vec<u8>> {
+    let first = |uti: &str| flavors.iter().find(|f| f.format == uti);
+    if let Some(png) = first("public.png") {
+        return Some(png.data.clone());
     }
-    let tiff = items.iter().find_map(|item| item.dataForType(tiff_type))?;
-    let png = NSBitmapImageRep::imageRepWithData(&tiff).and_then(|rep| to_png(&rep));
+    let tiff = first("public.tiff")?;
+    let png = NSBitmapImageRep::imageRepWithData(&NSData::with_bytes(&tiff.data))
+        .and_then(|rep| to_png(&rep));
     if png.is_none() {
-        log::debug!("TIFF 转 PNG 失败 bytes={}", tiff.len());
+        log::debug!("TIFF 转 PNG 失败 bytes={}", tiff.data.len());
     }
     png
 }
@@ -163,6 +162,9 @@ fn to_png(rep: &NSBitmapImageRep) -> Option<Vec<u8>> {
 
 /// 按 `item` 分组（保持首次出现顺序）写回剪切板，返回写入后的 `changeCount`。
 pub fn write(flavors: &[Flavor]) -> Result<u64, PlatformError> {
+    if flavors.iter().all(|f| f.format.is_empty()) {
+        return Err(PlatformError::Clipboard("没有可写入的格式".into()));
+    }
     autoreleasepool(|_| {
         let mut groups: Vec<(u32, Retained<NSPasteboardItem>)> = Vec::new();
         for f in flavors.iter().filter(|f| !f.format.is_empty()) {

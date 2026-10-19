@@ -36,6 +36,13 @@ pub fn dword_is_zero(bytes: &[u8]) -> bool {
         .unwrap_or(false)
 }
 
+/// 不读取的格式（按 item 的类型列表在 `dataForType` 之前判断）：
+/// `com.apple.icns`（访达附带的图标，动辄 MB 级）；同 item 已有 PNG 时的 `public.tiff`（重复且体积大得多）。
+pub fn should_skip_uti(uti: &str, item_types: &[String]) -> bool {
+    uti == "com.apple.icns"
+        || (uti == "public.tiff" && item_types.iter().any(|t| t == "public.png"))
+}
+
 /// 换行统一为 `\n`（`\r\n` 与单独的 `\r` 都转换）。
 pub fn normalize_newlines(s: &str) -> String {
     s.replace("\r\n", "\n").replace('\r', "\n")
@@ -97,5 +104,19 @@ mod tests {
     fn newlines_are_normalized() {
         assert_eq!(normalize_newlines("a\r\nb\rc\nd"), "a\nb\nc\nd");
         assert_eq!(normalize_newlines("\r\n\r"), "\n\n");
+    }
+
+    #[test]
+    fn skip_rules() {
+        let types = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let png_tiff = types(&["public.png", "public.tiff"]);
+        assert!(should_skip_uti(
+            "com.apple.icns",
+            &types(&["com.apple.icns"])
+        ));
+        assert!(should_skip_uti("public.tiff", &png_tiff));
+        assert!(!should_skip_uti("public.tiff", &types(&["public.tiff"])));
+        assert!(!should_skip_uti("public.png", &png_tiff));
+        assert!(!should_skip_uti("public.utf8-plain-text", &png_tiff));
     }
 }
