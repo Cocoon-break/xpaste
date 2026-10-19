@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{
     CloseHandle, GlobalFree, HANDLE, HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, PROPERTYKEY,
-    RPC_E_CHANGED_MODE, WPARAM,
+    RPC_E_CHANGED_MODE, SIZE, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, DeleteObject, GetDC, GetDIBits,
@@ -49,7 +49,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::Shell::PropertiesSystem::{
     GPS_DEFAULT, IPropertyStore, SHGetPropertyStoreFromParsingName,
 };
-use windows::Win32::UI::Shell::SHDefExtractIconW;
+use windows::Win32::UI::Shell::{
+    IShellItemImageFactory, SHCreateItemFromParsingName, SHDefExtractIconW, SIIGBF_THUMBNAILONLY,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyIcon, DispatchMessageW, GetClassNameW,
     GetForegroundWindow, GetIconInfo, GetMessageW, GetWindowThreadProcessId, HICON, HWND_MESSAGE,
@@ -62,9 +64,9 @@ use xpaste_core::{AppInfo, Flavor, Snapshot};
 
 use crate::decode::normalize_newlines;
 use crate::winfmt::{
-    VideoProps, bgra_to_png, bitmap_from_flavors, cf_html_fragment, file_description_query,
-    formats_to_read, is_shell_tray_class, parse_hdrop, standard_format_id, standard_format_name,
-    video_meta_from_props, write_bytes,
+    VideoProps, bgra_to_png, bgra_to_png_within, bitmap_from_flavors, cf_html_fragment,
+    file_description_query, formats_to_read, is_shell_tray_class, parse_hdrop, standard_format_id,
+    standard_format_name, video_meta_from_props, write_bytes,
 };
 use crate::{PasteBlock, PlatformError};
 
@@ -458,7 +460,8 @@ pub fn app_icon(app_id: &str) -> Option<Vec<u8>> {
     unsafe {
         let png = GetIconInfo(icon, &mut info)
             .ok()
-            .and_then(|()| icon_bitmap_to_png(info.hbmColor));
+            .and_then(|()| bitmap_bgra(info.hbmColor))
+            .and_then(|(w, h, px)| bgra_to_png(w, h, &px));
         if !info.hbmMask.is_invalid() {
             let _ = DeleteObject(info.hbmMask.into());
         }
@@ -470,8 +473,8 @@ pub fn app_icon(app_id: &str) -> Option<Vec<u8>> {
     }
 }
 
-/// 图标彩色位图读成自上而下的 32 位 BGRA 再转 PNG。位图由调用方释放。
-fn icon_bitmap_to_png(color: HBITMAP) -> Option<Vec<u8>> {
+/// 位图读成自上而下的 32 位 BGRA，返回（宽，高，像素）。位图由调用方释放。
+fn bitmap_bgra(color: HBITMAP) -> Option<(u32, u32, Vec<u8>)> {
     if color.is_invalid() {
         return None;
     }
@@ -520,10 +523,7 @@ fn icon_bitmap_to_png(color: HBITMAP) -> Option<Vec<u8>> {
         ReleaseDC(None, dc);
         n
     };
-    if lines != h as i32 {
-        return None;
-    }
-    bgra_to_png(w, h, &bgra)
+    (lines == h as i32).then_some((w, h, bgra))
 }
 
 /// 清空剪切板后写入 `CF_UNICODETEXT`，返回写入后的序号。
@@ -762,8 +762,24 @@ pub fn video_meta(path: &Path) -> Option<xpaste_core::VideoMeta> {
     })
 }
 
-pub fn video_poster(_path: &Path, _max_px: u32) -> Option<Vec<u8>> {
-    None
+/// 封面：系统缩略图（`SIIGBF_THUMBNAILONLY`，取帧位置由系统决定），长边不超过 `max_px`，PNG。
+/// 没有缩略图处理程序的格式（系统不认识的编码）返回 None。
+pub fn video_poster(path: &Path, max_px: u32) -> Option<Vec<u8>> {
+    let _com = ComGuard::init()?;
+    let wide = wide_path(path);
+    let side = i32::try_from(max_px).ok()?;
+    // SAFETY: wide 以 NUL 结尾，调用期间有效
+    let factory: IShellItemImageFactory =
+        unsafe { SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None) }.ok()?;
+    // SAFETY: GetImage 成功返回的位图归本函数所有，读完 DeleteObject
+    unsafe {
+        let bitmap = factory
+            .GetImage(SIZE { cx: side, cy: side }, SIIGBF_THUMBNAILONLY)
+            .ok()?;
+        let png = bitmap_bgra(bitmap).and_then(|(w, h, px)| bgra_to_png_within(w, h, &px, max_px));
+        let _ = DeleteObject(bitmap.into());
+        png
+    }
 }
 
 pub fn installed_apps() -> Vec<String> {

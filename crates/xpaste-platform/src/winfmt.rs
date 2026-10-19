@@ -6,6 +6,7 @@ use std::io::Cursor;
 use std::path::PathBuf;
 
 use image::codecs::bmp::BmpDecoder;
+use image::imageops::FilterType;
 use image::{DynamicImage, ImageDecoder, ImageFormat, RgbaImage};
 use xpaste_core::capture::MAX_FLAVOR_BYTES;
 use xpaste_core::{Flavor, VideoMeta};
@@ -139,6 +140,24 @@ pub fn dib_to_png(dib: &[u8]) -> Option<Vec<u8>> {
 
 /// 自上而下的 BGRA 像素转 PNG；长度必须正好是 `w * h * 4`。
 pub fn bgra_to_png(w: u32, h: u32, bgra: &[u8]) -> Option<Vec<u8>> {
+    encode_png(bgra_image(w, h, bgra)?)
+}
+
+/// 同 `bgra_to_png`，长边超过 `max_px` 时按比例缩小到不超过 `max_px`。
+pub fn bgra_to_png_within(w: u32, h: u32, bgra: &[u8], max_px: u32) -> Option<Vec<u8>> {
+    let img = opaque_if_no_alpha(bgra_image(w, h, bgra)?);
+    if w.max(h) <= max_px {
+        return encode_png(img);
+    }
+    let max = max_px.max(1);
+    encode_png(
+        DynamicImage::ImageRgba8(img)
+            .resize(max, max, FilterType::Triangle)
+            .to_rgba8(),
+    )
+}
+
+fn bgra_image(w: u32, h: u32, bgra: &[u8]) -> Option<RgbaImage> {
     if (w as usize).checked_mul(h as usize)?.checked_mul(4)? != bgra.len() {
         return None;
     }
@@ -148,7 +167,7 @@ pub fn bgra_to_png(w: u32, h: u32, bgra: &[u8]) -> Option<Vec<u8>> {
         .iter()
         .flat_map(|&[b, g, r, a]| [r, g, b, a])
         .collect();
-    encode_png(RgbaImage::from_raw(w, h, rgba)?)
+    RgbaImage::from_raw(w, h, rgba)
 }
 
 /// 已读出的 flavor 中有 `PNG` 时原样返回；否则第一个 `CF_DIBV5` / `CF_DIB` 转成 PNG。
@@ -256,10 +275,15 @@ fn fourcc_text(v: u32) -> String {
 }
 
 /// 很多程序写 32 位 DIB 时 alpha 全填 0：全零视为不透明，否则图片整张透明。
-fn encode_png(mut img: RgbaImage) -> Option<Vec<u8>> {
+fn opaque_if_no_alpha(mut img: RgbaImage) -> RgbaImage {
     if img.pixels().all(|p| p[3] == 0) {
         img.pixels_mut().for_each(|p| p[3] = 255);
     }
+    img
+}
+
+fn encode_png(img: RgbaImage) -> Option<Vec<u8>> {
+    let img = opaque_if_no_alpha(img);
     let mut out = Vec::new();
     img.write_to(&mut Cursor::new(&mut out), ImageFormat::Png)
         .ok()?;
@@ -469,6 +493,7 @@ mod tests {
         assert!(!is_shell_tray_class("Notepad"));
         assert!(!is_shell_tray_class("shell_traywnd")); // 类名区分大小写
     }
+
     #[test]
     fn video_meta_from_props_converts_units_and_codec() {
         let base = VideoProps {
@@ -535,5 +560,24 @@ mod tests {
             video_meta_from_props(&VideoProps { h: Some(0), ..base }),
             None
         );
+    }
+
+    #[test]
+    fn bgra_to_png_within_caps_long_edge() {
+        // 4 × 2 的红色，alpha 全 0（按不透明处理，缩放后颜色不能变黑）
+        let px: Vec<u8> = [0, 0, 255, 0].repeat(8);
+        let decode = |png: Vec<u8>| image::load_from_memory(&png).unwrap().to_rgba8();
+        let small = decode(bgra_to_png_within(4, 2, &px, 2).unwrap());
+        assert_eq!(small.dimensions(), (2, 1));
+        assert_eq!(small.get_pixel(0, 0).0, [255, 0, 0, 255]);
+        assert_eq!(
+            decode(bgra_to_png_within(4, 2, &px, 8).unwrap()).dimensions(),
+            (4, 2)
+        );
+        assert_eq!(
+            decode(bgra_to_png_within(4, 2, &px, 4).unwrap()).dimensions(),
+            (4, 2)
+        );
+        assert!(bgra_to_png_within(4, 2, &px[4..], 8).is_none());
     }
 }
