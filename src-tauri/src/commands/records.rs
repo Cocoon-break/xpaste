@@ -151,7 +151,8 @@ pub async fn copy(
     match plan_paste(xpaste_platform::can_paste(target), target, cfg!(windows)) {
         PastePlan::CopyOnly(reason) => {
             if reason == REASON_PASTE_FAILED {
-                log::warn!("模拟粘贴跳过：没有记录到目标窗口");
+                // 从托盘打开后按 Enter 是正常路径，不算警告
+                log::info!("模拟粘贴跳过：没有记录到目标窗口");
             }
             Ok(CopyResult::CopiedOnly { reason })
         }

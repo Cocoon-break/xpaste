@@ -35,12 +35,18 @@ test('M20-1 首次打开面板 720ms 上浮缩放 → 光柱 barIn 620ms spring�
   assert.match(ts, /runSearch\('', first \? \{ stagger: true, base: 260 \} : \{\}\)/);
 });
 
-test('M20-2 快捷键唤起 90ms enter / 隐藏 160ms ease-out 淡出（有意偏差：系统材质下淡出只位移不缩放，同 v0.5.1；系统材质下只有内容淡出，窗口本体 160 ms 后直接消失，原生 alpha 淡出留待合并后补）', () => {
-  assert.match(rule('.window[data-shown="true"]'), /transition: opacity 90ms var\(--ease-enter\), transform 120ms var\(--ease-spring\)/);
+test('M20-2 快捷键唤起 90ms enter / 托盘单击 320ms spring / 隐藏 160ms ease-out 淡出（有意偏差：系统材质下只位移不缩放，同 v0.5.1）', () => {
+  // 鼠标唤起（托盘单击）240 / 320ms；键盘唤起 data-instant 90 / 120ms
+  assert.match(rule('.window[data-shown="true"]'), /transition: opacity 240ms var\(--ease-enter\), transform 320ms var\(--ease-spring\)/);
+  assert.match(rule('.window[data-instant][data-shown="true"]'), /transition-duration: 90ms, 120ms;/);
+  // tray → 非 instant，其余来源（快捷键、再次启动、粘贴失败重新显示）→ instant
+  assert.match(ts, /win\.toggleAttribute\('data-instant', trigger !== 'tray'\);/);
+  assert.match(ts, /onPanelShown\(\(\{ t0, trigger \}\) => shown\(t0, trigger\)\)/);
   assert.match(rule('.window[data-shown="false"]'), /opacity: 0;[^}]*transition: opacity 140ms ease-out, transform 160ms ease-out/);
   assert.match(rule(':root:not([data-material="opaque"]) .window[data-shown="false"]'), /transform: translateY\(10px\);/);
-  // 淡出播完再让后端隐藏窗口
-  assert.match(ts, /const hide = \(\) => \{[\s\S]*?win\.dataset\.shown = 'false';[\s\S]*?\}\), reduced\.matches \? 0 : 160\);/);
+  // 淡出播完再让后端隐藏窗口；macOS 系统材质下立即调，后端在同样 160ms 内淡出整个窗口 alpha（panel.rs fade_out_ms）
+  assert.match(ts, /const hide = \(\) => \{[\s\S]*?win\.dataset\.shown = 'false';[\s\S]*?const animate = !reduced\.matches;[\s\S]*?hidePanel\(animate\)[\s\S]*?\}\), animate && !nativeFade\(\) \? 160 : 0\);/);
+  assert.match(ts, /const nativeFade = \(\) => S\.platform\.os === 'macos' && S\.platform\.material === 'glass';/);
 });
 
 test('M20-3 选中项切换 130ms move，换类型色；按住方向键 0ms', () => {
@@ -174,7 +180,9 @@ test('原则 3 减少动态效果：CSS 全局规则 + fx() 与直接 WAAPI 调�
   assert.deepEqual(direct, ['el', 'ring', 'el', 'root']);
   assert.match(ts, /if \(!\('startViewTransition' in document\) \|\| reduced\.matches \|\| !fromEl\) \{/);
   // 计时器驱动的收尾在 reduced 下也即时
-  for (const ms of [160, 150, 360]) assert.match(ts, new RegExp(`reduced\\.matches \\? 0 : ${ms}\\)`));
+  for (const ms of [150, 360]) assert.match(ts, new RegExp(`reduced\\.matches \\? 0 : ${ms}\\)`));
+  // 隐藏的 160ms：reduced 时 animate 为 false，计时为 0，后端也不做原生淡出
+  assert.match(ts, /const animate = !reduced\.matches;[\s\S]*?animate && !nativeFade\(\) \? 160 : 0\);/);
 });
 
 test('原则 4 只动 transform / opacity / filter 与颜色类属性（白名单），不过渡布局尺寸（行高 grid-template-rows 只限 .item / .item.is-removing）', () => {

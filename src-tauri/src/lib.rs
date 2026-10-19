@@ -108,7 +108,7 @@ pub fn run() {
                 app.state::<AppState>()
                     .onboarding
                     .store(true, std::sync::atomic::Ordering::SeqCst);
-                panel::show(app.handle(), None);
+                panel::show(app.handle(), None, panel::Trigger::Relaunch);
             }
             Ok(())
         })

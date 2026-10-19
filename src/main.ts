@@ -11,6 +11,7 @@ import {
   onPanelHidden,
   onPanelHideRequested,
   onPanelShown,
+  type PanelShown,
   onPausedChanged,
   onRecordAdded,
   onRecordsRemoved,
@@ -924,8 +925,10 @@ const handlers = {
     details.delete(s.id);
     applyUpdated(S.records, s);
     renderTabs(true);
-    // 选中视频的补全到了：正文重取以显示封面与标签；正在播放（已有 <video>）时不打断
-    if (s.id === bodyFor && s.kind === 'video' && !pbody.querySelector('video')) bodyFor = null;
+    // 选中视频的补全到了（时长或封面变了）：正文重取以显示封面与标签；正在播放（已有 <video>）时不打断。
+    // 置顶、复制计数、图标等其他更新不重取，免得预览滚动位置与焦点丢失
+    if (s.id === bodyFor && s.kind === 'video' && !pbody.querySelector('video')
+      && (prev?.durationSec !== s.durationSec || prev?.thumb !== s.thumb)) bodyFor = null;
     // 去重命中会改 copiedAt，需要重新排序；选中项的头部与信息栏随 select 刷新，不重取详情
     renderList();
     renderSpectrum(prev && prev.copiedAt !== s.copiedAt ? s.id : undefined);
@@ -1431,10 +1434,12 @@ obDlg.addEventListener('click', (e) => {
 
 // —— 面板显隐 ——
 let booted = false;
-const shown = (t0: number | null) => {
+const shown = (t0: number | null, trigger?: PanelShown['trigger']) => {
   S.shown = true;
   // 淡出途中又被唤起：取消待发的隐藏
   clearTimeout(hideTimer);
+  // 键盘唤起几乎即时（90 / 120ms）；托盘单击是鼠标唤起，按原型 240 / 320ms 弹性回位
+  win.toggleAttribute('data-instant', trigger !== 'tray');
   win.dataset.shown = 'true';
   const first = !booted;
   if (!booted) {
@@ -1471,17 +1476,20 @@ const hidden = () => {
 };
 
 // 键盘与隐藏按钮在 bootstrap 之前接线：读取失败的错误页也能 Esc / 关闭
-// 前端发起的隐藏先播 160ms 淡出；失焦隐藏由后端直接做，没有淡出
+// 前端发起的隐藏先播 160ms 淡出；失焦隐藏由后端直接做，没有淡出。
+// macOS 系统材质的底板不归网页画：立即调 hide_panel，后端在同样的 160ms 内把整个窗口 alpha 淡到 0，与内容淡出并行
 let hideTimer = 0;
+const nativeFade = () => S.platform.os === 'macos' && S.platform.material === 'glass';
 const hide = () => {
   // 首次唤起编排的动画会压住淡出（原型 setPanel 同样先去掉 boot）
   win.classList.remove('boot');
   win.dataset.shown = 'false';
   clearTimeout(hideTimer);
-  hideTimer = window.setTimeout(() => void hidePanel().catch((err: AppError) => {
+  const animate = !reduced.matches;
+  hideTimer = window.setTimeout(() => void hidePanel(animate).catch((err: AppError) => {
     win.dataset.shown = 'true';
     toast(err.message);
-  }), reduced.matches ? 0 : 160);
+  }), animate && !nativeFade() ? 160 : 0);
 };
 document.querySelectorAll('[data-hide]').forEach((b) => b.addEventListener('click', hide));
 
@@ -1541,7 +1549,7 @@ document.addEventListener('keydown', (e) => {
 
 await attachConsole();
 // 先订阅再 bootstrap，避免两者之间的事件丢失
-await onPanelShown(({ t0 }) => shown(t0));
+await onPanelShown(({ t0, trigger }) => shown(t0, trigger));
 await onPanelHidden(hidden);
 await onPanelHideRequested(hide);
 await onRecordAdded((s) => handlers.added(s));
@@ -1551,7 +1559,7 @@ await onPausedChanged((p) => handlers.paused(p));
 // 托盘“设置…”：后端已先唤起面板
 await onOpenSettings(openSettings);
 await onConfirmClear(() => void confirmClear());
-// 引导中按唤起快捷键（或再次启动应用）：可见时面板不隐藏，隐藏时先 panel-shown 再到这里；只在“试按快捷键”这一步算成功
+// 引导中按唤起快捷键：可见时面板不隐藏，隐藏时先 panel-shown 再到这里；只在“试按快捷键”这一步算成功
 await onHotkeyPressed(() => {
   if (obStep === 'hotkey' && obDlg.open) obSucceed();
 });
@@ -1712,6 +1720,8 @@ pbody.addEventListener('click', (e) => {
     vid.addEventListener('keydown', (e) => {
       if (e.key !== ' ') return;
       e.preventDefault();
+      // 按住空格不反复切换
+      if (e.repeat) return;
       if (vid.paused) vid.play().catch(() => {});
       else vid.pause();
     });
