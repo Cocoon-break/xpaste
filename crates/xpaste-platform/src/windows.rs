@@ -343,7 +343,15 @@ pub fn write(flavors: &[Flavor]) -> Result<u64, PlatformError> {
             log::debug!("跳过无法注册的格式 {}", f.format);
             continue;
         }
-        match set_global(&guard, id, &f.data) {
+        // read_snapshot 存的 CF_UNICODETEXT 不含 NUL；粘贴方按 NUL 找结尾，写回要补上
+        let terminated;
+        let data = if id == u32::from(CF_UNICODETEXT.0) {
+            terminated = [f.data.as_slice(), &[0, 0]].concat();
+            &terminated
+        } else {
+            &f.data
+        };
+        match set_global(&guard, id, data) {
             Ok(()) => written += 1,
             Err(e) => log::debug!("写入格式 {} 失败：{e}", f.format),
         }
