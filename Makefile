@@ -20,7 +20,7 @@ dev: ## 启动开发版（热更新）
 	pnpm tauri dev
 
 dev-isolated: ## 启动开发版，数据目录隔离在 .xpaste-dev/（自动化验收必须用这个）
-	XPASTE_DATA_DIR=$(CURDIR)/.xpaste-dev pnpm tauri dev
+	XPASTE_DATA_DIR=$(CURDIR)/.xpaste-dev XPASTE_TIMING=1 pnpm tauri dev
 
 fmt: ## 格式化 Rust 代码
 	cargo fmt --all

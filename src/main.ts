@@ -645,6 +645,8 @@ function setFilter(k: Filter, instant: boolean) {
 // —— 搜索 ——
 // 每次输入都查后端，不防抖；序号丢弃先发后到的结果
 let searchSeq = 0;
+// 唤起时后端带了 t0 说明 XPASTE_TIMING 已开启，之后的搜索也计时
+let timing = false;
 function fetchMatches(v: string, done: () => void) {
   const seq = ++searchSeq;
   if (!v.trim()) {
@@ -663,6 +665,7 @@ function fetchMatches(v: string, done: () => void) {
 }
 // 用户搜索：结果回到顶部并选中第一条（唤起时也走这里）
 function runSearch(v: string, opts: { stagger?: boolean; base?: number } = {}) {
+  const t = performance.now();
   S.q = v;
   clearQ.hidden = !v;
   fetchMatches(v, () => {
@@ -670,6 +673,10 @@ function runSearch(v: string, opts: { stagger?: boolean; base?: number } = {}) {
     S.sel = null;
     renderSpectrum();
     renderList(opts);
+    if (timing) {
+      const n = S.matchIds?.size ?? S.records.size;
+      requestAnimationFrame(() => void info(`搜索耗时 ${Math.round(performance.now() - t)} ms，命中 ${n} 条`));
+    }
   });
 }
 
@@ -1451,7 +1458,8 @@ const shown = (t0: number | null) => {
   paintSpectrumSel(false);
   // 引导没结束就被隐藏过：从当前步继续
   openOnboard();
-  if (import.meta.env.DEV && t0 !== null) {
+  if (t0 !== null) {
+    timing = true;
     requestAnimationFrame(() => void info(`唤起耗时 ${Date.now() - t0} ms`));
   }
 };
