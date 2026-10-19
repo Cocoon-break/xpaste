@@ -8,7 +8,7 @@ SHELL := /bin/bash
 WIN_TARGET := x86_64-pc-windows-msvc
 HAS_WIN_TARGET := $(shell rustup target list --installed 2>/dev/null | grep -c $(WIN_TARGET))
 
-.PHONY: help install dev fmt lint test-rust test-web test check build build-check release release-app icons fonts clean
+.PHONY: help install dev dev-isolated fmt lint test-rust test-web test check build build-check release release-app icons fonts clean
 
 help: ## 列出可用目标
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{ printf "  %-14s %s\n", $$1, $$2 }'
@@ -18,6 +18,9 @@ install: ## 安装前端依赖
 
 dev: ## 启动开发版（热更新）
 	pnpm tauri dev
+
+dev-isolated: ## 启动开发版，数据目录隔离在 .xpaste-dev/（自动化验收必须用这个）
+	XPASTE_DATA_DIR=$(CURDIR)/.xpaste-dev pnpm tauri dev
 
 fmt: ## 格式化 Rust 代码
 	cargo fmt --all

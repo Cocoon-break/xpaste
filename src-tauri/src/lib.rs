@@ -12,6 +12,7 @@ pub mod state;
 mod tray;
 
 use state::AppState;
+use std::path::PathBuf;
 use tauri::{Manager, WindowEvent};
 use tauri_plugin_global_shortcut::ShortcutState;
 use tauri_plugin_log::{Target, TargetKind};
@@ -24,7 +25,9 @@ pub fn run() {
     let builder = builder.plugin(tauri_nspanel::init());
     builder
         .setup(|app| {
-            let data_dir = app.path().data_dir()?.join("xPaste");
+            let override_ = std::env::var_os("XPASTE_DATA_DIR");
+            let default_dir = app.path().data_dir()?.join("xPaste");
+            let data_dir = data_dir_from(override_, default_dir.clone());
             let logs = data_dir.join("logs");
             // Builder::new() 自带 Stdout + LogDir，先清掉，只留下面显式加的目标
             let builder = tauri_plugin_log::Builder::new()
@@ -45,6 +48,9 @@ pub fn run() {
             };
             app.handle().plugin(builder.build())?;
             log::info!("xPaste 启动，平台 {}", xpaste_platform::OS);
+            if data_dir != default_dir {
+                log::info!("数据目录已由 XPASTE_DATA_DIR 覆盖");
+            }
             let store = Store::open(&data_dir)?;
             let settings = store.load_settings();
             let hotkey = settings.hotkey.clone();
@@ -104,6 +110,14 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
+/// 环境变量非空（去首尾空白后）时用它作数据目录，否则用默认目录；开发版隔离真实数据用。
+pub fn data_dir_from(override_: Option<std::ffi::OsString>, default: PathBuf) -> PathBuf {
+    match override_ {
+        Some(s) if !s.to_string_lossy().trim().is_empty() => PathBuf::from(s),
+        _ => default,
+    }
+}
+
 /// 收到快捷键时的 Unix 毫秒，仅开发构建用于测唤起耗时。
 fn t0() -> Option<u64> {
     #[cfg(debug_assertions)]
@@ -116,5 +130,22 @@ fn t0() -> Option<u64> {
     #[cfg(not(debug_assertions))]
     {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn data_dir_override_wins_only_when_non_empty() {
+        let d = PathBuf::from("/default/xPaste");
+        assert_eq!(
+            data_dir_from(Some("/tmp/xp".into()), d.clone()),
+            PathBuf::from("/tmp/xp")
+        );
+        assert_eq!(data_dir_from(Some("".into()), d.clone()), d);
+        assert_eq!(data_dir_from(Some("  ".into()), d.clone()), d);
+        assert_eq!(data_dir_from(None, d.clone()), d);
     }
 }
