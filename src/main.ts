@@ -988,7 +988,9 @@ const HOTKEY_IDLE = '点击输入框，然后按下新的组合键';
 let pendingHotkey = '', dlgReturn: HTMLElement | null = null, closeTimer = 0, saving = false;
 
 // 外观：点选即预览（原型 setTheme，新主题从被点按钮处圆形扩散），保存才持久化，关闭不保存时还原
-const themeMode = () => (root.dataset.theme || 'system') as Appearance;
+// 圆形扩散要先等窗口主题生效（见 applyAppearance），等待期间以待切的模式为准
+let themePending: Appearance | null = null;
+const themeMode = () => themePending ?? ((root.dataset.theme || 'system') as Appearance);
 function paintTheme(instant: boolean) {
   const mode = themeMode();
   themeOpts.forEach((b, i) => {
@@ -998,25 +1000,39 @@ function paintTheme(instant: boolean) {
     if (on) instantly(themePill, instant, () => (themePill.style.transform = `translateX(${i * 32}px)`));
   });
 }
-function applyAppearance(mode: Appearance, fromEl: HTMLElement | null) {
+// 窗口主题一并切：WKWebView 的 prefers-color-scheme 跟随窗口主题，系统材质也随之变化。
+// 命令同步执行，返回后再等两帧，让 WebKit 重新求值 prefers-color-scheme
+const previewWindowTheme = (mode: Appearance) =>
+  previewAppearance(mode)
+    .catch((e: AppError) => void info(`预览外观失败 kind=${e.kind}`))
+    .then(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
+async function applyAppearance(mode: Appearance, fromEl: HTMLElement | null) {
   if (mode === themeMode()) return;
   const apply = () => {
-    // 窗口主题一并切：WKWebView 的 prefers-color-scheme 跟随窗口主题，系统材质也随之变化
-    void previewAppearance(mode).catch((e: AppError) => void info(`预览外观失败 kind=${e.kind}`));
     if (mode === 'system') delete root.dataset.theme;
     else root.dataset.theme = mode;
     paintTheme(false);
   };
   root.setAttribute('data-theme-switching', '');
   const done = () => requestAnimationFrame(() => root.removeAttribute('data-theme-switching'));
-  // WKWebView 旧版本没有 View Transitions：直接切
+  // WKWebView 旧版本没有 View Transitions：直接切。键盘与关闭还原也走这里；
+  // 等窗口主题生效后再放开过渡，跟随系统的配色翻转才不会按各元素的过渡渐变
   if (!('startViewTransition' in document) || reduced.matches || !fromEl) {
+    themePending = null;
+    const win = previewWindowTheme(mode);
     apply();
-    // 先让“关过渡”生效（原型靠 paintTheme 里读 getComputedStyle 顺带刷新），再在下一帧放开
+    // 先让“关过渡”生效（原型靠 paintTheme 里读 getComputedStyle 顺带刷新）
     void root.offsetWidth;
-    done();
+    void win.then(done);
     return;
   }
+  // 先切窗口主题再拍旧画面：当前为跟随系统时，把解析出的配色钉在 data-theme 上，旧画面不随窗口主题变
+  if (!root.dataset.theme) root.dataset.theme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  themePending = mode;
+  await previewWindowTheme(mode);
+  // 等待期间又点了别的模式：交给后一次
+  if (themePending !== mode) return;
+  themePending = null;
   const r = fromEl.getBoundingClientRect();
   const x = r.left + r.width / 2, y = r.top + r.height / 2;
   const R = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y));
@@ -1029,7 +1045,7 @@ function applyAppearance(mode: Appearance, fromEl: HTMLElement | null) {
 }
 themeSeg.addEventListener('click', (e) => {
   const b = (e.target as Element).closest<HTMLElement>('[data-theme-opt]');
-  if (b) applyAppearance(b.dataset.themeOpt as Appearance, e.detail === 0 ? null : b);
+  if (b) void applyAppearance(b.dataset.themeOpt as Appearance, e.detail === 0 ? null : b);
 });
 themeSeg.addEventListener('keydown', (e) => {
   if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
@@ -1037,7 +1053,7 @@ themeSeg.addEventListener('keydown', (e) => {
   e.stopPropagation();
   const i = themeOpts.findIndex((b) => b.dataset.themeOpt === themeMode());
   const n = themeOpts[(i + (e.key === 'ArrowRight' ? 1 : -1) + themeOpts.length) % themeOpts.length];
-  applyAppearance(n.dataset.themeOpt as Appearance, null);
+  void applyAppearance(n.dataset.themeOpt as Appearance, null);
   n.focus();
 });
 
@@ -1088,7 +1104,7 @@ function closeSettings() {
 // 预览在收起动画之后才还原：换主题时 data-theme-switching 会关掉所有过渡，收起动画也会被吞掉
 dlg.addEventListener('close', () => {
   dlg.classList.remove('is-shown');
-  applyAppearance(S.settings.appearance, null);
+  void applyAppearance(S.settings.appearance, null);
   if (S.shown && dlgReturn?.isConnected) dlgReturn.focus({ preventScroll: true });
   dlgReturn = null;
 });

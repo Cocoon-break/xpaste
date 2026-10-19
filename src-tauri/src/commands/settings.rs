@@ -103,6 +103,24 @@ pub fn changed_fields(old: &Settings, new: &Settings) -> Vec<&'static str> {
     .collect()
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum HotkeyAction {
+    /// 快捷键改了：先注册，失败则恢复旧快捷键并返回 `HotkeyTaken`，不保存
+    Register,
+    /// 没改但启动时注册失败过：保存之后顺带重试，失败不算保存失败
+    RetryBestEffort,
+    None,
+}
+
+/// 启动时注册失败而组合仍被占用时，不能让每次保存（分类防抖、引导、改其他字段）都因重试失败而保存不了。
+pub fn hotkey_action(hotkey_changed: bool, startup_failed: bool) -> HotkeyAction {
+    match (hotkey_changed, startup_failed) {
+        (true, _) => HotkeyAction::Register,
+        (false, true) => HotkeyAction::RetryBestEffort,
+        (false, false) => HotkeyAction::None,
+    }
+}
+
 /// 开关开机启动；开发构建从不改系统登录项。失败只记日志（错误里可能带路径，只在 debug 级别输出）。
 fn set_autostart(app: &AppHandle, on: bool) {
     if cfg!(debug_assertions) {
@@ -128,8 +146,8 @@ pub fn save_settings(
     // 面板尺寸只由拖动记忆（panel::remember_size）写；这里只为 changed 不含 panelSize，落库时 save_settings_inner 持锁再取
     settings.panel_size = old.panel_size;
     let changed = changed_fields(&old, &settings);
-    // 启动时注册失败过：同一快捷键再保存也重试注册，成功后 set_hotkey_label 清掉失败状态
-    let hotkey_changed = changed.contains(&"hotkey") || crate::tray::hotkey_failed();
+    let action = hotkey_action(changed.contains(&"hotkey"), crate::tray::hotkey_failed());
+    let hotkey_changed = action == HotkeyAction::Register;
     let (hotkey, appearance, launch) = (
         settings.hotkey.clone(),
         settings.appearance,
@@ -158,8 +176,15 @@ pub fn save_settings(
     if changed.contains(&"appearance") {
         crate::panel::apply_theme(&app, appearance);
     }
-    if hotkey_changed {
-        crate::tray::set_hotkey_label(&hotkey);
+    match action {
+        HotkeyAction::Register => crate::tray::set_hotkey_label(&hotkey),
+        // 成功后 set_hotkey_label 清掉失败状态；失败时 register 已注销全部，原本也没注册上，无需恢复
+        HotkeyAction::RetryBestEffort => {
+            if crate::hotkey::register(&app, &hotkey).is_ok() {
+                crate::tray::set_hotkey_label(&hotkey);
+            }
+        }
+        HotkeyAction::None => {}
     }
     if changed.contains(&"launchAtLogin") {
         set_autostart(&app, launch);
@@ -168,7 +193,8 @@ pub fn save_settings(
 }
 
 /// 设置页预览外观：窗口主题随预览切换（WKWebView 的 prefers-color-scheme 跟随窗口主题），不持久化。
-#[tauri::command(async)]
+/// 同步命令（例外）：在主线程按 IPC 顺序执行，前端 await 返回后窗口主题的切换已排在前面，连点时也不乱序。
+#[tauri::command]
 pub fn preview_appearance(app: AppHandle, appearance: Appearance) -> Result<(), AppError> {
     crate::panel::apply_theme(&app, appearance);
     Ok(())
@@ -289,6 +315,14 @@ mod tests {
             changed_fields(&old, &new),
             ["hotkey", "appearance", "panelSize"]
         );
+    }
+
+    #[test]
+    fn hotkey_action_retries_only_best_effort_when_unchanged() {
+        assert_eq!(hotkey_action(true, false), HotkeyAction::Register);
+        assert_eq!(hotkey_action(true, true), HotkeyAction::Register);
+        assert_eq!(hotkey_action(false, true), HotkeyAction::RetryBestEffort);
+        assert_eq!(hotkey_action(false, false), HotkeyAction::None);
     }
 
     #[test]
