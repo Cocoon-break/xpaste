@@ -70,13 +70,12 @@ pub fn set_paused(app: &AppHandle, on: bool) {
 }
 
 /// 快捷键改成功后更新第一项文字，并恢复“打开 xPaste”的点击行为。
-#[expect(dead_code, reason = "阶段 5 Task 3 的 save_settings 接入")]
-pub fn set_hotkey_label(_app: &AppHandle, shortcut: &str) {
+pub fn set_hotkey_label(shortcut: &str) {
     HOTKEY_FAILED.store(false, Ordering::SeqCst);
     set_text(|h| &h.open, &open_label(&hotkey::label(shortcut)));
 }
 
-pub fn mark_hotkey_failed(_app: &AppHandle) {
+pub fn mark_hotkey_failed() {
     HOTKEY_FAILED.store(true, Ordering::SeqCst);
     set_text(|h| &h.open, "更换唤起快捷键…");
 }

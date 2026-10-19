@@ -1027,6 +1027,8 @@ const MOD = b.platform.os === 'macos' ? '⌘' : 'Ctrl';
 document.querySelectorAll('.mod').forEach((k) => (k.textContent = MOD));
 $('.modp').textContent = `${MOD} P`;
 await info(`bootstrap 完成，平台 ${b.platform.os}，材质 ${b.platform.material}`);
+// 首次启动后端在 setup 里就显示了面板，那时页面还没订阅，panel-shown 已丢失，这里补上
+if (b.firstRun && !S.shown) shown(null);
 
 // —— 事件 ——
 q.addEventListener('input', (e) => {

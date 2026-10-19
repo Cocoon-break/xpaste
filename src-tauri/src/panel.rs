@@ -4,8 +4,9 @@ use std::time::Duration;
 
 use tauri::{
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Monitor, PhysicalPosition,
-    PhysicalSize, WebviewWindow,
+    PhysicalSize, Theme, WebviewWindow,
 };
+use xpaste_core::Appearance;
 
 use crate::state::AppState;
 
@@ -247,15 +248,36 @@ static REQ_SEQ: AtomicU64 = AtomicU64::new(1);
 /// 前端淡出 160 ms 后调 `hide_panel`；超过这个时间窗口仍可见，说明前端没响应。
 const HIDE_FALLBACK: Duration = Duration::from_millis(400);
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum ToggleAction {
+    Show,
+    RequestHide,
+    /// 引导中面板不隐藏，通知前端“快捷键已按下”
+    HotkeyPressed,
+}
+
+/// 淡出途中再按一次视为重新唤起；引导中可见时不隐藏。
+pub fn toggle_action(visible: bool, hide_pending: bool, onboarding: bool) -> ToggleAction {
+    match (visible, hide_pending, onboarding) {
+        (false, _, _) | (true, true, _) => ToggleAction::Show,
+        (true, false, true) => ToggleAction::HotkeyPressed,
+        (true, false, false) => ToggleAction::RequestHide,
+    }
+}
+
 /// 以窗口实际可见性为准切换。可见时不直接隐藏，请前端先播淡出再调 `hide_panel`；
-/// 淡出途中再按一次视为重新唤起。前端失效时由兜底线程隐藏。
+/// 前端失效时由兜底线程隐藏。
 pub fn toggle(app: &AppHandle, t0: Option<u64>) {
     let Some(w) = window(app) else { return };
-    match w.is_visible() {
-        Ok(true) if HIDE_REQ.load(Ordering::Relaxed) != 0 => show(app, t0),
-        Ok(true) => request_hide(app),
-        Ok(false) => show(app, t0),
-        Err(e) => log::warn!("读取面板可见性失败：{e}"),
+    let visible = match w.is_visible() {
+        Ok(v) => v,
+        Err(e) => return log::warn!("读取面板可见性失败：{e}"),
+    };
+    let onboarding = app.state::<AppState>().onboarding.load(Ordering::SeqCst);
+    match toggle_action(visible, HIDE_REQ.load(Ordering::Relaxed) != 0, onboarding) {
+        ToggleAction::Show => show(app, t0),
+        ToggleAction::RequestHide => request_hide(app),
+        ToggleAction::HotkeyPressed => crate::events::emit(app, crate::events::HOTKEY_PRESSED, ()),
     }
 }
 
@@ -274,10 +296,105 @@ fn request_hide(app: &AppHandle) {
     });
 }
 
+pub fn theme_of(a: Appearance) -> Option<Theme> {
+    match a {
+        Appearance::System => None,
+        Appearance::Light => Some(Theme::Light),
+        Appearance::Dark => Some(Theme::Dark),
+    }
+}
+
+/// 窗口外观跟随设置（毛玻璃明暗随之变化）；失败只记日志。
+pub fn apply_theme(app: &AppHandle, a: Appearance) {
+    on_main(app, move |app| {
+        if let Some(w) = window(app)
+            && let Err(e) = w.set_theme(theme_of(a))
+        {
+            log::warn!("设置面板外观失败：{e}");
+        }
+    });
+}
+
+/// 物理尺寸换成逻辑像素；不可见或小于 720 × 520 时不记。
+pub fn size_to_remember(phys: (u32, u32), sf: f64, visible: bool) -> Option<(f64, f64)> {
+    let size = (phys.0 as f64 / sf, phys.1 as f64 / sf);
+    (visible && size.0 >= 720.0 && size.1 >= 520.0).then_some(size)
+}
+
+/// 最近一次尺寸变化的编号；防抖期间又变了就放弃这次。
+static RESIZE_SEQ: AtomicU64 = AtomicU64::new(0);
+const RESIZE_DEBOUNCE: Duration = Duration::from_millis(300);
+
+/// 用户拖动改变面板尺寸后记住它；300 ms 防抖，失败只记日志。
+pub fn remember_size(app: &AppHandle) {
+    let seq = RESIZE_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(RESIZE_DEBOUNCE);
+        if RESIZE_SEQ.load(Ordering::Relaxed) != seq {
+            return;
+        }
+        let Some(w) = window(&app) else { return };
+        let read = || -> tauri::Result<_> {
+            let p = w.inner_size()?;
+            Ok(size_to_remember(
+                (p.width, p.height),
+                w.scale_factor()?,
+                w.is_visible()?,
+            ))
+        };
+        let size = match read() {
+            Ok(Some(size)) => size,
+            Ok(None) => return,
+            Err(e) => return log::warn!("读取面板尺寸失败：{e}"),
+        };
+        let state = app.state::<AppState>();
+        let s = {
+            let mut s = state.settings();
+            // 显示时 place() 按设置改尺寸也会触发 Resized，尺寸没变就不写
+            if s.panel_size == size {
+                return;
+            }
+            s.panel_size = size;
+            s.clone()
+        };
+        if let Err(e) = state.store().save_settings(&s) {
+            log::warn!("保存面板尺寸失败：{e}");
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     const SIZE: (f64, f64) = (960.0, 640.0);
+
+    #[test]
+    fn size_to_remember_ignores_hidden_and_too_small() {
+        assert_eq!(
+            size_to_remember((1920, 1280), 2.0, true),
+            Some((960.0, 640.0))
+        );
+        assert_eq!(size_to_remember((1920, 1280), 2.0, false), None);
+        assert_eq!(size_to_remember((1400, 1000), 2.0, true), None); // 700 × 500 < 720 × 520
+    }
+
+    #[test]
+    fn toggle_keeps_panel_during_onboarding() {
+        assert_eq!(
+            toggle_action(true, false, true),
+            ToggleAction::HotkeyPressed
+        );
+        assert_eq!(toggle_action(true, false, false), ToggleAction::RequestHide);
+        assert_eq!(toggle_action(true, true, false), ToggleAction::Show);
+        assert_eq!(toggle_action(false, false, true), ToggleAction::Show);
+    }
+
+    #[test]
+    fn theme_of_maps_appearance() {
+        assert_eq!(theme_of(Appearance::System), None);
+        assert_eq!(theme_of(Appearance::Dark), Some(tauri::Theme::Dark));
+    }
 
     #[test]
     fn centered_horizontally_top_at_one_sixth() {

@@ -21,18 +21,26 @@ use xpaste_core::Store;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // 单实例插件必须第一个注册：再次启动时切换已运行实例的面板
-    let builder =
-        tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+    let override_ = data_dir_override(std::env::var_os("XPASTE_DATA_DIR"));
+    let builder = tauri::Builder::default();
+    // 单实例插件必须第一个注册：再次启动时切换已运行实例的面板。
+    // 它按 bundle id 加锁，隔离数据目录的开发版不注册，否则会和正在运行的发布版互相切换
+    let builder = if override_.is_some() {
+        builder
+    } else {
+        builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             panel::toggle(app, None)
-        }));
+        }))
+    };
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_nspanel::init());
     builder
-        .setup(|app| {
-            let override_ = std::env::var_os("XPASTE_DATA_DIR");
-            let default_dir = app.path().data_dir()?.join("xPaste");
-            let data_dir = data_dir_from(override_, default_dir.clone());
+        .setup(move |app| {
+            let isolated = override_.is_some();
+            let data_dir = match override_ {
+                Some(d) => d,
+                None => app.path().data_dir()?.join("xPaste"),
+            };
             let logs = data_dir.join("logs");
             // Builder::new() 自带 Stdout + LogDir，先清掉，只留下面显式加的目标
             let builder = tauri_plugin_log::Builder::new()
@@ -53,17 +61,29 @@ pub fn run() {
             };
             app.handle().plugin(builder.build())?;
             log::info!("xPaste 启动，平台 {}", xpaste_platform::OS);
-            if data_dir != default_dir {
-                log::info!("数据目录已由 XPASTE_DATA_DIR 覆盖");
+            if isolated {
+                log::info!("数据目录已由 XPASTE_DATA_DIR 覆盖，不启用单实例");
+                // tauri.conf.json 的 assetProtocol.scope 只覆盖默认数据目录
+                for sub in ["images", "thumbs", "icons"] {
+                    if let Err(e) = app
+                        .asset_protocol_scope()
+                        .allow_directory(data_dir.join(sub), true)
+                    {
+                        log::warn!("放行隔离数据目录 {sub} 失败");
+                        log::debug!("asset 作用域错误：{e}");
+                    }
+                }
             }
             let store = Store::open(&data_dir)?;
+            let first_run = matches!(store.kv_get("onboarded"), Ok(None));
             let settings = store.load_settings();
-            let hotkey = settings.hotkey.clone();
+            let (hotkey, appearance) = (settings.hotkey.clone(), settings.appearance);
             let enrich = enrich::start(app.handle().clone());
             app.manage(AppState::new(settings, store, enrich, data_dir));
             housekeeping::start(app.handle().clone());
             #[cfg(target_os = "macos")]
             panel::setup_macos(app)?;
+            panel::apply_theme(app.handle(), appearance);
             if let Err(e) = tray::setup(app) {
                 log::warn!("托盘图标创建失败：{e}");
             }
@@ -78,13 +98,24 @@ pub fn run() {
                 {
                     log::warn!("发送快捷键注册失败通知失败：{e}");
                 }
-                tray::mark_hotkey_failed(app.handle());
+                tray::mark_hotkey_failed();
             }
             clipboard::start(app.handle().clone());
+            // 首次启动直接显示面板与引导（AC-M18-01）
+            if first_run {
+                app.state::<AppState>()
+                    .onboarding
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                panel::show(app.handle(), None);
+            }
             Ok(())
         })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
@@ -95,10 +126,13 @@ pub fn run() {
                 .build(),
         )
         .on_window_event(|window, event| {
-            if window.label() == "panel"
-                && let WindowEvent::Focused(false) = event
-            {
-                panel::hide(window.app_handle());
+            if window.label() != "panel" {
+                return;
+            }
+            match event {
+                WindowEvent::Focused(false) => panel::hide(window.app_handle()),
+                WindowEvent::Resized(_) => panel::remember_size(window.app_handle()),
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -109,6 +143,7 @@ pub fn run() {
             commands::settings::finish_onboarding,
             commands::panel::hide_panel,
             commands::panel::open_accessibility_settings,
+            commands::panel::accessibility_granted,
             commands::panel::request_accessibility,
             commands::panel::open_url,
             commands::panel::reveal_file,
@@ -127,11 +162,9 @@ pub fn run() {
 }
 
 /// 环境变量非空（去首尾空白后）时用它作数据目录，否则用默认目录；开发版隔离真实数据用。
-pub fn data_dir_from(override_: Option<std::ffi::OsString>, default: PathBuf) -> PathBuf {
-    match override_ {
-        Some(s) if !s.to_string_lossy().trim().is_empty() => PathBuf::from(s),
-        _ => default,
-    }
+pub fn data_dir_override(v: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    v.filter(|s| !s.to_string_lossy().trim().is_empty())
+        .map(PathBuf::from)
 }
 
 /// 收到快捷键时的 Unix 毫秒，仅开发构建用于测唤起耗时。
@@ -155,13 +188,12 @@ mod tests {
 
     #[test]
     fn data_dir_override_wins_only_when_non_empty() {
-        let d = PathBuf::from("/default/xPaste");
         assert_eq!(
-            data_dir_from(Some("/tmp/xp".into()), d.clone()),
-            PathBuf::from("/tmp/xp")
+            data_dir_override(Some("/tmp/xp".into())),
+            Some(PathBuf::from("/tmp/xp"))
         );
-        assert_eq!(data_dir_from(Some("".into()), d.clone()), d);
-        assert_eq!(data_dir_from(Some("  ".into()), d.clone()), d);
-        assert_eq!(data_dir_from(None, d.clone()), d);
+        assert_eq!(data_dir_override(Some("".into())), None);
+        assert_eq!(data_dir_override(Some("  ".into())), None);
+        assert_eq!(data_dir_override(None), None);
     }
 }

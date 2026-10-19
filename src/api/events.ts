@@ -15,6 +15,11 @@ export const PANEL_HIDE_REQUESTED = 'panel-hide-requested';
 
 export const onPanelHideRequested = (cb: () => void): Promise<UnlistenFn> => listen(PANEL_HIDE_REQUESTED, () => cb());
 
+/** 引导中按下唤起快捷键：面板保持显示，引导据此推进。 */
+export const HOTKEY_PRESSED = 'hotkey-pressed';
+
+export const onHotkeyPressed = (cb: () => void): Promise<UnlistenFn> => listen(HOTKEY_PRESSED, () => cb());
+
 export const RECORD_ADDED = 'record-added';
 export const RECORD_UPDATED = 'record-updated';
 export const RECORDS_REMOVED = 'records-removed';

@@ -23,6 +23,12 @@ pub fn request_accessibility(app: AppHandle) -> Result<(), AppError> {
     Ok(())
 }
 
+/// 是否已获得粘贴所需的辅助功能权限（Windows 恒为 true）。
+#[tauri::command(async)]
+pub fn accessibility_granted() -> Result<bool, AppError> {
+    Ok(xpaste_platform::can_paste(None) == xpaste_platform::PasteBlock::None)
+}
+
 /// 只认小写 http/https 前缀（与 detect 的链接判定一致）。
 pub fn url_is_openable(url: &str) -> bool {
     url.starts_with("http://") || url.starts_with("https://")

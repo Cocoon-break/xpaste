@@ -21,6 +21,8 @@ pub struct AppState {
     pub writing: AtomicBool,
     /// 唤起面板前的前台窗口（Windows HWND），粘贴时切回；0 表示无（macOS 恒为 0）
     pub previous_window: AtomicIsize,
+    /// 首次启动引导进行中：快捷键不隐藏面板，改发 `hotkey-pressed`
+    pub onboarding: AtomicBool,
 }
 
 impl AppState {
@@ -39,6 +41,7 @@ impl AppState {
             last_write_seq: AtomicU64::new(u64::MAX),
             writing: AtomicBool::new(false),
             previous_window: AtomicIsize::new(0),
+            onboarding: AtomicBool::new(false),
         }
     }
 

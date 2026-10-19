@@ -8,6 +8,7 @@ use crate::clock::now_ms;
 use crate::error::AppError;
 use crate::events::{PAUSED_CHANGED, emit, emit_removed};
 use crate::state::AppState;
+use tauri_plugin_autostart::ManagerExt;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -80,22 +81,63 @@ pub fn prune_to_settings(state: &AppState) -> Vec<i64> {
     removed
 }
 
+/// 与旧设置不同的字段名（camelCase，与 kv.settings 一致），供日志与生效判断；不含字段值。
+pub fn changed_fields(old: &Settings, new: &Settings) -> Vec<&'static str> {
+    [
+        ("hotkey", old.hotkey != new.hotkey),
+        ("retentionDays", old.retention_days != new.retention_days),
+        ("maxRecords", old.max_records != new.max_records),
+        ("ignoredApps", old.ignored_apps != new.ignored_apps),
+        ("skipSensitive", old.skip_sensitive != new.skip_sensitive),
+        ("moveToTop", old.move_to_top != new.move_to_top),
+        ("launchAtLogin", old.launch_at_login != new.launch_at_login),
+        ("appearance", old.appearance != new.appearance),
+        ("panelSize", old.panel_size != new.panel_size),
+        ("lastFilter", old.last_filter != new.last_filter),
+    ]
+    .into_iter()
+    .filter_map(|(name, changed)| changed.then_some(name))
+    .collect()
+}
+
+/// 开关开机启动；开发构建从不改系统登录项。失败只记日志（错误里可能带路径，只在 debug 级别输出）。
+fn set_autostart(app: &AppHandle, on: bool) {
+    if cfg!(debug_assertions) {
+        log::info!("开发构建不改开机启动项");
+        return;
+    }
+    let al = app.autolaunch();
+    let r = if on { al.enable() } else { al.disable() };
+    if let Err(e) = r {
+        log::warn!("{}开机启动失败", if on { "开启" } else { "关闭" });
+        log::debug!("开机启动插件错误：{e}");
+    }
+}
+
 #[tauri::command(async)]
 pub fn save_settings(
     app: AppHandle,
     state: State<'_, AppState>,
-    settings: Settings,
+    mut settings: Settings,
 ) -> Result<(), AppError> {
     settings.validate()?;
-    let old = state.settings().hotkey.clone();
-    let hotkey_changed = settings.hotkey != old;
+    let old = state.settings().clone();
+    // 面板尺寸只由拖动记忆（panel::remember_size）写；前端手里的快照可能是旧的，不让它覆盖
+    settings.panel_size = old.panel_size;
+    let changed = changed_fields(&old, &settings);
+    let hotkey_changed = changed.contains(&"hotkey");
+    let (hotkey, appearance, launch) = (
+        settings.hotkey.clone(),
+        settings.appearance,
+        settings.launch_at_login,
+    );
     // register 会先注销全部快捷键，失败时要把旧的注册回去
     let restore = |app: &AppHandle| {
-        if let Err(e) = crate::hotkey::register(app, &old) {
+        if let Err(e) = crate::hotkey::register(app, &old.hotkey) {
             log::warn!("恢复原快捷键失败：{e}");
         }
     };
-    if hotkey_changed && let Err(e) = crate::hotkey::register(&app, &settings.hotkey) {
+    if hotkey_changed && let Err(e) = crate::hotkey::register(&app, &hotkey) {
         restore(&app);
         return Err(e);
     }
@@ -105,9 +147,19 @@ pub fn save_settings(
         }
         return Err(e);
     }
-    // 设置已持久化并生效：清理失败不回滚、不算保存失败（prune_to_settings 只记日志）
+    log::info!("设置已保存 changed=[{}]", changed.join(", "));
+    // 设置已持久化并生效：以下步骤失败不回滚、不算保存失败（都只记日志）
     let removed = prune_to_settings(&state);
     emit_removed(&app, &removed);
+    if changed.contains(&"appearance") {
+        crate::panel::apply_theme(&app, appearance);
+    }
+    if hotkey_changed {
+        crate::tray::set_hotkey_label(&hotkey);
+    }
+    if changed.contains(&"launchAtLogin") {
+        set_autostart(&app, launch);
+    }
     Ok(())
 }
 
@@ -136,9 +188,17 @@ pub fn set_paused(app: AppHandle, on: bool) -> Result<(), AppError> {
     Ok(())
 }
 
+/// 引导结束：记下已引导、恢复快捷键切换；按设置兜底开启开机启动（前端已先 `save_settings`）。
 #[tauri::command(async)]
-pub fn finish_onboarding(state: State<'_, AppState>) -> Result<(), AppError> {
-    Ok(state.store().kv_set("onboarded", "1")?)
+pub fn finish_onboarding(app: AppHandle) -> Result<(), AppError> {
+    let state = app.state::<AppState>();
+    state.store().kv_set("onboarded", "1")?;
+    state.onboarding.store(false, Ordering::SeqCst);
+    let launch = state.settings().launch_at_login;
+    if launch {
+        set_autostart(&app, true);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -195,14 +255,30 @@ mod tests {
     }
 
     #[test]
+    fn changed_fields_lists_only_differences() {
+        let old = Settings::default();
+        assert!(changed_fields(&old, &old).is_empty());
+        let new = Settings {
+            hotkey: "Alt+Space".into(),
+            appearance: xpaste_core::Appearance::Dark,
+            panel_size: (1000.0, 700.0),
+            ..Settings::default()
+        };
+        assert_eq!(
+            changed_fields(&old, &new),
+            ["hotkey", "appearance", "panelSize"]
+        );
+    }
+
+    #[test]
     fn app_assembles_with_handlers() {
         tauri::test::mock_builder()
             .manage(AppState::for_test())
             .invoke_handler(tauri::generate_handler![
-                // 带 AppHandle 参数的命令（含 get_record）只能用于 Wry 运行时，由 lib.rs 的 generate_handler! 编译覆盖
+                // 带 AppHandle 参数的命令（含 get_record、finish_onboarding）只能用于 Wry 运行时，由 lib.rs 的 generate_handler! 编译覆盖
                 bootstrap,
                 prune_preview,
-                finish_onboarding,
+                crate::commands::panel::accessibility_granted,
                 crate::commands::records::search,
                 crate::commands::records::count_unpinned,
             ])
