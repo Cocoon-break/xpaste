@@ -18,7 +18,8 @@ esac
 # —— 公共前置 ——
 [[ $(uname) == Darwin ]] || { echo "只支持 macOS" >&2; exit 1; }
 [[ -x $APP ]] || { echo "找不到 ${APP}，请先 make release-app" >&2; exit 1; }
-if pgrep -x xPaste >/dev/null; then
+# xpaste 是开发版进程名，它也会抢 ⌘⇧V
+if pgrep -x xPaste >/dev/null || pgrep -x xpaste >/dev/null; then
   echo "检测到正在运行的 xPaste，请先从菜单栏退出" >&2
   exit 1
 fi
@@ -34,7 +35,8 @@ esac
 
 mkdir -p target/measure
 OUT=target/measure/$(date +%Y%m%d-%H%M%S).txt
-exec > >(tee "$OUT") 2>&1
+# tee 忽略 Ctrl-C，中断时 finish 的输出仍能写进结果文件
+exec > >(trap '' INT; exec tee "$OUT") 2>&1
 
 cargo build -q -p xpaste-core --release --example seed
 SEED=target/release/examples/seed
@@ -44,19 +46,37 @@ CLIP=$(pbpaste; printf x)
 CLIP=${CLIP%x}
 REAL_MTIME=$(stat -f %m "$REAL_DB" 2>/dev/null || true)
 AGENTS=$(ls "$HOME/Library/LaunchAgents" 2>/dev/null || true)
-PID="" KIDS_DONE="" BEFORE="" T0=0 DIR="" RUNS=0 DOC="" WATCH=""
+PID="" KIDS_DONE="" BEFORE="" T0=0 DIR="" RUNS=0 DOC="" TE_OURS="" WATCH=""
 : >"$ROOT/pids"
 : >"$ROOT/net.log"
 
+# 先清理、后输出：Ctrl-C 或关终端时输出端可能已断，任何输出都不能挡在 kill / 恢复前面
 finish() {
-  local rc=$?
+  local rc=$? net i
+  trap '' PIPE INT
   set +e
-  stop_app || rc=1
+  if [[ -n $PID ]]; then
+    kill "$PID" 2>/dev/null
+    wait "$PID" 2>/dev/null
+  fi
   [[ -n $WATCH ]] && kill "$WATCH" 2>/dev/null && wait "$WATCH" 2>/dev/null
-  [[ -n $DOC ]] && osascript -e "tell application \"TextEdit\" to close (every document whose name is \"$DOC\") saving no" >/dev/null 2>&1
   printf '%s' "$CLIP" | pbcopy
-  echo "结果 网络连接 次数=$(wc -l <"$ROOT/net.log" | tr -d ' ') 目标=0"
-  sed 's/^/  /' "$ROOT/net.log"
+  if [[ -n $DOC ]]; then
+    osascript -e "tell application \"TextEdit\" to close (every document whose name is \"$DOC\") saving no" >/dev/null 2>&1
+    # 文本编辑是脚本启动的、且没有别的文稿时才退出它
+    [[ -n $TE_OURS ]] && osascript -e 'tell application "TextEdit" to if (count of documents) = 0 then quit' >/dev/null 2>&1
+  fi
+  net=$(cat "$ROOT/net.log")
+  rm -rf "$ROOT"
+  for i in $(seq 50); do
+    pgrep -x xPaste >/dev/null || break
+    sleep 0.1
+  done
+  if pgrep -x xPaste >/dev/null; then
+    echo "失败：xPaste 仍在运行" && rc=1
+  fi
+  echo "结果 网络连接 次数=$(printf '%s' "$net" | grep -c .) 目标=0"
+  [[ -z $net ]] || echo "$net" | sed 's/^/  /'
   if [[ -z $REAL_MTIME ]]; then
     echo "真实数据库不存在，未比较"
   elif [[ $(stat -f %m "$REAL_DB" 2>/dev/null) == "$REAL_MTIME" ]]; then
@@ -69,7 +89,6 @@ finish() {
   else
     echo "失败：~/Library/LaunchAgents 有变化" && rc=1
   fi
-  rm -rf "$ROOT"
   echo "结果文件：$OUT"
   exit "$rc"
 }
@@ -140,6 +159,9 @@ stop_app() {
     [[ -n $kids ]] && ps -p "$(echo "$kids" | paste -sd, -)" >/dev/null 2>&1 || break
     sleep 0.1
   done
+  if [[ -n $kids ]] && ps -p "$(echo "$kids" | paste -sd, -)" >/dev/null 2>&1; then
+    echo "  注意：5 秒后仍有归属的 WebKit 进程存活（可能不是被测程序的）"
+  fi
   grep -hE 'XPASTE_TIMING|bootstrap 返回|设置已保存|\[(WARN|ERROR)\]' "$DIR"/logs/*.log 2>/dev/null | sed 's/^/  日志 /' || true
   if pgrep -x xPaste >/dev/null; then
     echo "失败：xPaste 退出后仍有残留进程"
@@ -165,6 +187,7 @@ open_doc() {
   [[ -z $DOC ]] || return 0
   DOC=xpaste-measure-$$.txt
   : >"$ROOT/$DOC"
+  pgrep -x TextEdit >/dev/null || TE_OURS=1
   open -a TextEdit "$ROOT/$DOC"
   sleep 1
   osascript -e "tell application \"TextEdit\" to activate"
@@ -232,7 +255,7 @@ run_startup() {
       stop_app
     done
     # shellcheck disable=SC2086
-    summary "启动(${n}条)" ms 2000 le 0 $samples
+    summary "启动(${n}条)" ms 2000 le 5 $samples
   done
 }
 
@@ -259,7 +282,7 @@ run_latency() {
   done
   stop_app
   # shellcheck disable=SC2086
-  summary 采集延迟 ms 1000 le 0 $samples
+  summary 采集延迟 ms 1000 le 10 $samples
 }
 
 run_summon() {
@@ -290,6 +313,12 @@ run_search() {
   wait_log 'bootstrap 返回 5000 条记录'
   sleep 1
   open_doc
+  # 预热：首次唤起有开场动画、首次查询是冷的，不计入
+  front_ok
+  key "$HOTKEY"
+  sleep 0.6
+  key "$HOTKEY"
+  sleep 0.6
   for _ in 1 2 3; do
     front_ok
     key "$HOTKEY"
@@ -340,9 +369,8 @@ run_crash() {
   key 'key code 35 using {command down}'
   sleep 0.5
   key 'key code 36'
-  sleep 1
-  # 模拟粘贴成功时面板已自行隐藏；只复制时面板还在
-  if (($(log_count 已模拟粘贴) == 0)); then
+  # 模拟粘贴成功时面板已自行隐藏；2 秒内没粘贴就是只复制，面板还在
+  if ! wait_log 已模拟粘贴 2 >/dev/null; then
     front_ok
     key "$HOTKEY"
   fi
@@ -364,7 +392,7 @@ run_crash() {
 }
 
 run_idle() {
-  local i pids fp="" rss="" cpu="" line
+  local i pids npids fp="" rss="" cpu="" line f
   seed 5000
   launch
   wait_log 'bootstrap 返回 5000 条记录'
@@ -377,23 +405,36 @@ run_idle() {
   echo "空闲 600 秒后采样…"
   sleep 600
   pids=$(paste -sd, "$ROOT/pids")
+  npids=$(wc -l <"$ROOT/pids" | tr -d ' ')
   echo "采样进程：$pids"
+  # 每次采样 ps 与 footprint 都要数到全部进程，少一个（主进程退出、WebKit 崩溃）这次样本就作废；
+  # 样本不足 6 个判不达标
   for i in $(seq 6); do
-    line=$(ps -o pid=,rss=,pcpu= -p "$pids" | awk '{ r += $2; c += $3 } END { printf "%.1f %.1f", r / 1024, c }' || true)
-    rss="$rss ${line% *}"
-    cpu="$cpu ${line#* }"
+    if ! kill -0 "$PID" 2>/dev/null; then
+      echo "失败：被测程序已退出"
+      break
+    fi
+    line=$(ps -o pid=,rss=,pcpu= -p "$pids" | awk '{ k++; r += $2; c += $3 } END { printf "%d %.1f %.1f", k, r / 1024, c }' || true)
     # shellcheck disable=SC2046
-    fp="$fp $(footprint --noCategories -f bytes $(sed 's/^/-p /' "$ROOT/pids") 2>/dev/null |
-      awk '/\[[0-9]+\]:.*Footprint:/ { for (i = 1; i < NF; i++) if ($i == "Footprint:") s += $(i + 1) } END { printf "%.1f", s / 1048576 }' || true)"
+    f=$(footprint --noCategories -f bytes $(sed 's/^/-p /' "$ROOT/pids") 2>/dev/null |
+      awk '/\[[0-9]+\]:.*Footprint:/ { for (i = 1; i < NF; i++) if ($i == "Footprint:") { k++; s += $(i + 1) } } END { printf "%d %.1f", k, s / 1048576 }' || true)
+    if [[ ${line%% *} == "$npids" && ${f%% *} == "$npids" && ${f#* } != 0.0 ]]; then
+      line=${line#* }
+      rss="$rss ${line% *}"
+      cpu="$cpu ${line#* }"
+      fp="$fp ${f#* }"
+    else
+      echo "第 $i 次采样作废：应有 $npids 个进程，ps 数到 ${line%% *}，footprint 数到 ${f%% *}"
+    fi
     if ((i < 6)); then sleep 10; fi
   done
   stop_app
   # shellcheck disable=SC2086
-  summary '内存(footprint)' MB 150 le 0 $fp
+  summary '内存(footprint)' MB 150 le 6 $fp
   # shellcheck disable=SC2086
-  summary '内存(RSS)' MB - le 0 $rss
+  summary '内存(RSS)' MB - le 6 $rss
   # shellcheck disable=SC2086
-  summary CPU % 1 lt 0 $cpu
+  summary CPU % 1 lt 6 $cpu
 }
 
 echo "xPaste 测量 $(date '+%F %T')  $APP"
