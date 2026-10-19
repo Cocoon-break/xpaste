@@ -17,7 +17,7 @@
   --fg: #EAF0FF; --muted: #9AA4CB; --faint: #646E94;
   --c-text: #8FE3FF; --c-link: #6F8BFF; --c-code: #4FE3C1; --c-color: #FF6FD8;
   --c-image: #FFB84D; --c-video: #FF6B6B; --c-file: #B48CFF; --c-fav: #D9F26B;
-  --beam: #8FE3FF; --beam-hover: #B4EEFF; --on-beam: #06101C; --on-pill: #06101C; --danger: #FF6B81;
+  --beam: #8FE3FF; --beam-hover: #B4EEFF; --on-beam: #06101C; --on-pill: #06101C; --danger: #FF6B81; --danger-hover: #FF8A9B; --on-danger: #06101C;
   --well: rgb(0 0 0 / .22); --well-2: rgb(0 0 0 / .32);
   --pop: rgb(14 18 32 / .94); --pop-solid: #12162A;
   --hover: rgb(255 255 255 / .11);
@@ -50,7 +50,7 @@
     --fg: #111632; --muted: #545C7C; --faint: #8790AE;
     --c-text: #0891B2; --c-link: #3B5BDB; --c-code: #0D9488; --c-color: #C026D3;
     --c-image: #D97706; --c-video: #E03131; --c-file: #7C3AED; --c-fav: #4D7C0F;
-    --beam: #0E7FA3; --beam-hover: #0B6A88; --on-beam: #FFFFFF; --on-pill: #FFFFFF; --danger: #D6334F;
+    --beam: #0E7FA3; --beam-hover: #0B6A88; --on-beam: #FFFFFF; --on-pill: #FFFFFF; --danger: #D6334F; --danger-hover: #B82640; --on-danger: #FFFFFF;
     --well: rgb(20 30 80 / .04); --well-2: rgb(255 255 255 / .85);
     --pop: rgb(255 255 255 / .94); --pop-solid: #FFFFFF;
     --hover: rgb(20 30 80 / .07);
@@ -75,7 +75,7 @@
   --fg: #111632; --muted: #545C7C; --faint: #8790AE;
   --c-text: #0891B2; --c-link: #3B5BDB; --c-code: #0D9488; --c-color: #C026D3;
   --c-image: #D97706; --c-video: #E03131; --c-file: #7C3AED; --c-fav: #4D7C0F;
-  --beam: #0E7FA3; --beam-hover: #0B6A88; --on-beam: #FFFFFF; --on-pill: #FFFFFF; --danger: #D6334F;
+  --beam: #0E7FA3; --beam-hover: #0B6A88; --on-beam: #FFFFFF; --on-pill: #FFFFFF; --danger: #D6334F; --danger-hover: #B82640; --on-danger: #FFFFFF;
   --well: rgb(20 30 80 / .04); --well-2: rgb(255 255 255 / .85);
   --pop: rgb(255 255 255 / .94); --pop-solid: #FFFFFF;
   --hover: rgb(20 30 80 / .07);
@@ -136,7 +136,7 @@ kbd {
 }
 .btn.primary kbd { background: color-mix(in srgb, var(--on-beam) 14%, transparent); border-color: color-mix(in srgb, var(--on-beam) 30%, transparent); color: var(--on-beam); }
 .btn.danger {
-  background: var(--danger); color: #fff; border-color: transparent; font-weight: 600;
+  background: var(--danger); color: var(--on-danger); border-color: transparent; font-weight: 600;
   box-shadow: 0 6px 20px -8px color-mix(in srgb, var(--danger) 70%, transparent);
 }
 .btn.icon { width: 32px; padding: 0; justify-content: center; }
@@ -146,7 +146,7 @@ kbd {
   .btn:hover:not(:disabled) { background: var(--hover); border-color: color-mix(in srgb, var(--line-2) 100%, var(--fg) 10%); }
   .btn.primary:hover:not(:disabled) { background: var(--beam-hover); box-shadow: 0 0 0 4px color-mix(in srgb, var(--beam) 16%, transparent), 0 8px 26px -8px color-mix(in srgb, var(--beam) 90%, transparent); }
   .btn.ghost:hover:not(:disabled) { color: var(--fg); background: var(--glass-3); }
-  .btn.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 88%, #000); box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 16%, transparent), 0 8px 26px -8px color-mix(in srgb, var(--danger) 90%, transparent); }
+  .btn.danger:hover:not(:disabled) { background: var(--danger-hover); box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 16%, transparent), 0 8px 26px -8px color-mix(in srgb, var(--danger) 90%, transparent); }
 }
 
 /* 图标替换：模糊 + 弹性缩放 */

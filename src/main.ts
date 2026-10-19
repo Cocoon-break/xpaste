@@ -944,6 +944,8 @@ function closeConfirm(ok: boolean) {
   cfTimer = window.setTimeout(() => cfDlg.close(), reduced.matches ? 0 : 150);
 }
 cfDlg.addEventListener('close', () => {
+  // 上一次 close 排队的事件到达时已重新打开：不能结算新的确认框
+  if (cfDlg.open) return;
   cfDlg.classList.remove('is-shown');
   settleConfirm(false);
   if (S.shown && cfReturn?.isConnected) cfReturn.focus({ preventScroll: true });
