@@ -25,6 +25,52 @@ export interface PlatformInfo {
 export interface Bootstrap {
   settings: Settings;
   platform: PlatformInfo;
+  records: RecordSummary[];
+  firstRun: boolean;
+}
+
+/** `icon`、`thumb`、`image.src` 为 asset 协议 URL，可直接用作 `<img src>`。 */
+export interface AppSummary {
+  name: string;
+  icon: string | null;
+}
+
+export interface RecordSummary {
+  id: number;
+  kind: Kind;
+  title: string;
+  app: AppSummary | null;
+  /** Unix 毫秒 */
+  copiedAt: number;
+  uses: number;
+  pinned: boolean;
+  size: number;
+  lang: string | null;
+  thumb: string | null;
+  durationSec: number | null;
+}
+
+export interface FileEntry {
+  path: string;
+  name: string;
+  ext: string;
+  size: number;
+  exists: boolean;
+}
+
+export interface ImageInfo {
+  src: string;
+  w: number;
+  h: number;
+}
+
+export interface RecordDetail extends RecordSummary {
+  text: string | null;
+  truncated: boolean;
+  linkTitle: string | null;
+  files: FileEntry[];
+  image: ImageInfo | null;
+  video: unknown;
 }
 
 export interface AppError {

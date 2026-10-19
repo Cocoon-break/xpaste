@@ -1,8 +1,21 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { Bootstrap, CopyResult } from './types';
+import type { Bootstrap, CopyResult, RecordDetail, Settings } from './types';
 
 export const bootstrap = () => invoke<Bootstrap>('bootstrap');
 export const hidePanel = () => invoke<void>('hide_panel');
 // 阶段 1 临时命令，阶段 4 由 copy 替换
 export const pasteText = (text: string) => invoke<CopyResult>('paste_text', { text });
 export const openAccessibilitySettings = () => invoke<void>('open_accessibility_settings');
+
+export const getRecord = (id: number) => invoke<RecordDetail | null>('get_record', { id });
+export const search = (q: string) => invoke<number[]>('search', { q });
+export const setPinned = (id: number, on: boolean) => invoke<void>('set_pinned', { id, on });
+export const deleteRecord = (id: number) => invoke<void>('delete', { id });
+export const undoDelete = (id: number) => invoke<boolean>('undo_delete', { id });
+export const clearHistory = () => invoke<number>('clear_history');
+export const countUnpinned = () => invoke<number>('count_unpinned');
+export const prunePreview = (retentionDays: number | null, maxRecords: number) =>
+  invoke<number>('prune_preview', { retentionDays, maxRecords });
+export const saveSettings = (settings: Settings) => invoke<void>('save_settings', { settings });
+export const setPaused = (on: boolean) => invoke<void>('set_paused', { on });
+export const finishOnboarding = () => invoke<void>('finish_onboarding');
