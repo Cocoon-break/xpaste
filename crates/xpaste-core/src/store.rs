@@ -102,10 +102,17 @@ impl Store {
     /// 缺失或损坏时回落到默认设置。
     pub fn load_settings(&self) -> Settings {
         match self.kv_get("settings") {
-            Ok(Some(raw)) => serde_json::from_str(&raw).unwrap_or_else(|e| {
-                log::warn!("设置解析失败，使用默认值：{e}");
-                Settings::default()
-            }),
+            Ok(Some(raw)) => match serde_json::from_str::<Settings>(&raw) {
+                Ok(s) if s.validate().is_ok() => s,
+                Ok(_) => {
+                    log::warn!("已保存的设置未通过校验，使用默认值");
+                    Settings::default()
+                }
+                Err(e) => {
+                    log::warn!("设置解析失败，使用默认值：{e}");
+                    Settings::default()
+                }
+            },
             Ok(None) => Settings::default(),
             Err(e) => {
                 log::warn!("读取设置失败，使用默认值：{e}");
@@ -659,6 +666,13 @@ pub(crate) mod tests {
     fn corrupt_settings_fall_back_to_default() {
         let s = Store::open_in_memory(&tmp()).unwrap();
         s.kv_set("settings", "{not json").unwrap();
+        assert_eq!(s.load_settings(), Settings::default());
+    }
+
+    #[test]
+    fn invalid_settings_fall_back_to_default() {
+        let s = Store::open_in_memory(&tmp()).unwrap();
+        s.kv_set("settings", r#"{"maxRecords":0}"#).unwrap();
         assert_eq!(s.load_settings(), Settings::default());
     }
 

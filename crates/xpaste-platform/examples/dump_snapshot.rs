@@ -13,7 +13,7 @@ fn main() {
         println!("icon_bytes={n}");
         return;
     }
-    let Some(s) = xpaste_platform::read_snapshot().expect("读取剪切板失败") else {
+    let Some(s) = xpaste_platform::read_snapshot(true).expect("读取剪切板失败") else {
         println!("剪切板为空");
         return;
     };

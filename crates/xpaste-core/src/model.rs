@@ -132,11 +132,22 @@ impl Settings {
 }
 
 /// 剪切板里一个 item 的一种格式的原始数据。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Flavor {
     pub item: u32,
     pub format: String,
     pub data: Vec<u8>,
+}
+
+/// 不打印原始字节，只打印长度。
+impl fmt::Debug for Flavor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Flavor")
+            .field("item", &self.item)
+            .field("format", &self.format)
+            .field("data", &self.data.len())
+            .finish()
+    }
 }
 
 /// 来源应用：macOS 为 bundle id，Windows 为可执行文件完整路径。
@@ -309,6 +320,18 @@ mod tests {
         };
         assert_eq!(s.text_bytes(), 6);
         assert_eq!(Snapshot::default().text_bytes(), 0);
+    }
+
+    #[test]
+    fn flavor_debug_hides_bytes() {
+        let f = Flavor {
+            item: 0,
+            format: "public.utf8-plain-text".into(),
+            data: b"secret-bytes".to_vec(),
+        };
+        let out = format!("{f:?}");
+        // 派生的 Debug 会打印成字节数组 `[115, 101, …]`
+        assert!(!out.contains('[') && out.contains("data: 12"), "{out}");
     }
 
     #[test]

@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 
 fn shape() -> (Vec<xpaste_core::Flavor>, BTreeSet<(u32, String, usize)>) {
-    let s = xpaste_platform::read_snapshot()
+    let s = xpaste_platform::read_snapshot(true)
         .expect("读取剪切板失败")
         .unwrap_or_default();
     let set = s

@@ -32,7 +32,9 @@ pub fn build_record(snapshot: Snapshot, kind: Kind, now_ms: i64) -> NewRecord {
     let is_file_kind = matches!(kind, Kind::Image | Kind::Video | Kind::File);
 
     let link_title = match kind {
-        Kind::Link => url_title.or_else(|| anchor_text(html.as_deref()?, text.as_deref()?.trim())),
+        Kind::Link => url_title
+            .filter(|t| !t.trim().is_empty())
+            .or_else(|| anchor_text(html.as_deref()?, text.as_deref()?.trim())),
         _ => None,
     };
     let lang = match kind {
@@ -44,7 +46,7 @@ pub fn build_record(snapshot: Snapshot, kind: Kind, now_ms: i64) -> NewRecord {
         Kind::Text | Kind::Code => text
             .as_deref()
             .and_then(|t| t.lines().map(str::trim).find(|l| !l.is_empty()))
-            .map(|l| l.chars().take(TITLE_MAX_CHARS).collect()),
+            .map(Into::into),
         Kind::Link => link_title.clone().or_else(|| non_blank(text.as_deref())),
         Kind::Color => non_blank(text.as_deref()).map(|t| t.to_uppercase()),
         Kind::Image | Kind::Video | Kind::File => match paths.as_slice() {
@@ -55,7 +57,10 @@ pub fn build_record(snapshot: Snapshot, kind: Kind, now_ms: i64) -> NewRecord {
             [p, ..] => Some(format!("{} 等 {} 个", file_name(p), paths.len())),
         },
     }
-    .unwrap_or_else(|| EMPTY_TITLE.into());
+    .map_or_else(
+        || EMPTY_TITLE.into(),
+        |t| t.chars().take(TITLE_MAX_CHARS).collect(),
+    );
 
     let size = if !is_file_kind {
         text.as_ref().map_or(0, |t| t.len() as u64)
@@ -122,7 +127,11 @@ pub fn process(
         Some(Skip::Paused)
     } else if snapshot.sensitive && settings.skip_sensitive {
         Some(Skip::Sensitive)
-    } else if is_ignored(&snapshot, &settings.ignored_apps) {
+    } else if snapshot
+        .source
+        .as_ref()
+        .is_some_and(|a| is_ignored_app(&a.name, &settings.ignored_apps))
+    {
         Some(Skip::IgnoredApp)
     } else if snapshot.text_bytes() > MAX_TEXT_BYTES
         || snapshot
@@ -157,13 +166,9 @@ pub fn process(
     )
 }
 
-/// 按应用名称匹配，去首尾空白、不区分大小写（含非 ASCII）。
-#[cfg(feature = "store")]
-fn is_ignored(snapshot: &Snapshot, ignored: &[String]) -> bool {
-    let Some(app) = &snapshot.source else {
-        return false;
-    };
-    let name = app.name.trim().to_lowercase();
+/// 按应用名称匹配，去首尾空白、不区分大小写（含非 ASCII）。监听回调读剪切板前也用它。
+pub fn is_ignored_app(name: &str, ignored: &[String]) -> bool {
+    let name = name.trim().to_lowercase();
     !name.is_empty() && ignored.iter().any(|i| i.trim().to_lowercase() == name)
 }
 
@@ -277,6 +282,36 @@ mod tests {
         );
     }
     #[test]
+    fn blank_url_title_falls_back_to_url() {
+        let mut s = snap("https://a.io/x");
+        s.url_title = Some("  \n".into());
+        let r = build_record(s, Kind::Link, 0);
+        assert_eq!(r.title, "https://a.io/x");
+        assert_eq!(r.link_title, None);
+    }
+    #[test]
+    fn link_title_is_capped_at_200_chars() {
+        let mut s = snap("https://a.io/x");
+        s.url_title = Some("页".repeat(300));
+        assert_eq!(build_record(s, Kind::Link, 0).title.chars().count(), 200);
+        let long = format!("https://a.io/{}", "x".repeat(300));
+        assert_eq!(
+            build_record(snap(&long), Kind::Link, 0)
+                .title
+                .chars()
+                .count(),
+            200
+        );
+    }
+    #[test]
+    fn ignored_app_name_matching() {
+        let list = vec![" 1Password ".to_string(), "Ärger".into()];
+        assert!(is_ignored_app("1PASSWORD", &list));
+        assert!(is_ignored_app("ärger ", &list));
+        assert!(!is_ignored_app("Notes", &list));
+        assert!(!is_ignored_app("  ", &["".into()]));
+    }
+    #[test]
     fn file_title_counts_multiple() {
         assert_eq!(
             build_record(snap_files(&["/d/规范.fig"]), Kind::File, 0).title,
@@ -356,6 +391,7 @@ mod tests {
                 Outcome::Skipped(Skip::Paused)
             ));
         }
+        /// 开关关闭时平台层会读出内容（`read_snapshot(false)`），这里的快照即对应那种情况。
         #[test]
         fn skips_sensitive_when_enabled_records_when_disabled() {
             let mut s = Snapshot {
@@ -380,8 +416,12 @@ mod tests {
                 id: "p".into(),
                 name: "1PASSWORD".into(),
             });
+            let cfg = Settings {
+                ignored_apps: vec!["1Password".into()],
+                ..Default::default()
+            };
             assert!(matches!(
-                run(s, &Settings::default(), false),
+                run(s, &cfg, false),
                 Outcome::Skipped(Skip::IgnoredApp)
             ));
         }

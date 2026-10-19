@@ -78,10 +78,11 @@ pub fn kind(snapshot: &Snapshot) -> Kind {
             Kind::File
         };
     }
-    if snapshot.bitmap.is_some() {
+    let text = snapshot.text.as_deref().unwrap_or("").trim();
+    // 规则 4：有非空白文本时位图只作预览（表格、文档会附带渲染图），按文本规则继续
+    if snapshot.bitmap.is_some() && text.is_empty() {
         return Kind::Image;
     }
-    let text = snapshot.text.as_deref().unwrap_or("").trim();
     if is_color(text) {
         Kind::Color
     } else if is_link(text) {
@@ -129,7 +130,7 @@ pub fn content_hash(snapshot: &Snapshot, kind: Kind) -> [u8; 32] {
         paths.sort();
         h.update(b"files\n");
         h.update(paths.join("\n"));
-    } else if let (Some(png), true) = (&snapshot.bitmap, snapshot.file_paths.is_empty()) {
+    } else if is_file_kind && let Some(png) = &snapshot.bitmap {
         h.update(b"bitmap\n");
         h.update(png);
     } else {
@@ -228,6 +229,26 @@ mod tests {
     #[test]
     fn ac_m02_06_bitmap_is_image() {
         assert_eq!(kind(&snap_bitmap()), Kind::Image);
+    }
+    #[test]
+    fn bitmap_with_text_is_text() {
+        let s = Snapshot {
+            text: Some("季度报表\t123".into()),
+            ..snap_bitmap()
+        };
+        assert_eq!(kind(&s), Kind::Text);
+        assert_eq!(
+            content_hash(&s, Kind::Text),
+            content_hash(&snap("季度报表\t123"), Kind::Text)
+        );
+    }
+    #[test]
+    fn bitmap_with_blank_text_is_image() {
+        let s = Snapshot {
+            text: Some("  \n".into()),
+            ..snap_bitmap()
+        };
+        assert_eq!(kind(&s), Kind::Image);
     }
     #[test]
     fn ac_m02_07_mp4_is_video() {

@@ -33,7 +33,22 @@ pub fn start(app: AppHandle) {
             log::info!("跳过自身写入 seq={seq}");
             return;
         }
-        match xpaste_platform::read_snapshot() {
+        // 暂停或忽略的应用：连剪切板都不读（process 里仍有同样的检查兜底）
+        if state.paused.load(Ordering::SeqCst) {
+            log::info!("跳过 Paused");
+            return;
+        }
+        let (ignored, skip_sensitive) = {
+            let s = state.settings();
+            (s.ignored_apps.clone(), s.skip_sensitive)
+        };
+        if xpaste_platform::frontmost_app()
+            .is_some_and(|a| capture::is_ignored_app(&a.name, &ignored))
+        {
+            log::info!("跳过 IgnoredApp");
+            return;
+        }
+        match xpaste_platform::read_snapshot(skip_sensitive) {
             Err(e) => log::warn!("读取剪切板失败：{e}"),
             Ok(None) => log::debug!("剪切板为空"),
             Ok(Some(s)) => {

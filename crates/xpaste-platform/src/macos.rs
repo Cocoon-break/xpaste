@@ -54,7 +54,8 @@ pub fn watch(on_change: impl Fn(u64) + Send + 'static) {
     }
 }
 
-pub fn read_snapshot() -> Result<Option<Snapshot>, PlatformError> {
+/// `skip_sensitive` 为真时，敏感内容只返回标记、不读取内容；为假时照常读取，仍标记 `sensitive`。
+pub fn read_snapshot(skip_sensitive: bool) -> Result<Option<Snapshot>, PlatformError> {
     autoreleasepool(|_| {
         let Some(items) = NSPasteboard::generalPasteboard().pasteboardItems() else {
             return Ok(None);
@@ -68,7 +69,7 @@ pub fn read_snapshot() -> Result<Option<Snapshot>, PlatformError> {
                 .iter()
                 .any(|t| crate::decode::is_sensitive_uti(&t.to_string()))
         });
-        if sensitive {
+        if sensitive && skip_sensitive {
             return Ok(Some(Snapshot {
                 sensitive: true,
                 source,
@@ -76,6 +77,7 @@ pub fn read_snapshot() -> Result<Option<Snapshot>, PlatformError> {
             }));
         }
         let mut snapshot = Snapshot {
+            sensitive,
             source,
             ..Default::default()
         };
