@@ -275,7 +275,16 @@ pub fn toggle(app: &AppHandle, t0: Option<u64>) {
     };
     let onboarding = app.state::<AppState>().onboarding.load(Ordering::SeqCst);
     match toggle_action(visible, HIDE_REQ.load(Ordering::Relaxed) != 0, onboarding) {
-        ToggleAction::Show => show(app, t0),
+        ToggleAction::Show => {
+            show(app, t0);
+            // 引导中先切到别的应用（面板失焦隐藏）再按快捷键，也算试按成功。
+            // 排在 show 的主线程任务之后发，前端先收到 panel-shown、重新打开引导，再收到这个
+            if onboarding {
+                on_main(app, |app| {
+                    crate::events::emit(app, crate::events::HOTKEY_PRESSED, ())
+                });
+            }
+        }
         ToggleAction::RequestHide => request_hide(app),
         ToggleAction::HotkeyPressed => crate::events::emit(app, crate::events::HOTKEY_PRESSED, ()),
     }

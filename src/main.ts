@@ -1154,8 +1154,9 @@ async function submitSettings() {
 $('#settingsBtn').addEventListener('click', openSettings);
 
 // —— 首次启动引导（M18） ——
-// 与设置对话框同一套弹入 / 150ms 收起 / 遮罩规则。每步一个 .dlg-body，切步时新显示的那个重放 rowIn。
-// 关闭按钮、Esc、遮罩、“完成”都算结束（不再显示）；面板隐藏时直接 close 不算，下次唤起从当前步继续
+// 与设置对话框同一套弹入 / 150ms 收起。每步一个 .dlg-body，切步时新显示的那个重放 rowIn。
+// 关闭按钮、Esc、“完成”都算结束（不再显示）；点遮罩不关，免得首次使用误点丢掉引导；
+// 面板隐藏时直接 close 不算结束，下次唤起从当前步继续
 const obDlg = $<HTMLDialogElement>('#onboard'), obNext = $<HTMLButtonElement>('#obNext'), obSkip = $<HTMLButtonElement>('#obSkip');
 const obDots = $('#obDots'), obAuto = $<HTMLInputElement>('#obAutostart');
 let obSteps: Step[] = [], obStep: Step | null = null, obOk = false, obPoll = 0, obTimer = 0, obReturn: HTMLElement | null = null;
@@ -1257,11 +1258,9 @@ obDlg.addEventListener('cancel', (e) => {
   e.preventDefault();
   void finishOnboard();
 });
-let obDownOnBackdrop = false;
-obDlg.addEventListener('pointerdown', (e) => (obDownOnBackdrop = e.target === obDlg));
 obDlg.addEventListener('click', (e) => {
   const t = e.target as Element;
-  if (t.closest('[data-close]') || (t === obDlg && obDownOnBackdrop)) void finishOnboard();
+  if (t.closest('[data-close]')) void finishOnboard();
   else if (t.closest('#obNext')) obAdvance(false);
   else if (t.closest('#obSkip')) obAdvance(true);
   else if (t.closest('#obGrant')) void requestAccessibility().catch((err: AppError) => toast(err.message));
@@ -1387,7 +1386,7 @@ await onPausedChanged((p) => handlers.paused(p));
 // 托盘“设置…”：后端已先唤起面板
 await onOpenSettings(openSettings);
 await onConfirmClear(() => void confirmClear());
-// 引导中按唤起快捷键（或再次启动应用）：面板不隐藏，只在“试按快捷键”这一步算成功
+// 引导中按唤起快捷键（或再次启动应用）：可见时面板不隐藏，隐藏时先 panel-shown 再到这里；只在“试按快捷键”这一步算成功
 await onHotkeyPressed(() => {
   if (obStep === 'hotkey' && obDlg.open) obSucceed();
 });
