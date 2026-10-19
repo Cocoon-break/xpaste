@@ -1,4 +1,4 @@
-//! 补全线程：位图尺寸与缩略图、图片文件缩略图、来源应用图标。失败只记日志，不带路径与内容。
+//! 补全线程：位图尺寸与缩略图、图片文件缩略图、视频元数据与封面、来源应用图标。失败只记日志，不带路径与内容。
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -16,6 +16,7 @@ const THUMB_MAX: u32 = 320;
 pub enum Job {
     Bitmap { id: i64 },
     ImageFile { id: i64, path: PathBuf },
+    Video { id: i64, path: PathBuf },
     AppIcon { app_id: String },
 }
 
@@ -64,6 +65,36 @@ fn handle(app: &AppHandle, job: Job) {
         Job::ImageFile { id, path } => {
             if let Some(img) = decode(&path) {
                 thumb(app, &state.data_dir, id, &img);
+            }
+        }
+        Job::Video { id, path } => {
+            // AVFoundation 在锁外读，读完再写库
+            let meta = match xpaste_platform::video_meta(&path) {
+                Some(m) => match state.store().set_meta(id, &json!(m)) {
+                    Ok(()) => true,
+                    Err(e) => {
+                        log::warn!("记录 {id} 写入视频元数据失败：{e}");
+                        false
+                    }
+                },
+                None => {
+                    log::debug!("记录 {id} 视频元数据读取失败");
+                    false
+                }
+            };
+            let poster = match xpaste_platform::video_poster(&path, THUMB_MAX) {
+                Some(png) => {
+                    std::fs::write(state.data_dir.join("thumbs").join(format!("{id}.png")), png)
+                        .inspect_err(|e| log::warn!("记录 {id} 写入缩略图失败：{e}"))
+                        .is_ok()
+                }
+                None => {
+                    log::debug!("记录 {id} 视频封面生成失败");
+                    false
+                }
+            };
+            if meta || poster {
+                emit_summary(app, RECORD_UPDATED, id);
             }
         }
         Job::AppIcon { app_id } => {

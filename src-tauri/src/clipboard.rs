@@ -85,14 +85,13 @@ fn ingest(app: &AppHandle, snap: Snapshot) {
             emit_removed(app, &removed);
             let dir = &state.data_dir;
             let mut jobs = Vec::new();
-            if kind == Kind::Image {
-                match first_path {
-                    Some(path) => jobs.push(Job::ImageFile { id, path }),
-                    None if dir.join("images").join(format!("{id}.png")).exists() => {
-                        jobs.push(Job::Bitmap { id });
-                    }
-                    None => {}
+            match (kind, first_path) {
+                (Kind::Image, Some(path)) => jobs.push(Job::ImageFile { id, path }),
+                (Kind::Image, None) if dir.join("images").join(format!("{id}.png")).exists() => {
+                    jobs.push(Job::Bitmap { id });
                 }
+                (Kind::Video, Some(path)) => jobs.push(Job::Video { id, path }),
+                _ => {}
             }
             if let Some(app_id) = source
                 && !icon_path(dir, &app_id).exists()

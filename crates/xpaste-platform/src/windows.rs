@@ -656,3 +656,16 @@ pub fn foreground_window() -> Option<isize> {
         Some(hwnd.0 as isize)
     }
 }
+
+// —— 阶段 7 新增，阶段 6 实现 ——
+pub fn video_meta(_path: &Path) -> Option<xpaste_core::VideoMeta> {
+    None
+}
+
+pub fn video_poster(_path: &Path, _max_px: u32) -> Option<Vec<u8>> {
+    None
+}
+
+pub fn installed_apps() -> Vec<String> {
+    Vec::new()
+}

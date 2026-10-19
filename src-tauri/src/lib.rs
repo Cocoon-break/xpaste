@@ -144,6 +144,7 @@ pub fn run() {
             commands::settings::set_paused,
             commands::settings::finish_onboarding,
             commands::settings::preview_appearance,
+            commands::settings::installed_apps,
             commands::panel::hide_panel,
             commands::panel::open_accessibility_settings,
             commands::panel::accessibility_granted,

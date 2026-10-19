@@ -1,5 +1,6 @@
+use std::collections::HashSet;
 use std::sync::atomic::Ordering;
-use std::sync::mpsc;
+use std::sync::{LazyLock, Mutex, PoisonError, mpsc};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -8,11 +9,12 @@ use xpaste_core::{Flavor, ImageInfo, Kind, RecordDetail};
 use xpaste_platform::{PasteBlock, PlatformError};
 
 use crate::clock::now_ms;
+use crate::enrich::Job;
 use crate::error::AppError;
 use crate::events::{RECORD_ADDED, RECORD_UPDATED, emit_removed, emit_summary};
 use crate::state::AppState;
 
-/// 图片文件引用（不是位图）的预览：只授权这一个文件给 asset 协议（设计 9.5）。
+/// 图片文件引用（不是位图）与视频的预览：只授权这一个源文件给 asset 协议（设计 9.5）。
 #[tauri::command(async)]
 pub fn get_record(
     app: AppHandle,
@@ -40,7 +42,32 @@ pub fn get_record(
             h,
         });
     }
+    // 视频同理：只授权该视频源文件，供详情 <video> 播放
+    if d.video.as_ref().is_some_and(|v| v.src.is_some()) {
+        app.asset_protocol_scope()
+            .allow_file(std::path::Path::new(&d.files[0].path))?;
+    }
+    // 每个 id 每次运行最多补跑一次：AVFoundation 读不了的格式不会写 meta，否则每次选中都会重排
+    static BACKFILLED: LazyLock<Mutex<HashSet<i64>>> = LazyLock::new(Default::default);
+    if needs_video_backfill(&d)
+        && BACKFILLED
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id)
+    {
+        let path = d.files[0].path.clone().into();
+        if state.enrich.send(Job::Video { id, path }).is_err() {
+            log::warn!("补全线程已退出");
+        }
+    }
     Ok(Some(d))
+}
+
+/// 阶段 7 之前采集或去重命中的视频没有补全过：源文件还在、还没有时长（`meta.duration`）时补跑。
+fn needs_video_backfill(d: &RecordDetail) -> bool {
+    d.summary.kind == Kind::Video
+        && d.summary.duration_sec.is_none()
+        && d.files.first().is_some_and(|f| f.exists)
 }
 
 #[tauri::command(async)]
@@ -278,6 +305,29 @@ mod tests {
             precheck(&state, id),
             Err(AppError::ClipboardWrite)
         ));
+    }
+
+    #[test]
+    fn video_backfill_only_for_existing_videos_without_duration() {
+        let state = AppState::for_test();
+        let f = std::env::temp_dir().join(format!("xpaste-backfill-{}.mp4", std::process::id()));
+        std::fs::write(&f, b"x").unwrap();
+        let id = insert_file_record(&state, f.to_str().unwrap());
+        let d = |id| state.store().detail(id).unwrap().unwrap();
+        assert!(needs_video_backfill(&d(id)));
+        state
+            .store()
+            .set_meta(id, &json!({"duration": 3.0}))
+            .unwrap();
+        assert!(!needs_video_backfill(&d(id)));
+        assert!(!needs_video_backfill(&d(insert_file_record(
+            &state,
+            "/definitely/missing.mp4"
+        ))));
+        assert!(!needs_video_backfill(&d(
+            insert_text_record_without_flavors(&state)
+        )));
+        std::fs::remove_file(&f).unwrap();
     }
 
     #[test]

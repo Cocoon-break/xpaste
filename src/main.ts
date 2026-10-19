@@ -1,7 +1,7 @@
 import './styles.css';
 import { attachConsole, info } from './api/log';
 import {
-  accessibilityGranted, bootstrap, clearHistory, copy, copyText, countUnpinned, deleteRecord, finishOnboarding, getRecord, hidePanel, openUrl, previewAppearance, prunePreview,
+  accessibilityGranted, bootstrap, clearHistory, copy, copyText, countUnpinned, deleteRecord, finishOnboarding, getRecord, hidePanel, installedApps, openUrl, previewAppearance, prunePreview,
   requestAccessibility, revealFile, saveSettings, search, setPaused, setPinned, undoDelete,
 } from './api/commands';
 import {
@@ -16,18 +16,19 @@ import {
   onRecordsRemoved,
   onRecordUpdated,
 } from './api/events';
-import type { AppError, Appearance, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
+import type { AppError, Appearance, FileEntry, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
 import { grade, hexInfo, isHex } from './color';
 import { copyToast, needsAccessibility } from './copy-status';
 import {
-  esc, FAV_MIN, FILTERS, FL, fmtBytes, fmtDateTime, fmtDur, fmtInt, hl, hlCode, host, isFav, isHttpUrl, LABEL, rel, truncate,
+  canInlinePlay, esc, FAV_MIN, FILTERS, FL, fmtBytes, fmtDateTime, fmtDur, fmtInt, hl, hlCode, host, isFav, isHttpUrl, LABEL, rel, truncate, videoChips,
   type Filter,
 } from './format';
 import { hotkeyFromEvent, hotkeyLabel } from './hotkey';
 import { keyAction } from './keymap';
 import { nextStep, onboardSteps, type Step } from './onboarding';
 import { applyAdded, applyRemoved, applyUpdated } from './records';
-import { formToSettings, joinIgnored, optionFromRetention, parseLimit } from './settings-form';
+import { layoutBars, sameColumns, spectrumStat, staggerIndex, xPct, type Layout } from './spectrum';
+import { addIgnored, formToSettings, optionFromRetention, parseLimit, pickerOptions, removeIgnored } from './settings-form';
 import {
   armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, nextSelection, UNDO_MS, visible, type UndoState,
 } from './view';
@@ -86,7 +87,6 @@ const instantly = (el: HTMLElement, on: boolean, fn: () => void) => {
 };
 const nf2 = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const hf = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
-const DAY = 864e5;
 
 // —— 元素 ——
 const win = $('#win'), list = $('#list'), rowsEl = $('#rows'), ind = $('#ind'), q = $<HTMLInputElement>('#q'), clearQ = $('#clearQ');
@@ -363,6 +363,24 @@ const gradeHTML = (c: number) => {
   return `<em class="${g === '不达标' ? 'fail' : 'pass'}">${g}</em>`;
 };
 const MISSING = '原文件已移动或删除';
+const UNPLAYABLE = '无法在预览中播放这个格式';
+
+/** `failed`：WebView 实际播放出错后，按不可播放重绘。 */
+function videoHTML(d: RecordDetail, failed = false): string {
+  const f = d.files[0], v = d.video, w = v?.w ?? 0, h = v?.h ?? 0, src = v?.src ?? null;
+  const playable = !failed && src !== null && canInlinePlay(f.ext);
+  const pic = d.thumb
+    ? `<img src="${esc(d.thumb)}" alt=""${w && h ? ` width="${w}" height="${h}"` : ''}>`
+    : `<span class="poster-blank" style="aspect-ratio:${w && h ? `${w}/${h}` : '16/9'}"></span>`;
+  const inner = pic + (playable ? `<span class="play">${svg('play')}</span>` : '')
+    + (d.durationSec !== null ? `<span class="dur">${fmtDur(d.durationSec)}</span>` : '');
+  const poster = playable
+    ? `<button type="button" class="poster" data-play aria-label="播放“${esc(d.title)}”">${inner}</button>`
+    : `<div class="poster">${inner}</div>`;
+  const chips = v ? videoChips(v).map((c) => `<span class="chip">${esc(c)}</span>`).join('') : '';
+  const note = src === null ? MISSING : playable ? '' : UNPLAYABLE;
+  return `<figure class="p-video">${poster}<figcaption>${esc(f.name)}</figcaption>${chips ? `<div class="chips">${chips}</div>` : ''}${note ? `<div class="fpath">${note}</div>` : ''}</figure>`;
+}
 
 function bodyHTML(d: RecordDetail): string {
   const text = d.text ?? '';
@@ -397,14 +415,13 @@ function bodyHTML(d: RecordDetail): string {
     case 'video':
     case 'file': {
       const reveal = S.platform.os === 'macos' ? '在访达中显示' : '在资源管理器中显示';
-      // 视频本阶段不内联播放：有缩略图时按原型的封面（播放钮 + 时长），下面列出文件名与路径
-      const poster = d.kind === 'video' && d.thumb
-        ? `<figure class="p-video"><div class="poster"><img src="${esc(d.thumb)}" alt="${esc(d.title)} 的封面"><span class="play">${svg('play')}</span>${d.durationSec !== null ? `<span class="dur">${fmtDur(d.durationSec)}</span>` : ''}</div></figure>`
-        : '';
-      return poster + d.files.map((f, i) => `<div class="p-file"><span class="big">${svg(d.kind)}</span><div><div class="fname">${esc(f.name)}</div><code class="fpath">${esc(f.path)}</code>
+      const row = (f: FileEntry, i: number) => `<div class="p-file"><span class="big">${svg(d.kind)}</span><div><div class="fname">${esc(f.name)}</div><code class="fpath">${esc(f.path)}</code>
           <div class="chips">${f.ext ? `<span class="chip">${esc(f.ext.toUpperCase())}</span>` : ''}${d.kind === 'video' && d.durationSec !== null ? `<span class="chip">${fmtDur(d.durationSec)}</span>` : ''}<span class="chip">${fmtBytes(f.size)}</span></div>
           ${d.kind === 'file' ? `<div><button class="btn sm" type="button" data-reveal="${i}"${f.exists ? '' : ' disabled'}>${reveal}</button></div>` : ''}
-          ${f.exists ? '' : `<div class="fpath">${MISSING}</div>`}</div></div>`).join('');
+          ${f.exists ? '' : `<div class="fpath">${MISSING}</div>`}</div></div>`;
+      // 视频：第一个文件用封面卡片（点击才建 <video>，掠过时不加载），其余沿用文件行
+      if (d.kind === 'video' && d.files[0]) return videoHTML(d) + d.files.slice(1).map((f, i) => row(f, i + 1)).join('');
+      return d.files.map(row).join('');
     }
   }
 }
@@ -485,49 +502,69 @@ function renderPreview(fade = false) {
 }
 
 // —— 复制频谱 ——
-// 左侧 6% 是“更早”区，其余 94% 映射最近 24 小时
-const xOf = (at: number) => {
-  const age = Date.now() - at;
-  if (age > DAY) return Math.max(1, 5 - ((Math.min(age, 7 * DAY) - DAY) / (6 * DAY)) * 4);
-  return Math.min(99.4, 6 + 94 * (1 - age / DAY));
-};
-const hOf = (r: RecordSummary) => 16 + Math.min(1, Math.log10(Math.max(10, r.size)) / 8) * 84;
+// 每 2px 一列、一列一根光柱（spectrum.ts）；sp 是当前布局，spNow 是布局用的时刻，游标按同一时刻定位
+let sp: Layout = { bars: [], colOf: new Map() };
+let spNow = Date.now();
+let spOn: Element | null = null;
 function renderSpectrum(freshId?: number) {
-  const nowT = Date.now();
-  const sorted = [...S.records.values()].filter((r) => nowT - r.copiedAt <= 7 * DAY).sort((a, b) => a.copiedAt - b.copiedAt);
-  spBars.innerHTML = sorted.map((r, i) =>
-    `<span class="bar${r.id === freshId ? ' fresh' : ''}" data-id="${r.id}" data-type="${r.kind}" style="left:${xOf(r.copiedAt)}%;height:${hOf(r)}%;--i:${i}"></span>`).join('');
-  const ticks: [number, string][] = [[3, '更早'], ...[18, 12, 6].map((h): [number, string] => [6 + 94 * (1 - h / 24), hf.format(nowT - h * 3600e3)]), [100, '现在']];
+  spNow = Date.now();
+  // 删除中的记录不参与布局，否则重绘会把正在收起的光柱拉回来
+  const recs = [...S.records.values()].filter((r) => !S.removing.has(r.id));
+  const next = layoutBars(recs, spNow, spTrack.clientWidth, matches, freshId);
+  const cls = (b: Layout['bars'][number]) => `bar${b.dim ? ' dim' : ''}${b.fresh ? ' fresh' : ''}`;
+  const n = next.bars.length;
+  if (sameColumns(sp, next) && spBars.children.length === n) {
+    // 列没变（切分类、搜索、时间小幅流逝）：原地改，.dim/.on 的 200ms 过渡照常播放（原型同样是原地切类）
+    next.bars.forEach((b, i) => {
+      const el = spBars.children[i] as HTMLElement;
+      el.className = cls(b);
+      el.dataset.type = b.kind;
+      el.style.left = b.x + '%';
+      el.style.height = b.h + '%';
+      // 撤销删除时光柱还在原列，但 remove() 的收起动画 fill: forwards 仍压着它：取消脚本动画，CSS 过渡照常
+      el.getAnimations().forEach((a) => {
+        if (!(a instanceof CSSAnimation) && !(a instanceof CSSTransition)) a.cancel();
+      });
+    });
+  } else {
+    spBars.innerHTML = next.bars.map((b, i) =>
+      `<span class="${cls(b)}" data-col="${i}" data-type="${b.kind}" style="left:${b.x}%;height:${b.h}%;--i:${staggerIndex(i, n)}"></span>`).join('');
+    // 悬停的光柱已被替换，提示条不再对应
+    spTip.classList.remove('show');
+  }
+  sp = next;
+  // className 重写会去掉 .on，两条路径都由 paintSpectrumSel 重新标记
+  spOn = null;
+  const ticks: [number, string][] = [[3, '更早'], ...[18, 12, 6].map((h): [number, string] => [6 + 94 * (1 - h / 24), hf.format(spNow - h * 3600e3)]), [100, '现在']];
   $('#spAxis').innerHTML = ticks.map(([x, l]) => `<span style="left:${x}%">${l}</span>`).join('');
-  const day = sorted.filter((r) => nowT - r.copiedAt <= DAY);
-  const hours: Record<number, number> = {};
-  day.forEach((r) => {
-    const h = new Date(r.copiedAt).getHours();
-    hours[h] = (hours[h] || 0) + 1;
-  });
-  const peak = Object.entries(hours).sort((a, b) => b[1] - a[1])[0];
-  $('#spStat').textContent = `24 小时内复制 ${fmtInt(day.length)} 次${peak && peak[1] > 1 ? ` · 最忙 ${peak[0]} 点（${peak[1]} 次）` : ''}`;
+  const { count, peak } = spectrumStat(S.records.values(), spNow);
+  $('#spStat').textContent = `24 小时内复制 ${fmtInt(count)} 次${peak ? ` · 最忙 ${peak.hour} 点（${peak.n} 次）` : ''}`;
   paintSpectrumSel(false);
 }
+// 只换上一根和这一根的 .on；变暗由布局决定，筛选变化时重绘
 function paintSpectrumSel(animate = true) {
-  spBars.querySelectorAll<HTMLElement>('.bar').forEach((b) => {
-    const r = S.records.get(Number(b.dataset.id));
-    b.classList.toggle('on', r?.id === S.sel);
-    b.classList.toggle('dim', !!r && !matches(r));
-  });
   const r = S.sel === null ? undefined : S.records.get(S.sel);
+  const col = r && sp.colOf.get(r.id);
+  const b = col === undefined ? null : spBars.children[col] ?? null;
+  if (b !== spOn) {
+    spOn?.classList.remove('on');
+    b?.classList.add('on');
+    spOn = b;
+  }
   // 超过 7 天的记录没有光柱，游标不指向空处
-  if (!r || !spBars.querySelector(`.bar[data-id="${r.id}"]`)) {
+  if (!r || !b) {
     spCursor.style.opacity = '0';
     return;
   }
   spCursor.style.transitionDuration = animate && !reduced.matches ? '' : '0ms';
-  spCursor.style.transform = `translateX(${(spTrack.clientWidth * xOf(r.copiedAt)) / 100}px)`;
+  // 用选中记录自己的位置，不用所在列代表记录的
+  spCursor.style.transform = `translateX(${(spTrack.clientWidth * (xPct(spNow - r.copiedAt) ?? 1)) / 100}px)`;
   spCursor.style.opacity = '1';
 }
 const barOf = (e: Event) => {
   const b = (e.target as Element).closest<HTMLElement>('.bar');
-  const r = b ? S.records.get(Number(b.dataset.id)) : undefined;
+  const bar = b ? sp.bars[Number(b.dataset.col)] : undefined;
+  const r = bar && S.records.get(bar.id);
   return b && r ? { b, r } : null;
 };
 spTrack.addEventListener('pointerover', (e) => {
@@ -599,6 +636,8 @@ function setFilter(k: Filter, instant: boolean) {
   // M06 规则 6：切换分类后回到顶部并选中第一条
   list.scrollTop = 0;
   S.sel = null;
+  // 先重绘频谱（变暗随分类变），再由 renderList 的选中移动游标
+  renderSpectrum();
   renderList({ stagger: !instant });
   paintSpectrumSel(!instant);
 }
@@ -629,6 +668,7 @@ function runSearch(v: string, opts: { stagger?: boolean; base?: number } = {}) {
   fetchMatches(v, () => {
     list.scrollTop = 0;
     S.sel = null;
+    renderSpectrum();
     renderList(opts);
   });
 }
@@ -759,7 +799,9 @@ function remove(id: number) {
   }
   // 下方的行与 .item.is-removing 的收起同步上移一行（滚到底时整体按夹紧量修正，见 goneOf）
   paintRows({ glide: `transform 240ms ${EASE_MOVE} 100ms`, glideBusy: `transform 240ms ${EASE_MOVE}` });
-  const bar = spBars.querySelector(`.bar[data-id="${id}"]`);
+  // 光柱只代表这一条时才收起；同列还有别的记录就等删除后的重绘
+  const col = sp.colOf.get(id);
+  const bar = col !== undefined && sp.bars[col].ids.length === 1 ? spBars.children[col] ?? null : null;
   fx(bar, [{ transform: 'scaleY(1)', opacity: 1 }, { transform: 'scaleY(0)', opacity: 0 }], { duration: 260, easing: EASE_MOVE, fill: 'forwards' });
   // 光标目标是下一条补位后的位置：同组时就是被删行的位置，光标停住、下一条滑进来（原型 1384–1393）
   select(next, { scroll: true, indDur: 340 });
@@ -778,7 +820,8 @@ function remove(id: number) {
     (err: AppError) => {
       S.removing.delete(id);
       ownEcho.delete(id);
-      bar?.getAnimations().forEach((a) => a.cancel());
+      // 重绘把光柱补回来：没重建过时原地路径取消收起动画，删除途中重建过时按新布局补上
+      renderSpectrum();
       paintRows({ glide: ENTER_GLIDE });
       select(id, { scroll: true });
       toast(err.message);
@@ -881,6 +924,8 @@ const handlers = {
     details.delete(s.id);
     applyUpdated(S.records, s);
     renderTabs(true);
+    // 选中视频的补全到了：正文重取以显示封面与标签；正在播放（已有 <video>）时不打断
+    if (s.id === bodyFor && s.kind === 'video' && !pbody.querySelector('video')) bodyFor = null;
     // 去重命中会改 copiedAt，需要重新排序；选中项的头部与信息栏随 select 刷新，不重取详情
     renderList();
     renderSpectrum(prev && prev.copiedAt !== s.copiedAt ? s.id : undefined);
@@ -987,6 +1032,95 @@ const themeOpts = [...themeSeg.querySelectorAll<HTMLElement>('[data-theme-opt]')
 const HOTKEY_IDLE = '点击输入框，然后按下新的组合键';
 let pendingHotkey = '', dlgReturn: HTMLElement | null = null, closeTimer = 0, saving = false;
 
+// 不记录这些应用：芯片 + 组合框（M15 P1）。草稿只在保存时写回，取消 / Esc / 遮罩丢弃
+const ignoreBox = $('#ignoreBox'), ignoreChips = $('#ignoreChips'), ignoreList = $('#ignoreList');
+let draftIgnored: string[] = [], allApps: string[] = [], appOpts: string[] = [], appActive = -1, escClosedList = false;
+// from 起的芯片是新加的：弹入
+function paintChips(from = Infinity) {
+  ignoreChips.innerHTML = draftIgnored
+    .map((n, i) => `<span class="chip app-chip">${esc(n)}<button type="button" data-rm="${i}" aria-label="移除 ${esc(n)}">${svg('x')}</button></span>`)
+    .join('');
+  [...ignoreChips.children].slice(from).forEach((c) => fx(c, [{ transform: 'scale(.9)' }, { transform: 'scale(1)' }], { duration: 220, easing: EASE_SPRING }));
+}
+// 只有键盘移动才滚动：悬停时滚动会让列表在鼠标下面爬
+function setAppActive(i: number, scroll = true) {
+  appActive = i;
+  [...ignoreList.children].forEach((li, j) => li.setAttribute('aria-selected', String(j === i)));
+  if (i < 0) return ignoreIn.removeAttribute('aria-activedescendant');
+  ignoreIn.setAttribute('aria-activedescendant', `app-opt-${i}`);
+  if (scroll) ignoreList.children[i].scrollIntoView({ block: 'nearest' });
+}
+// 有候选才展开
+function paintAppList(open: boolean) {
+  const wasHidden = ignoreList.hidden;
+  appOpts = open ? pickerOptions(allApps, draftIgnored, ignoreIn.value) : [];
+  ignoreList.innerHTML = appOpts.map((n, i) => `<li role="option" id="app-opt-${i}" aria-selected="false">${esc(n)}</li>`).join('');
+  ignoreList.hidden = appOpts.length === 0;
+  ignoreIn.setAttribute('aria-expanded', String(!ignoreList.hidden));
+  setAppActive(-1);
+  // 刚展开时整张列表滚入对话框中部滚动区，免得下半截压在页脚下面
+  if (wasHidden && !ignoreList.hidden) ignoreList.scrollIntoView({ block: 'nearest' });
+}
+function addApps(text: string) {
+  const from = draftIgnored.length;
+  draftIgnored = addIgnored(draftIgnored, text);
+  ignoreIn.value = '';
+  paintChips(from);
+  paintAppList(true);
+}
+ignoreIn.addEventListener('focus', () => paintAppList(true));
+ignoreIn.addEventListener('input', () => paintAppList(true));
+ignoreIn.addEventListener('blur', () => paintAppList(false));
+ignoreIn.addEventListener('keydown', (e) => {
+  // 输入法组字中的回车 / 方向键归输入法
+  if (e.isComposing || e.keyCode === 229) return;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (ignoreList.hidden) paintAppList(true);
+    const n = appOpts.length, d = e.key === 'ArrowDown' ? 1 : -1;
+    if (n) setAppActive(appActive < 0 ? (d > 0 ? 0 : n - 1) : (appActive + d + n) % n);
+  } else if (e.key === 'Enter') {
+    // 有高亮加高亮项，否则加输入的文字；输入为空且无高亮时照常提交
+    if (appActive >= 0) addApps(appOpts[appActive]);
+    else if (ignoreIn.value.trim()) addApps(ignoreIn.value);
+    else return;
+    e.preventDefault();
+  } else if (e.key === 'Escape' && !ignoreList.hidden) {
+    // 列表展开时 Esc 只收起列表；旧 WebKit 仍会触发对话框的 cancel，在那里按此标记拦下
+    e.preventDefault();
+    e.stopPropagation();
+    paintAppList(false);
+    escClosedList = true;
+    setTimeout(() => (escClosedList = false));
+  } else if (e.key === 'Backspace' && !ignoreIn.value && draftIgnored.length) {
+    e.preventDefault();
+    draftIgnored = draftIgnored.slice(0, -1);
+    paintChips();
+    paintAppList(!ignoreList.hidden);
+  }
+});
+// 点候选不抢焦点：输入框不失焦、列表不先收起。Chromium / WebView2 只拦 pointerdown 不够，mousedown 也要拦
+ignoreList.addEventListener('pointerdown', (e) => e.preventDefault());
+ignoreList.addEventListener('mousedown', (e) => e.preventDefault());
+// 悬停即高亮：鼠标与键盘共用一个高亮项，Enter 加的就是看到的那项
+ignoreList.addEventListener('pointermove', (e) => {
+  const li = (e.target as Element).closest('[role="option"]');
+  const i = li ? [...ignoreList.children].indexOf(li) : -1;
+  if (i >= 0 && i !== appActive) setAppActive(i, false);
+});
+ignoreList.addEventListener('click', (e) => {
+  const li = (e.target as Element).closest('[role="option"]');
+  if (li) addApps(appOpts[[...ignoreList.children].indexOf(li)]);
+});
+ignoreBox.addEventListener('click', (e) => {
+  const b = (e.target as Element).closest<HTMLElement>('[data-rm]');
+  if (b) {
+    draftIgnored = removeIgnored(draftIgnored, draftIgnored[Number(b.dataset.rm)]);
+    paintChips();
+  }
+  if (b || e.target === ignoreBox) ignoreIn.focus();
+});
+
 // 外观：点选即预览（原型 setTheme，新主题从被点按钮处圆形扩散），保存才持久化，关闭不保存时还原
 // 圆形扩散要先等窗口主题生效（见 applyAppearance），等待期间以待切的模式为准
 let themePending: Appearance | null = null;
@@ -1082,7 +1216,18 @@ function openSettings() {
   limitIn.value = String(st.maxRecords);
   limitErr.hidden = true;
   limitIn.removeAttribute('aria-invalid');
-  ignoreIn.value = joinIgnored(st.ignoredApps);
+  draftIgnored = [...st.ignoredApps];
+  ignoreIn.value = '';
+  paintChips();
+  paintAppList(false);
+  // 每次打开都重取（期间可能装了新应用）；取不到只记日志，照样能手输
+  void installedApps().then(
+    (a) => {
+      allApps = a;
+      if (document.activeElement === ignoreIn) paintAppList(true);
+    },
+    (e: AppError) => void info(`读取应用列表失败 kind=${e.kind}`),
+  );
   sensitiveIn.checked = st.skipSensitive;
   moveTopIn.checked = st.moveToTop;
   autostartIn.checked = st.launchAtLogin;
@@ -1110,7 +1255,7 @@ dlg.addEventListener('close', () => {
 });
 dlg.addEventListener('cancel', (e) => {
   e.preventDefault();
-  closeSettings();
+  if (!escClosedList) closeSettings();
 });
 // 遮罩点击才关：在输入框里拖选文字、松手落到遮罩上不算（那次 click 的目标也是 dialog）
 let downOnBackdrop = false;
@@ -1144,7 +1289,7 @@ async function submitSettings() {
   limitIn.setAttribute('aria-invalid', String(limit === null));
   if (limit === null) return limitIn.focus();
   const s = formToSettings(S.settings, {
-    hotkey: pendingHotkey, retain: retainIn.value, limit, ignored: ignoreIn.value, skipSensitive: sensitiveIn.checked,
+    hotkey: pendingHotkey, retain: retainIn.value, limit, ignored: addIgnored(draftIgnored, ignoreIn.value), skipSensitive: sensitiveIn.checked,
     moveToTop: moveTopIn.checked, launchAtLogin: autostartIn.checked, appearance: themeMode(),
   });
   saving = true;
@@ -1301,8 +1446,9 @@ const shown = (t0: number | null) => {
   q.value = '';
   q.focus();
   // 隐藏期间不刷新相对时间与分组，唤起时补一次；首次唤起逐行浮现（启动时窗口还不可见，不在那时播）
+  // 空查询同步完成，runSearch 里已按当前宽度与时刻重绘频谱；这里只让游标直接落位、不滑
   runSearch('', first ? { stagger: true, base: 260 } : {});
-  renderSpectrum();
+  paintSpectrumSel(false);
   // 引导没结束就被隐藏过：从当前步继续
   openOnboard();
   if (import.meta.env.DEV && t0 !== null) {
@@ -1316,6 +1462,7 @@ const hidden = () => {
   // 跨隐藏不复用详情（例如文件是否还在）
   bodyFor = null;
   details.clear();
+  pbody.querySelectorAll('video').forEach((v) => v.pause());
   pbody.innerHTML = '';
   closeMenu(false);
   // 对话框不播收起动画，直接关（close 事件里还原外观预览）
@@ -1544,6 +1691,35 @@ pbody.addEventListener('click', (e) => {
     if (f) revealFile(f.path).catch((err: AppError) => toast(err.kind === 'fileMissing' ? MISSING : err.message));
     return;
   }
+  const play = t.closest<HTMLElement>('[data-play]');
+  if (play) {
+    const d = S.detail, v = d?.video;
+    if (!d || !v?.src) return;
+    const wh = v.w && v.h ? ` width="${v.w}" height="${v.h}"` : '';
+    play.insertAdjacentHTML('afterend', `<video src="${esc(v.src)}" controls playsinline preload="auto" aria-label="${esc(d.title)}"${wh}></video>`);
+    const vid = play.nextElementSibling as HTMLVideoElement;
+    play.remove();
+    // 容器认得但解码不了（例如 mov 里的 ProRes）：换回封面并说明；已切走的旧正文不管
+    vid.addEventListener('error', () => {
+      const fig = vid.closest('figure');
+      if (!vid.isConnected || !fig) return;
+      const had = document.activeElement === vid;
+      fig.outerHTML = videoHTML(d, true);
+      // 焦点随 <video> 一起消失会落到 body：交还搜索框
+      if (had) q.focus({ preventScroll: true });
+    }, { once: true });
+    // WebKit 在这里不会用空格切换播放；Enter 由 keymap 让给 video，不复制
+    vid.addEventListener('keydown', (e) => {
+      if (e.key !== ' ') return;
+      e.preventDefault();
+      if (vid.paused) vid.play().catch(() => {});
+      else vid.pause();
+    });
+    // 同步调用，仍在用户手势内；被拒绝（自动播放策略等）时留给用户点控件
+    vid.play().catch(() => {});
+    vid.focus();
+    return;
+  }
   const btn = t.closest<HTMLElement>('[data-copy]');
   if (!btn) return;
   const v = btn.dataset.copy!;
@@ -1586,11 +1762,17 @@ matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
   void root.offsetWidth;
   requestAnimationFrame(() => root.removeAttribute('data-theme-switching'));
 });
+// 列数随轨道宽度变，一帧内的多次 resize 只重排一次频谱
+let spRaf = 0;
 addEventListener('resize', () => {
   renderTabs(true);
   paintRows();
   paintSpectrumSel(false);
   moveInd({ instant: true });
+  if (!spRaf) spRaf = requestAnimationFrame(() => {
+    spRaf = 0;
+    renderSpectrum();
+  });
 });
 setInterval(() => {
   if (S.shown && !menuOpen() && !S.removing.size) {

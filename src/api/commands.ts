@@ -24,3 +24,4 @@ export const saveSettings = (settings: Settings) => invoke<void>('save_settings'
 export const previewAppearance = (appearance: Appearance) => invoke<void>('preview_appearance', { appearance });
 export const setPaused = (on: boolean) => invoke<void>('set_paused', { on });
 export const finishOnboarding = () => invoke<void>('finish_onboarding');
+export const installedApps = () => invoke<string[]>('installed_apps');

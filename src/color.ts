@@ -10,6 +10,13 @@ export interface HexInfo {
   onBlack: number;
 }
 
+// WCAG 相对亮度；参数为 `#RRGGBB`。
+const luminance = (hex: string): number => {
+  const n = parseInt(hex.slice(1), 16), r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  const lin = (c: number) => ((c /= 255) <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+};
+
 /** 调用方先用 `isHex` 校验。 */
 export const hexInfo = (h: string): HexInfo => {
   let x = h.trim().slice(1);
@@ -25,8 +32,7 @@ export const hexInfo = (h: string): HexInfo => {
     hh = Math.round(hh * 60);
     if (hh < 0) hh += 360;
   }
-  const lin = (c: number) => ((c /= 255) <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
-  const L = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+  const L = luminance('#' + x);
   return {
     hex: '#' + x,
     rgb: `rgb(${r}, ${g}, ${b})`,
@@ -34,6 +40,12 @@ export const hexInfo = (h: string): HexInfo => {
     onWhite: 1.05 / (L + 0.05),
     onBlack: (L + 0.05) / 0.05,
   };
+};
+
+/** 两个 HEX 的 WCAG 对比度：(较亮 + 0.05) / (较暗 + 0.05)。 */
+export const contrast = (a: string, b: string): number => {
+  const x = luminance(a), y = luminance(b);
+  return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
 };
 
 export const grade = (c: number): 'AA' | 'AA 大字' | '不达标' => (c >= 4.5 ? 'AA' : c >= 3 ? 'AA 大字' : '不达标');

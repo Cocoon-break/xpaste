@@ -281,7 +281,7 @@ pub struct RecordDetail {
     pub link_title: Option<String>,
     pub files: Vec<FileEntry>,
     pub image: Option<ImageInfo>,
-    pub video: Option<serde_json::Value>,
+    pub video: Option<VideoInfo>,
 }
 
 impl fmt::Debug for RecordDetail {
@@ -306,6 +306,29 @@ pub struct ImageInfo {
     pub src: String,
     pub w: u32,
     pub h: u32,
+}
+
+/// `records.meta` 的视频部分：与图片 `w`/`h` 同层的扁平键 `{duration,w,h,fps,codec}`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct VideoMeta {
+    #[serde(rename = "duration")]
+    pub duration_sec: f64,
+    pub w: u32,
+    pub h: u32,
+    pub fps: f64,
+    pub codec: String,
+}
+
+/// 视频详情。`src` 为源文件绝对路径（文件不存在时为 None），应用层再转 asset URL。
+/// 时长、封面、字节数在摘要里，这里不重复。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoInfo {
+    pub src: Option<String>,
+    pub w: u32,
+    pub h: u32,
+    pub fps: f64,
+    pub codec: String,
 }
 
 #[cfg(test)]
@@ -497,6 +520,21 @@ mod tests {
             assert_eq!(serde_json::to_string(&k).unwrap(), format!("\"{name}\""));
         }
         assert_eq!(Kind::parse("nope"), None);
+    }
+
+    #[test]
+    fn video_meta_uses_flat_meta_keys() {
+        let m = VideoMeta {
+            duration_sec: 3.0,
+            w: 640,
+            h: 360,
+            fps: 30.0,
+            codec: "H.264".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&m).unwrap(),
+            serde_json::json!({"duration": 3.0, "w": 640, "h": 360, "fps": 30.0, "codec": "H.264"})
+        );
     }
 
     #[test]

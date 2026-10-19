@@ -1,20 +1,24 @@
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
 use objc2::AllocAnyThread;
 use objc2::rc::{Retained, autoreleasepool};
-use objc2::runtime::ProtocolObject;
+use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2_app_kit::{
-    NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard, NSPasteboardItem,
-    NSPasteboardTypeFileURL, NSPasteboardTypeHTML, NSPasteboardTypeString, NSWorkspace,
+    NSApplicationActivationPolicy, NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard,
+    NSPasteboardItem, NSPasteboardTypeFileURL, NSPasteboardTypeHTML, NSPasteboardTypeString,
+    NSWorkspace,
 };
+use objc2_av_foundation::{AVAssetImageGenerator, AVAssetTrack, AVMediaTypeVideo, AVURLAsset};
 use objc2_core_graphics::{CGEvent, CGEventFlags, CGEventTapLocation};
+use objc2_core_media::{CMFormatDescription, CMTime};
 use objc2_foundation::{
-    NSArray, NSData, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString, NSURL, ns_string,
+    NSArray, NSData, NSDictionary, NSFileManager, NSNumber, NSPoint, NSRect, NSSize, NSString,
+    NSURL, ns_string,
 };
-use xpaste_core::{AppInfo, Flavor, Snapshot};
+use xpaste_core::{AppInfo, Flavor, Snapshot, VideoMeta};
 
 use crate::{PasteBlock, PlatformError};
 
@@ -213,6 +217,98 @@ pub fn app_icon(app_id: &str) -> Option<Vec<u8>> {
     })
 }
 
+fn video_asset(path: &Path) -> Retained<AVURLAsset> {
+    let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+    // SAFETY: 不传选项
+    unsafe { AVURLAsset::URLAssetWithURL_options(&url, None) }
+}
+
+/// 有限的秒数，否则 0。
+fn seconds(t: CMTime) -> f64 {
+    // SAFETY: 纯计算
+    let s = unsafe { t.seconds() };
+    if s.is_finite() { s } else { 0.0 }
+}
+
+/// 首条视频轨。同步接口会阻塞，只在补全线程调用。
+#[allow(deprecated)] // 异步的 loadTracksWithMediaType 要回调，补全线程本来就可以阻塞
+fn first_video_track(asset: &AVURLAsset) -> Option<Retained<AVAssetTrack>> {
+    // SAFETY: AVFoundation 导出的常量，进程内一直有效
+    let video = unsafe { AVMediaTypeVideo }?;
+    // SAFETY: video 是有效的媒体类型
+    unsafe { asset.tracksWithMediaType(video) }.firstObject()
+}
+
+/// 读时长、方向校正后的分辨率、帧率与编码。无视频轨或 AVFoundation 打不开（如 mkv）时返回 None。
+pub fn video_meta(path: &Path) -> Option<VideoMeta> {
+    autoreleasepool(|_| {
+        let asset = video_asset(path);
+        let track = first_video_track(&asset)?;
+        // SAFETY: 以下都是只读属性
+        let (size, t, fps, formats) = unsafe {
+            (
+                track.naturalSize(),
+                track.preferredTransform(),
+                track.nominalFrameRate(),
+                track.formatDescriptions(),
+            )
+        };
+        let (w, h) = oriented_size(size.width, size.height, t.a, t.b);
+        let codec = formats.firstObject().map_or_else(String::new, |f| {
+            let f: *const AnyObject = &*f;
+            // SAFETY: formatDescriptions 的元素都是 CMFormatDescriptionRef（CF 对象与 Objective-C 对象免费桥接）
+            let sub = unsafe { (*f.cast::<CMFormatDescription>()).media_sub_type() };
+            crate::codec_label(&String::from_utf8_lossy(&sub.to_be_bytes()))
+        });
+        Some(VideoMeta {
+            // SAFETY: 只读属性
+            duration_sec: seconds(unsafe { asset.duration() }),
+            w,
+            h,
+            fps: round_fps(fps),
+            codec,
+        })
+    })
+}
+
+/// 封面：第 min(1 s, 时长 × 10%) 处的一帧，按拍摄方向转正，长边不超过 `max_px`，PNG。
+pub fn video_poster(path: &Path, max_px: u32) -> Option<Vec<u8>> {
+    autoreleasepool(|_| {
+        let asset = video_asset(path);
+        // SAFETY: 以下调用参数都是有效值；actual_time 传 null
+        let cg = unsafe {
+            let at = (seconds(asset.duration()) * 0.1).min(1.0);
+            let generator = AVAssetImageGenerator::assetImageGeneratorWithAsset(&asset);
+            generator.setAppliesPreferredTrackTransform(true);
+            generator.setMaximumSize(NSSize::new(f64::from(max_px), f64::from(max_px)));
+            #[allow(deprecated)] // 异步接口要回调，补全线程本来就可以阻塞
+            generator.copyCGImageAtTime_actualTime_error(
+                CMTime::with_seconds(at, 600),
+                std::ptr::null_mut(),
+            )
+        }
+        .ok()?;
+        to_png(&NSBitmapImageRep::initWithCGImage(
+            NSBitmapImageRep::alloc(),
+            &cg,
+        ))
+    })
+}
+
+/// 方向校正：`preferredTransform` 的 `|b| > |a|` 视为四分之一转（90° / 270°），交换宽高。
+fn oriented_size(w: f64, h: f64, a: f64, b: f64) -> (u32, u32) {
+    let (w, h) = if b.abs() > a.abs() { (h, w) } else { (w, h) };
+    (w.abs().round() as u32, h.abs().round() as u32)
+}
+
+/// 可变帧率等情况下 `nominalFrameRate` 可能为 0 或非有限，记 0（界面不显示）；否则保留两位小数。
+fn round_fps(f: f32) -> f64 {
+    if !f.is_finite() || f <= 0.0 {
+        return 0.0;
+    }
+    (f64::from(f) * 100.0).round() / 100.0
+}
+
 pub fn frontmost_app() -> Option<AppInfo> {
     autoreleasepool(|_| {
         let app = NSWorkspace::sharedWorkspace().frontmostApplication()?;
@@ -225,6 +321,44 @@ pub fn frontmost_app() -> Option<AppInfo> {
             name: name.unwrap_or_else(|| id.clone()),
             id,
         })
+    })
+}
+
+/// 选择器候选：前台类（Regular）运行中应用的 `localizedName`，加上常见应用目录下一层 `*.app` 的显示名
+///（去掉 `.app`）。与 `frontmost_app().name` 同口径；可重复、无序，由前端去重。
+pub fn installed_apps() -> Vec<String> {
+    const DIRS: [&str; 5] = [
+        "/Applications",
+        "/Applications/Utilities",
+        "/System/Applications",
+        "/System/Applications/Utilities",
+        "/System/Library/CoreServices/Applications",
+    ];
+    let home = std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Applications"));
+    let bundles: Vec<PathBuf> = DIRS
+        .iter()
+        .map(PathBuf::from)
+        .chain(home)
+        .filter_map(|d| std::fs::read_dir(d).ok())
+        .flatten()
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "app"))
+        .collect();
+    autoreleasepool(|_| {
+        let running = NSWorkspace::sharedWorkspace().runningApplications();
+        let fm = NSFileManager::defaultManager();
+        running
+            .iter()
+            .filter(|a| a.activationPolicy() == NSApplicationActivationPolicy::Regular)
+            .filter_map(|a| a.localizedName().map(|s| s.to_string()))
+            .chain(bundles.iter().filter_map(|p| {
+                let name = fm
+                    .displayNameAtPath(&NSString::from_str(p.to_str()?))
+                    .to_string();
+                Some(name.strip_suffix(".app").map(str::to_owned).unwrap_or(name))
+            }))
+            .filter(|n| !n.trim().is_empty())
+            .collect()
     })
 }
 
@@ -295,4 +429,52 @@ pub fn open_accessibility_settings() {
 /// macOS 粘贴发给当前前台应用，不需要记录窗口。
 pub fn foreground_window() -> Option<isize> {
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oriented_size_swaps_on_quarter_turn() {
+        assert_eq!(oriented_size(1920.0, 1080.0, 1.0, 0.0), (1920, 1080));
+        assert_eq!(oriented_size(1920.0, 1080.0, 0.0, 1.0), (1080, 1920)); // 竖拍 90°
+        assert_eq!(oriented_size(1920.0, 1080.0, 0.0, -1.0), (1080, 1920)); // 270°
+        assert_eq!(oriented_size(1920.0, 1080.0, -1.0, 0.0), (1920, 1080)); // 180°
+    }
+
+    #[test]
+    fn installed_apps_lists_display_names() {
+        let apps = installed_apps();
+        assert!(
+            apps.iter().any(|n| n == "Safari"),
+            "{} 项里没有 Safari",
+            apps.len()
+        );
+        assert!(apps.iter().all(|n| !n.is_empty() && !n.ends_with(".app")));
+    }
+
+    #[test]
+    fn round_fps_drops_non_finite() {
+        assert_eq!(round_fps(29.970_03), 29.97);
+        assert_eq!(round_fps(60.0), 60.0);
+        assert_eq!(round_fps(f32::NAN), 0.0);
+        assert_eq!(round_fps(0.0), 0.0);
+    }
+
+    #[test]
+    #[ignore = "需要 XPASTE_SAMPLE_VIDEO（见执行说明的 ffmpeg 命令）"]
+    fn reads_sample_video() {
+        let p = std::path::PathBuf::from(std::env::var("XPASTE_SAMPLE_VIDEO").unwrap());
+        let m = video_meta(&p).unwrap();
+        assert!((m.duration_sec - 3.0).abs() < 0.1);
+        assert_eq!(
+            (m.w, m.h, m.fps, m.codec.as_str()),
+            (640, 360, 30.0, "H.264")
+        );
+        let png = video_poster(&p, 320).unwrap();
+        let wh = |o: usize| u32::from_be_bytes(png[o..o + 4].try_into().unwrap());
+        assert_eq!((wh(16), wh(20)), (320, 180)); // PNG IHDR 宽高
+        assert!(video_meta(std::path::Path::new("/definitely/missing.mp4")).is_none());
+    }
 }
