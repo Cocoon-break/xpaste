@@ -17,6 +17,27 @@ pub enum Kind {
     File,
 }
 
+const KINDS: [(Kind, &str); 7] = [
+    (Kind::Text, "text"),
+    (Kind::Link, "link"),
+    (Kind::Code, "code"),
+    (Kind::Color, "color"),
+    (Kind::Image, "image"),
+    (Kind::Video, "video"),
+    (Kind::File, "file"),
+];
+
+impl Kind {
+    /// 与 serde 一致的小写名，用于入库。
+    pub fn as_str(&self) -> &'static str {
+        KINDS.iter().find(|(k, _)| k == self).map_or("", |(_, s)| s)
+    }
+
+    pub fn parse(s: &str) -> Option<Kind> {
+        KINDS.iter().find(|(_, n)| *n == s).map(|(k, _)| *k)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Appearance {
@@ -200,6 +221,82 @@ impl fmt::Debug for NewRecord {
     }
 }
 
+/// 列表项。`thumb`、`app.icon` 为绝对文件路径，应用层再转 asset URL。
+/// `Debug` 不输出标题与来源应用。
+#[derive(Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordSummary {
+    pub id: i64,
+    pub kind: Kind,
+    pub title: String,
+    pub app: Option<AppSummary>,
+    pub copied_at: i64,
+    pub uses: u32,
+    pub pinned: bool,
+    pub size: u64,
+    pub lang: Option<String>,
+    pub thumb: Option<String>,
+    pub duration_sec: Option<f64>,
+}
+
+impl fmt::Debug for RecordSummary {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RecordSummary")
+            .field("id", &self.id)
+            .field("kind", &self.kind)
+            .field("size", &self.size)
+            .field("uses", &self.uses)
+            .field("pinned", &self.pinned)
+            .field("copied_at", &self.copied_at)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppSummary {
+    pub name: String,
+    pub icon: Option<String>,
+}
+
+/// 详情。`text` 超过 200 KB 时截断并置 `truncated`。`Debug` 同 `RecordSummary` 脱敏。
+#[derive(Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordDetail {
+    #[serde(flatten)]
+    pub summary: RecordSummary,
+    pub text: Option<String>,
+    pub truncated: bool,
+    pub link_title: Option<String>,
+    pub files: Vec<FileEntry>,
+    pub image: Option<ImageInfo>,
+    pub video: Option<serde_json::Value>,
+}
+
+impl fmt::Debug for RecordDetail {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.summary.fmt(f)
+    }
+}
+
+#[derive(Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileEntry {
+    pub path: String,
+    pub name: String,
+    pub ext: String,
+    pub size: u64,
+    pub exists: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageInfo {
+    pub src: String,
+    pub w: u32,
+    pub h: u32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -367,5 +464,51 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(invalid(&s), "面板尺寸不能小于 720 × 520");
+    }
+
+    #[test]
+    fn kind_str_roundtrips_like_serde() {
+        for (k, name) in KINDS {
+            assert_eq!(k.as_str(), name);
+            assert_eq!(Kind::parse(name), Some(k));
+            assert_eq!(serde_json::to_string(&k).unwrap(), format!("\"{name}\""));
+        }
+        assert_eq!(Kind::parse("nope"), None);
+    }
+
+    #[test]
+    fn record_debug_hides_content() {
+        let summary = RecordSummary {
+            id: 1,
+            kind: Kind::Text,
+            title: "secret-title".into(),
+            app: Some(AppSummary {
+                name: "secret-app".into(),
+                icon: None,
+            }),
+            copied_at: 0,
+            uses: 0,
+            pinned: false,
+            size: 3,
+            lang: None,
+            thumb: None,
+            duration_sec: None,
+        };
+        let d = RecordDetail {
+            summary,
+            text: Some("secret-text".into()),
+            truncated: false,
+            link_title: None,
+            files: vec![],
+            image: None,
+            video: None,
+        };
+        let out = format!("{d:?} {:?}", d.summary);
+        assert!(!out.contains("secret"), "{out}");
+        let json = serde_json::to_string(&d).unwrap();
+        assert!(
+            json.contains(r#""copiedAt":0"#) && json.contains(r#""linkTitle":null"#),
+            "{json}"
+        );
     }
 }
