@@ -559,7 +559,8 @@ function copyRecord(id: number) {
   copy(id, true).then(
     (res) => {
       const cur = S.records.get(id);
-      const uses = cur && cur !== before ? cur.uses : before.uses + 1;
+      // 事件可能还没到；并发的置顶、补全更新也不会让次数变少
+      const uses = Math.max(cur?.uses ?? 0, before.uses + 1);
       const fav = !isFav(before) && uses >= FAV_MIN;
       const msg = copyToast(res, S.platform.os, fav);
       if (msg) toast(msg, { icon: fav && res.result === 'copied' ? 'star' : 'check' });
@@ -628,6 +629,7 @@ function remove(id: number) {
   const next = nextSelection(vis().filter((x) => !S.removing.has(x.id)), id);
   const p = painted.get('r' + id), c = S.cells.find((c) => c.kind === 'row' && c.id === id);
   S.removing.add(id);
+  ownEcho.add(id);
   if (p && c?.kind === 'row') {
     // 直接加类让过渡播放；同步 p.h，避免下一次重绘整行替换
     p.el.querySelector('.item')?.classList.add('is-removing');
@@ -650,12 +652,16 @@ function remove(id: number) {
     },
     (err: AppError) => {
       S.removing.delete(id);
+      ownEcho.delete(id);
       bar?.getAnimations().forEach((a) => a.cancel());
       paintRows();
       toast(err.message);
     },
   );
 }
+
+// 自己删除后后端回发的 records-removed，收到一次就消掉
+const ownEcho = new Set<number>();
 
 // 恢复后后端发 record-added，由 handlers.added 插入并选中
 let restoring: number | null = null;
@@ -748,13 +754,21 @@ const handlers = {
     renderSpectrum(prev && prev.copiedAt !== s.copiedAt ? s.id : undefined);
   },
   removed: (ids: number[]) => {
-    // 自己发起的删除由 remove() 的计时器移除，这里跳过，也不清掉它的撤销
+    // 别处的删除（保留时长清理、清空历史）清掉了待撤销的记录：撤销已无意义
+    const foreign = ids.filter((id) => !ownEcho.delete(id));
+    if (S.undo && foreign.includes(S.undo.id)) {
+      S.undo = null;
+      clearTimeout(toastTimer);
+      undoBtn.hidden = true;
+      toastEl.dataset.open = 'false';
+    }
+    if (S.menuFor !== null && foreign.includes(S.menuFor)) closeMenu(false);
+    // 自己发起的删除由 remove() 的计时器移除，这里跳过
     const gone = ids.filter((id) => S.records.has(id) && !S.removing.has(id));
     if (!gone.length) return;
     const before = vis();
     applyRemoved(S.records, gone);
     if (S.sel !== null && gone.includes(S.sel)) S.sel = nextSelection(before, S.sel);
-    if (S.undo && gone.includes(S.undo.id)) S.undo = null;
     renderTabs(true);
     renderList();
     renderSpectrum();
@@ -898,7 +912,8 @@ document.addEventListener('pointerdown', (e) => {
   if (menuOpen() && !menu.contains(t) && !moreBtn.contains(t)) closeMenu(false);
 }, true);
 undoBtn.addEventListener('click', undo);
-document.querySelectorAll('[data-hide]').forEach((b) => b.addEventListener('click', () => void hidePanel()));
+const hide = () => void hidePanel().catch((err: AppError) => toast(err.message));
+document.querySelectorAll('[data-hide]').forEach((b) => b.addEventListener('click', hide));
 pauseBtn.addEventListener('click', () => setPaused(!S.paused).catch((err: AppError) => toast(err.message)));
 
 pbody.addEventListener('click', (e) => {
@@ -959,6 +974,8 @@ void document.fonts?.ready.then(() => {
 document.addEventListener('keydown', (e) => {
   if (e.isComposing) return;
   const t = e.target as Element, inSearch = t === q;
+  // 其他输入控件（设置里的快捷键、保留时长）自己处理按键
+  if (!inSearch && t.closest?.('input, textarea, select')) return;
   const a = keyAction(
     { key: e.key, code: e.code, mod: e.ctrlKey || e.metaKey, alt: e.altKey, shift: e.shiftKey, repeat: e.repeat },
     {
@@ -995,7 +1012,7 @@ document.addEventListener('keydown', (e) => {
     case 'clearSearch':
       q.value = '';
       return runSearch('');
-    case 'hide': return void hidePanel();
+    case 'hide': return hide();
     case 'menu': {
       // ponytail: 选中行滚出视口未渲染时不弹菜单；键盘移动总会把选中行滚回视口
       const r = rowEl(sel)?.getBoundingClientRect();
