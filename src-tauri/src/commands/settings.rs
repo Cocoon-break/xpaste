@@ -23,6 +23,7 @@ pub struct Bootstrap {
     pub platform: PlatformInfo,
     pub records: Vec<RecordSummary>,
     pub first_run: bool,
+    pub paused: bool,
 }
 
 pub fn bootstrap_inner(state: &AppState) -> Result<Bootstrap, AppError> {
@@ -44,6 +45,7 @@ pub fn bootstrap_inner(state: &AppState) -> Result<Bootstrap, AppError> {
         },
         records,
         first_run,
+        paused: state.paused.load(Ordering::SeqCst),
     })
 }
 
@@ -147,6 +149,14 @@ mod tests {
         assert!(matches!(b.platform.material, "glass" | "opaque"));
         assert!(b.records.is_empty());
         assert!(b.first_run);
+        assert!(!b.paused);
+    }
+
+    #[test]
+    fn bootstrap_reports_paused_flag() {
+        let state = AppState::for_test();
+        state.paused.store(true, Ordering::SeqCst);
+        assert!(bootstrap_inner(&state).unwrap().paused);
     }
 
     #[test]
@@ -183,11 +193,10 @@ mod tests {
         tauri::test::mock_builder()
             .manage(AppState::for_test())
             .invoke_handler(tauri::generate_handler![
-                // 带 AppHandle 参数的命令只能用于 Wry 运行时，由 lib.rs 的 generate_handler! 编译覆盖
+                // 带 AppHandle 参数的命令（含 get_record）只能用于 Wry 运行时，由 lib.rs 的 generate_handler! 编译覆盖
                 bootstrap,
                 prune_preview,
                 finish_onboarding,
-                crate::commands::records::get_record,
                 crate::commands::records::search,
                 crate::commands::records::count_unpinned,
             ])

@@ -3,8 +3,8 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use serde::Serialize;
-use tauri::{AppHandle, State};
-use xpaste_core::RecordDetail;
+use tauri::{AppHandle, Manager, State};
+use xpaste_core::{ImageInfo, Kind, RecordDetail};
 use xpaste_platform::PasteBlock;
 
 use crate::clock::now_ms;
@@ -12,9 +12,35 @@ use crate::error::AppError;
 use crate::events::{RECORD_ADDED, RECORD_UPDATED, emit_removed, emit_summary};
 use crate::state::AppState;
 
+/// 图片文件引用（不是位图）的预览：只授权这一个文件给 asset 协议（设计 9.5）。
 #[tauri::command(async)]
-pub fn get_record(state: State<'_, AppState>, id: i64) -> Result<Option<RecordDetail>, AppError> {
-    Ok(state.store().detail(id)?.map(crate::assets::detail_dto))
+pub fn get_record(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<Option<RecordDetail>, AppError> {
+    let Some(mut d) = state.store().detail(id)?.map(crate::assets::detail_dto) else {
+        return Ok(None);
+    };
+    if d.summary.kind == Kind::Image
+        && d.image.is_none()
+        && let Some(f) = d.files.first().filter(|f| f.exists)
+    {
+        let path = std::path::Path::new(&f.path);
+        app.asset_protocol_scope().allow_file(path)?;
+        // 补全线程只给位图写尺寸，文件引用读文件头；HEIC 等读不出时为 0
+        let (w, h) = image::ImageReader::open(path)
+            .and_then(|r| r.with_guessed_format())
+            .ok()
+            .and_then(|r| r.into_dimensions().ok())
+            .unwrap_or((0, 0));
+        d.image = Some(ImageInfo {
+            src: crate::assets::asset_url(path),
+            w,
+            h,
+        });
+    }
+    Ok(Some(d))
 }
 
 #[tauri::command(async)]

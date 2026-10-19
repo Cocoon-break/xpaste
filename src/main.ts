@@ -1,7 +1,6 @@
 import { attachConsole, info } from './api/log';
 import { bootstrap, hidePanel, openAccessibilitySettings, pasteText } from './api/commands';
 import {
-  onClipboardChanged,
   onPanelShown,
   onRecordAdded,
   onRecordUpdated,
@@ -14,21 +13,14 @@ const q = document.querySelector<HTMLInputElement>('#q')!;
 const status = document.querySelector<HTMLElement>('#status')!;
 const axSettings = document.querySelector<HTMLButtonElement>('#axSettings')!;
 const list = document.querySelector<HTMLUListElement>('#list')!;
-// 阶段 1 临时：测量用，阶段 3 移除
-let hiddenEvents = 0;
 
 await attachConsole();
 await onPanelShown(({ t0 }) => {
-  void info(`隐藏期间收到 ${hiddenEvents} 个事件；reduced-motion=${matchMedia('(prefers-reduced-motion: reduce)').matches}`);
-  hiddenEvents = 0;
+  void info(`reduced-motion=${matchMedia('(prefers-reduced-motion: reduce)').matches}`);
   q.focus();
   requestAnimationFrame(() => {
     if (t0 !== null) void info(`唤起耗时 ${Date.now() - t0} ms`);
   });
-});
-await onClipboardChanged((p) => {
-  hiddenEvents++;
-  void info(`剪切板变化 ${p.bytes} B sensitive=${p.sensitive}`);
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !e.isComposing) void hidePanel();

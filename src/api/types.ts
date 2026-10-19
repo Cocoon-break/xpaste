@@ -27,6 +27,7 @@ export interface Bootstrap {
   platform: PlatformInfo;
   records: RecordSummary[];
   firstRun: boolean;
+  paused: boolean;
 }
 
 /** `icon`、`thumb`、`image.src` 为 asset 协议 URL，可直接用作 `<img src>`。 */
@@ -74,7 +75,7 @@ export interface RecordDetail extends RecordSummary {
 }
 
 export interface AppError {
-  kind: 'fileMissing' | 'clipboardWrite' | 'hotkeyTaken' | 'invalidSettings' | 'internal';
+  kind: 'fileMissing' | 'clipboardWrite' | 'hotkeyTaken' | 'invalidSettings' | 'invalid' | 'internal';
   message: string;
 }
 

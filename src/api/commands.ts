@@ -6,6 +6,8 @@ export const hidePanel = () => invoke<void>('hide_panel');
 // 阶段 1 临时命令，阶段 4 由 copy 替换
 export const pasteText = (text: string) => invoke<CopyResult>('paste_text', { text });
 export const openAccessibilitySettings = () => invoke<void>('open_accessibility_settings');
+export const openUrl = (url: string) => invoke<void>('open_url', { url });
+export const revealFile = (path: string) => invoke<void>('reveal_file', { path });
 
 export const getRecord = (id: number) => invoke<RecordDetail | null>('get_record', { id });
 export const search = (q: string) => invoke<number[]>('search', { q });

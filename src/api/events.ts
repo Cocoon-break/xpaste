@@ -6,12 +6,9 @@ export const PANEL_SHOWN = 'panel-shown';
 export const onPanelShown = (cb: (p: { t0: number | null }) => void): Promise<UnlistenFn> =>
   listen<{ t0: number | null }>(PANEL_SHOWN, (e) => cb(e.payload));
 
-export const CLIPBOARD_CHANGED = 'clipboard-changed';
+export const PANEL_HIDDEN = 'panel-hidden';
 
-export type ClipboardChanged = { bytes: number; sensitive: boolean; source: string | null };
-
-export const onClipboardChanged = (cb: (p: ClipboardChanged) => void): Promise<UnlistenFn> =>
-  listen<ClipboardChanged>(CLIPBOARD_CHANGED, (e) => cb(e.payload));
+export const onPanelHidden = (cb: () => void): Promise<UnlistenFn> => listen(PANEL_HIDDEN, () => cb());
 
 export const RECORD_ADDED = 'record-added';
 export const RECORD_UPDATED = 'record-updated';

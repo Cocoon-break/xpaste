@@ -229,10 +229,10 @@ fn show_panel(app: &AppHandle, t0: Option<u64>) {
 pub fn hide(app: &AppHandle) {
     on_main(app, |app| {
         // NSPanel 上 hide 即 orderOut:
-        if let Some(w) = window(app)
-            && let Err(e) = w.hide()
-        {
-            log::warn!("隐藏面板失败：{e}");
+        let Some(w) = window(app) else { return };
+        match w.hide() {
+            Ok(()) => crate::events::emit(app, crate::events::PANEL_HIDDEN, ()),
+            Err(e) => log::warn!("隐藏面板失败：{e}"),
         }
     });
 }

@@ -3,16 +3,13 @@
 
 use std::sync::atomic::Ordering;
 
-use serde_json::json;
 use tauri::{AppHandle, Manager};
 use xpaste_core::capture::{self, Outcome};
 use xpaste_core::{Kind, Snapshot, detect};
 
 use crate::clock::now_ms;
 use crate::enrich::{Job, icon_path};
-use crate::events::{
-    CLIPBOARD_CHANGED, RECORD_ADDED, RECORD_UPDATED, emit, emit_removed, emit_summary,
-};
+use crate::events::{RECORD_ADDED, RECORD_UPDATED, emit_removed, emit_summary};
 use crate::state::AppState;
 
 /// 这次变化是否由 xPaste 自己写入引起（M01 规则 5）。
@@ -59,9 +56,6 @@ pub fn start(app: AppHandle) {
                     s.sensitive,
                     source
                 );
-                let payload =
-                    json!({ "bytes": s.text_bytes(), "sensitive": s.sensitive, "source": source });
-                emit(&app, CLIPBOARD_CHANGED, payload);
                 ingest(&app, s);
             }
         }

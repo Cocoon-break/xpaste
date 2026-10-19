@@ -6,8 +6,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::state::AppState;
 
 pub const PANEL_SHOWN: &str = "panel-shown";
-// 阶段 1 临时：前端计数用，阶段 3 移除
-pub const CLIPBOARD_CHANGED: &str = "clipboard-changed";
+pub const PANEL_HIDDEN: &str = "panel-hidden";
 pub const RECORD_ADDED: &str = "record-added";
 pub const RECORD_UPDATED: &str = "record-updated";
 pub const RECORDS_REMOVED: &str = "records-removed";

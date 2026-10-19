@@ -10,10 +10,15 @@ pub enum AppError {
     ClipboardWrite,
     #[error("该快捷键已被其他应用占用，请换一个")]
     HotkeyTaken,
+    /// 参数不合法（非 http 链接、记录不存在等）
+    #[error("{0}")]
+    Invalid(String),
     #[error(transparent)]
     Core(#[from] CoreError),
     #[error(transparent)]
     Tauri(#[from] tauri::Error),
+    #[error(transparent)]
+    Opener(#[from] tauri_plugin_opener::Error),
 }
 
 impl AppError {
@@ -22,8 +27,9 @@ impl AppError {
             Self::FileMissing => "fileMissing",
             Self::ClipboardWrite => "clipboardWrite",
             Self::HotkeyTaken => "hotkeyTaken",
+            Self::Invalid(_) => "invalid",
             Self::Core(CoreError::InvalidSettings(_)) => "invalidSettings",
-            Self::Core(_) | Self::Tauri(_) => "internal",
+            Self::Core(_) | Self::Tauri(_) | Self::Opener(_) => "internal",
         }
     }
 }
@@ -55,6 +61,14 @@ mod tests {
         assert_eq!(
             serde_json::to_value(AppError::ClipboardWrite).unwrap()["message"],
             "写入剪切板失败，请重试"
+        );
+    }
+
+    #[test]
+    fn invalid_serializes_with_kind() {
+        assert_eq!(
+            serde_json::to_value(AppError::Invalid("x".into())).unwrap(),
+            json!({"kind": "invalid", "message": "x"})
         );
     }
 

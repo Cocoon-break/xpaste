@@ -1,4 +1,5 @@
 use tauri::AppHandle;
+use tauri_plugin_opener::OpenerExt;
 
 use crate::error::AppError;
 
@@ -13,4 +14,43 @@ pub fn hide_panel(app: AppHandle) -> Result<(), AppError> {
 pub fn open_accessibility_settings(app: AppHandle) -> Result<(), AppError> {
     app.run_on_main_thread(xpaste_platform::open_accessibility_settings)?;
     Ok(())
+}
+
+/// 只认小写 http/https 前缀（与 detect 的链接判定一致）。
+pub fn url_is_openable(url: &str) -> bool {
+    url.starts_with("http://") || url.starts_with("https://")
+}
+
+/// 用系统默认浏览器打开链接。
+#[tauri::command(async)]
+pub fn open_url(app: AppHandle, url: String) -> Result<(), AppError> {
+    if !url_is_openable(&url) {
+        return Err(AppError::Invalid("只能打开 http/https 链接".into()));
+    }
+    app.opener().open_url(url, None::<&str>)?;
+    Ok(())
+}
+
+/// 在访达 / 资源管理器中显示文件。
+#[tauri::command(async)]
+pub fn reveal_file(app: AppHandle, path: String) -> Result<(), AppError> {
+    if !std::path::Path::new(&path).exists() {
+        return Err(AppError::FileMissing);
+    }
+    app.opener().reveal_item_in_dir(path)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_http_urls_are_openable() {
+        assert!(url_is_openable("https://example.com/a?b=c"));
+        assert!(url_is_openable("http://localhost:1420"));
+        assert!(!url_is_openable("javascript:alert(1)"));
+        assert!(!url_is_openable("file:///etc/passwd"));
+        assert!(!url_is_openable("HTTPS://x")); // 规格里链接判定区分大小写前缀，与 detect 一致
+    }
 }

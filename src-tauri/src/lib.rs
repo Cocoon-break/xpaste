@@ -63,6 +63,7 @@ pub fn run() {
             clipboard::start(app.handle().clone());
             Ok(())
         })
+        .plugin(tauri_plugin_opener::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
@@ -87,6 +88,8 @@ pub fn run() {
             commands::settings::finish_onboarding,
             commands::panel::hide_panel,
             commands::panel::open_accessibility_settings,
+            commands::panel::open_url,
+            commands::panel::reveal_file,
             commands::records::get_record,
             commands::records::search,
             commands::records::set_pinned,
