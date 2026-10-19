@@ -20,3 +20,10 @@ export function copyStatus(r: CopyResult, os: PlatformInfo['os']): string {
 export function needsAccessibility(r: CopyResult): boolean {
   return r.result === 'copiedOnly' && r.reason === 'needAccessibility';
 }
+
+/** 操作“复制”后的提示条文案；已粘贴（面板已隐藏）时不提示。 */
+export function copyToast(r: CopyResult, os: PlatformInfo['os'], becameFav: boolean): string | null {
+  if (r.result === 'pasted') return null;
+  if (r.result === 'copied' && becameFav) return '这条已经用了 3 次，已加入“常用”';
+  return copyStatus(r, os);
+}

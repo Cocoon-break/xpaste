@@ -1,6 +1,8 @@
 import './styles.css';
 import { attachConsole, info } from './api/log';
-import { bootstrap, copyText, getRecord, hidePanel, openUrl, revealFile, search } from './api/commands';
+import {
+  bootstrap, copy, copyText, deleteRecord, getRecord, hidePanel, openUrl, revealFile, search, setPaused, setPinned, undoDelete,
+} from './api/commands';
 import {
   onPanelHidden,
   onPanelShown,
@@ -11,11 +13,16 @@ import {
 } from './api/events';
 import type { AppError, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
 import { grade, hexInfo, isHex } from './color';
+import { copyToast } from './copy-status';
 import {
   esc, FAV_MIN, FILTERS, FL, fmtBytes, fmtDateTime, fmtDur, fmtInt, hl, hlCode, host, isFav, isHttpUrl, LABEL, rel, truncate,
   type Filter,
 } from './format';
-import { counts, ensureSelection, groups, inFilter, isStale, visible, type UndoState } from './view';
+import { keyAction } from './keymap';
+import { applyAdded, applyRemoved, applyUpdated } from './records';
+import {
+  armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, nextSelection, UNDO_MS, visible, type UndoState,
+} from './view';
 import { layout, range, ROW_H, scrollTo, topOf, type Cell } from './virtual-list';
 
 const I = {
@@ -79,7 +86,7 @@ const tabs = $('#tabs'), tabsBase = $('#tabsBase'), tabsOver = $('#tabsOver');
 const ptype = $('#ptype'), pbody = $('#pbody'), pmeta = $('#pmeta'), countEl = $('#count');
 const pinBtn = $<HTMLButtonElement>('#pinBtn'), copyBtn = $<HTMLButtonElement>('#copyBtn');
 const moreBtn = $<HTMLButtonElement>('#moreBtn'), delBtn = $<HTMLButtonElement>('#delBtn');
-const menu = $('#menu'), toastEl = $('#toast'), toastMsg = $('#toastMsg');
+const menu = $('#menu'), toastEl = $('#toast'), toastMsg = $('#toastMsg'), undoBtn = $<HTMLButtonElement>('#undoBtn'), pauseBtn = $('#pauseBtn');
 const spBars = $('#spBars'), spTrack = $('#spTrack'), spCursor = $('#spCursor'), spTip = $('#spTip');
 
 // —— 状态 ——
@@ -266,7 +273,7 @@ function select(id: number | null, { scroll = false, glide = true, instant = fal
   paintSpectrumSel(!instant);
 }
 
-// 键盘上下移动；Task 8 的键盘分发调用它
+// 键盘上下移动
 function move(d: 1 | -1, instant: boolean) {
   const v = vis().filter((r) => !S.removing.has(r.id));
   if (!v.length) return;
@@ -492,48 +499,270 @@ function setFilter(k: Filter, instant: boolean) {
 }
 
 // —— 搜索 ——
-// 每次输入都查后端，不防抖；序号丢弃先发后到的结果。结果回到顶部并选中第一条（唤起时也走这里）
+// 每次输入都查后端，不防抖；序号丢弃先发后到的结果
 let searchSeq = 0;
-function runSearch(v: string, opts: { stagger?: boolean } = {}) {
-  S.q = v;
-  clearQ.hidden = !v;
+function fetchMatches(v: string, done: () => void) {
   const seq = ++searchSeq;
   if (!v.trim()) {
     S.matchIds = null;
-    list.scrollTop = 0;
-    S.sel = null;
-    renderList(opts);
+    done();
     return;
   }
   search(v).then(
     (ids) => {
       if (isStale(seq, searchSeq)) return;
       S.matchIds = new Set(ids);
-      list.scrollTop = 0;
-      S.sel = null;
-      renderList(opts);
+      done();
     },
     (e: AppError) => void info(`search 失败 kind=${e.kind}`),
   );
 }
-
-// —— 提示条 ——
-// 最小版本；撤销变体由 Task 8 扩展
-let toastTimer = 0;
-function toast(msg: string) {
-  $('#toastIc').innerHTML = svg('check');
-  toastMsg.textContent = msg;
-  toastEl.dataset.open = 'true';
-  clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => (toastEl.dataset.open = 'false'), 2400);
+// 用户搜索：结果回到顶部并选中第一条（唤起时也走这里）
+function runSearch(v: string, opts: { stagger?: boolean } = {}) {
+  S.q = v;
+  clearQ.hidden = !v;
+  fetchMatches(v, () => {
+    list.scrollTop = 0;
+    S.sel = null;
+    renderList(opts);
+  });
 }
 
-// 记录与暂停事件的处理函数，由 Task 8 填充
+// —— 提示条 ——
+// 连续触发时只换文字、不重播弹入；非撤销提示会顶掉未完成的撤销
+let toastTimer = 0;
+function toast(msg: string, { undo = false, icon = 'check' as keyof typeof I } = {}) {
+  if (!undo) S.undo = null;
+  $('#toastIc').innerHTML = svg(icon);
+  if (toastEl.dataset.open === 'true') fx(toastMsg, [{ opacity: 0, transform: 'translateY(4px)', filter: 'blur(2px)' }, { opacity: 1, transform: 'none', filter: 'blur(0)' }], { duration: 180, easing: EASE_ENTER });
+  toastMsg.textContent = msg;
+  undoBtn.hidden = !undo;
+  toastEl.dataset.open = 'true';
+  if (undo) {
+    const ring = $('#ring');
+    ring.getAnimations().forEach((a) => a.cancel());
+    ring.animate([{ strokeDashoffset: 0 }, { strokeDashoffset: 44 }], { duration: UNDO_MS, fill: 'forwards' });
+  }
+  clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => {
+    toastEl.dataset.open = 'false';
+    if (undo) S.undo = null;
+  }, undo ? UNDO_MS : 2400);
+}
+
+// —— 操作 ——
+// 结果以后端事件为准：copy 之后 record-updated 带来新的 uses / copiedAt
+let copyTimer = 0;
+function copyRecord(id: number) {
+  const before = S.records.get(id);
+  if (!before || S.removing.has(id)) return;
+  copy(id, true).then(
+    (res) => {
+      const cur = S.records.get(id);
+      const uses = cur && cur !== before ? cur.uses : before.uses + 1;
+      const fav = !isFav(before) && uses >= FAV_MIN;
+      const msg = copyToast(res, S.platform.os, fav);
+      if (msg) toast(msg, { icon: fav && res.result === 'copied' ? 'star' : 'check' });
+      if (!S.shown) return;
+      const sw = copyBtn.querySelector<HTMLElement>('.swap')!;
+      sw.dataset.state = 'b';
+      clearTimeout(copyTimer);
+      copyTimer = window.setTimeout(() => (sw.dataset.state = 'a'), 1300);
+      // “移到最上方”会改变位置，保持选中行可见
+      renderList({ scroll: true });
+      const r = rowEl(id);
+      if (r && !reduced.matches) {
+        r.classList.remove('beam');
+        void r.offsetWidth;
+        r.classList.add('beam');
+        setTimeout(() => r.classList.remove('beam'), 800);
+      }
+    },
+    (err: AppError) => toast(err.message, { icon: 'copy' }),
+  );
+}
+
+// 乐观更新，失败回滚；鼠标操作时 FLIP 平移到新分组，起点或终点没渲染就直接到位
+function togglePin(id: number, animate: boolean) {
+  const r = S.records.get(id);
+  if (!r || S.removing.has(id)) return;
+  const on = !r.pinned;
+  const setLocal = (pinned: boolean) => {
+    const cur = S.records.get(id);
+    if (cur) S.records.set(id, { ...cur, pinned });
+    if (id === S.sel) setPin(pinned, !animate);
+  };
+  const r0 = animate && !reduced.matches ? rowEl(id)?.getBoundingClientRect() : undefined;
+  const indFrom = ind.style.transform;
+  setLocal(on);
+  renderList({ scroll: id === S.sel });
+  const el = rowEl(id), top = topOf(S.cells, id);
+  const dy = r0 && el ? r0.top - el.getBoundingClientRect().top : 0;
+  if (el && dy) {
+    el.classList.add('lift');
+    el.animate([{ transform: `translateY(${dy}px) scale(1.02)` }, { transform: 'translateY(0) scale(1)' }], { duration: 300, easing: EASE_MOVE })
+      .finished.then(() => el.classList.remove('lift'), () => {});
+    if (id === S.sel && top !== undefined) {
+      // 选中光标用同样的时长和曲线跟随
+      ind.style.transition = 'none';
+      ind.style.transform = indFrom;
+      void ind.offsetWidth;
+      ind.style.transition = `transform 300ms ${EASE_MOVE}, opacity 160ms ease`;
+      ind.style.transform = `translateY(${top}px)`;
+    }
+  }
+  setPinned(id, on).then(
+    () => toast(on ? '已置顶，会一直显示在列表最上方' : '已取消置顶', { icon: on ? 'pinFill' : 'pin' }),
+    (err: AppError) => {
+      setLocal(!on);
+      renderList();
+      toast(err.message);
+    },
+  );
+}
+
+// 先播放滑出，后端确认后再从列表移除；records-removed 对 S.removing 中的 id 不做处理
+function remove(id: number) {
+  const r = S.records.get(id);
+  if (!r || S.removing.has(id)) return;
+  const next = nextSelection(vis().filter((x) => !S.removing.has(x.id)), id);
+  const p = painted.get('r' + id), c = S.cells.find((c) => c.kind === 'row' && c.id === id);
+  S.removing.add(id);
+  if (p && c?.kind === 'row') {
+    // 直接加类让过渡播放；同步 p.h，避免下一次重绘整行替换
+    p.el.querySelector('.item')?.classList.add('is-removing');
+    p.h = rowHTML(r, c.index, false, false);
+  }
+  const bar = spBars.querySelector(`.bar[data-id="${id}"]`);
+  fx(bar, [{ transform: 'scaleY(1)', opacity: 1 }, { transform: 'scaleY(0)', opacity: 0 }], { duration: 260, easing: EASE_MOVE, fill: 'forwards' });
+  select(next, { scroll: true, indDur: 340 });
+  deleteRecord(id).then(
+    () => {
+      setTimeout(() => {
+        if (!S.removing.delete(id)) return;
+        S.records.delete(id);
+        renderTabs(true);
+        renderList();
+        renderSpectrum();
+      }, reduced.matches ? 0 : 360);
+      toast(`已删除“${truncate(r.title, 14)}”`, { undo: true, icon: 'trash' });
+      S.undo = armUndo(S.undo, id, r.title, Date.now());
+    },
+    (err: AppError) => {
+      S.removing.delete(id);
+      bar?.getAnimations().forEach((a) => a.cancel());
+      paintRows();
+      toast(err.message);
+    },
+  );
+}
+
+// 恢复后后端发 record-added，由 handlers.added 插入并选中
+let restoring: number | null = null;
+function undo() {
+  const u = S.undo;
+  if (!u || !canUndo(u, Date.now())) return;
+  S.undo = null;
+  restoring = u.id;
+  undoDelete(u.id).then(
+    (ok) => {
+      if (!ok) restoring = null;
+      toast(ok ? '已恢复' : '已无法恢复');
+    },
+    (err: AppError) => {
+      restoring = null;
+      toast(err.message);
+    },
+  );
+}
+
+// —— 右键菜单 ——
+let menuReturn: HTMLElement | null = null;
+function openMenu(id: number, x: number, y: number, viaKb: boolean) {
+  const r = S.records.get(id);
+  if (!r) return;
+  S.menuFor = id;
+  $('#mPin').textContent = r.pinned ? '取消置顶' : '置顶';
+  menuReturn = document.activeElement as HTMLElement | null;
+  const wr = win.getBoundingClientRect(), mw = menu.offsetWidth, mh = menu.offsetHeight;
+  let left = x - wr.left, top = y - wr.top, ox = 'left', oy = 'top';
+  if (left + mw > wr.width - 8) {
+    left = Math.max(8, left - mw);
+    ox = 'right';
+  }
+  if (top + mh > wr.height - 8) {
+    top = Math.max(8, top - mh);
+    oy = 'bottom';
+  }
+  menu.style.left = left + 'px';
+  menu.style.top = top + 'px';
+  menu.style.transformOrigin = `${ox} ${oy}`;
+  menu.toggleAttribute('data-instant', viaKb);
+  menu.dataset.open = 'true';
+  menu.querySelector('button')!.focus({ preventScroll: true });
+}
+function closeMenu(restore: boolean) {
+  if (!menuOpen()) return;
+  menu.dataset.open = 'false';
+  if (restore && menuReturn && document.contains(menuReturn)) menuReturn.focus({ preventScroll: true });
+}
+function moveMenuFocus(d: 1 | -1) {
+  const bs = [...menu.querySelectorAll('button')];
+  const i = bs.indexOf(document.activeElement as HTMLButtonElement);
+  bs[(i + d + bs.length) % bs.length].focus();
+}
+
+function paintPause() {
+  pauseBtn.querySelector('span')!.textContent = S.paused ? '已暂停' : '正在记录';
+  pauseBtn.setAttribute('aria-pressed', String(S.paused));
+  pauseBtn.dataset.paused = String(S.paused);
+}
+
+// —— 后端事件 ——
+// 外部新记录（设计 §2 回写项 2）：不改搜索、分类、选中项，不弹提示；只有撤销恢复的那条会被选中
 const handlers = {
-  added: (_s: RecordSummary) => {},
-  updated: (_s: RecordSummary) => {},
-  removed: (_ids: number[]) => {},
-  paused: (_p: boolean) => {},
+  added: (s: RecordSummary) => {
+    applyAdded(S.records, s);
+    S.removing.delete(s.id);
+    const restored = s.id === restoring;
+    if (restored) restoring = null;
+    const paint = () => {
+      // newId 只在插入这一次渲染时有效，之后的重绘不重播动画
+      if (S.shown) S.newId = s.id;
+      if (restored) S.sel = s.id;
+      renderTabs(true);
+      renderList({ scroll: restored });
+      renderSpectrum(s.id);
+      S.newId = null;
+    };
+    // 搜索中：新记录可能命中，重新取命中集合但不重置选中
+    if (S.q.trim()) fetchMatches(S.q, paint);
+    else paint();
+  },
+  updated: (s: RecordSummary) => {
+    const prev = S.records.get(s.id);
+    applyUpdated(S.records, s);
+    renderTabs(true);
+    // 去重命中会改 copiedAt，需要重新排序；选中项的头部与信息栏随 select 刷新，不重取详情
+    renderList();
+    renderSpectrum(prev && prev.copiedAt !== s.copiedAt ? s.id : undefined);
+  },
+  removed: (ids: number[]) => {
+    // 自己发起的删除由 remove() 的计时器移除，这里跳过，也不清掉它的撤销
+    const gone = ids.filter((id) => S.records.has(id) && !S.removing.has(id));
+    if (!gone.length) return;
+    const before = vis();
+    applyRemoved(S.records, gone);
+    if (S.sel !== null && gone.includes(S.sel)) S.sel = nextSelection(before, S.sel);
+    if (S.undo && gone.includes(S.undo.id)) S.undo = null;
+    renderTabs(true);
+    renderList();
+    renderSpectrum();
+  },
+  paused: (p: boolean) => {
+    S.paused = p;
+    paintPause();
+  },
 };
 
 // —— 面板显隐 ——
@@ -560,7 +789,7 @@ const shown = (t0: number | null) => {
 const hidden = () => {
   S.shown = false;
   win.dataset.shown = 'false';
-  menu.dataset.open = 'false';
+  closeMenu(false);
   (document.activeElement as HTMLElement | null)?.blur();
 };
 
@@ -577,6 +806,7 @@ const b = await bootstrap();
 S.settings = b.settings;
 S.platform = b.platform;
 S.paused = b.paused;
+paintPause();
 // 订阅后到达的事件比快照新，快照不覆盖已有条目
 // ponytail: 快照之后、返回之前被删除的记录会被快照带回，下次 records-removed 或重启时消失
 for (const r of b.records) if (!S.records.has(r.id)) S.records.set(r.id, r);
@@ -604,15 +834,72 @@ tabsBase.addEventListener('click', (e) => {
   const t = (e.target as Element).closest<HTMLElement>('[data-f]');
   if (t) setFilter(t.dataset.f as Filter, e.detail === 0);
 });
-list.addEventListener('scroll', schedulePaint, { passive: true });
-list.addEventListener('click', (e) => {
-  if (!(e.target as Element).closest('[data-act="reset"]')) return;
-  q.value = '';
-  S.filter = 'all';
-  renderTabs(false);
-  runSearch('', { stagger: true });
-  q.focus();
+list.addEventListener('scroll', () => {
+  schedulePaint();
+  closeMenu(false);
+}, { passive: true });
+// 行不抢焦点，键盘始终留在搜索框
+list.addEventListener('mousedown', (e) => {
+  if ((e.target as Element).closest('.row')) e.preventDefault();
 });
+const itemOf = (e: Event) => {
+  const it = (e.target as Element).closest<HTMLElement>('.item');
+  const id = Number(it?.dataset.id);
+  return it && !S.removing.has(id) ? id : null;
+};
+list.addEventListener('click', (e) => {
+  const t = e.target as Element;
+  if (t.closest('[data-act="reset"]')) {
+    q.value = '';
+    S.filter = 'all';
+    renderTabs(false);
+    runSearch('', { stagger: true });
+    q.focus();
+    return;
+  }
+  const id = itemOf(e);
+  if (id === null) return;
+  const qa = t.closest<HTMLElement>('[data-qa]')?.dataset.qa;
+  select(id, { indDur: 180 });
+  if (qa === 'copy') copyRecord(id);
+  if (qa === 'pin') togglePin(id, true);
+});
+list.addEventListener('dblclick', (e) => {
+  const id = itemOf(e);
+  if (id !== null && !(e.target as Element).closest('[data-qa]')) copyRecord(id);
+});
+list.addEventListener('contextmenu', (e) => {
+  const id = itemOf(e);
+  if (id === null) return;
+  e.preventDefault();
+  select(id, { indDur: 180 });
+  openMenu(id, e.clientX, e.clientY, false);
+});
+
+pinBtn.addEventListener('click', (e) => S.sel !== null && togglePin(S.sel, e.detail !== 0));
+copyBtn.addEventListener('click', () => S.sel !== null && copyRecord(S.sel));
+delBtn.addEventListener('click', () => S.sel !== null && remove(S.sel));
+moreBtn.addEventListener('click', (e) => {
+  if (menuOpen()) return closeMenu(true);
+  const r = moreBtn.getBoundingClientRect();
+  if (S.sel !== null) openMenu(S.sel, r.right, r.bottom + 6, e.detail === 0);
+});
+menu.addEventListener('click', (e) => {
+  const m = (e.target as Element).closest<HTMLElement>('[data-m]')?.dataset.m;
+  const id = S.menuFor, mouse = e.detail !== 0;
+  if (!m || id === null) return;
+  closeMenu(true);
+  if (m === 'copy') copyRecord(id);
+  if (m === 'pin') togglePin(id, mouse);
+  if (m === 'del') remove(id);
+});
+document.addEventListener('pointerdown', (e) => {
+  const t = e.target as Node;
+  if (menuOpen() && !menu.contains(t) && !moreBtn.contains(t)) closeMenu(false);
+}, true);
+undoBtn.addEventListener('click', undo);
+document.querySelectorAll('[data-hide]').forEach((b) => b.addEventListener('click', () => void hidePanel()));
+pauseBtn.addEventListener('click', () => setPaused(!S.paused).catch((err: AppError) => toast(err.message)));
 
 pbody.addEventListener('click', (e) => {
   const t = e.target as Element;
@@ -668,12 +955,52 @@ void document.fonts?.ready.then(() => {
   paintSpectrumSel(false);
 });
 
-// 临时：Esc 隐藏、↑↓ 选择，完整键盘分发由 Task 8 接管
+// —— 键盘 ——
 document.addEventListener('keydown', (e) => {
   if (e.isComposing) return;
-  if (e.key === 'Escape') void hidePanel();
-  else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-    e.preventDefault();
-    move(e.key === 'ArrowDown' ? 1 : -1, e.repeat);
+  const t = e.target as Element, inSearch = t === q;
+  const a = keyAction(
+    { key: e.key, code: e.code, mod: e.ctrlKey || e.metaKey, alt: e.altKey, shift: e.shiftKey, repeat: e.repeat },
+    {
+      inSearch,
+      onControl: !inSearch && !!t.closest?.('button, a, video'),
+      searchHasText: !!q.value,
+      menuOpen: menuOpen(),
+      hasSel: S.sel !== null,
+      canUndo: canUndo(S.undo, Date.now()),
+    },
+  );
+  if (!a) return;
+  // 让这个字符照常输入到搜索框
+  if (a.t === 'focusSearch') return q.focus();
+  e.preventDefault();
+  const sel = S.sel;
+  switch (a.t) {
+    case 'menuClose': return closeMenu(true);
+    case 'menuMove': return moveMenuFocus(a.d);
+    case 'move': return move(a.d, a.instant);
+    case 'copy': return void (sel !== null && copyRecord(sel));
+    case 'copyIndex': {
+      const r = vis()[a.i];
+      if (r) {
+        select(r.id);
+        copyRecord(r.id);
+      }
+      return;
+    }
+    case 'pin': return void (sel !== null && togglePin(sel, false));
+    case 'filter': return setFilter(cycleFilter(S.filter, a.d), true);
+    case 'undo': return undo();
+    case 'delete': return void (sel !== null && remove(sel));
+    case 'clearSearch':
+      q.value = '';
+      return runSearch('');
+    case 'hide': return void hidePanel();
+    case 'menu': {
+      // ponytail: 选中行滚出视口未渲染时不弹菜单；键盘移动总会把选中行滚回视口
+      const r = rowEl(sel)?.getBoundingClientRect();
+      if (r && sel !== null) openMenu(sel, r.left + 48, r.bottom, true);
+      return;
+    }
   }
 });
