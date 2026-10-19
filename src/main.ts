@@ -16,11 +16,11 @@ import {
   onRecordsRemoved,
   onRecordUpdated,
 } from './api/events';
-import type { AppError, Appearance, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
+import type { AppError, Appearance, FileEntry, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
 import { grade, hexInfo, isHex } from './color';
 import { copyToast, needsAccessibility } from './copy-status';
 import {
-  esc, FAV_MIN, FILTERS, FL, fmtBytes, fmtDateTime, fmtDur, fmtInt, hl, hlCode, host, isFav, isHttpUrl, LABEL, rel, truncate,
+  canInlinePlay, esc, FAV_MIN, FILTERS, FL, fmtBytes, fmtDateTime, fmtDur, fmtInt, hl, hlCode, host, isFav, isHttpUrl, LABEL, rel, truncate, videoChips,
   type Filter,
 } from './format';
 import { hotkeyFromEvent, hotkeyLabel } from './hotkey';
@@ -363,6 +363,24 @@ const gradeHTML = (c: number) => {
   return `<em class="${g === '不达标' ? 'fail' : 'pass'}">${g}</em>`;
 };
 const MISSING = '原文件已移动或删除';
+const UNPLAYABLE = '无法在预览中播放这个格式';
+
+/** `failed`：WebView 实际播放出错后，按不可播放重绘。 */
+function videoHTML(d: RecordDetail, failed = false): string {
+  const f = d.files[0], v = d.video, w = v?.w ?? 0, h = v?.h ?? 0, src = v?.src ?? null;
+  const playable = !failed && src !== null && canInlinePlay(f.ext);
+  const pic = d.thumb
+    ? `<img src="${esc(d.thumb)}" alt=""${w && h ? ` width="${w}" height="${h}"` : ''}>`
+    : `<span class="poster-blank" style="aspect-ratio:${w && h ? `${w}/${h}` : '16/9'}"></span>`;
+  const inner = pic + (playable ? `<span class="play">${svg('play')}</span>` : '')
+    + (d.durationSec !== null ? `<span class="dur">${fmtDur(d.durationSec)}</span>` : '');
+  const poster = playable
+    ? `<button type="button" class="poster" data-play aria-label="播放“${esc(d.title)}”">${inner}</button>`
+    : `<div class="poster">${inner}</div>`;
+  const chips = v ? videoChips(v).map((c) => `<span class="chip">${esc(c)}</span>`).join('') : '';
+  const note = src === null ? MISSING : playable ? '' : UNPLAYABLE;
+  return `<figure class="p-video">${poster}<figcaption>${esc(f.name)}</figcaption>${chips ? `<div class="chips">${chips}</div>` : ''}${note ? `<div class="fpath">${note}</div>` : ''}</figure>`;
+}
 
 function bodyHTML(d: RecordDetail): string {
   const text = d.text ?? '';
@@ -397,14 +415,13 @@ function bodyHTML(d: RecordDetail): string {
     case 'video':
     case 'file': {
       const reveal = S.platform.os === 'macos' ? '在访达中显示' : '在资源管理器中显示';
-      // 视频本阶段不内联播放：有缩略图时按原型的封面（播放钮 + 时长），下面列出文件名与路径
-      const poster = d.kind === 'video' && d.thumb
-        ? `<figure class="p-video"><div class="poster"><img src="${esc(d.thumb)}" alt="${esc(d.title)} 的封面"><span class="play">${svg('play')}</span>${d.durationSec !== null ? `<span class="dur">${fmtDur(d.durationSec)}</span>` : ''}</div></figure>`
-        : '';
-      return poster + d.files.map((f, i) => `<div class="p-file"><span class="big">${svg(d.kind)}</span><div><div class="fname">${esc(f.name)}</div><code class="fpath">${esc(f.path)}</code>
+      const row = (f: FileEntry, i: number) => `<div class="p-file"><span class="big">${svg(d.kind)}</span><div><div class="fname">${esc(f.name)}</div><code class="fpath">${esc(f.path)}</code>
           <div class="chips">${f.ext ? `<span class="chip">${esc(f.ext.toUpperCase())}</span>` : ''}${d.kind === 'video' && d.durationSec !== null ? `<span class="chip">${fmtDur(d.durationSec)}</span>` : ''}<span class="chip">${fmtBytes(f.size)}</span></div>
           ${d.kind === 'file' ? `<div><button class="btn sm" type="button" data-reveal="${i}"${f.exists ? '' : ' disabled'}>${reveal}</button></div>` : ''}
-          ${f.exists ? '' : `<div class="fpath">${MISSING}</div>`}</div></div>`).join('');
+          ${f.exists ? '' : `<div class="fpath">${MISSING}</div>`}</div></div>`;
+      // 视频：第一个文件用封面卡片（点击才建 <video>，掠过时不加载），其余沿用文件行
+      if (d.kind === 'video' && d.files[0]) return videoHTML(d) + d.files.slice(1).map((f, i) => row(f, i + 1)).join('');
+      return d.files.map(row).join('');
     }
   }
 }
@@ -1316,6 +1333,7 @@ const hidden = () => {
   // 跨隐藏不复用详情（例如文件是否还在）
   bodyFor = null;
   details.clear();
+  pbody.querySelectorAll('video').forEach((v) => v.pause());
   pbody.innerHTML = '';
   closeMenu(false);
   // 对话框不播收起动画，直接关（close 事件里还原外观预览）
@@ -1542,6 +1560,24 @@ pbody.addEventListener('click', (e) => {
     const f = S.detail?.files[Number(rv.dataset.reveal)];
     // 后端的 fileMissing 文案是“无法粘贴”，这里按 kind 给自己的文案
     if (f) revealFile(f.path).catch((err: AppError) => toast(err.kind === 'fileMissing' ? MISSING : err.message));
+    return;
+  }
+  const play = t.closest<HTMLElement>('[data-play]');
+  if (play) {
+    const d = S.detail, v = d?.video;
+    if (!d || !v?.src) return;
+    const wh = v.w && v.h ? ` width="${v.w}" height="${v.h}"` : '';
+    play.insertAdjacentHTML('afterend', `<video src="${esc(v.src)}" controls playsinline preload="auto" aria-label="${esc(d.title)}"${wh}></video>`);
+    const vid = play.nextElementSibling as HTMLVideoElement;
+    play.remove();
+    // 容器认得但解码不了（例如 mov 里的 ProRes）：换回封面并说明；已切走的旧正文不管
+    vid.addEventListener('error', () => {
+      const fig = vid.closest('figure');
+      if (vid.isConnected && fig) fig.outerHTML = videoHTML(d, true);
+    }, { once: true });
+    // 同步调用，仍在用户手势内；被拒绝（自动播放策略等）时留给用户点控件
+    vid.play().catch(() => {});
+    vid.focus();
     return;
   }
   const btn = t.closest<HTMLElement>('[data-copy]');

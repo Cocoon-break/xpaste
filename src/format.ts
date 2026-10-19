@@ -43,6 +43,15 @@ export const fmtDur = (sec: number): string => {
   return h ? `${h}:${pad(m)}:${ss}` : `${pad(m)}:${ss}`;
 };
 
+export const fmtFps = (fps: number): string => `${Number(fps.toFixed(2))} fps`;
+
+/** 原型顺序：编码、W × H、帧率；未知（0 / ''）的项省略。 */
+export const videoChips = (v: { w: number; h: number; fps: number; codec: string }): string[] =>
+  [v.codec, v.w && v.h ? `${v.w} × ${v.h}` : '', v.fps ? fmtFps(v.fps) : ''].filter(Boolean);
+
+/** WebView 能内联播放的容器。 */
+export const canInlinePlay = (ext: string): boolean => ['mp4', 'mov', 'm4v', 'webm'].includes(ext.toLowerCase());
+
 export const fmtBytes = (n: number): string =>
   n < 1024 ? `${n} B` : n < 1048576 ? `${nf1.format(n / 1024)} KB` : `${nf1.format(n / 1048576)} MB`;
 

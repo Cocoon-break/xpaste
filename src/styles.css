@@ -434,6 +434,9 @@ mark { background: var(--mark-bg); color: var(--mark-fg); border-radius: 3px; pa
 .p-video { margin: 0; display: grid; gap: 10px; }
 .poster { position: relative; border-radius: 14px; overflow: hidden; border: 1px solid var(--line-2); box-shadow: var(--shadow-pop); }
 .poster img, .p-video video { display: block; width: 100%; height: auto; }
+button.poster { display: block; width: 100%; padding: 0; background: #000000; cursor: pointer; font: inherit; color: inherit; }
+/* 没有封面（mkv 等读不到元数据）时的深色占位 */
+.poster-blank { display: block; width: 100%; background: linear-gradient(135deg, color-mix(in srgb, var(--c-video) 22%, #000000), #0a0d1c); }
 .p-video video { border-radius: 14px; background: #000000; }
 /* 播放图标和时长贴在画面上，不随主题变化 */
 .poster .play { position: absolute; inset: 0; margin: auto; width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; color: #FFFFFF; background: rgb(0 0 0 / .42); border: 1px solid rgb(255 255 255 / .3); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); transition: transform 320ms var(--ease-spring); }
@@ -584,4 +587,6 @@ dialog > form { display: contents; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after, ::backdrop { transition-duration: 0s !important; transition-delay: 0s !important; animation: none !important; }
+  /* 过渡归零后悬停仍会瞬间放大，减少动态效果时干脆不缩放 */
+  .poster:hover .play { transform: none; }
 }

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { esc, FILTERS, fmtBytes, fmtDur, hl, isHttpUrl, rel, truncate } from './format.ts';
+import { canInlinePlay, esc, FILTERS, fmtBytes, fmtDur, fmtFps, hl, isHttpUrl, rel, truncate, videoChips } from './format.ts';
 
 test('hl 转义正则元字符并高亮', () => {
   assert.equal(hl('a.b c++ (x)', 'c++'), 'a.b <mark>c++</mark> (x)');
@@ -46,3 +46,14 @@ test('FILTERS 顺序与 M06 一致', () =>
     FILTERS.map(([k]) => k),
     ['all', 'fav', 'text', 'link', 'code', 'color', 'image', 'video', 'file'],
   ));
+
+test('videoChips_skips_unknown', () => {
+  assert.deepEqual(videoChips({ w: 1920, h: 1080, fps: 60, codec: 'H.264' }), ['H.264', '1920 × 1080', '60 fps']);
+  assert.deepEqual(videoChips({ w: 1080, h: 1920, fps: 29.97, codec: 'HEVC' }), ['HEVC', '1080 × 1920', '29.97 fps']);
+  assert.deepEqual(videoChips({ w: 0, h: 0, fps: 0, codec: '' }), []);
+});
+test('canInlinePlay_only_webview_containers', () => {
+  for (const e of ['mp4', 'MOV', 'm4v', 'webm']) assert.equal(canInlinePlay(e), true);
+  for (const e of ['mkv', 'avi', 'wmv', 'flv', '']) assert.equal(canInlinePlay(e), false);
+});
+test('fmtFps 去掉多余的小数', () => assert.equal(fmtFps(30), '30 fps'));
