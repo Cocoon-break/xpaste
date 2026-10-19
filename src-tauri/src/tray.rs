@@ -85,7 +85,7 @@ pub fn mark_hotkey_failed() {
 }
 
 fn open_settings(app: &AppHandle) {
-    panel::show(app, None);
+    panel::show(app, None, panel::Trigger::Tray);
     emit(app, OPEN_SETTINGS, ());
 }
 
@@ -124,13 +124,13 @@ pub fn setup(app: &App) -> tauri::Result<()> {
         .show_menu_on_left_click(cfg!(target_os = "macos"))
         .on_menu_event(|app, event| match event.id().as_ref() {
             "open" if HOTKEY_FAILED.load(Ordering::SeqCst) => open_settings(app),
-            "open" => panel::show(app, None),
+            "open" => panel::show(app, None, panel::Trigger::Tray),
             "pause" => {
                 let paused = app.state::<AppState>().paused.load(Ordering::SeqCst);
                 crate::commands::settings::set_paused_inner(app, !paused);
             }
             "clear" => {
-                panel::show(app, None);
+                panel::show(app, None, panel::Trigger::Tray);
                 emit(app, CONFIRM_CLEAR, ());
             }
             "settings" => open_settings(app),

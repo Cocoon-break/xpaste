@@ -3,9 +3,10 @@ use tauri_plugin_opener::OpenerExt;
 
 use crate::error::AppError;
 
+/// `animate`：前端没有开减少动态效果；macOS 系统材质下据此决定是否原生淡出整个窗口。
 #[tauri::command(async)]
-pub fn hide_panel(app: AppHandle) -> Result<(), AppError> {
-    crate::panel::hide(&app);
+pub fn hide_panel(app: AppHandle, animate: bool) -> Result<(), AppError> {
+    crate::panel::hide_animated(&app, animate);
     Ok(())
 }
 

@@ -213,9 +213,27 @@ fn place(app: &AppHandle, w: &WebviewWindow) -> tauri::Result<()> {
     }
 }
 
-fn try_show(app: &AppHandle, w: &WebviewWindow, t0: Option<u64>) -> tauri::Result<()> {
+fn try_show(
+    app: &AppHandle,
+    w: &WebviewWindow,
+    t0: Option<u64>,
+    trigger: Trigger,
+) -> tauri::Result<()> {
     if let Err(e) = place(app, w) {
         log::warn!("面板定位失败：{e}");
+    }
+    // 隐藏状态下唤起（系统材质）：先把 alpha 置 0 再上屏，上屏后淡入；已可见（淡出途中重新唤起）立即不透明，
+    // 同时打断进行中的淡出。隐藏时 hide() 已在 orderOut 后把 alpha 复位为 1，这里在上屏前覆盖，不会闪一帧
+    let hidden = !w.is_visible().unwrap_or(true);
+    let fade_in = fade_in_ms(
+        cfg!(target_os = "macos"),
+        material(),
+        hidden && !reduce_motion(),
+        trigger,
+    );
+    let start = if fade_in.is_some() { 0.0 } else { 1.0 };
+    if let Err(e) = animate_alpha(w, start, 0.0) {
+        log::warn!("复位面板透明度失败：{e}");
     }
     #[cfg(target_os = "macos")]
     {
@@ -233,7 +251,60 @@ fn try_show(app: &AppHandle, w: &WebviewWindow, t0: Option<u64>) -> tauri::Resul
         w.show()?;
         w.set_focus()?;
     }
-    w.emit(crate::events::PANEL_SHOWN, serde_json::json!({ "t0": t0 }))
+    if let Some(ms) = fade_in
+        && let Err(e) = animate_alpha(w, 1.0, ms as f64 / 1000.0)
+    {
+        log::warn!("面板淡入失败：{e}");
+        let _ = animate_alpha(w, 1.0, 0.0);
+    }
+    w.emit(
+        crate::events::PANEL_SHOWN,
+        serde_json::json!({ "t0": t0, "trigger": trigger }),
+    )
+}
+
+/// 经动画代理把窗口 alpha 改到 `alpha`，`secs` 秒内完成；`secs = 0` 立即生效并打断进行中的动画。
+/// 只在主线程调用。
+#[cfg(target_os = "macos")]
+// cocoa 已弃用，但 tauri-nspanel 公开的就是它的类型；objc 0.2 的 sel! 展开里有 cfg(feature = "cargo-clippy")
+#[allow(deprecated, unexpected_cfgs)]
+fn animate_alpha(w: &WebviewWindow, alpha: f64, secs: f64) -> tauri::Result<()> {
+    use tauri_nspanel::cocoa::base::id;
+    use tauri_nspanel::objc::{class, msg_send, sel, sel_impl};
+    let ns = w.ns_window()? as id;
+    unsafe {
+        let _: () = msg_send![class!(NSAnimationContext), beginGrouping];
+        let ctx: id = msg_send![class!(NSAnimationContext), currentContext];
+        let _: () = msg_send![ctx, setDuration: secs];
+        let animator: id = msg_send![ns, animator];
+        let _: () = msg_send![animator, setAlphaValue: alpha];
+        let _: () = msg_send![class!(NSAnimationContext), endGrouping];
+    }
+    Ok(())
+}
+
+/// 其他平台不做原生淡入淡出（`fade_out_ms` / `fade_in_ms` 恒为 `None`），alpha 始终为 1。
+#[cfg(not(target_os = "macos"))]
+fn animate_alpha(_: &WebviewWindow, _: f64, _: f64) -> tauri::Result<()> {
+    Ok(())
+}
+
+/// 系统设置“减弱动态效果”（与网页的 prefers-reduced-motion 同源）。只在主线程调用。
+#[cfg(target_os = "macos")]
+#[allow(deprecated, unexpected_cfgs)] // 同 animate_alpha
+fn reduce_motion() -> bool {
+    use tauri_nspanel::cocoa::base::{BOOL, YES, id};
+    use tauri_nspanel::objc::{class, msg_send, sel, sel_impl};
+    unsafe {
+        let ws: id = msg_send![class!(NSWorkspace), sharedWorkspace];
+        let r: BOOL = msg_send![ws, accessibilityDisplayShouldReduceMotion];
+        r == YES
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn reduce_motion() -> bool {
+    false
 }
 
 /// AppKit 只能在主线程调用；已在主线程时同步执行（hide_panel 命令跑在异步线程上）。
@@ -244,37 +315,98 @@ fn on_main(app: &AppHandle, f: impl FnOnce(&AppHandle) + Send + 'static) {
     }
 }
 
-pub fn show(app: &AppHandle, t0: Option<u64>) {
+/// `trigger` 随 `panel-shown` 发给前端，决定进入动效的时长（托盘单击用鼠标时长）。
+pub fn show(app: &AppHandle, t0: Option<u64>, trigger: Trigger) {
     app.state::<AppState>().previous_window.store(
         xpaste_platform::foreground_window().unwrap_or(0),
         std::sync::atomic::Ordering::Relaxed,
     );
-    show_panel(app, t0);
+    show_panel(app, t0, trigger);
 }
 
 /// 粘贴失败后重新显示面板给出降级提示；不覆盖 `previous_window`（此时前台可能已是别的窗口）。
+/// 粘贴由 Enter 发起，按键盘时长进入。
 pub fn reshow(app: &AppHandle) {
-    show_panel(app, None);
+    show_panel(app, None, Trigger::Hotkey);
 }
 
-fn show_panel(app: &AppHandle, t0: Option<u64>) {
+fn show_panel(app: &AppHandle, t0: Option<u64>, trigger: Trigger) {
     HIDE_REQ.store(0, Ordering::Relaxed);
+    FADING.store(0, Ordering::Relaxed);
     on_main(app, move |app| {
         if let Some(w) = window(app)
-            && let Err(e) = try_show(app, &w, t0)
+            && let Err(e) = try_show(app, &w, t0, trigger)
         {
             log::warn!("显示面板失败：{e}");
         }
     });
 }
 
+/// 前端发起的隐藏是否由原生把整个窗口淡出（毫秒）：只有 macOS 系统材质、且没有开减少动态效果。
+/// 系统材质的底板不归网页画，网页淡不掉它；这时网页内容只位移、不自己变透明（`data-native-fade`），
+/// 整个面板由窗口 alpha 淡出。不透明材质的底板由网页画，随内容一起淡出，不需要。
+pub fn fade_out_ms(macos: bool, material: &str, animate: bool) -> Option<u64> {
+    (macos && material != "opaque" && animate).then_some(160)
+}
+
+/// 唤起时是否由窗口 alpha 0 → 1 淡入（毫秒），与 `fade_out_ms` 对称：只在隐藏状态下唤起时
+/// （`animate` 已含“隐藏中”与减少动态效果）。键盘唤起 90 ms（M20“90 ms enter”），托盘单击 240 ms（鼠标时长）。
+pub fn fade_in_ms(macos: bool, material: &str, animate: bool, trigger: Trigger) -> Option<u64> {
+    fade_out_ms(macos, material, animate).map(|_| if trigger == Trigger::Tray { 240 } else { 90 })
+}
+
+/// 前端发起的隐藏（`hide_panel`）。macOS 系统材质下前端不等、立即调到这里：网页内容只下移，
+/// 窗口 alpha 在 160 ms 内把整个面板淡到 0，播完再隐藏；其他情况前端已播完内容淡出，直接隐藏。
+pub fn hide_animated(app: &AppHandle, animate: bool) {
+    let Some(ms) = fade_out_ms(cfg!(target_os = "macos"), material(), animate) else {
+        return hide(app);
+    };
+    let seq = REQ_SEQ.fetch_add(1, Ordering::Relaxed);
+    // 已在淡出（再按一次 Esc）：不重新开始
+    if FADING
+        .compare_exchange(0, seq, Ordering::Relaxed, Ordering::Relaxed)
+        .is_err()
+    {
+        return;
+    }
+    on_main(app, move |app| {
+        // 排队期间被重新唤起或直接隐藏过
+        if FADING.load(Ordering::Relaxed) != seq {
+            return;
+        }
+        let Some(w) = window(app) else { return };
+        if let Err(e) = animate_alpha(&w, 0.0, ms as f64 / 1000.0) {
+            log::warn!("面板淡出失败：{e}");
+            return hide(app);
+        }
+        // 动画与计时同时开始，到点时 alpha 已是 0。检查放在主线程闭包里，与 show_panel 的主线程任务串行，
+        // 期间重新唤起或直接隐藏过就不再动。
+        // ponytail: 用计时线程代替 NSAnimationContext 的 completionHandler（免写 ObjC block）；
+        // 主线程卡顿时动画会落后于计时，orderOut 可能早于 alpha 到 0（提前消失），但不会卡在可见；需要逐帧对齐再改用 completionHandler
+        let app = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(ms));
+            on_main(&app, move |app| {
+                if FADING.load(Ordering::Relaxed) == seq {
+                    hide(app);
+                }
+            });
+        });
+    });
+}
+
+/// 直接隐藏（失焦、粘贴前、兜底线程、淡出播完）。打断进行中的淡出，隐藏后把 alpha 复位为 1 供下次显示。
 pub fn hide(app: &AppHandle) {
     HIDE_REQ.store(0, Ordering::Relaxed);
+    FADING.store(0, Ordering::Relaxed);
     on_main(app, |app| {
         // NSPanel 上 hide 即 orderOut:
         let Some(w) = window(app) else { return };
         match w.hide() {
             Ok(()) => {
+                if let Err(e) = animate_alpha(&w, 1.0, 0.0) {
+                    log::warn!("复位面板透明度失败：{e}");
+                }
                 LAST_HIDE_MS.store(crate::clock::now_ms(), Ordering::Relaxed);
                 crate::events::emit(app, crate::events::PANEL_HIDDEN, ())
             }
@@ -286,7 +418,9 @@ pub fn hide(app: &AppHandle) {
 /// 待处理的隐藏请求编号，0 表示没有；`show_panel` / `hide` 时清零。
 static HIDE_REQ: AtomicU64 = AtomicU64::new(0);
 static REQ_SEQ: AtomicU64 = AtomicU64::new(1);
-/// 前端淡出 160 ms 后调 `hide_panel`；超过这个时间窗口仍可见，说明前端没响应。
+/// 正在原生淡出的隐藏编号，0 表示没有；`show_panel` / `hide` 时清零即取消。
+static FADING: AtomicU64 = AtomicU64::new(0);
+/// 前端淡出 160 ms 后调 `hide_panel`（macOS 系统材质下立即调，原生淡出 160 ms）；超过这个时间窗口仍可见，说明前端没响应。
 const HIDE_FALLBACK: Duration = Duration::from_millis(400);
 
 /// 最近一次成功隐藏的时间（Unix 毫秒）；`i64::MIN` 表示从未隐藏。
@@ -294,8 +428,9 @@ static LAST_HIDE_MS: AtomicI64 = AtomicI64::new(i64::MIN);
 /// 隐藏后这段时间内的托盘单击不再唤起：这次按下已让面板失焦隐藏。
 pub const TRAY_AFTER_HIDE_MS: u64 = 300;
 
-/// `toggle` 的来源。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// `toggle` / `show` 的来源；随 `panel-shown` 以小写字符串发给前端。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Trigger {
     Hotkey,
     Tray,
@@ -341,6 +476,11 @@ pub fn toggle_action(
     }
 }
 
+/// 有待处理的隐藏：前端淡出中（`HIDE_REQ`），或原生淡出中（`FADING`，窗口仍可见）。
+fn hide_pending(req: u64, fading: u64) -> bool {
+    req != 0 || fading != 0
+}
+
 /// 以窗口实际可见性为准切换。可见时不直接隐藏，请前端先播淡出再调 `hide_panel`；
 /// 前端失效时由兜底线程隐藏。
 pub fn toggle(app: &AppHandle, t0: Option<u64>, trigger: Trigger) {
@@ -353,10 +493,13 @@ pub fn toggle(app: &AppHandle, t0: Option<u64>, trigger: Trigger) {
     // 时钟回拨（差为负）当作很久以前隐藏，宁可漏挡一次也不让托盘失灵
     let since = crate::clock::now_ms().saturating_sub(LAST_HIDE_MS.load(Ordering::Relaxed));
     let since = u64::try_from(since).unwrap_or(u64::MAX);
-    let hide_pending = HIDE_REQ.load(Ordering::Relaxed) != 0;
+    let hide_pending = hide_pending(
+        HIDE_REQ.load(Ordering::Relaxed),
+        FADING.load(Ordering::Relaxed),
+    );
     match toggle_action(visible, hide_pending, onboarding, trigger, since) {
         ToggleAction::Show { then_hotkey } => {
-            show(app, t0);
+            show(app, t0, trigger);
             // 引导中先切到别的应用（面板失焦隐藏）再按快捷键，也算试按成功。
             // 排在 show 的主线程任务之后发，前端先收到 panel-shown、重新打开引导，再收到这个
             if then_hotkey {
@@ -365,7 +508,7 @@ pub fn toggle(app: &AppHandle, t0: Option<u64>, trigger: Trigger) {
                 });
             }
         }
-        ToggleAction::Reshow => show_panel(app, t0),
+        ToggleAction::Reshow => show_panel(app, t0, trigger),
         ToggleAction::RequestHide => request_hide(app),
         ToggleAction::HotkeyPressed => crate::events::emit(app, crate::events::HOTKEY_PRESSED, ()),
         ToggleAction::Ignore => {}
@@ -504,6 +647,44 @@ mod tests {
         assert_eq!(toggle_action(false, false, true, Hotkey, 9999), show(true));
         assert_eq!(toggle_action(false, false, true, Tray, 9999), show(false));
     }
+    #[test]
+    fn reshow_during_native_fade() {
+        assert!(!hide_pending(0, 0));
+        assert!(hide_pending(7, 0));
+        assert!(hide_pending(0, 9)); // Esc 后原生淡出途中（没有 HIDE_REQ）
+        assert_eq!(
+            toggle_action(true, hide_pending(0, 9), false, Trigger::Hotkey, 0),
+            ToggleAction::Reshow
+        );
+    }
+
+    #[test]
+    fn native_fade_in_mirrors_fade_out() {
+        use Trigger::*;
+        assert_eq!(fade_in_ms(true, "glass", true, Hotkey), Some(90));
+        assert_eq!(fade_in_ms(true, "glass", true, Relaunch), Some(90));
+        assert_eq!(fade_in_ms(true, "glass", true, Tray), Some(240));
+        assert_eq!(fade_in_ms(true, "glass", false, Hotkey), None); // 已可见（淡出途中重新唤起）或减少动态效果
+        assert_eq!(fade_in_ms(true, "opaque", true, Hotkey), None);
+        assert_eq!(fade_in_ms(false, "glass", true, Hotkey), None);
+    }
+
+    #[test]
+    fn native_fade_only_for_macos_system_material() {
+        assert_eq!(fade_out_ms(true, "glass", true), Some(160));
+        assert_eq!(fade_out_ms(true, "opaque", true), None); // 底板随网页内容淡出
+        assert_eq!(fade_out_ms(true, "glass", false), None); // 减少动态效果
+        assert_eq!(fade_out_ms(false, "glass", true), None); // Windows 不做
+    }
+
+    #[test]
+    fn trigger_serializes_lowercase_for_panel_shown() {
+        let j = |t| serde_json::to_value(t).unwrap();
+        assert_eq!(j(Trigger::Hotkey), "hotkey");
+        assert_eq!(j(Trigger::Tray), "tray");
+        assert_eq!(j(Trigger::Relaunch), "relaunch");
+    }
+
     #[test]
     fn windows_material_falls_back_but_win10_stays_opaque() {
         use window_vibrancy::Error as E;

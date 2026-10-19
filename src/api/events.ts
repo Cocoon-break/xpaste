@@ -3,8 +3,10 @@ import type { RecordSummary } from './types';
 
 export const PANEL_SHOWN = 'panel-shown';
 
-export const onPanelShown = (cb: (p: { t0: number | null }) => void): Promise<UnlistenFn> =>
-  listen<{ t0: number | null }>(PANEL_SHOWN, (e) => cb(e.payload));
+/** `trigger`：唤起来源；托盘单击按鼠标时长进入，其余按键盘时长。 */
+export type PanelShown = { t0: number | null; trigger: 'hotkey' | 'tray' | 'relaunch' };
+export const onPanelShown = (cb: (p: PanelShown) => void): Promise<UnlistenFn> =>
+  listen<PanelShown>(PANEL_SHOWN, (e) => cb(e.payload));
 
 export const PANEL_HIDDEN = 'panel-hidden';
 
