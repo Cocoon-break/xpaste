@@ -12,7 +12,7 @@ use crate::error::AppError;
 use crate::events::{RECORD_ADDED, RECORD_UPDATED, emit_removed, emit_summary};
 use crate::state::AppState;
 
-/// 图片文件引用（不是位图）的预览：只授权这一个文件给 asset 协议（设计 9.5）。
+/// 图片文件引用（不是位图）与视频的预览：只授权这一个源文件给 asset 协议（设计 9.5）。
 #[tauri::command(async)]
 pub fn get_record(
     app: AppHandle,
@@ -39,6 +39,11 @@ pub fn get_record(
             w,
             h,
         });
+    }
+    // 视频同理：只授权该视频源文件，供详情 <video> 播放
+    if d.video.as_ref().is_some_and(|v| v.src.is_some()) {
+        app.asset_protocol_scope()
+            .allow_file(std::path::Path::new(&d.files[0].path))?;
     }
     Ok(Some(d))
 }

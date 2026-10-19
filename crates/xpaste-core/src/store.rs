@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::{
     AppSummary, CoreError, FileEntry, Flavor, ImageInfo, Kind, NewRecord, RecordDetail,
-    RecordSummary, Settings,
+    RecordSummary, Settings, VideoInfo,
 };
 
 /// 按版本排列的迁移脚本；第 i 项把 `user_version` 从 i 升到 i+1。
@@ -281,7 +281,7 @@ impl Store {
             Some(p) => serde_json::from_str(&p)?,
             None => Vec::new(),
         };
-        let files = paths
+        let files: Vec<FileEntry> = paths
             .into_iter()
             .map(|path| {
                 let p = Path::new(&path);
@@ -310,7 +310,23 @@ impl Store {
                 w: dim("w"),
                 h: dim("h"),
             });
-        let video = meta.as_ref().and_then(|m| m.get("video").cloned());
+        let video = match files.first() {
+            Some(f) if summary.kind == Kind::Video => Some(VideoInfo {
+                src: f.exists.then(|| f.path.clone()),
+                w: dim("w"),
+                h: dim("h"),
+                fps: meta
+                    .as_ref()
+                    .and_then(|m| m.get("fps")?.as_f64())
+                    .unwrap_or(0.0),
+                codec: meta
+                    .as_ref()
+                    .and_then(|m| m.get("codec")?.as_str())
+                    .unwrap_or_default()
+                    .to_owned(),
+            }),
+            _ => None,
+        };
         Ok(Some(RecordDetail {
             summary,
             text,
@@ -687,7 +703,7 @@ pub(crate) mod tests {
     }
 
     use crate::capture::build_record;
-    use crate::{AppInfo, Flavor, Kind, NewRecord, Snapshot, detect};
+    use crate::{AppInfo, Flavor, Kind, NewRecord, Snapshot, VideoInfo, VideoMeta, detect};
 
     fn mem() -> Store {
         Store::open_in_memory(&tmp()).unwrap()
@@ -707,6 +723,66 @@ pub(crate) mod tests {
             file_paths: p.iter().map(Into::into).collect(),
             ..Default::default()
         })
+    }
+
+    #[test]
+    fn detail_builds_video_info_from_meta_and_file() {
+        let mut s = mem();
+        let f = s.dir.join("clip.mp4");
+        std::fs::write(&f, b"x").unwrap();
+        let p = f.to_string_lossy().into_owned();
+        let (Upsert::Added(id), _) = s.insert_or_merge(&rec_files(&[&p]), 1, 500).unwrap() else {
+            panic!()
+        };
+        let m = VideoMeta {
+            duration_sec: 83.0,
+            w: 1920,
+            h: 1080,
+            fps: 60.0,
+            codec: "H.264".into(),
+        };
+        s.set_meta(id, &serde_json::to_value(&m).unwrap()).unwrap();
+        let d = s.detail(id).unwrap().unwrap();
+        assert_eq!(d.summary.duration_sec, Some(83.0));
+        assert_eq!(
+            d.video,
+            Some(VideoInfo {
+                src: Some(p),
+                w: 1920,
+                h: 1080,
+                fps: 60.0,
+                codec: "H.264".into()
+            })
+        );
+        std::fs::remove_file(&f).unwrap();
+        assert_eq!(s.detail(id).unwrap().unwrap().video.unwrap().src, None); // AC-M08-05
+    }
+
+    #[test]
+    fn video_without_meta_is_zeroed_and_other_kinds_have_none() {
+        let mut s = mem();
+        let (Upsert::Added(v), _) = s
+            .insert_or_merge(&rec_files(&["/definitely/missing.mov"]), 1, 500)
+            .unwrap()
+        else {
+            panic!()
+        };
+        let d = s.detail(v).unwrap().unwrap();
+        assert_eq!(
+            d.video,
+            Some(VideoInfo {
+                src: None,
+                w: 0,
+                h: 0,
+                fps: 0.0,
+                codec: String::new()
+            })
+        );
+        assert_eq!(d.summary.duration_sec, None);
+        let (Upsert::Added(t), _) = s.insert_or_merge(&rec("a"), 2, 500).unwrap() else {
+            panic!()
+        };
+        assert_eq!(s.detail(t).unwrap().unwrap().video, None);
     }
 
     #[test]

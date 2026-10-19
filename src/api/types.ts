@@ -65,13 +65,21 @@ export interface ImageInfo {
   h: number;
 }
 
+export interface VideoInfo {
+  src: string | null;
+  w: number;
+  h: number;
+  fps: number;
+  codec: string;
+}
+
 export interface RecordDetail extends RecordSummary {
   text: string | null;
   truncated: boolean;
   linkTitle: string | null;
   files: FileEntry[];
   image: ImageInfo | null;
-  video: unknown;
+  video: VideoInfo | null;
 }
 
 export interface AppError {
