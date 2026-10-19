@@ -822,7 +822,7 @@ xPaste 是一款常驻后台的剪切板历史工具。它自动记录用户复�
 | 面板材质 | `NSVisualEffectView` | Win11 Mica / Acrylic；Win10 不透明 |
 | 不显示独立图标 | 后台应用（无 Dock 图标） | 不显示任务栏按钮 |
 | 常驻入口 | 菜单栏图标 | 系统托盘图标 |
-| 开机启动 | 登录项（SMAppService） | 当前用户启动项 |
+| 开机启动 | 登录项（本期 LaunchAgent，见实现设计 §2 回写项 3） | 当前用户启动项 |
 | 减少动态效果 | “减弱动态效果” | “显示动画效果” |
 | 数据目录 | `~/Library/Application Support/xPaste/` | `%APPDATA%\xPaste\` |
 | 视频封面与元数据 | AVFoundation | 系统缩略图接口 / Media Foundation |
