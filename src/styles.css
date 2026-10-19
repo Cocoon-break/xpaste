@@ -434,7 +434,7 @@ mark { background: var(--mark-bg); color: var(--mark-fg); border-radius: 3px; pa
 .p-video { margin: 0; display: grid; gap: 10px; }
 .poster { position: relative; border-radius: 14px; overflow: hidden; border: 1px solid var(--line-2); box-shadow: var(--shadow-pop); }
 .poster img, .p-video video { display: block; width: 100%; height: auto; }
-button.poster { display: block; width: 100%; padding: 0; background: #000000; cursor: pointer; font: inherit; color: inherit; }
+button.poster { display: block; width: 100%; padding: 0; background: #000000; background-clip: padding-box; cursor: pointer; font: inherit; color: inherit; }
 /* 没有封面（mkv 等读不到元数据）时的深色占位 */
 .poster-blank { display: block; width: 100%; background: linear-gradient(135deg, color-mix(in srgb, var(--c-video) 22%, #000000), #0a0d1c); }
 .p-video video { border-radius: 14px; background: #000000; }
