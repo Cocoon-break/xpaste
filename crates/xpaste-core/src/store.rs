@@ -236,6 +236,18 @@ impl Store {
             .optional()?)
     }
 
+    /// 未软删除的记录摘要；已删除或不存在时为 None（发给前端前用它，避免已删记录复现）。
+    pub fn live_summary(&self, id: i64) -> Result<Option<RecordSummary>, CoreError> {
+        Ok(self
+            .conn
+            .query_row(
+                &format!("{SUMMARY_SQL} WHERE r.id = ?1 AND r.deleted_at IS NULL"),
+                [id],
+                |row| self.summary_row(row),
+            )
+            .optional()?)
+    }
+
     pub fn detail(&self, id: i64) -> Result<Option<RecordDetail>, CoreError> {
         let Some(summary) = self.summary(id)? else {
             return Ok(None);
@@ -740,6 +752,17 @@ pub(crate) mod tests {
         assert_eq!(removed.len(), 1);
         assert_eq!(s.list_summaries().unwrap().len(), 3);
         assert!(s.list_summaries().unwrap().iter().any(|r| r.id == first));
+    }
+    #[test]
+    fn live_summary_hides_soft_deleted() {
+        let mut s = mem();
+        let (Upsert::Added(id), _) = s.insert_or_merge(&rec("a"), 1, 500).unwrap() else {
+            panic!()
+        };
+        assert_eq!(s.live_summary(id).unwrap().map(|r| r.id), Some(id));
+        s.soft_delete(id, 2).unwrap();
+        assert!(s.live_summary(id).unwrap().is_none());
+        assert!(s.summary(id).unwrap().is_some());
     }
     #[test]
     fn prune_capacity_removes_oldest_unpinned() {

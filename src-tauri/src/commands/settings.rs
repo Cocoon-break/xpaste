@@ -52,16 +52,30 @@ pub fn bootstrap(state: State<'_, AppState>) -> Result<Bootstrap, AppError> {
     bootstrap_inner(&state)
 }
 
-/// 校验、持久化并生效新设置，然后按新的保留时长与条数上限清理；返回被删 id。不处理快捷键、不发事件。
-pub fn save_settings_inner(state: &AppState, s: Settings) -> Result<Vec<i64>, AppError> {
+/// 校验、持久化并生效新设置。不处理快捷键、不清理、不发事件。
+pub fn save_settings_inner(state: &AppState, s: Settings) -> Result<(), AppError> {
     s.validate()?;
     state.store().save_settings(&s)?;
-    let (days, max) = (s.retention_days, s.max_records);
     *state.settings() = s;
+    Ok(())
+}
+
+/// 按当前设置的保留时长与条数上限清理，返回已删除的 id。设置已生效，失败只记日志。
+pub fn prune_to_settings(state: &AppState) -> Vec<i64> {
+    let (days, max) = {
+        let s = state.settings();
+        (s.retention_days, s.max_records)
+    };
     let mut store = state.store();
-    let mut removed = store.prune_retention(days, now_ms())?;
-    removed.extend(store.prune_capacity(max)?);
-    Ok(removed)
+    let mut removed = store.prune_retention(days, now_ms()).unwrap_or_else(|e| {
+        log::warn!("保存设置后保留时长清理失败：{e}");
+        Vec::new()
+    });
+    match store.prune_capacity(max) {
+        Ok(ids) => removed.extend(ids),
+        Err(e) => log::warn!("保存设置后条数上限清理失败：{e}"),
+    }
+    removed
 }
 
 #[tauri::command(async)]
@@ -83,18 +97,16 @@ pub fn save_settings(
         restore(&app);
         return Err(e);
     }
-    match save_settings_inner(&state, settings) {
-        Ok(removed) => {
-            emit_removed(&app, &removed);
-            Ok(())
+    if let Err(e) = save_settings_inner(&state, settings) {
+        if hotkey_changed {
+            restore(&app);
         }
-        Err(e) => {
-            if hotkey_changed {
-                restore(&app);
-            }
-            Err(e)
-        }
+        return Err(e);
     }
+    // 设置已持久化并生效：清理失败不回滚、不算保存失败（prune_to_settings 只记日志）
+    let removed = prune_to_settings(&state);
+    emit_removed(&app, &removed);
+    Ok(())
 }
 
 /// 按给定规则会清理掉的非置顶记录数（设置页确认用）。
@@ -160,12 +172,10 @@ mod tests {
             max_records: 1000,
             ..Settings::default()
         };
-        assert_eq!(
-            save_settings_inner(&state, s.clone()).unwrap(),
-            Vec::<i64>::new()
-        );
+        save_settings_inner(&state, s.clone()).unwrap();
         assert_eq!(*state.settings(), s);
         assert_eq!(state.store().load_settings(), s);
+        assert!(prune_to_settings(&state).is_empty());
     }
 
     #[test]

@@ -19,12 +19,12 @@ pub fn emit<S: Serialize + Clone>(app: &AppHandle, event: &str, payload: S) {
     }
 }
 
-/// 读出记录摘要（转成前端 URL）后发送。
+/// 读出记录摘要（转成前端 URL）后发送。已软删除的记录不发，避免补全晚到时前端把它加回列表。
 pub fn emit_summary(app: &AppHandle, event: &str, id: i64) {
-    let summary = app.state::<AppState>().store().summary(id);
+    let summary = app.state::<AppState>().store().live_summary(id);
     match summary {
         Ok(Some(s)) => emit(app, event, crate::assets::summary_dto(s)),
-        Ok(None) => log::debug!("记录 {id} 已不存在，不发 {event}"),
+        Ok(None) => log::debug!("记录 {id} 已删除或不存在，不发 {event}"),
         Err(e) => log::warn!("读取记录 {id} 失败：{e}"),
     }
 }
