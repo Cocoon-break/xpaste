@@ -535,6 +535,13 @@ dialog.is-shown .dlg-body > * { animation: rowIn 460ms var(--ease-enter) both; a
 .switch input:checked::after { transform: translateX(16px); background: var(--on-beam); }
 .dlg-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 22px 18px; border-top: 1px solid var(--line); }
 
+/* —— 窄窗口（720–760px）：列表与预览上下叠放 —— */
+@media (max-width: 760px) {
+  .body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
+  .list { border-right: 0; border-bottom: 1px solid var(--line); }
+  .statusbar .k:not(:first-child) { display: none; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after, ::backdrop { transition-duration: 0s !important; transition-delay: 0s !important; animation: none !important; }
 }
