@@ -1,10 +1,11 @@
 import './styles.css';
 import { attachConsole, info } from './api/log';
 import {
-  bootstrap, copy, copyText, deleteRecord, getRecord, hidePanel, openUrl, requestAccessibility, revealFile, search, setPaused, setPinned,
-  undoDelete,
+  accessibilityGranted, bootstrap, copy, copyText, deleteRecord, getRecord, hidePanel, openUrl, prunePreview, requestAccessibility, revealFile,
+  saveSettings, search, setPaused, setPinned, undoDelete,
 } from './api/commands';
 import {
+  onOpenSettings,
   onPanelHidden,
   onPanelHideRequested,
   onPanelShown,
@@ -13,15 +14,17 @@ import {
   onRecordsRemoved,
   onRecordUpdated,
 } from './api/events';
-import type { AppError, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
+import type { AppError, Appearance, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
 import { grade, hexInfo, isHex } from './color';
 import { copyToast, needsAccessibility } from './copy-status';
 import {
   esc, FAV_MIN, FILTERS, FL, fmtBytes, fmtDateTime, fmtDur, fmtInt, hl, hlCode, host, isFav, isHttpUrl, LABEL, rel, truncate,
   type Filter,
 } from './format';
+import { hotkeyFromEvent, hotkeyLabel } from './hotkey';
 import { keyAction } from './keymap';
 import { applyAdded, applyRemoved, applyUpdated } from './records';
+import { formToSettings, joinIgnored, optionFromRetention, parseLimit } from './settings-form';
 import {
   armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, nextSelection, UNDO_MS, visible, type UndoState,
 } from './view';
@@ -571,10 +574,19 @@ function renderTabs(instant: boolean) {
   });
   if (instant) b.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
-// lastFilter 的持久化在阶段 5（设置保存）
+// 分类记忆（M06）：写进 settings.lastFilter，失败不提示
+function persistFilter() {
+  if (S.settings.lastFilter === S.filter) return;
+  const s = { ...S.settings, lastFilter: S.filter };
+  saveSettings(s).then(
+    () => void (S.settings = s),
+    (e: AppError) => void info(`保存分类失败 kind=${e.kind}`),
+  );
+}
 function setFilter(k: Filter, instant: boolean) {
   if (S.filter === k) return;
   S.filter = k;
+  persistFilter();
   renderTabs(instant);
   // M06 规则 6：切换分类后回到顶部并选中第一条
   list.scrollTop = 0;
@@ -894,6 +906,184 @@ const handlers = {
   },
 };
 
+// —— 设置 ——
+// Task 5 替换为真正的确认对话框
+const confirm = async (_: { title: string; body: string; ok: string; danger?: boolean }) => true;
+const dlg = $<HTMLDialogElement>('#settings'), form = $<HTMLFormElement>('#settingsForm'), hotkeyIn = $<HTMLInputElement>('#hotkey');
+const hotkeyHelp = $('#hotkeyHelp'), retainIn = $<HTMLSelectElement>('#retain'), limitIn = $<HTMLInputElement>('#limit'), limitErr = $('#limitErr');
+const ignoreIn = $<HTMLInputElement>('#ignore'), sensitiveIn = $<HTMLInputElement>('#sensitive');
+const moveTopIn = $<HTMLInputElement>('#moveTop'), autostartIn = $<HTMLInputElement>('#autostart');
+const permRow = $('#permRow'), permState = $('#permState'), permBtn = $<HTMLButtonElement>('#permBtn');
+const themeSeg = $('#themeSeg'), themePill = themeSeg.querySelector<HTMLElement>('.pill')!;
+const themeOpts = [...themeSeg.querySelectorAll<HTMLElement>('[data-theme-opt]')];
+const HOTKEY_IDLE = '点击输入框，然后按下新的组合键';
+let pendingHotkey = '', dlgReturn: HTMLElement | null = null, closeTimer = 0, saving = false;
+
+// 外观：点选即预览（原型 setTheme，新主题从被点按钮处圆形扩散），保存才持久化，关闭不保存时还原
+const themeMode = () => (root.dataset.theme || 'system') as Appearance;
+function paintTheme(instant: boolean) {
+  const mode = themeMode();
+  themeOpts.forEach((b, i) => {
+    const on = b.dataset.themeOpt === mode;
+    b.setAttribute('aria-checked', String(on));
+    b.tabIndex = on ? 0 : -1;
+    if (on) instantly(themePill, instant, () => (themePill.style.transform = `translateX(${i * 32}px)`));
+  });
+}
+function applyAppearance(mode: Appearance, fromEl: HTMLElement | null) {
+  if (mode === themeMode()) return;
+  const apply = () => {
+    if (mode === 'system') delete root.dataset.theme;
+    else root.dataset.theme = mode;
+    paintTheme(false);
+  };
+  root.setAttribute('data-theme-switching', '');
+  const done = () => requestAnimationFrame(() => root.removeAttribute('data-theme-switching'));
+  // WKWebView 旧版本没有 View Transitions：直接切
+  if (!('startViewTransition' in document) || reduced.matches || !fromEl) {
+    apply();
+    // 先让“关过渡”生效（原型靠 paintTheme 里读 getComputedStyle 顺带刷新），再在下一帧放开
+    void root.offsetWidth;
+    done();
+    return;
+  }
+  const r = fromEl.getBoundingClientRect();
+  const x = r.left + r.width / 2, y = r.top + r.height / 2;
+  const R = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y));
+  const vt = document.startViewTransition(apply);
+  vt.ready.then(() => root.animate(
+    { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${R}px at ${x}px ${y}px)`] },
+    { duration: 560, easing: EASE_ENTER, pseudoElement: '::view-transition-new(root)' },
+  ), () => {});
+  void vt.finished.finally(done);
+}
+themeSeg.addEventListener('click', (e) => {
+  const b = (e.target as Element).closest<HTMLElement>('[data-theme-opt]');
+  if (b) applyAppearance(b.dataset.themeOpt as Appearance, e.detail === 0 ? null : b);
+});
+themeSeg.addEventListener('keydown', (e) => {
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  e.preventDefault();
+  e.stopPropagation();
+  const i = themeOpts.findIndex((b) => b.dataset.themeOpt === themeMode());
+  const n = themeOpts[(i + (e.key === 'ArrowRight' ? 1 : -1) + themeOpts.length) % themeOpts.length];
+  applyAppearance(n.dataset.themeOpt as Appearance, null);
+  n.focus();
+});
+
+const setHotkeyHelp = (msg: string, err = false) => {
+  hotkeyHelp.textContent = msg;
+  hotkeyHelp.className = err ? 'err' : 'help';
+  hotkeyIn.setAttribute('aria-invalid', String(err));
+};
+async function paintPerm() {
+  permRow.hidden = S.platform.os !== 'macos';
+  if (permRow.hidden) return;
+  const ok = await accessibilityGranted().catch(() => false);
+  permState.textContent = ok ? '已授予' : '未授予';
+  permBtn.hidden = ok;
+}
+function openSettings() {
+  // bootstrap 之前没有设置可填；已打开时（托盘再点“设置…”）不重填，保留正在改的内容
+  if (!S.settings.hotkey || dlg.classList.contains('is-shown')) return;
+  clearTimeout(closeTimer);
+  if (!dlg.open) dlgReturn = document.activeElement as HTMLElement | null;
+  const st = S.settings;
+  pendingHotkey = st.hotkey;
+  hotkeyIn.value = hotkeyLabel(st.hotkey, S.platform.os);
+  setHotkeyHelp(HOTKEY_IDLE);
+  retainIn.value = optionFromRetention(st.retentionDays);
+  limitIn.value = String(st.maxRecords);
+  limitErr.hidden = true;
+  limitIn.removeAttribute('aria-invalid');
+  ignoreIn.value = joinIgnored(st.ignoredApps);
+  sensitiveIn.checked = st.skipSensitive;
+  moveTopIn.checked = st.moveToTop;
+  autostartIn.checked = st.launchAtLogin;
+  paintTheme(true);
+  void paintPerm();
+  if (!dlg.open) dlg.showModal();
+  // 关闭时 display:none 不会清掉滚动位置，打开后再回到顶部
+  dlg.querySelector('.dlg-body')!.scrollTop = 0;
+  void dlg.offsetWidth;
+  dlg.classList.add('is-shown');
+  hotkeyIn.focus();
+}
+function closeSettings() {
+  dlg.classList.remove('is-shown');
+  clearTimeout(closeTimer);
+  closeTimer = window.setTimeout(() => dlg.close(), reduced.matches ? 0 : 150);
+}
+// 所有关闭路径（含面板隐藏时直接 close）都到这里：清掉弹入状态、还原预览、焦点回到打开前的元素。
+// 预览在收起动画之后才还原：换主题时 data-theme-switching 会关掉所有过渡，收起动画也会被吞掉
+dlg.addEventListener('close', () => {
+  dlg.classList.remove('is-shown');
+  applyAppearance(S.settings.appearance, null);
+  if (S.shown && dlgReturn?.isConnected) dlgReturn.focus({ preventScroll: true });
+  dlgReturn = null;
+});
+dlg.addEventListener('cancel', (e) => {
+  e.preventDefault();
+  closeSettings();
+});
+// 遮罩点击才关：在输入框里拖选文字、松手落到遮罩上不算（那次 click 的目标也是 dialog）
+let downOnBackdrop = false;
+dlg.addEventListener('pointerdown', (e) => (downOnBackdrop = e.target === dlg));
+dlg.addEventListener('click', (e) => {
+  if ((e.target as Element).closest('[data-close]') || (e.target === dlg && downOnBackdrop)) closeSettings();
+});
+hotkeyIn.addEventListener('focus', () => setHotkeyHelp('请按下组合键，至少包含一个修饰键…'));
+hotkeyIn.addEventListener('blur', () => setHotkeyHelp(HOTKEY_IDLE));
+hotkeyIn.addEventListener('keydown', (e) => {
+  if (e.key === 'Tab' || e.key === 'Escape') return;
+  e.preventDefault();
+  if (['Control', 'Meta', 'Shift', 'Alt'].includes(e.key)) return;
+  const h = hotkeyFromEvent({ key: e.key, code: e.code, mod: e.ctrlKey || e.metaKey, alt: e.altKey, shift: e.shiftKey, repeat: e.repeat });
+  if (!h) return setHotkeyHelp(`至少需要包含 ${MOD} 或 Alt`);
+  pendingHotkey = h;
+  hotkeyIn.value = hotkeyLabel(h, S.platform.os);
+  setHotkeyHelp('已记录，保存后生效');
+  fx(hotkeyIn, [{ transform: 'scale(.98)' }, { transform: 'scale(1)' }], { duration: 300, easing: EASE_SPRING });
+});
+permBtn.addEventListener('click', () => void requestAccessibility().catch((err: AppError) => toast(err.message)));
+form.addEventListener('submit', (e) => {
+  e.preventDefault();
+  void submitSettings();
+});
+async function submitSettings() {
+  if (saving) return;
+  const limit = parseLimit(limitIn.value);
+  limitErr.hidden = limit !== null;
+  limitIn.setAttribute('aria-invalid', String(limit === null));
+  if (limit === null) return limitIn.focus();
+  const s = formToSettings(S.settings, {
+    hotkey: pendingHotkey, retain: retainIn.value, limit, ignored: ignoreIn.value, skipSensitive: sensitiveIn.checked,
+    moveToTop: moveTopIn.checked, launchAtLogin: autostartIn.checked, appearance: themeMode(),
+  });
+  saving = true;
+  try {
+    // 新的保留时长 / 条数上限会立即清理记录：先告诉用户删几条（设计 §5.5）
+    if (s.retentionDays !== S.settings.retentionDays || s.maxRecords !== S.settings.maxRecords) {
+      const n = await prunePreview(s.retentionDays, s.maxRecords);
+      if (n > 0 && !(await confirm({ title: '保存设置', body: `将删除 ${n} 条记录`, ok: '删除并保存' }))) return;
+    }
+    await saveSettings(s);
+    S.settings = s;
+    closeSettings();
+    toast('设置已保存');
+  } catch (e) {
+    const err = e as AppError;
+    if (err.kind === 'hotkeyTaken') {
+      // 先聚焦再写错误：focus 处理器会改帮助文字
+      hotkeyIn.focus();
+      setHotkeyHelp(err.message, true);
+    } else toast(err.message);
+  } finally {
+    saving = false;
+  }
+}
+$('#settingsBtn').addEventListener('click', openSettings);
+
 // —— 面板显隐 ——
 let booted = false;
 const shown = (t0: number | null) => {
@@ -926,6 +1116,8 @@ const hidden = () => {
   details.clear();
   pbody.innerHTML = '';
   closeMenu(false);
+  // 对话框不播收起动画，直接关（close 事件里还原外观预览）
+  document.querySelectorAll<HTMLDialogElement>('dialog[open]').forEach((d) => d.close());
   (document.activeElement as HTMLElement | null)?.blur();
 };
 
@@ -988,6 +1180,7 @@ document.addEventListener('keydown', (e) => {
       q.value = '';
       return runSearch('');
     case 'hide': return hide();
+    case 'settings': return openSettings();
     case 'menu': {
       // ponytail: 选中行滚出视口未渲染时不弹菜单；键盘移动总会把选中行滚回视口
       const r = rowEl(sel)?.getBoundingClientRect();
@@ -1006,6 +1199,8 @@ await onRecordAdded((s) => handlers.added(s));
 await onRecordUpdated((s) => handlers.updated(s));
 await onRecordsRemoved((ids) => handlers.removed(ids));
 await onPausedChanged((p) => handlers.paused(p));
+// 托盘“设置…”：后端已先唤起面板
+await onOpenSettings(openSettings);
 
 const b = await bootstrap().catch((e: AppError) => {
   // 之后的每次 renderList 都显示这条，不被空列表文案覆盖
@@ -1064,6 +1259,7 @@ list.addEventListener('click', (e) => {
   if (t.closest('[data-act="reset"]')) {
     q.value = '';
     S.filter = 'all';
+    persistFilter();
     renderTabs(false);
     runSearch('', { stagger: true });
     q.focus();
