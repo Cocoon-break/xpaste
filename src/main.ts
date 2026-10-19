@@ -1581,6 +1581,8 @@ S.filter = FILTERS.some(([k]) => k === b.settings.lastFilter) ? (b.settings.last
 if (b.settings.appearance === 'system') delete root.dataset.theme;
 else root.dataset.theme = b.settings.appearance;
 root.dataset.material = b.platform.material;
+// 原生淡出时网页内容不再自己淡出（否则内容先消失、只剩底板），整体由窗口 alpha 承担
+root.toggleAttribute('data-native-fade', nativeFade());
 const MOD = b.platform.os === 'macos' ? '⌘' : 'Ctrl';
 document.querySelectorAll('.mod').forEach((k) => (k.textContent = MOD));
 $('.modp').textContent = `${MOD} P`;

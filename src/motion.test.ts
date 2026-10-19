@@ -47,6 +47,9 @@ test('M20-2 快捷键唤起 90ms enter / 托盘单击 320ms spring / 隐藏 160m
   // 淡出播完再让后端隐藏窗口；macOS 系统材质下立即调，后端在同样 160ms 内淡出整个窗口 alpha（panel.rs fade_out_ms）
   assert.match(ts, /const hide = \(\) => \{[\s\S]*?win\.dataset\.shown = 'false';[\s\S]*?const animate = !reduced\.matches;[\s\S]*?hidePanel\(animate\)[\s\S]*?\}\), animate && !nativeFade\(\) \? 160 : 0\);/);
   assert.match(ts, /const nativeFade = \(\) => S\.platform\.os === 'macos' && S\.platform\.material === 'glass';/);
+  // 原生淡出时内容不自己淡出，只位移，窗口 alpha 单独承担整体淡出（不匹配 Windows Mica：nativeFade 要求 macOS）
+  assert.match(ts, /root\.toggleAttribute\('data-native-fade', nativeFade\(\)\);/);
+  assert.match(rule(':root[data-native-fade] .window[data-shown="false"]'), /opacity: 1;/);
 });
 
 test('M20-3 选中项切换 130ms move，换类型色；按住方向键 0ms', () => {

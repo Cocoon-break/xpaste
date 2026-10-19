@@ -339,13 +339,18 @@ pub fn hide_animated(app: &AppHandle, animate: bool) {
             log::warn!("面板淡出失败：{e}");
             return hide(app);
         }
-        // 动画与计时同时开始，到点时 alpha 已是 0；期间重新唤起或直接隐藏过就不再动
+        // 动画与计时同时开始，到点时 alpha 已是 0。检查放在主线程闭包里，与 show_panel 的主线程任务串行，
+        // 期间重新唤起或直接隐藏过就不再动。
+        // ponytail: 用计时线程代替 NSAnimationContext 的 completionHandler（免写 ObjC block）；
+        // 主线程卡顿时动画会落后于计时，orderOut 可能早于 alpha 到 0（提前消失），但不会卡在可见；需要逐帧对齐再改用 completionHandler
         let app = app.clone();
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(ms));
-            if FADING.load(Ordering::Relaxed) == seq {
-                hide(&app);
-            }
+            on_main(&app, move |app| {
+                if FADING.load(Ordering::Relaxed) == seq {
+                    hide(app);
+                }
+            });
         });
     });
 }
@@ -431,6 +436,11 @@ pub fn toggle_action(
     }
 }
 
+/// 有待处理的隐藏：前端淡出中（`HIDE_REQ`），或原生淡出中（`FADING`，窗口仍可见）。
+fn hide_pending(req: u64, fading: u64) -> bool {
+    req != 0 || fading != 0
+}
+
 /// 以窗口实际可见性为准切换。可见时不直接隐藏，请前端先播淡出再调 `hide_panel`；
 /// 前端失效时由兜底线程隐藏。
 pub fn toggle(app: &AppHandle, t0: Option<u64>, trigger: Trigger) {
@@ -443,8 +453,10 @@ pub fn toggle(app: &AppHandle, t0: Option<u64>, trigger: Trigger) {
     // 时钟回拨（差为负）当作很久以前隐藏，宁可漏挡一次也不让托盘失灵
     let since = crate::clock::now_ms().saturating_sub(LAST_HIDE_MS.load(Ordering::Relaxed));
     let since = u64::try_from(since).unwrap_or(u64::MAX);
-    // 原生淡出途中窗口仍可见，同样算待处理的隐藏
-    let hide_pending = HIDE_REQ.load(Ordering::Relaxed) != 0 || FADING.load(Ordering::Relaxed) != 0;
+    let hide_pending = hide_pending(
+        HIDE_REQ.load(Ordering::Relaxed),
+        FADING.load(Ordering::Relaxed),
+    );
     match toggle_action(visible, hide_pending, onboarding, trigger, since) {
         ToggleAction::Show { then_hotkey } => {
             show(app, t0, trigger);
@@ -595,6 +607,17 @@ mod tests {
         assert_eq!(toggle_action(false, false, true, Hotkey, 9999), show(true));
         assert_eq!(toggle_action(false, false, true, Tray, 9999), show(false));
     }
+    #[test]
+    fn reshow_during_native_fade() {
+        assert!(!hide_pending(0, 0));
+        assert!(hide_pending(7, 0));
+        assert!(hide_pending(0, 9)); // Esc 后原生淡出途中（没有 HIDE_REQ）
+        assert_eq!(
+            toggle_action(true, hide_pending(0, 9), false, Trigger::Hotkey, 0),
+            ToggleAction::Reshow
+        );
+    }
+
     #[test]
     fn native_fade_only_for_macos_system_material() {
         assert_eq!(fade_out_ms(true, "glass", true), Some(160));
