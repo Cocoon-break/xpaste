@@ -34,6 +34,7 @@ const JETBRAINS_EXES: [&str; 10] = [
     "fleet",
 ];
 
+/// 区分大小写，与 M02 规则 7 原文一致（否则 “Let me know…” 这类句子会被判成代码）。
 const CODE_PREFIXES: [&str; 9] = [
     "$ ",
     "git ",
@@ -102,7 +103,7 @@ pub fn lang(text: &str) -> Option<&'static str> {
         Some("Shell")
     } else if ["SELECT", "INSERT", "UPDATE", "WITH"]
         .iter()
-        .any(|p| starts_with_ci(t, p))
+        .any(|p| starts_with_word_ci(t, p))
     {
         Some("SQL")
     } else if ["const ", "let ", "function ", "=>", "import "]
@@ -144,9 +145,14 @@ fn has_ext(path: &Path, exts: &[&str]) -> bool {
         .is_some_and(|e| exts.iter().any(|x| e.eq_ignore_ascii_case(x)))
 }
 
-fn starts_with_ci(text: &str, prefix: &str) -> bool {
-    text.get(..prefix.len())
-        .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+/// 不区分大小写的前缀，且其后为空白或文本结束（单词边界）。
+fn starts_with_word_ci(text: &str, word: &str) -> bool {
+    text.get(..word.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(word))
+        && text[word.len()..]
+            .chars()
+            .next()
+            .is_none_or(char::is_whitespace)
 }
 
 /// `^#([0-9a-f]{3}|[0-9a-f]{6})$`，不区分大小写。
@@ -165,7 +171,7 @@ fn is_link(t: &str) -> bool {
 fn is_code(t: &str, snapshot: &Snapshot) -> bool {
     snapshot.source.as_ref().is_some_and(|a| is_code_app(&a.id))
         || (t.contains('\n') && t.contains(['{', '}', ';', '=', '(', ')', '<', '>']))
-        || CODE_PREFIXES.iter().any(|p| starts_with_ci(t, p))
+        || CODE_PREFIXES.iter().any(|p| t.starts_with(p))
 }
 
 #[cfg(test)]
@@ -263,6 +269,8 @@ mod tests {
         assert_eq!(lang("select * from t"), Some("SQL"));
         assert_eq!(lang("const a = () => 1"), Some("JavaScript"));
         assert_eq!(lang("hello"), None);
+        assert_eq!(lang("withStyles(x)"), None);
+        assert_eq!(lang("update users set a=1"), Some("SQL"));
     }
     #[test]
     fn hash_is_stable_and_order_independent_for_files() {
@@ -287,6 +295,7 @@ mod tests {
     fn presentable_content() {
         assert!(!Snapshot::default().has_presentable_content());
         assert!(snap("a").has_presentable_content());
+        assert!(!snap("  \n\t").has_presentable_content());
     }
 
     #[test]
@@ -295,5 +304,19 @@ mod tests {
         assert!(is_code_app(r"C:\JetBrains\bin\pycharm64.exe"));
         assert!(!is_code_app(r"C:\Windows\notepad.exe"));
         assert!(!is_code_app("com.microsoft.VSCodeInsidersX"));
+    }
+
+    #[test]
+    fn prose_starting_with_capitalised_keyword_is_text() {
+        for t in [
+            "Let me know tomorrow",
+            "Select all files first",
+            "Import duties apply",
+        ] {
+            assert_eq!(kind(&snap(t)), Kind::Text, "{t}");
+        }
+        for t in ["SELECT 1", "let x = 1"] {
+            assert_eq!(kind(&snap(t)), Kind::Code, "{t}");
+        }
     }
 }
