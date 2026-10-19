@@ -1,10 +1,20 @@
+use std::collections::HashSet;
+use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
-use objc2::rc::autoreleasepool;
-use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString, NSWorkspace};
+use objc2::AllocAnyThread;
+use objc2::rc::{Retained, autoreleasepool};
+use objc2::runtime::ProtocolObject;
+use objc2_app_kit::{
+    NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard, NSPasteboardItem,
+    NSPasteboardTypeFileURL, NSPasteboardTypeHTML, NSPasteboardTypePNG, NSPasteboardTypeString,
+    NSPasteboardTypeTIFF, NSWorkspace,
+};
 use objc2_core_graphics::{CGEvent, CGEventFlags, CGEventTapLocation};
-use objc2_foundation::{NSString, NSURL};
+use objc2_foundation::{
+    NSArray, NSData, NSDictionary, NSPoint, NSRect, NSSize, NSString, NSURL, ns_string,
+};
 use xpaste_core::{AppInfo, Flavor, Snapshot};
 
 use crate::{PasteBlock, PlatformError};
@@ -66,25 +76,135 @@ pub fn read_snapshot() -> Result<Option<Snapshot>, PlatformError> {
                 ..Default::default()
             }));
         }
-        // SAFETY: AppKit 导出的常量，进程内一直有效
-        let text_type = unsafe { NSPasteboardTypeString };
         let mut snapshot = Snapshot {
             source,
             ..Default::default()
         };
-        if let Some((i, text)) = items
-            .iter()
-            .enumerate()
-            .find_map(|(i, item)| item.stringForType(text_type).map(|s| (i, s.to_string())))
-        {
-            snapshot.flavors.push(Flavor {
-                item: i as u32,
-                format: text_type.to_string(),
-                data: text.as_bytes().to_vec(),
-            });
-            snapshot.text = Some(text);
+        let mut seen = HashSet::new();
+        for (i, item) in items.iter().enumerate() {
+            for uti in item.types().iter() {
+                let format = uti.to_string();
+                if !seen.insert((i, format.clone())) {
+                    continue;
+                }
+                if let Some(data) = item.dataForType(&uti) {
+                    snapshot.flavors.push(Flavor {
+                        item: i as u32,
+                        format,
+                        data: data.to_vec(),
+                    });
+                }
+            }
+        }
+        let first_string = |uti: &NSString| {
+            items
+                .iter()
+                .find_map(|item| item.stringForType(uti).map(|s| s.to_string()))
+        };
+        // SAFETY: AppKit 导出的常量，进程内一直有效
+        let (text_type, html_type, file_type, png_type, tiff_type) = unsafe {
+            (
+                NSPasteboardTypeString,
+                NSPasteboardTypeHTML,
+                NSPasteboardTypeFileURL,
+                NSPasteboardTypePNG,
+                NSPasteboardTypeTIFF,
+            )
+        };
+        snapshot.text = first_string(text_type).map(|t| crate::decode::normalize_newlines(&t));
+        snapshot.html = first_string(html_type);
+        snapshot.url_title = first_string(ns_string!("public.url-name"));
+        for item in items.iter() {
+            let path = item
+                .stringForType(file_type)
+                .and_then(|s| NSURL::URLWithString(&s))
+                .filter(|u| u.isFileURL())
+                // 文件引用 URL（file:///.file/id=…）先转成路径 URL
+                .and_then(|u| u.filePathURL())
+                .and_then(|u| u.path())
+                .map(|p| PathBuf::from(p.to_string()));
+            if let Some(p) = path
+                && !snapshot.file_paths.contains(&p)
+            {
+                snapshot.file_paths.push(p);
+            }
+        }
+        if snapshot.file_paths.is_empty() {
+            snapshot.bitmap = read_bitmap(&items, png_type, tiff_type);
         }
         Ok(Some(snapshot))
+    })
+}
+
+/// 第一个 PNG 原样返回；否则第一个 TIFF 转成 PNG。
+fn read_bitmap(
+    items: &NSArray<NSPasteboardItem>,
+    png_type: &NSString,
+    tiff_type: &NSString,
+) -> Option<Vec<u8>> {
+    if let Some(png) = items.iter().find_map(|item| item.dataForType(png_type)) {
+        return Some(png.to_vec());
+    }
+    let tiff = items.iter().find_map(|item| item.dataForType(tiff_type))?;
+    let png = NSBitmapImageRep::imageRepWithData(&tiff).and_then(|rep| to_png(&rep));
+    if png.is_none() {
+        log::debug!("TIFF 转 PNG 失败 bytes={}", tiff.len());
+    }
+    png
+}
+
+fn to_png(rep: &NSBitmapImageRep) -> Option<Vec<u8>> {
+    // SAFETY: 空字典，类型参数无关
+    unsafe {
+        rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())
+    }
+    .map(|d| d.to_vec())
+}
+
+/// 按 `item` 分组（保持首次出现顺序）写回剪切板，返回写入后的 `changeCount`。
+pub fn write(flavors: &[Flavor]) -> Result<u64, PlatformError> {
+    autoreleasepool(|_| {
+        let mut groups: Vec<(u32, Retained<NSPasteboardItem>)> = Vec::new();
+        for f in flavors.iter().filter(|f| !f.format.is_empty()) {
+            let idx = match groups.iter().position(|(i, _)| *i == f.item) {
+                Some(idx) => idx,
+                None => {
+                    groups.push((f.item, NSPasteboardItem::new()));
+                    groups.len() - 1
+                }
+            };
+            groups[idx]
+                .1
+                .setData_forType(&NSData::with_bytes(&f.data), &NSString::from_str(&f.format));
+        }
+        let items: Vec<_> = groups
+            .into_iter()
+            .map(|(_, item)| ProtocolObject::from_retained(item))
+            .collect();
+        let pb = NSPasteboard::generalPasteboard();
+        pb.clearContents();
+        if !pb.writeObjects(&NSArray::from_retained_slice(&items)) {
+            return Err(PlatformError::Clipboard("writeObjects 失败".into()));
+        }
+        Ok(change_count())
+    })
+}
+
+/// 应用图标转 PNG：取 64 pt 对应的那档图像（Retina 屏上为 128×128 px），不重新绘制。
+pub fn app_icon(app_id: &str) -> Option<Vec<u8>> {
+    autoreleasepool(|_| {
+        let ws = NSWorkspace::sharedWorkspace();
+        let path = ws
+            .URLForApplicationWithBundleIdentifier(&NSString::from_str(app_id))?
+            .path()?;
+        let image = ws.iconForFile(&path);
+        let mut rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(64.0, 64.0));
+        // SAFETY: rect 是有效的栈上变量；不传 context 与 hints
+        let cg = unsafe { image.CGImageForProposedRect_context_hints(&mut rect, None, None) }?;
+        to_png(&NSBitmapImageRep::initWithCGImage(
+            NSBitmapImageRep::alloc(),
+            &cg,
+        ))
     })
 }
 

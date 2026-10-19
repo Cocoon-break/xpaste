@@ -264,6 +264,18 @@ fn app_of_window(hwnd: HWND) -> Option<AppInfo> {
     }
 }
 
+/// 多格式写回在阶段 6 实现。
+pub fn write(flavors: &[Flavor]) -> Result<u64, PlatformError> {
+    let _ = flavors;
+    Err(PlatformError::Unsupported)
+}
+
+/// 应用图标在阶段 6 实现。
+pub fn app_icon(app_id: &str) -> Option<Vec<u8>> {
+    let _ = app_id;
+    None
+}
+
 /// 清空剪切板后写入 `CF_UNICODETEXT`，返回写入后的序号。
 pub fn write_text(text: &str) -> Result<u64, PlatformError> {
     let wide: Vec<u16> = text.encode_utf16().chain([0]).collect();
