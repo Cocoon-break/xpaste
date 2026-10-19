@@ -7,6 +7,77 @@ macOS / Windows 剪切板历史工具。
 - 技术选型：[docs/ADR-001-技术选型.md](docs/ADR-001-技术选型.md)
 - 实现设计：[docs/specs/2026-10-18-xPaste-实现设计.md](docs/specs/2026-10-18-xPaste-实现设计.md)（设计文档放 `docs/specs/`，实施计划放 `docs/plans/`）
 
+## 安装
+
+**macOS 13 及以上**（Apple 芯片）：打开 `xPaste_<版本>_aarch64.dmg`，把 xPaste 拖进“应用程序”。安装包未签名，第一次打开会被系统拦下，任选一种方式放行：
+
+- 在访达的“应用程序”里右键 xPaste →“打开”，在弹窗里再点“打开”；
+- 或先双击打开一次，再到系统设置 → 隐私与安全性，在页面底部点“仍要打开”；
+- 或在终端运行 `xattr -dr com.apple.quarantine /Applications/xPaste.app`。
+
+**Windows 10 21H2 / Windows 11**（x64）：运行 `xPaste_<版本>_x64-setup.exe`，装到当前用户目录（`%LOCALAPPDATA%\xPaste`），不需要管理员权限。SmartScreen 提示“Windows 已保护你的电脑”时，点“更多信息 → 仍要运行”。系统没有 WebView2 运行时（部分 Windows 10）时，安装程序会在线下载，需要联网。
+
+## 快速上手
+
+- 按 `⌘ + Shift + V`（macOS）/ `Ctrl + Shift + V`（Windows）唤起面板，可在设置里改。第一次启动有引导。
+- macOS 上按 Enter 自动粘贴到上一个应用，需要“辅助功能”权限（系统设置 → 隐私与安全性 → 辅助功能）。不授权也能用：Enter 只复制并提示，到目标应用里手动按 `⌘ + V`。
+- 数据只存在本机，不联网、不同步、不收集使用统计：
+  - macOS：`~/Library/Application Support/xPaste/`
+  - Windows：`%APPDATA%\xPaste\`
+- 卸载：
+  - macOS：从菜单栏图标选“退出 xPaste”，把应用拖进废纸篓。要删数据，手动删除上面的数据目录，以及 `~/Library/LaunchAgents/` 下 xPaste 的 plist（开过“开机时启动”才有）。
+  - Windows：在“设置 → 应用”里卸载。要删历史数据，在卸载确认页勾选“删除应用程序数据”。
+
+## 已知限制
+
+**性能**（阶段 8 测量：macOS 27、Apple M1、release 构建、5000 条记录，见[验收记录](docs/验收记录.md)“测量摘要（阶段 8）”）
+
+- 唤起到第一帧 166 ms（中位数，最大 183 ms），目标 100 ms：5000 条时每次显示都同步重渲染列表。记录少（百条左右）时多在 100 ms 以内。
+- 空闲内存约 266 MB 以上（footprint，含 3 个 WebKit 子进程），目标 150 MB。那次采样被打断，待重测（阶段8-空闲测量）。
+- 启动后第一次唤起时，第一个搜索按键约 110 ms（目标 50 ms），之后 20–40 ms。
+- Windows 的性能还没有测。
+
+**发布与数据**
+
+- 安装包未签名、未公证，首次打开要手动放行（见“安装”；拿到证书后的步骤见“签名与公证”）。
+- 没有自动更新，托盘菜单里也没有“检查更新…”，新版本要手动下载安装。
+- 数据库没有加密（本机明文 SQLite，靠系统账户权限保护）。
+- macOS 安装包只有 Apple 芯片（aarch64）版本，没有 Intel 或通用版本。
+- dmg 打开后没有窗口图标摆位（无界面打包跳过了 Finder 布局），“应用程序”快捷方式还在，拖进去即可。
+- Windows 安装界面只有简体中文。
+- 崩溃后不会自动重启。已写入的记录不丢，开机启动项保留，下次登录或手动打开即可恢复。
+
+**macOS**
+
+- 其他应用占用同一快捷键时检测不到：`global-hotkey` 是非独占注册，两个应用会同时响应，xPaste 不会提示“快捷键被占用”。
+- 卸载时无法询问是否删除数据（拖进废纸篓没有卸载程序），数据要手动删，见“快速上手”。
+- 开机启动用 LaunchAgent（`~/Library/LaunchAgents/` 下的 plist），不是 SMAppService；系统设置的“登录项”里同样显示 xPaste。
+- 开发版（`xpaste`）与正式版（`xPaste`）在“辅助功能”列表里是两个条目，要分别授权。重新构建开发版后签名会变，要删掉旧条目再添加。
+- 自动粘贴按物理键位发送 `⌘ + V`（`kVK_ANSI_V`）：Dvorak 等 V 不在这个键位上的键盘布局下，可能粘贴失败。
+- 毛玻璃材质下，隐藏与显示的整窗淡入淡出改过之后还没在实机上目视确认（阶段7-T7-a）。主线程卡顿时，面板可能在淡出完成前就消失。
+
+**Windows**
+
+- Windows 端的代码还没有在 Windows 上编译和验收过（仓库还没有远端，CI 没有运行过），以下几条来自实现与审查。
+- 覆盖安装时选了“安装前卸载”，或者卸载时保留数据再重新安装：设置里“开机时启动”仍显示开启，但卸载已经删掉注册表 Run 值，实际不会开机启动。在设置里关掉保存、再打开保存即可恢复（自动重新同步是后续工作）。
+- 从托盘图标或托盘菜单打开面板时没有可粘贴的目标窗口，Enter 只复制并提示。
+- 托盘左键单击按松开计：面板隐藏后 300 ms 内的单击不重新显示；按住超过 300 ms 再松开，会把面板重新打开。
+- Windows 10 上面板为不透明背景，不用 Acrylic。
+- 链接标题只取浏览器复制时附带 HTML 里的锚文本，不解析 Firefox 的 `text/x-moz-url`。
+- 没有透明通道的老式应用图标按不透明处理，可能显示为带底色的方块。
+
+**两端通用**
+
+- 首次引导中，只有按唤起快捷键算“试按成功”；托盘单击、再次启动应用、从访达重开都不算（阶段 6 起的规则）。
+- 在设置的快捷键录制框里按当前的唤起快捷键，会先被全局快捷键截获（面板隐藏、对话框关闭）。
+- 视频：`mkv`、`avi`、`wmv`、`flv` 不能在预览里播放，预览显示“无法在预览中播放这个格式”（macOS 上这几种也读不出时长和封面）。视频获得焦点时按 `Space` 切换播放 / 暂停，已实现，还没在实机上验证。
+- 面板打开时外部连续复制多条，新记录只插入列表、不改选中项，选中行可能被推到可视区外（阶段7-T4-a，待确认）。
+- 亮色主题下，几处用类型色的文字对比度低于 4.5 : 1，如标题栏“正在记录”、频谱最后一个刻度、“用过 N 次”、代码高亮、选中行序号（阶段7-T6-c，待定）。
+- 截图记录的标题时间（`截图 YYYY-MM-DD HH.mm.png`）是 UTC，不是本地时间；列表的相对时间按本地时间显示。
+- 选中行被鼠标滚轮滚出可视区后，按菜单键或 `Shift + F10` 不弹菜单；用方向键移动会把选中行滚回来。
+- 读屏：列表行的 DOM 顺序不一定等于视觉顺序（行不可聚焦，读屏通过 `aria-activedescendant` 跟随选中项）。
+- 启动瞬间删除的记录，可能被启动快照带回列表，下一次删除事件或重启后消失。
+
 ## 目录
 
 - `crates/xpaste-core`：核心逻辑，不依赖 Tauri
@@ -19,12 +90,25 @@ macOS / Windows 剪切板历史工具。
 需要 Node.js、pnpm 和 Rust ≥ 1.90。统一通过 `make` 操作，`make help` 列出全部目标：
 
 ```sh
-make install   # 安装依赖
-make dev       # 开发运行
-make check     # 提交前全量检查：格式、clippy、Rust + 前端单元测试、前端构建
-make test      # 只跑单元测试
-make release   # 打发布包（未签名）
+make install       # 安装依赖
+make dev           # 开发运行
+make dev-isolated  # 开发运行，数据目录隔离在 .xpaste-dev/，开启唤起与搜索计时（自动化验收用这个）
+make measure       # macOS 性能与可靠性测量（先 make release-app；离开电脑时运行，约 15 分钟）
+make check         # 提交前全量检查：格式、clippy、Rust + 前端单元测试、前端构建
+make test          # 只跑单元测试
+make release       # 打发布包（未签名）
 ```
+
+### 签名与公证（拿到证书后）
+
+现在的安装包未签名，配置不用改，拿到证书后按下面做：
+
+- **macOS**：钥匙串里装好 Developer ID Application 证书，设置环境变量后运行 `make release`，Tauri 会签名 `.app` 并公证 dmg：
+  - `APPLE_SIGNING_IDENTITY`：证书名称，如 `Developer ID Application: <名字> (<TEAM ID>)`
+  - `APPLE_ID`：Apple 账号
+  - `APPLE_PASSWORD`：App 专用密码（在 appleid.apple.com 生成，不是账号密码）
+  - `APPLE_TEAM_ID`：团队 ID
+- **Windows**：把代码签名证书导入“当前用户 → 个人”证书存储，在 `src-tauri/tauri.windows.conf.json` 的 `bundle.windows` 下加 `certificateThumbprint`（证书指纹）、`digestAlgorithm: "sha256"`、`timestampUrl`（证书颁发机构提供的时间戳服务地址），再运行 `make release`。
 
 ## 分支
 
