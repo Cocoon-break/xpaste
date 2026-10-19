@@ -172,6 +172,7 @@ kbd {
 .window.boot { animation: panelIn 720ms var(--ease-enter) both; }
 /* 系统材质由窗口外层提供圆角，内层缩放会让两层圆角错位：只位移 */
 :root:not([data-material="opaque"]) .window.boot { animation-name: panelInGlass; }
+:root:not([data-material="opaque"]) .window[data-shown="false"] { transform: translateY(10px); }
 .window.boot .sel-ind { animation: fadeIn 400ms ease 300ms both; }
 @keyframes panelIn { from { opacity: 0; transform: scale(.94) translateY(24px); } }
 @keyframes panelInGlass { from { opacity: 0; transform: translateY(8px); } }

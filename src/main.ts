@@ -132,7 +132,7 @@ const metaLine = (r: RecordSummary) => {
 
 const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id === S.newId) => `
     <div class="item${isNew ? ' is-new' : ''}${S.removing.has(r.id) ? ' is-removing' : ''}${stagger && i < 12 ? ' stg' : ''}" data-id="${r.id}" style="--i:${i}">
-      <div class="row" role="option" id="opt-${r.id}" aria-selected="false" aria-posinset="${i + 1}" data-type="${r.kind}">
+      <div class="row" role="option" id="opt-${r.id}" aria-selected="false" aria-posinset="${i + 1}" aria-label="${esc(r.title)}，${LABEL[r.kind]}" data-type="${r.kind}">
         <div class="row-in">
           ${thumb(r)}
           <div class="main">
@@ -157,7 +157,9 @@ function setCount(n: number, total: number) {
   fx(countEl, [{ transform: 'translateY(6px)', opacity: 0, filter: 'blur(3px)' }, { transform: 'none', opacity: 1, filter: 'blur(0)' }], { duration: 260, easing: EASE_ENTER });
 }
 
+let bootError = '';
 function emptyHTML() {
+  if (bootError) return `<div class="empty"><span class="ring">${svg('inbox')}</span><p>无法读取历史记录：${esc(bootError)}</p></div>`;
   const qq = S.q.trim(), f = S.filter;
   const msg = qq ? `没有匹配“${esc(qq)}”的${f === 'all' ? '' : FL[f]}记录`
     : f === 'fav' ? `还没有常用记录。同一条内容复制 ${FAV_MIN} 次以上就会出现在这里`
@@ -174,12 +176,19 @@ let painted = new Map<string, Painted>();
 // cell 的 top 相对 .list-inner，滚动容器还有上内边距
 const padTop = () => parseFloat(getComputedStyle(list).paddingTop) || 0;
 // 正在删除的行收起后，它下方的 cell 显示位置上移一行（设计 9.4）。原型靠 grid 收起把邻居推上去，
-// 这里 .vrow 绝对定位，位置显式算：S.cells 不变，删除计时器到点重排时 layout 给出的 top 与这里一致
-const goneTops = () => [...S.removing].flatMap((id) => topOf(S.cells, id) ?? []);
-const shiftUp = (top: number, gone: number[]) => top - gone.filter((t) => t < top).length * ROW_H;
+// 这里 .vrow 绝对定位，位置显式算：S.cells 不变，删除计时器到点重排时 layout 给出的 top 与这里一致。
+// 滚到底时重排会把 scrollTop 夹紧到新的最大值（原型是收起过程中逐渐夹紧）：超出的 over 让所有 cell
+// 先下移 over，重排后浏览器夹紧 scrollTop 正好落到同一画面
+type Gone = { tops: number[]; over: number };
+const goneOf = (): Gone => {
+  const tops = [...S.removing].flatMap((id) => topOf(S.cells, id) ?? []);
+  const over = tops.length ? Math.max(0, list.scrollTop - (list.scrollHeight - tops.length * ROW_H - list.clientHeight)) : 0;
+  return { tops, over };
+};
+const shiftUp = (top: number, g: Gone) => top + g.over - g.tops.filter((t) => t < top).length * ROW_H;
 const shownTop = (id: number) => {
   const t = topOf(S.cells, id);
-  return t === undefined ? t : shiftUp(t, goneTops());
+  return t === undefined ? t : shiftUp(t, goneOf());
 };
 // 复制光扫：记住开始时间，行被事件重绘整行替换时在新元素上接着扫（负的 animation-delay）
 const BEAM_MS = 760;
@@ -190,11 +199,12 @@ function paintBeam(row: HTMLElement | null) {
   row.style.setProperty('--beam-at', `${Math.round(left - BEAM_MS)}ms`);
   row.classList.add('beam');
 }
-/** `glide`：已渲染的元素位置变了就用这条 transition 过去（插入 / 删除时下方的行补位）；transitionend 后清掉 */
-function paintRows({ stagger = false, glide = '' } = {}) {
+/** `glide`：已渲染的元素位置变了就用这条 transition 过去（插入 / 删除时下方的行补位）；transitionend 后清掉。
+ *  `glideBusy`：元素正在补位途中（连续删除）时改用它，不再空停一段延迟 */
+function paintRows({ stagger = false, glide = '', glideBusy = '' } = {}) {
   const [a, b] = range(S.cells, list.scrollTop - padTop(), list.clientHeight);
   const next = new Map<string, Painted>();
-  const gone = goneTops();
+  const gone = goneOf();
   if (reduced.matches) glide = '';
   for (let i = a; i < b; i++) {
     const c = S.cells[i];
@@ -215,15 +225,18 @@ function paintRows({ stagger = false, glide = '' } = {}) {
     if (r && (fresh || p.h !== h)) {
       const row = p.el.querySelector<HTMLElement>('.row');
       // 新记录弹入：旧 WebKit 没有 @starting-style，用 WAAPI 兜底
-      if (r.id === S.newId) fx(row, [{ transform: 'translateY(-12px) scale(.97)', opacity: 0 }, { transform: 'none', opacity: 1 }], { duration: 520, easing: EASE_SPRING, delay: 60, fill: 'backwards' });
+      if (r.id === S.newId) {
+        fx(row, [{ opacity: 0 }, { opacity: 1 }], { duration: 260, easing: EASE_ENTER, delay: 60, fill: 'backwards' });
+        fx(row, [{ transform: 'translateY(-12px) scale(.97)' }, { transform: 'none' }], { duration: 520, easing: EASE_SPRING, delay: 60, fill: 'backwards' });
+      }
       if (r.id === beam.id) paintBeam(row);
     }
     p.h = h;
     // 条数一变全部行都会变，放在 HTML 里会让每次增删整表替换
     if (r) p.el.querySelector('.row')?.setAttribute('aria-setsize', String(S.count));
     const y = shiftUp(c.top, gone);
-    // 位置不变时不设 transition：不会有 transitionend 来清它
-    if (glide && p.el.isConnected && p.top !== y) p.el.style.transition = glide;
+    // 位置不变时不动 transition：不会有 transitionend 来清它；位置变了但这次不补位，清掉残留的过渡
+    if (p.top !== y) p.el.style.transition = glide && p.el.isConnected ? (p.el.style.transition && glideBusy) || glide : '';
     p.top = y;
     p.el.style.transform = `translateY(${y}px)`;
     // ponytail: 新元素追加在末尾，DOM 顺序不严格等于视觉顺序；行不可聚焦，读屏走 aria-activedescendant
@@ -275,13 +288,13 @@ function renderList({ scroll = false, stagger = false, base = 0, glide = '' } = 
   paintRows({ stagger, glide });
   S.sel = ensureSelection(v, S.sel);
   // 补位时选中光标跟着选中行一起滑
-  select(S.sel, { scroll, glide: !!glide, fade: false, indDur: 300 });
+  select(S.sel, { scroll, glide: !!glide, fade: false, indDur: 300, indEase: EASE_ENTER });
 }
 const ENTER_GLIDE = `transform 300ms ${EASE_ENTER}`;
 
 // 选中光标：独立一层滑动，内容即时
 let indShown = false;
-function moveInd({ instant = false, dur = 130, top }: { instant?: boolean; dur?: number; top?: number } = {}) {
+function moveInd({ instant = false, dur = 130, ease = EASE_MOVE, top }: { instant?: boolean; dur?: number; ease?: string; top?: number } = {}) {
   const r = S.sel === null ? undefined : S.records.get(S.sel);
   const t = top ?? (r ? shownTop(r.id) : undefined);
   if (!r || t === undefined) {
@@ -291,14 +304,14 @@ function moveInd({ instant = false, dur = 130, top }: { instant?: boolean; dur?:
   }
   ind.dataset.type = r.kind;
   const d = instant || !indShown || reduced.matches ? 0 : dur;
-  ind.style.transition = `transform ${d}ms ${EASE_MOVE}, opacity 160ms ease`;
+  ind.style.transition = `transform ${d}ms ${ease}, opacity 160ms ease`;
   ind.style.transform = `translateY(${t}px)`;
   ind.style.opacity = '1';
   indShown = true;
 }
 
-type SelectOpts = { scroll?: boolean; glide?: boolean; instant?: boolean; fade?: boolean; indTop?: number; indDur?: number };
-function select(id: number | null, { scroll = false, glide = true, instant = false, fade = true, indTop, indDur }: SelectOpts = {}) {
+type SelectOpts = { scroll?: boolean; glide?: boolean; instant?: boolean; fade?: boolean; indTop?: number; indDur?: number; indEase?: string };
+function select(id: number | null, { scroll = false, glide = true, instant = false, fade = true, indTop, indDur, indEase }: SelectOpts = {}) {
   const changed = S.sel !== id;
   S.sel = id;
   const top = id === null ? undefined : shownTop(id);
@@ -311,7 +324,7 @@ function select(id: number | null, { scroll = false, glide = true, instant = fal
     }
   }
   markSel();
-  moveInd({ instant: !glide || instant, top: indTop, dur: indDur });
+  moveInd({ instant: !glide || instant, top: indTop, dur: indDur, ease: indEase });
   renderPreview(changed && fade && !instant);
   paintSpectrumSel(!instant);
 }
@@ -375,8 +388,11 @@ function bodyHTML(d: RecordDetail): string {
     case 'video':
     case 'file': {
       const reveal = S.platform.os === 'macos' ? '在访达中显示' : '在资源管理器中显示';
-      // 视频本阶段不内联播放：类型图标作封面占位，列出文件名与路径
-      return d.files.map((f, i) => `<div class="p-file"><span class="big">${svg(d.kind)}</span><div><div class="fname">${esc(f.name)}</div><code class="fpath">${esc(f.path)}</code>
+      // 视频本阶段不内联播放：有缩略图时按原型的封面（播放钮 + 时长），下面列出文件名与路径
+      const poster = d.kind === 'video' && d.thumb
+        ? `<figure class="p-video"><div class="poster"><img src="${esc(d.thumb)}" alt="${esc(d.title)} 的封面"><span class="play">${svg('play')}</span>${d.durationSec !== null ? `<span class="dur">${fmtDur(d.durationSec)}</span>` : ''}</div></figure>`
+        : '';
+      return poster + d.files.map((f, i) => `<div class="p-file"><span class="big">${svg(d.kind)}</span><div><div class="fname">${esc(f.name)}</div><code class="fpath">${esc(f.path)}</code>
           <div class="chips">${f.ext ? `<span class="chip">${esc(f.ext.toUpperCase())}</span>` : ''}${d.kind === 'video' && d.durationSec !== null ? `<span class="chip">${fmtDur(d.durationSec)}</span>` : ''}<span class="chip">${fmtBytes(f.size)}</span></div>
           ${d.kind === 'file' ? `<div><button class="btn sm" type="button" data-reveal="${i}"${f.exists ? '' : ' disabled'}>${reveal}</button></div>` : ''}
           ${f.exists ? '' : `<div class="fpath">${MISSING}</div>`}</div></div>`).join('');
@@ -435,15 +451,14 @@ function renderPreview(fade = false) {
   const hit = details.get(r.id);
   if (hit) return showBody(hit, fade);
   S.detail = null;
-  // 新头部不配旧正文：旧正文先淡掉，详情到达后浮入
-  if (fade) {
-    pbody.style.opacity = '.35';
-    pbody.style.filter = 'blur(2px)';
-  }
+  // 新头部不配旧正文：旧正文先压暗，详情到达后替换（需要动画时浮入）
+  pbody.style.opacity = '.35';
+  pbody.style.filter = 'blur(2px)';
   getRecord(r.id).then(
     (d) => {
       if (isStale(seq, detailSeq)) return;
-      if (d) {
+      // 请求途中这条记录更新过，到达的详情可能是旧的：照常显示但不进缓存
+      if (d && S.records.get(d.id) === r) {
         details.delete(d.id);
         details.set(d.id, d);
         if (details.size > 20) details.delete(details.keys().next().value!);
@@ -492,7 +507,8 @@ function paintSpectrumSel(animate = true) {
     b.classList.toggle('dim', !!r && !matches(r));
   });
   const r = S.sel === null ? undefined : S.records.get(S.sel);
-  if (!r) {
+  // 超过 7 天的记录没有光柱，游标不指向空处
+  if (!r || !spBars.querySelector(`.bar[data-id="${r.id}"]`)) {
     spCursor.style.opacity = '0';
     return;
   }
@@ -537,10 +553,11 @@ function renderTabs(instant: boolean) {
     const tag = real ? `button type="button" class="tab" data-f="${k}" aria-pressed="${S.filter === k}"` : 'span class="tab"';
     return `<${tag} data-type="${k}">${mark}${l}<span class="n">${c[k]}</span></${real ? 'button' : 'span'}>${k === 'fav' ? '<span class="tabs-sep"></span>' : ''}`;
   }).join('');
-  const refocus = document.activeElement?.classList.contains('tab');
+  const ae = document.activeElement as HTMLElement | null;
+  const refocus = ae?.classList.contains('tab') ? ae.dataset.f : undefined;
   tabsBase.innerHTML = html(true);
   tabsOver.innerHTML = html(false);
-  if (refocus) tabsBase.querySelector<HTMLElement>(`[data-f="${S.filter}"]`)?.focus({ preventScroll: true });
+  if (refocus) tabsBase.querySelector<HTMLElement>(`[data-f="${refocus}"]`)?.focus({ preventScroll: true });
   // 颜色带的色标对齐到每个标签中心，指示条停在哪就是哪个类型的颜色
   const stops = [...tabsBase.querySelectorAll<HTMLElement>('.tab')].map((b) => `${tabColor(b.dataset.f!)} ${b.offsetLeft + b.offsetWidth / 2}px`);
   tabsOver.style.background = `linear-gradient(90deg, ${stops.join(', ')})`;
@@ -621,11 +638,9 @@ let copyTimer = 0;
 function copyRecord(id: number) {
   const before = S.records.get(id);
   if (!before || S.removing.has(id)) return;
-  // 能粘贴时后端会隐藏面板：先淡出；只复制（面板仍可见）或失败时再淡回
-  win.dataset.shown = 'false';
+  // 粘贴成功由后端直接隐藏面板（无淡出）；只复制或失败时面板不动
   copy(id, true).then(
     (res) => {
-      if (res.result !== 'pasted' && S.shown) win.dataset.shown = 'true';
       const cur = S.records.get(id);
       // 事件可能还没到；并发的置顶、补全更新也不会让次数变少
       const uses = Math.max(cur?.uses ?? 0, before.uses + 1);
@@ -645,10 +660,7 @@ function copyRecord(id: number) {
       void r?.offsetWidth;
       paintBeam(r);
     },
-    (err: AppError) => {
-      if (S.shown) win.dataset.shown = 'true';
-      toast(err.message, { icon: 'copy' });
-    },
+    (err: AppError) => toast(err.message, { icon: 'copy' }),
   );
 }
 
@@ -701,11 +713,7 @@ function togglePin(id: number, animate: boolean) {
 function remove(id: number) {
   const r = S.records.get(id);
   if (!r || S.removing.has(id)) return;
-  const v = vis().filter((x) => !S.removing.has(x.id));
-  const next = nextSelection(v, id);
-  // 原型：下一条在下方时光标停在被删行的位置，下一条收起补位时滑进光标；删的是最后一条才上滑
-  const nextIsBelow = v[v.findIndex((x) => x.id === id) + 1] !== undefined;
-  const goneTop = shownTop(id);
+  const next = nextSelection(vis().filter((x) => !S.removing.has(x.id)), id);
   const p = painted.get('r' + id), c = S.cells.find((c) => c.kind === 'row' && c.id === id);
   S.removing.add(id);
   ownEcho.add(id);
@@ -714,11 +722,12 @@ function remove(id: number) {
     p.el.querySelector('.item')?.classList.add('is-removing');
     p.h = rowHTML(r, c.index, false, false);
   }
-  // 下方的行与 .item.is-removing 的收起同步上移一行
-  paintRows({ glide: `transform 240ms ${EASE_MOVE} 100ms` });
+  // 下方的行与 .item.is-removing 的收起同步上移一行（滚到底时整体按夹紧量修正，见 goneOf）
+  paintRows({ glide: `transform 240ms ${EASE_MOVE} 100ms`, glideBusy: `transform 240ms ${EASE_MOVE}` });
   const bar = spBars.querySelector(`.bar[data-id="${id}"]`);
   fx(bar, [{ transform: 'scaleY(1)', opacity: 1 }, { transform: 'scaleY(0)', opacity: 0 }], { duration: 260, easing: EASE_MOVE, fill: 'forwards' });
-  select(next, { scroll: true, indTop: nextIsBelow ? goneTop : undefined, indDur: 340 });
+  // 光标目标是下一条补位后的位置：同组时就是被删行的位置，光标停住、下一条滑进来（原型 1384–1393）
+  select(next, { scroll: true, indDur: 340 });
   deleteRecord(id).then(
     () => {
       setTimeout(() => {
@@ -874,6 +883,8 @@ const handlers = {
 let booted = false;
 const shown = (t0: number | null) => {
   S.shown = true;
+  // 淡出途中又被唤起：取消待发的隐藏
+  clearTimeout(hideTimer);
   win.dataset.shown = 'true';
   const first = !booted;
   if (!booted) {
@@ -898,9 +909,75 @@ const hidden = () => {
   // 跨隐藏不复用详情（例如文件是否还在）
   bodyFor = null;
   details.clear();
+  pbody.innerHTML = '';
   closeMenu(false);
   (document.activeElement as HTMLElement | null)?.blur();
 };
+
+// 键盘与隐藏按钮在 bootstrap 之前接线：读取失败的错误页也能 Esc / 关闭
+// 前端发起的隐藏先播 160ms 淡出；失焦隐藏由后端直接做，没有淡出
+let hideTimer = 0;
+const hide = () => {
+  win.dataset.shown = 'false';
+  clearTimeout(hideTimer);
+  hideTimer = window.setTimeout(() => void hidePanel().catch((err: AppError) => {
+    win.dataset.shown = 'true';
+    toast(err.message);
+  }), reduced.matches ? 0 : 160);
+};
+document.querySelectorAll('[data-hide]').forEach((b) => b.addEventListener('click', hide));
+
+// —— 键盘 ——
+document.addEventListener('keydown', (e) => {
+  if (e.isComposing) return;
+  const t = e.target as Element, inSearch = t === q;
+  // 其他输入控件（设置里的快捷键、保留时长）自己处理按键
+  if (!inSearch && t.closest?.('input, textarea, select')) return;
+  const a = keyAction(
+    { key: e.key, code: e.code, mod: e.ctrlKey || e.metaKey, alt: e.altKey, shift: e.shiftKey, repeat: e.repeat },
+    {
+      inSearch,
+      onControl: !inSearch && !!t.closest?.('button, a, video'),
+      searchHasText: !!q.value,
+      menuOpen: menuOpen(),
+      hasSel: S.sel !== null,
+      canUndo: canUndo(S.undo, Date.now()),
+    },
+  );
+  if (!a) return;
+  // 让这个字符照常输入到搜索框
+  if (a.t === 'focusSearch') return q.focus();
+  e.preventDefault();
+  const sel = S.sel;
+  switch (a.t) {
+    case 'menuClose': return closeMenu(true);
+    case 'menuMove': return moveMenuFocus(a.d);
+    case 'move': return move(a.d, a.instant);
+    case 'copy': return void (sel !== null && copyRecord(sel));
+    case 'copyIndex': {
+      const r = vis()[a.i];
+      if (r) {
+        select(r.id);
+        copyRecord(r.id);
+      }
+      return;
+    }
+    case 'pin': return void (sel !== null && togglePin(sel, false));
+    case 'filter': return setFilter(cycleFilter(S.filter, a.d), true);
+    case 'undo': return undo();
+    case 'delete': return void (sel !== null && remove(sel));
+    case 'clearSearch':
+      q.value = '';
+      return runSearch('');
+    case 'hide': return hide();
+    case 'menu': {
+      // ponytail: 选中行滚出视口未渲染时不弹菜单；键盘移动总会把选中行滚回视口
+      const r = rowEl(sel)?.getBoundingClientRect();
+      if (r && sel !== null) openMenu(sel, r.left + 48, r.bottom, true);
+      return;
+    }
+  }
+});
 
 await attachConsole();
 // 先订阅再 bootstrap，避免两者之间的事件丢失
@@ -912,7 +989,9 @@ await onRecordsRemoved((ids) => handlers.removed(ids));
 await onPausedChanged((p) => handlers.paused(p));
 
 const b = await bootstrap().catch((e: AppError) => {
-  rowsEl.innerHTML = `<div class="empty"><span class="ring">${svg('inbox')}</span><p>无法读取历史记录：${esc(e.message)}</p></div>`;
+  // 之后的每次 renderList 都显示这条，不被空列表文案覆盖
+  bootError = e?.message || String(e);
+  renderList();
   throw e;
 });
 S.settings = b.settings;
@@ -1011,15 +1090,6 @@ document.addEventListener('pointerdown', (e) => {
   if (menuOpen() && !menu.contains(t) && !moreBtn.contains(t)) closeMenu(false);
 }, true);
 undoBtn.addEventListener('click', undo);
-// 前端发起的隐藏先播 160ms 淡出；失焦隐藏由后端直接做，没有淡出
-const hide = () => {
-  win.dataset.shown = 'false';
-  setTimeout(() => void hidePanel().catch((err: AppError) => {
-    win.dataset.shown = 'true';
-    toast(err.message);
-  }), reduced.matches ? 0 : 160);
-};
-document.querySelectorAll('[data-hide]').forEach((b) => b.addEventListener('click', hide));
 pauseBtn.addEventListener('click', () => setPaused(!S.paused).catch((err: AppError) => toast(err.message)));
 
 pbody.addEventListener('click', (e) => {
@@ -1100,56 +1170,4 @@ void document.fonts?.ready.then(() => {
   renderTabs(true);
   moveInd({ instant: true });
   paintSpectrumSel(false);
-});
-
-// —— 键盘 ——
-document.addEventListener('keydown', (e) => {
-  if (e.isComposing) return;
-  const t = e.target as Element, inSearch = t === q;
-  // 其他输入控件（设置里的快捷键、保留时长）自己处理按键
-  if (!inSearch && t.closest?.('input, textarea, select')) return;
-  const a = keyAction(
-    { key: e.key, code: e.code, mod: e.ctrlKey || e.metaKey, alt: e.altKey, shift: e.shiftKey, repeat: e.repeat },
-    {
-      inSearch,
-      onControl: !inSearch && !!t.closest?.('button, a, video'),
-      searchHasText: !!q.value,
-      menuOpen: menuOpen(),
-      hasSel: S.sel !== null,
-      canUndo: canUndo(S.undo, Date.now()),
-    },
-  );
-  if (!a) return;
-  // 让这个字符照常输入到搜索框
-  if (a.t === 'focusSearch') return q.focus();
-  e.preventDefault();
-  const sel = S.sel;
-  switch (a.t) {
-    case 'menuClose': return closeMenu(true);
-    case 'menuMove': return moveMenuFocus(a.d);
-    case 'move': return move(a.d, a.instant);
-    case 'copy': return void (sel !== null && copyRecord(sel));
-    case 'copyIndex': {
-      const r = vis()[a.i];
-      if (r) {
-        select(r.id);
-        copyRecord(r.id);
-      }
-      return;
-    }
-    case 'pin': return void (sel !== null && togglePin(sel, false));
-    case 'filter': return setFilter(cycleFilter(S.filter, a.d), true);
-    case 'undo': return undo();
-    case 'delete': return void (sel !== null && remove(sel));
-    case 'clearSearch':
-      q.value = '';
-      return runSearch('');
-    case 'hide': return hide();
-    case 'menu': {
-      // ponytail: 选中行滚出视口未渲染时不弹菜单；键盘移动总会把选中行滚回视口
-      const r = rowEl(sel)?.getBoundingClientRect();
-      if (r && sel !== null) openMenu(sel, r.left + 48, r.bottom, true);
-      return;
-    }
-  }
 });
