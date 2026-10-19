@@ -22,6 +22,7 @@ use xpaste_core::Store;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let override_ = data_dir_override(std::env::var_os("XPASTE_DATA_DIR"));
+    let timing = timing_enabled(std::env::var_os("XPASTE_TIMING"));
     let builder = tauri::Builder::default();
     // 单实例插件必须第一个注册：再次启动时切换已运行实例的面板。
     // 它按 bundle id 加锁，隔离数据目录的开发版不注册，否则会和正在运行的发布版互相切换
@@ -61,6 +62,9 @@ pub fn run() {
             };
             app.handle().plugin(builder.build())?;
             log::info!("xPaste 启动，平台 {}", xpaste_platform::OS);
+            if timing {
+                log::info!("唤起计时已由 XPASTE_TIMING 开启");
+            }
             if isolated {
                 log::info!("数据目录已由 XPASTE_DATA_DIR 覆盖，不启用单实例");
                 // tauri.conf.json 的 assetProtocol.scope 只覆盖默认数据目录
@@ -120,9 +124,9 @@ pub fn run() {
         ))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
+                .with_handler(move |app, _shortcut, event| {
                     if event.state() == ShortcutState::Pressed {
-                        panel::toggle(app, t0(), panel::Trigger::Hotkey);
+                        panel::toggle(app, timing.then(now_unix_ms), panel::Trigger::Hotkey);
                     }
                 })
                 .build(),
@@ -179,19 +183,16 @@ pub fn data_dir_override(v: Option<std::ffi::OsString>) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// 收到快捷键时的 Unix 毫秒，仅开发构建用于测唤起耗时。
-fn t0() -> Option<u64> {
-    #[cfg(debug_assertions)]
-    {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()
-            .map(|d| d.as_millis() as u64)
-    }
-    #[cfg(not(debug_assertions))]
-    {
-        None
-    }
+/// 同 `data_dir_override` 的口径：XPASTE_TIMING 去首尾空白后非空才开启唤起与搜索计时。
+pub fn timing_enabled(v: Option<std::ffi::OsString>) -> bool {
+    v.is_some_and(|s| !s.to_string_lossy().trim().is_empty())
+}
+
+/// 收到快捷键时的 Unix 毫秒，前端据此算唤起耗时。
+fn now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
 }
 
 #[cfg(test)]
@@ -207,5 +208,13 @@ mod tests {
         assert_eq!(data_dir_override(Some("".into())), None);
         assert_eq!(data_dir_override(Some("  ".into())), None);
         assert_eq!(data_dir_override(None), None);
+    }
+
+    #[test]
+    fn timing_enabled_only_when_non_empty() {
+        assert!(timing_enabled(Some("1".into())));
+        assert!(!timing_enabled(Some("".into())));
+        assert!(!timing_enabled(Some("  ".into())));
+        assert!(!timing_enabled(None));
     }
 }

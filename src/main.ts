@@ -646,6 +646,8 @@ function setFilter(k: Filter, instant: boolean) {
 // —— 搜索 ——
 // 每次输入都查后端，不防抖；序号丢弃先发后到的结果
 let searchSeq = 0;
+// 唤起时后端带了 t0 说明 XPASTE_TIMING 已开启；搜索计时从第一次快捷键唤起之后才开始
+let timing = false;
 function fetchMatches(v: string, done: () => void) {
   const seq = ++searchSeq;
   if (!v.trim()) {
@@ -663,7 +665,9 @@ function fetchMatches(v: string, done: () => void) {
   );
 }
 // 用户搜索：结果回到顶部并选中第一条（唤起时也走这里）
-function runSearch(v: string, opts: { stagger?: boolean; base?: number } = {}) {
+// timed：只有 input / compositionend 路径计时，唤起、清空等程序调用不算搜索样本
+function runSearch(v: string, opts: { stagger?: boolean; base?: number; timed?: boolean } = {}) {
+  const t = performance.now();
   S.q = v;
   clearQ.hidden = !v;
   fetchMatches(v, () => {
@@ -671,6 +675,12 @@ function runSearch(v: string, opts: { stagger?: boolean; base?: number } = {}) {
     S.sel = null;
     renderSpectrum();
     renderList(opts);
+    if (timing && opts.timed) {
+      const n = S.matchIds?.size ?? S.records.size;
+      requestAnimationFrame(
+        () => void info(`搜索耗时 ${Math.round(performance.now() - t)} ms，命中 ${n} 条`),
+      );
+    }
   });
 }
 
@@ -1456,7 +1466,8 @@ const shown = (t0: number | null, trigger?: PanelShown['trigger']) => {
   paintSpectrumSel(false);
   // 引导没结束就被隐藏过：从当前步继续
   openOnboard();
-  if (import.meta.env.DEV && t0 !== null) {
+  if (t0 !== null) {
+    timing = true;
     requestAnimationFrame(() => void info(`唤起耗时 ${Date.now() - t0} ms`));
   }
 };
@@ -1599,9 +1610,9 @@ if (b.firstRun) {
 // —— 事件 ——
 q.addEventListener('input', (e) => {
   if ((e as InputEvent).isComposing) return;
-  runSearch(q.value);
+  runSearch(q.value, { timed: true });
 });
-q.addEventListener('compositionend', () => runSearch(q.value));
+q.addEventListener('compositionend', () => runSearch(q.value, { timed: true }));
 clearQ.addEventListener('click', () => {
   q.value = '';
   runSearch('');

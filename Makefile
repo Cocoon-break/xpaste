@@ -8,7 +8,7 @@ SHELL := /bin/bash
 WIN_TARGET := x86_64-pc-windows-msvc
 HAS_WIN_TARGET := $(shell rustup target list --installed 2>/dev/null | grep -c $(WIN_TARGET))
 
-.PHONY: help install dev dev-isolated fmt lint test-rust test-web test check build build-check release release-app icons fonts clean
+.PHONY: help install dev dev-isolated fmt lint test-rust test-web test check build build-check release release-app measure icons fonts clean
 
 help: ## 列出可用目标
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{ printf "  %-14s %s\n", $$1, $$2 }'
@@ -20,7 +20,7 @@ dev: ## 启动开发版（热更新）
 	pnpm tauri dev
 
 dev-isolated: ## 启动开发版，数据目录隔离在 .xpaste-dev/（自动化验收必须用这个）
-	XPASTE_DATA_DIR=$(CURDIR)/.xpaste-dev pnpm tauri dev
+	XPASTE_DATA_DIR=$(CURDIR)/.xpaste-dev XPASTE_TIMING=1 pnpm tauri dev
 
 fmt: ## 格式化 Rust 代码
 	cargo fmt --all
@@ -68,6 +68,9 @@ release-report: ## 列出产物及大小
 	  if [ -d "$$f" ]; then echo "$$f  $$h  $$(du -sk "$$f" | cut -f1) KiB"; \
 	  else echo "$$f  $$h  $$(wc -c < "$$f" | tr -d ' ') B"; fi; \
 	done || true
+
+measure: ## macOS 性能与可靠性测量（先 make release-app；离开电脑时运行，约 15 分钟）
+	bash scripts/measure.sh all
 
 icons: ## 从 docs/brand 的 SVG 重新生成应用图标和托盘图标（需要 rsvg-convert、ImageMagick）
 	@tmp=$$(mktemp -d) && trap 'rm -rf $$tmp' EXIT && \
