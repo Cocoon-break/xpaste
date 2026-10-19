@@ -1,4 +1,4 @@
-//! Windows 剪切板格式的纯函数：格式名映射、读取筛选、CF_HTML / CF_HDROP / DIB 解码。
+//! Windows 平台层的纯函数：格式名映射、读取筛选、CF_HTML / CF_HDROP / DIB 解码、版本资源查询路径、托盘窗口类名。
 //! 与 `decode.rs` 一样全平台编译，`windows.rs` 只负责 Win32 调用。
 
 use std::io::Cursor;
@@ -150,6 +150,27 @@ pub fn bitmap_from_flavors(flavors: &[Flavor]) -> Option<Vec<u8>> {
         log::debug!("{} 转 PNG 失败 bytes={}", dib.format, dib.data.len());
     }
     png
+}
+
+/// 版本资源里 `FileDescription` 的查询路径。`translation` 是 `\VarFileInfo\Translation` 的值，
+/// 前 4 字节为（语言 u16 LE，代码页 u16 LE）；不足 4 字节时用美国英语 + Unicode（`040904b0`）。
+pub fn file_description_query(translation: &[u8]) -> String {
+    let (lang, cp) = match translation {
+        [a, b, c, d, ..] => (u16::from_le_bytes([*a, *b]), u16::from_le_bytes([*c, *d])),
+        _ => (0x0409, 0x04b0),
+    };
+    format!(r"\StringFileInfo\{lang:04x}{cp:04x}\FileDescription")
+}
+
+/// 任务栏、副屏任务栏与通知区域溢出窗口的类名（区分大小写）：它们成为前台时不作粘贴目标。
+pub fn is_shell_tray_class(class: &str) -> bool {
+    matches!(
+        class,
+        "Shell_TrayWnd"
+            | "Shell_SecondaryTrayWnd"
+            | "NotifyIconOverflowWindow"
+            | "TopLevelWindowForOverflowXamlIsland"
+    )
 }
 
 /// 很多程序写 32 位 DIB 时 alpha 全填 0：全零视为不透明，否则图片整张透明。
@@ -327,5 +348,33 @@ mod tests {
         );
         assert!(bitmap_from_flavors(&[f("CF_DIBV5", red)]).is_some());
         assert_eq!(bitmap_from_flavors(&[f("CF_UNICODETEXT", vec![])]), None);
+    }
+    #[test]
+    fn file_description_query_from_translation() {
+        assert_eq!(
+            file_description_query(&[0x09, 0x04, 0xB0, 0x04]),
+            r"\StringFileInfo\040904b0\FileDescription"
+        );
+        assert_eq!(
+            file_description_query(&[0x04, 0x08, 0xA8, 0x03]),
+            r"\StringFileInfo\080403a8\FileDescription"
+        );
+        assert_eq!(
+            file_description_query(&[]),
+            r"\StringFileInfo\040904b0\FileDescription"
+        );
+    }
+    #[test]
+    fn shell_tray_classes_are_not_paste_targets() {
+        for c in [
+            "Shell_TrayWnd",
+            "Shell_SecondaryTrayWnd",
+            "NotifyIconOverflowWindow",
+            "TopLevelWindowForOverflowXamlIsland",
+        ] {
+            assert!(is_shell_tray_class(c), "{c}");
+        }
+        assert!(!is_shell_tray_class("Notepad"));
+        assert!(!is_shell_tray_class("shell_traywnd")); // 类名区分大小写
     }
 }

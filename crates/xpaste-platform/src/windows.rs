@@ -6,7 +6,14 @@ use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{
     CloseHandle, GlobalFree, HANDLE, HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM,
 };
+use windows::Win32::Graphics::Gdi::{
+    BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, DeleteObject, GetDC, GetDIBits,
+    GetObjectW, HBITMAP, ReleaseDC,
+};
 use windows::Win32::Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation};
+use windows::Win32::Storage::FileSystem::{
+    GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
+};
 use windows::Win32::System::DataExchange::{
     AddClipboardFormatListener, CloseClipboard, EmptyClipboard, EnumClipboardFormats,
     GetClipboardData, GetClipboardFormatNameW, GetClipboardOwner, GetClipboardSequenceNumber,
@@ -18,17 +25,19 @@ use windows::Win32::System::Memory::{
 };
 use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::System::Threading::{
-    GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_NAME_WIN32,
+    GetCurrentProcess, GetCurrentProcessId, OpenProcess, OpenProcessToken, PROCESS_NAME_WIN32,
     PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
     VIRTUAL_KEY, VK_CONTROL,
 };
+use windows::Win32::UI::Shell::SHDefExtractIconW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetForegroundWindow, GetMessageW,
-    GetWindowThreadProcessId, HWND_MESSAGE, MSG, RegisterClassW, SetForegroundWindow,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLIPBOARDUPDATE, WNDCLASSW,
+    CreateWindowExW, DefWindowProcW, DestroyIcon, DispatchMessageW, GetClassNameW,
+    GetForegroundWindow, GetIconInfo, GetMessageW, GetWindowThreadProcessId, HICON, HWND_MESSAGE,
+    ICONINFO, MSG, RegisterClassW, SetForegroundWindow, WINDOW_EX_STYLE, WINDOW_STYLE,
+    WM_CLIPBOARDUPDATE, WNDCLASSW,
 };
 use windows::core::{Error, PCWSTR, PWSTR, w};
 use xpaste_core::capture::MAX_FLAVOR_BYTES;
@@ -36,8 +45,8 @@ use xpaste_core::{AppInfo, Flavor, Snapshot};
 
 use crate::decode::normalize_newlines;
 use crate::winfmt::{
-    bitmap_from_flavors, cf_html_fragment, formats_to_read, parse_hdrop, standard_format_id,
-    standard_format_name,
+    bgra_to_png, bitmap_from_flavors, cf_html_fragment, file_description_query, formats_to_read,
+    is_shell_tray_class, parse_hdrop, standard_format_id, standard_format_name,
 };
 use crate::{PasteBlock, PlatformError};
 
@@ -278,7 +287,6 @@ fn format_name(id: u32) -> Option<String> {
 }
 
 /// 剪切板所有者窗口所属进程；取不到时用前台窗口。
-/// ponytail: name 用文件名，FileDescription 留到阶段 6。
 pub fn frontmost_app() -> Option<AppInfo> {
     // SAFETY: 只读查询
     let owner = unsafe { GetClipboardOwner() }
@@ -312,10 +320,48 @@ fn app_of_window(hwnd: HWND) -> Option<AppInfo> {
         let _ = CloseHandle(process);
         ok.ok()?;
         let id = String::from_utf16_lossy(&buf[..len as usize]);
-        let name = Path::new(&id)
-            .file_stem()
-            .map_or_else(|| id.clone(), |s| s.to_string_lossy().into_owned());
+        let name = file_description(&id).unwrap_or_else(|| {
+            Path::new(&id)
+                .file_stem()
+                .map_or_else(|| id.clone(), |s| s.to_string_lossy().into_owned())
+        });
         Some(AppInfo { id, name })
+    }
+}
+
+/// exe 版本资源里的 `FileDescription`（按第一个语言 / 代码页取）；没有或为空时返回 `None`。
+fn file_description(path: &str) -> Option<String> {
+    let wide: Vec<u16> = path.encode_utf16().chain([0]).collect();
+    let path = PCWSTR(wide.as_ptr());
+    // SAFETY: path 以 NUL 结尾，调用期间有效；VerQueryValueW 返回的指针指向 data 内部，
+    // 只在 data 存活期间按其返回的长度读取
+    unsafe {
+        let size = GetFileVersionInfoSizeW(path, None);
+        if size == 0 {
+            return None;
+        }
+        let mut data = vec![0u8; size as usize];
+        GetFileVersionInfoW(path, None, size, data.as_mut_ptr().cast()).ok()?;
+        let query = |sub: PCWSTR| {
+            let mut ptr = std::ptr::null_mut();
+            let mut len = 0u32;
+            (VerQueryValueW(data.as_ptr().cast(), sub, &mut ptr, &mut len).as_bool()
+                && !ptr.is_null())
+            .then_some((ptr, len as usize))
+        };
+        let translation = query(w!(r"\VarFileInfo\Translation")).map_or(&[][..], |(p, len)| {
+            std::slice::from_raw_parts(p as *const u8, len)
+        });
+        let sub: Vec<u16> = file_description_query(translation)
+            .encode_utf16()
+            .chain([0])
+            .collect();
+        // 字符串值的长度按 WCHAR 计，可能含结尾 NUL
+        let (p, len) = query(PCWSTR(sub.as_ptr()))?;
+        let chars = std::slice::from_raw_parts(p as *const u16, len);
+        let end = chars.iter().position(|&c| c == 0).unwrap_or(len);
+        let name = String::from_utf16_lossy(&chars[..end]).trim().to_owned();
+        (!name.is_empty()).then_some(name)
     }
 }
 
@@ -386,10 +432,87 @@ fn set_global(_guard: &ClipboardGuard, id: u32, bytes: &[u8]) -> Result<(), Plat
     Ok(())
 }
 
-/// 应用图标在阶段 6 实现。
+/// `app_id` 是 exe 路径：取 64 px 图标转 PNG；单色图标（无彩色位图）返回 `None`。
+/// ponytail: alpha 全零的老图标按不透明处理，有反馈再按 hbmMask 抠图
 pub fn app_icon(app_id: &str) -> Option<Vec<u8>> {
-    let _ = app_id;
-    None
+    let wide: Vec<u16> = app_id.encode_utf16().chain([0]).collect();
+    let mut icon = HICON::default();
+    // SAFETY: wide 以 NUL 结尾；icon 指向本地变量，成功后由下面 DestroyIcon 释放
+    let hr = unsafe { SHDefExtractIconW(PCWSTR(wide.as_ptr()), 0, 0, Some(&mut icon), None, 64) };
+    if hr.is_err() || icon.is_invalid() {
+        return None;
+    }
+    let mut info = ICONINFO::default();
+    // SAFETY: icon 有效；GetIconInfo 成功时创建的两张位图由本函数 DeleteObject，图标最后 DestroyIcon
+    unsafe {
+        let png = GetIconInfo(icon, &mut info)
+            .ok()
+            .and_then(|()| icon_bitmap_to_png(info.hbmColor));
+        if !info.hbmMask.is_invalid() {
+            let _ = DeleteObject(info.hbmMask.into());
+        }
+        if !info.hbmColor.is_invalid() {
+            let _ = DeleteObject(info.hbmColor.into());
+        }
+        let _ = DestroyIcon(icon);
+        png
+    }
+}
+
+/// 图标彩色位图读成自上而下的 32 位 BGRA 再转 PNG。位图由调用方释放。
+fn icon_bitmap_to_png(color: HBITMAP) -> Option<Vec<u8>> {
+    if color.is_invalid() {
+        return None;
+    }
+    let mut bm = BITMAP::default();
+    // SAFETY: bm 是本地变量，大小随参数传入
+    let got = unsafe {
+        GetObjectW(
+            color.into(),
+            size_of::<BITMAP>() as i32,
+            Some((&mut bm as *mut BITMAP).cast()),
+        )
+    };
+    let (w, h) = (
+        u32::try_from(bm.bmWidth).ok()?,
+        u32::try_from(bm.bmHeight).ok()?,
+    );
+    if got == 0 || w == 0 || h == 0 {
+        return None;
+    }
+    let mut bmi = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: bm.bmWidth,
+            biHeight: -bm.bmHeight, // 负高度：自上而下
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut bgra = vec![0u8; w as usize * h as usize * 4];
+    // SAFETY: 屏幕 DC 用完即释放；bgra 正好容纳 h 行 32 位像素（32 位行天然 4 字节对齐）；
+    // 32 位 BI_RGB 不写颜色表，BITMAPINFO 里的一项 bmiColors 足够
+    let lines = unsafe {
+        let dc = GetDC(None);
+        let n = GetDIBits(
+            dc,
+            color,
+            0,
+            h,
+            Some(bgra.as_mut_ptr().cast()),
+            &mut bmi,
+            DIB_RGB_COLORS,
+        );
+        ReleaseDC(None, dc);
+        n
+    };
+    if lines != h as i32 {
+        return None;
+    }
+    bgra_to_png(w, h, &bgra)
 }
 
 /// 清空剪切板后写入 `CF_UNICODETEXT`，返回写入后的序号。
@@ -518,8 +641,25 @@ pub fn request_accessibility() {}
 
 pub fn open_accessibility_settings() {}
 
+/// 粘贴目标窗口：前台窗口无效、属于本进程或是任务栏 / 托盘溢出窗口时返回 `None`，
+/// 应用层随之只复制不粘贴（从托盘打开面板就是这种情况）。
 pub fn foreground_window() -> Option<isize> {
-    // SAFETY: 只读查询
-    let hwnd = unsafe { GetForegroundWindow() };
-    (!hwnd.is_invalid()).then_some(hwnd.0 as isize)
+    // SAFETY: 只读查询；pid 与类名缓冲区都是本地变量
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.is_invalid() {
+            return None;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid as *mut u32));
+        if pid == GetCurrentProcessId() {
+            return None;
+        }
+        let mut class = [0u16; 256];
+        let len = GetClassNameW(hwnd, &mut class);
+        if len > 0 && is_shell_tray_class(&String::from_utf16_lossy(&class[..len as usize])) {
+            return None;
+        }
+        Some(hwnd.0 as isize)
+    }
 }
