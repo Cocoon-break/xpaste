@@ -33,6 +33,7 @@ tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
+window-vibrancy = "0.8"
 
 [dev-dependencies]
 rusqlite.workspace = true
@@ -40,4 +41,3 @@ tauri = { workspace = true, features = ["test"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", rev = "18ffb9a201fbf6fedfaa382fd4b92315ea30ab1a" }
-window-vibrancy = "0.8"

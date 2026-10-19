@@ -29,7 +29,7 @@ pub fn run() {
         builder
     } else {
         builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            panel::toggle(app, None)
+            panel::toggle(app, None, panel::Trigger::Relaunch)
         }))
     };
     #[cfg(target_os = "macos")]
@@ -83,6 +83,8 @@ pub fn run() {
             housekeeping::start(app.handle().clone());
             #[cfg(target_os = "macos")]
             panel::setup_macos(app)?;
+            #[cfg(windows)]
+            panel::setup_windows(app);
             panel::apply_theme(app.handle(), appearance);
             if let Err(e) = tray::setup(app) {
                 log::warn!("托盘图标创建失败：{e}");
@@ -120,7 +122,7 @@ pub fn run() {
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
                     if event.state() == ShortcutState::Pressed {
-                        panel::toggle(app, t0());
+                        panel::toggle(app, t0(), panel::Trigger::Hotkey);
                     }
                 })
                 .build(),
@@ -164,7 +166,7 @@ pub fn run() {
             // macOS 重开已运行的 .app（Finder / Spotlight）不起第二个进程，而是发 Reopen
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { .. } = event {
-                panel::toggle(app, None);
+                panel::toggle(app, None, panel::Trigger::Relaunch);
             }
             let _ = (app, &event);
         });
