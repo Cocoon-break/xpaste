@@ -107,7 +107,7 @@ const menuOpen = () => menu.dataset.open === 'true';
 const vis = () => visible(S.records, S.filter, S.matchIds);
 const matches = (r: RecordSummary) => inFilter(r, S.filter) && (S.matchIds === null || S.matchIds.has(r.id));
 const rowEl = (id: number | null) => (id === null ? null : document.getElementById('opt-' + id));
-const source = (r: RecordSummary) => r.app?.name ?? '未知来源';
+const source = (r: RecordSummary) => r.app?.name || '未知来源';
 
 const thumb = (r: RecordSummary) =>
   r.kind === 'color' && isHex(r.title) ? `<span class="thumb swatch-thumb" style="background:${esc(r.title)}"></span>`
@@ -382,7 +382,9 @@ function renderPreview(fade = false) {
       if (fade) fx(pbody, [{ opacity: 0.35, transform: 'translateY(4px)', filter: 'blur(2px)' }, { opacity: 1, transform: 'none', filter: 'blur(0)' }], { duration: 180, easing: EASE_ENTER });
     },
     (e: AppError) => {
-      if (!isStale(seq, detailSeq)) bodyFor = null;
+      if (isStale(seq, detailSeq)) return;
+      bodyFor = null;
+      pbody.innerHTML = '<div class="p-empty">在左侧选择一条记录查看完整内容</div>';
       void info(`get_record 失败 id=${r.id} kind=${e.kind}`);
     },
   );
@@ -482,13 +484,15 @@ function setFilter(k: Filter, instant: boolean) {
   if (S.filter === k) return;
   S.filter = k;
   renderTabs(instant);
+  // M06 规则 6：切换分类后回到顶部并选中第一条
   list.scrollTop = 0;
+  S.sel = null;
   renderList({ stagger: !instant });
   paintSpectrumSel(!instant);
 }
 
 // —— 搜索 ——
-// 每次输入都查后端，不防抖；序号丢弃先发后到的结果
+// 每次输入都查后端，不防抖；序号丢弃先发后到的结果。结果回到顶部并选中第一条（唤起时也走这里）
 let searchSeq = 0;
 function runSearch(v: string, opts: { stagger?: boolean } = {}) {
   S.q = v;
@@ -497,6 +501,7 @@ function runSearch(v: string, opts: { stagger?: boolean } = {}) {
   if (!v.trim()) {
     S.matchIds = null;
     list.scrollTop = 0;
+    S.sel = null;
     renderList(opts);
     return;
   }
@@ -505,6 +510,7 @@ function runSearch(v: string, opts: { stagger?: boolean } = {}) {
       if (isStale(seq, searchSeq)) return;
       S.matchIds = new Set(ids);
       list.scrollTop = 0;
+      S.sel = null;
       renderList(opts);
     },
     (e: AppError) => void info(`search 失败 kind=${e.kind}`),
@@ -647,7 +653,8 @@ addEventListener('resize', () => {
 });
 setInterval(() => {
   if (S.shown && !menuOpen() && !S.removing.size) {
-    paintRows();
+    // 跨午夜时分组标题也要更新；选中项不变时 renderPreview 不重取详情（bodyFor）
+    renderList();
     renderSpectrum();
   }
 }, 60e3);
