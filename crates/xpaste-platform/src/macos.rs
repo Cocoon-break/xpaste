@@ -263,16 +263,21 @@ pub fn paste(_target: Option<isize>) -> Result<(), PlatformError> {
     Ok(())
 }
 
-/// 未授权时弹出系统辅助功能授权对话框并把本应用加入列表；已授权时无操作。须在主线程调用。
+/// 未授权时先请求系统授权对话框（无 TCC 记录时弹出并把本应用加入列表），再打开系统设置的
+/// 辅助功能页：拒绝过或在设置里撤销过时对话框通常不再弹出，只靠前者按钮会没反应。
+/// 已授权时无操作。须在主线程调用。
 pub fn request_accessibility() {
-    autoreleasepool(|_| {
+    let trusted = autoreleasepool(|_| {
         // `kAXTrustedCheckOptionPrompt` 的值
         let key = NSString::from_str("AXTrustedCheckOptionPrompt");
         let yes = NSNumber::new_bool(true);
         let options = NSDictionary::from_slices(&[&*key], &[&*yes]);
         // SAFETY: NSDictionary 与 CFDictionaryRef 免费桥接，options 在调用期间存活
-        unsafe { AXIsProcessTrustedWithOptions(Retained::as_ptr(&options)) };
-    })
+        unsafe { AXIsProcessTrustedWithOptions(Retained::as_ptr(&options)) != 0 }
+    });
+    if !trusted {
+        open_accessibility_settings();
+    }
 }
 
 pub fn open_accessibility_settings() {

@@ -1110,6 +1110,7 @@ document.addEventListener('pointerdown', (e) => {
 undoBtn.addEventListener('click', undo);
 toastAct.addEventListener('click', () => {
   toastRun?.();
+  toastRun = null;
   toastEl.dataset.open = 'false';
   clearTimeout(toastTimer);
 });

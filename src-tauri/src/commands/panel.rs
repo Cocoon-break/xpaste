@@ -16,7 +16,7 @@ pub fn open_accessibility_settings(app: AppHandle) -> Result<(), AppError> {
     Ok(())
 }
 
-/// 触发系统辅助功能授权对话框（已授权或非 macOS 无操作）。AppKit 调用切到主线程。
+/// 请求系统辅助功能授权对话框并打开系统设置的辅助功能页（已授权或非 macOS 无操作）。AppKit 调用切到主线程。
 #[tauri::command(async)]
 pub fn request_accessibility(app: AppHandle) -> Result<(), AppError> {
     app.run_on_main_thread(xpaste_platform::request_accessibility)?;
