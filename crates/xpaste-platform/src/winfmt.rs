@@ -1,12 +1,14 @@
 //! Windows 平台层的纯函数：格式名映射、读取筛选、CF_HTML / CF_HDROP / DIB 解码、版本资源查询路径、托盘窗口类名。
 //! 与 `decode.rs` 一样全平台编译，`windows.rs` 只负责 Win32 调用。
 
+use std::borrow::Cow;
 use std::io::Cursor;
 use std::path::PathBuf;
 
 use image::codecs::bmp::BmpDecoder;
 use image::{DynamicImage, ImageDecoder, ImageFormat, RgbaImage};
 use xpaste_core::Flavor;
+use xpaste_core::capture::MAX_FLAVOR_BYTES;
 
 /// 系统预定义格式（`CF_*`）：id 与名字。`GetClipboardFormatNameW` 取不到这些名字。
 pub const STANDARD_FORMATS: [(u32, &str); 22] = [
@@ -110,9 +112,21 @@ pub fn parse_hdrop(bytes: &[u8]) -> Vec<PathBuf> {
     names.into_iter().map(PathBuf::from).collect()
 }
 
-/// 头部声称的尺寸超过这个字节数就不解码（与 image 默认 reader 的上限一致）：
+/// 头部声称解码后超过这个字节数（读取上限的 4 倍，200 MiB）就不解码：
 /// `from_decoder` 按头部一次性分配缓冲区，伪造的 65535×65535 头会要十几 GB。
-const MAX_DIB_DECODED_BYTES: u64 = 512 << 20;
+/// 不超过 50 MB 读取上限的未压缩 DIB 解码后最多约 67 MiB，只有 RLE 压缩的头会被这条拦下。
+const MAX_DIB_DECODED_BYTES: u64 = 4 * MAX_FLAVOR_BYTES as u64;
+
+/// 写回剪切板前的字节变换：`CF_UNICODETEXT`（13）补结尾 NUL（读取时去掉了，存储的数据不带 NUL，
+/// 粘贴方按 NUL 找结尾）；其他格式空数据写 1 个 0 字节（`GlobalAlloc(GMEM_MOVEABLE, 0)` 的块锁不住，
+/// 标记类格式只看存在与否）；其余原样。
+pub fn write_bytes(id: u32, data: &[u8]) -> Cow<'_, [u8]> {
+    match (id, data) {
+        (13, _) => Cow::Owned([data, &[0, 0]].concat()),
+        (_, []) => Cow::Borrowed(&[0]),
+        _ => Cow::Borrowed(data),
+    }
+}
 
 /// `CF_DIB` / `CF_DIBV5`（无文件头的 BMP）转 PNG。
 pub fn dib_to_png(dib: &[u8]) -> Option<Vec<u8>> {
@@ -305,6 +319,16 @@ mod tests {
         let png = dib_to_png(&dib(2, 1, 32, &[0, 0, 255, 0, 0, 255, 0, 0])).unwrap();
         assert_eq!(px(&png, 1, 0), [0, 255, 0, 255]);
         assert_eq!(dib_to_png(&[1, 2, 3]), None);
+    }
+    #[test]
+    fn write_bytes_terminates_unicode_text() {
+        assert_eq!(&*write_bytes(13, &[0x61, 0]), &[0x61, 0, 0, 0]);
+        assert_eq!(&*write_bytes(13, &[]), &[0, 0]);
+    }
+    #[test]
+    fn write_bytes_pads_empty_other_formats() {
+        assert_eq!(&*write_bytes(49_000, &[]), &[0]);
+        assert_eq!(&*write_bytes(15, &[1, 2, 3]), &[1, 2, 3]);
     }
     #[test]
     fn dib_to_png_rejects_huge_header_before_allocating() {

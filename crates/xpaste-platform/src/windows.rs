@@ -46,7 +46,7 @@ use xpaste_core::{AppInfo, Flavor, Snapshot};
 use crate::decode::normalize_newlines;
 use crate::winfmt::{
     bgra_to_png, bitmap_from_flavors, cf_html_fragment, file_description_query, formats_to_read,
-    is_shell_tray_class, parse_hdrop, standard_format_id, standard_format_name,
+    is_shell_tray_class, parse_hdrop, standard_format_id, standard_format_name, write_bytes,
 };
 use crate::{PasteBlock, PlatformError};
 
@@ -370,6 +370,7 @@ fn file_description(path: &str) -> Option<String> {
 ///
 /// `OpenClipboard(None)` 后 `EmptyClipboard` 会把剪切板所有者设为空，文档说此时 `SetClipboardData`
 /// 可能失败；若 Windows 上往返验收（`阶段6-W1`）失败，改为用监听线程的 message-only 窗口作所有者。
+/// 一个格式都没写成时返回错误，但剪切板已经清空（与 macOS 的 `clearContents` 相同），原有内容不会恢复。
 pub fn write(flavors: &[Flavor]) -> Result<u64, PlatformError> {
     if flavors.iter().all(|f| f.format.is_empty()) {
         return Err(PlatformError::Clipboard("没有可写入的格式".into()));
@@ -389,15 +390,7 @@ pub fn write(flavors: &[Flavor]) -> Result<u64, PlatformError> {
             log::debug!("跳过无法注册的格式 {}", f.format);
             continue;
         }
-        // read_snapshot 存的 CF_UNICODETEXT 不含 NUL；粘贴方按 NUL 找结尾，写回要补上
-        let terminated;
-        let data = if id == u32::from(CF_UNICODETEXT.0) {
-            terminated = [f.data.as_slice(), &[0, 0]].concat();
-            &terminated
-        } else {
-            &f.data
-        };
-        match set_global(&guard, id, data) {
+        match set_global(&guard, id, &write_bytes(id, &f.data)) {
             Ok(()) => written += 1,
             Err(e) => log::debug!("写入格式 {} 失败：{e}", f.format),
         }
@@ -410,7 +403,7 @@ pub fn write(flavors: &[Flavor]) -> Result<u64, PlatformError> {
 }
 
 /// 把 `bytes` 拷进新分配的全局内存块并 `SetClipboardData`。调用方必须持有 `ClipboardGuard` 且已 `EmptyClipboard`。
-/// 空数据也至少分配 1 字节（清零）：`GlobalAlloc(GMEM_MOVEABLE, 0)` 得到的块锁不住，标记类格式只看存在与否。
+/// 补 NUL、空数据补 1 字节由调用方经 `winfmt::write_bytes` 处理；这里的 `max(1)` 只是兜底，0 字节的块锁不住。
 fn set_global(_guard: &ClipboardGuard, id: u32, bytes: &[u8]) -> Result<(), PlatformError> {
     let err = |what: &str, e: Error| PlatformError::Clipboard(format!("{what}：{e}"));
     // SAFETY: 剪切板已打开；内存块不小于拷贝长度；SetClipboardData 成功后所有权归系统，失败时自行释放
