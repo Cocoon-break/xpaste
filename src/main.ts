@@ -1,7 +1,7 @@
 import './styles.css';
 import { attachConsole, info } from './api/log';
 import {
-  accessibilityGranted, bootstrap, clearHistory, copy, copyText, countUnpinned, deleteRecord, finishOnboarding, getRecord, hidePanel, openUrl, prunePreview,
+  accessibilityGranted, bootstrap, clearHistory, copy, copyText, countUnpinned, deleteRecord, finishOnboarding, getRecord, hidePanel, openUrl, previewAppearance, prunePreview,
   requestAccessibility, revealFile, saveSettings, search, setPaused, setPinned, undoDelete,
 } from './api/commands';
 import {
@@ -1001,6 +1001,8 @@ function paintTheme(instant: boolean) {
 function applyAppearance(mode: Appearance, fromEl: HTMLElement | null) {
   if (mode === themeMode()) return;
   const apply = () => {
+    // 窗口主题一并切：WKWebView 的 prefers-color-scheme 跟随窗口主题，系统材质也随之变化
+    void previewAppearance(mode).catch((e: AppError) => void info(`预览外观失败 kind=${e.kind}`));
     if (mode === 'system') delete root.dataset.theme;
     else root.dataset.theme = mode;
     paintTheme(false);
@@ -1243,9 +1245,9 @@ async function finishOnboard() {
     await saveSettings(s);
     S.settings = s;
   } catch (e) {
-    void info(`引导：保存开机启动失败：${(e as AppError).message}`);
+    void info(`引导：保存开机启动失败 kind=${(e as AppError).kind}`);
   }
-  await finishOnboarding().catch((e: AppError) => void info(`引导：结束引导失败：${e.message}`));
+  await finishOnboarding().catch((e: AppError) => void info(`引导：结束引导失败 kind=${e.kind}`));
 }
 obDlg.addEventListener('close', () => {
   if (obDlg.open) return;

@@ -407,6 +407,7 @@ mod tests {
     #[test]
     fn theme_of_maps_appearance() {
         assert_eq!(theme_of(Appearance::System), None);
+        assert_eq!(theme_of(Appearance::Light), Some(tauri::Theme::Light));
         assert_eq!(theme_of(Appearance::Dark), Some(tauri::Theme::Dark));
     }
 

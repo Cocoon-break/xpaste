@@ -75,6 +75,10 @@ pub fn set_hotkey_label(shortcut: &str) {
     set_text(|h| &h.open, &open_label(&hotkey::label(shortcut)));
 }
 
+pub fn hotkey_failed() -> bool {
+    HOTKEY_FAILED.load(Ordering::SeqCst)
+}
+
 pub fn mark_hotkey_failed() {
     HOTKEY_FAILED.store(true, Ordering::SeqCst);
     set_text(|h| &h.open, "更换唤起快捷键…");
@@ -158,5 +162,14 @@ mod tests {
         assert_eq!(open_label("⌘ + Shift + V"), "打开 xPaste（⌘ + Shift + V）");
         assert_eq!(pause_label(true), "继续记录");
         assert_eq!(pause_label(false), "暂停记录");
+    }
+
+    // 托盘未建时 set_text 不做事，只验失败标志；本文件外的测试不碰 HOTKEY_FAILED
+    #[test]
+    fn hotkey_failed_cleared_by_label() {
+        mark_hotkey_failed();
+        assert!(hotkey_failed());
+        set_hotkey_label("CmdOrCtrl+Shift+V");
+        assert!(!hotkey_failed());
     }
 }

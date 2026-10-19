@@ -2,7 +2,7 @@ use std::sync::atomic::Ordering;
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
-use xpaste_core::{RecordSummary, Settings};
+use xpaste_core::{Appearance, RecordSummary, Settings};
 
 use crate::clock::now_ms;
 use crate::error::AppError;
@@ -128,7 +128,8 @@ pub fn save_settings(
     // 面板尺寸只由拖动记忆（panel::remember_size）写；这里只为 changed 不含 panelSize，落库时 save_settings_inner 持锁再取
     settings.panel_size = old.panel_size;
     let changed = changed_fields(&old, &settings);
-    let hotkey_changed = changed.contains(&"hotkey");
+    // 启动时注册失败过：同一快捷键再保存也重试注册，成功后 set_hotkey_label 清掉失败状态
+    let hotkey_changed = changed.contains(&"hotkey") || crate::tray::hotkey_failed();
     let (hotkey, appearance, launch) = (
         settings.hotkey.clone(),
         settings.appearance,
@@ -166,6 +167,13 @@ pub fn save_settings(
     Ok(())
 }
 
+/// 设置页预览外观：窗口主题随预览切换（WKWebView 的 prefers-color-scheme 跟随窗口主题），不持久化。
+#[tauri::command(async)]
+pub fn preview_appearance(app: AppHandle, appearance: Appearance) -> Result<(), AppError> {
+    crate::panel::apply_theme(&app, appearance);
+    Ok(())
+}
+
 /// 按给定规则会清理掉的非置顶记录数（设置页确认用）。
 #[tauri::command(async)]
 pub fn prune_preview(
@@ -195,8 +203,9 @@ pub fn set_paused(app: AppHandle, on: bool) -> Result<(), AppError> {
 #[tauri::command(async)]
 pub fn finish_onboarding(app: AppHandle) -> Result<(), AppError> {
     let state = app.state::<AppState>();
-    state.store().kv_set("onboarded", "1")?;
+    // 先恢复快捷键切换：记 kv 失败也不能让本次运行的快捷键收不起面板
     state.onboarding.store(false, Ordering::SeqCst);
+    state.store().kv_set("onboarded", "1")?;
     let launch = state.settings().launch_at_login;
     if launch {
         set_autostart(&app, true);
@@ -287,7 +296,7 @@ mod tests {
         tauri::test::mock_builder()
             .manage(AppState::for_test())
             .invoke_handler(tauri::generate_handler![
-                // 带 AppHandle 参数的命令（含 get_record、finish_onboarding）只能用于 Wry 运行时，由 lib.rs 的 generate_handler! 编译覆盖
+                // 带 AppHandle 参数的命令（含 get_record、finish_onboarding、preview_appearance）只能用于 Wry 运行时，由 lib.rs 的 generate_handler! 编译覆盖
                 bootstrap,
                 prune_preview,
                 crate::commands::panel::accessibility_granted,

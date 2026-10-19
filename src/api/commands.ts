@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { Bootstrap, CopyResult, RecordDetail, Settings } from './types';
+import type { Appearance, Bootstrap, CopyResult, RecordDetail, Settings } from './types';
 
 export const bootstrap = () => invoke<Bootstrap>('bootstrap');
 export const hidePanel = () => invoke<void>('hide_panel');
@@ -21,5 +21,6 @@ export const countUnpinned = () => invoke<number>('count_unpinned');
 export const prunePreview = (retentionDays: number | null, maxRecords: number) =>
   invoke<number>('prune_preview', { retentionDays, maxRecords });
 export const saveSettings = (settings: Settings) => invoke<void>('save_settings', { settings });
+export const previewAppearance = (appearance: Appearance) => invoke<void>('preview_appearance', { appearance });
 export const setPaused = (on: boolean) => invoke<void>('set_paused', { on });
 export const finishOnboarding = () => invoke<void>('finish_onboarding');

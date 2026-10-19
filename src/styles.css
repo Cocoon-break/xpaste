@@ -513,11 +513,10 @@ dialog.is-shown::backdrop { opacity: 1; transition: opacity 220ms cubic-bezier(.
 dialog.is-shown .dlg-body > * { animation: rowIn 460ms var(--ease-enter) both; animation-delay: calc(60ms + var(--i) * 45ms); }
 .dlg-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 12px 6px 22px; }
 .dlg-head h2 { margin: 0; font: 700 16px var(--font-display); }
-.dlg-body { display: grid; gap: 16px; padding: 10px 22px 18px; }
 /* 面板最矮 520px，放不下整张表单：头尾固定，中间滚动 */
 dialog[open] { display: flex; flex-direction: column; max-height: calc(100% - 32px); overflow: hidden; }
 dialog > form { display: contents; }
-.dlg-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.dlg-body { display: grid; gap: 16px; padding: 10px 22px 18px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .field { display: grid; gap: 7px; min-width: 0; }
 .field label { font-size: 13px; font-weight: 500; }
 .field input, .field select {

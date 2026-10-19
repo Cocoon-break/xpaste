@@ -141,6 +141,7 @@ pub fn run() {
             commands::settings::prune_preview,
             commands::settings::set_paused,
             commands::settings::finish_onboarding,
+            commands::settings::preview_appearance,
             commands::panel::hide_panel,
             commands::panel::open_accessibility_settings,
             commands::panel::accessibility_granted,
@@ -157,8 +158,16 @@ pub fn run() {
             commands::records::copy,
             commands::records::copy_text
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app, event| {
+            // macOS 重开已运行的 .app（Finder / Spotlight）不起第二个进程，而是发 Reopen
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = event {
+                panel::toggle(app, None);
+            }
+            let _ = (app, &event);
+        });
 }
 
 /// 环境变量非空（去首尾空白后）时用它作数据目录，否则用默认目录；开发版隔离真实数据用。
