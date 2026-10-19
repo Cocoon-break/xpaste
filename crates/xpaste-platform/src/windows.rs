@@ -1,6 +1,6 @@
 use std::cell::OnceCell;
 use std::os::windows::ffi::OsStrExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -25,7 +25,8 @@ use windows::Win32::System::Com::StructuredStorage::{
     PropVariantToUInt64,
 };
 use windows::Win32::System::Com::{
-    COINIT_MULTITHREADED, CoInitializeEx, CoTaskMemFree, CoUninitialize,
+    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree,
+    CoUninitialize, IPersistFile, STGM_READ,
 };
 use windows::Win32::System::DataExchange::{
     AddClipboardFormatListener, CloseClipboard, EmptyClipboard, EnumClipboardFormats,
@@ -50,15 +51,16 @@ use windows::Win32::UI::Shell::PropertiesSystem::{
     GPS_DEFAULT, IPropertyStore, SHGetPropertyStoreFromParsingName,
 };
 use windows::Win32::UI::Shell::{
-    IShellItemImageFactory, SHCreateItemFromParsingName, SHDefExtractIconW, SIIGBF_THUMBNAILONLY,
+    IShellItemImageFactory, IShellLinkW, SHCreateItemFromParsingName, SHDefExtractIconW,
+    SIIGBF_THUMBNAILONLY, ShellLink,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyIcon, DispatchMessageW, GetClassNameW,
-    GetForegroundWindow, GetIconInfo, GetMessageW, GetWindowThreadProcessId, HICON, HWND_MESSAGE,
-    ICONINFO, MSG, RegisterClassW, SetForegroundWindow, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WM_CLIPBOARDUPDATE, WNDCLASSW,
+    CreateWindowExW, DefWindowProcW, DestroyIcon, DispatchMessageW, EnumWindows, GetClassNameW,
+    GetForegroundWindow, GetIconInfo, GetMessageW, GetWindowTextLengthW, GetWindowThreadProcessId,
+    HICON, HWND_MESSAGE, ICONINFO, IsWindowVisible, MSG, RegisterClassW, SetForegroundWindow,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLIPBOARDUPDATE, WNDCLASSW,
 };
-use windows::core::{Error, PCWSTR, PWSTR, w};
+use windows::core::{BOOL, Error, Interface, PCWSTR, PWSTR, w};
 use xpaste_core::capture::MAX_FLAVOR_BYTES;
 use xpaste_core::{AppInfo, Flavor, Snapshot};
 
@@ -321,13 +323,24 @@ fn app_of_window(hwnd: HWND) -> Option<AppInfo> {
     if hwnd.is_invalid() {
         return None;
     }
+    let id = exe_of_pid(window_pid(hwnd)?)?;
+    Some(AppInfo {
+        name: app_name(&id),
+        id,
+    })
+}
+
+fn window_pid(hwnd: HWND) -> Option<u32> {
     let mut pid = 0u32;
-    // SAFETY: pid 指向本地变量；进程句柄用完即关
+    // SAFETY: pid 指向本地变量；hwnd 失效时调用失败、pid 保持 0
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid as *mut u32)) };
+    (pid != 0).then_some(pid)
+}
+
+/// 进程的 exe 完整路径。
+fn exe_of_pid(pid: u32) -> Option<String> {
+    // SAFETY: 进程句柄用完即关；buf 是本地缓冲区，len 为其容量
     unsafe {
-        GetWindowThreadProcessId(hwnd, Some(&mut pid as *mut u32));
-        if pid == 0 {
-            return None;
-        }
         let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
         let mut buf = [0u16; 1024];
         let mut len = buf.len() as u32;
@@ -339,14 +352,17 @@ fn app_of_window(hwnd: HWND) -> Option<AppInfo> {
         );
         let _ = CloseHandle(process);
         ok.ok()?;
-        let id = String::from_utf16_lossy(&buf[..len as usize]);
-        let name = file_description(&id).unwrap_or_else(|| {
-            Path::new(&id)
-                .file_stem()
-                .map_or_else(|| id.clone(), |s| s.to_string_lossy().into_owned())
-        });
-        Some(AppInfo { id, name })
+        Some(String::from_utf16_lossy(&buf[..len as usize]))
     }
+}
+
+/// 应用名称（`frontmost_app().name` 与 `installed_apps` 共用）：`FileDescription`，没有时用不带扩展名的文件名。
+fn app_name(exe: &str) -> String {
+    file_description(exe).unwrap_or_else(|| {
+        Path::new(exe)
+            .file_stem()
+            .map_or_else(|| exe.to_owned(), |s| s.to_string_lossy().into_owned())
+    })
 }
 
 /// exe 版本资源里的 `FileDescription`（按第一个语言 / 代码页取）；没有或为空时返回 `None`。
@@ -782,6 +798,93 @@ pub fn video_poster(path: &Path, max_px: u32) -> Option<Vec<u8>> {
     }
 }
 
+/// 选择器候选：有可见、带标题顶层窗口的进程（本进程除外），加上开始菜单快捷方式指向的 exe，
+/// 名称与 `frontmost_app().name` 同口径。可重复、无序，由前端去重。
 pub fn installed_apps() -> Vec<String> {
-    Vec::new()
+    let mut pids: Vec<u32> = Vec::new();
+    // SAFETY: 回调只在 EnumWindows 返回前经 lparam 访问 pids
+    let _ = unsafe {
+        EnumWindows(
+            Some(push_window_pid),
+            LPARAM(&mut pids as *mut Vec<u32> as isize),
+        )
+    };
+    // SAFETY: 无参数
+    let me = unsafe { GetCurrentProcessId() };
+    pids.retain(|&p| p != me);
+    pids.sort_unstable();
+    pids.dedup();
+    let linked = ComGuard::init().map_or_else(Vec::new, |_com| start_menu_targets());
+    pids.into_iter()
+        .filter_map(exe_of_pid)
+        .chain(linked)
+        .map(|exe| app_name(&exe))
+        .filter(|n| !n.trim().is_empty())
+        .collect()
+}
+
+extern "system" fn push_window_pid(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    // SAFETY: lparam 是 installed_apps 传入的 &mut Vec<u32>，EnumWindows 返回前一直有效
+    unsafe {
+        if IsWindowVisible(hwnd).as_bool()
+            && GetWindowTextLengthW(hwnd) > 0
+            && let Some(pid) = window_pid(hwnd)
+        {
+            (*(lparam.0 as *mut Vec<u32>)).push(pid);
+        }
+    }
+    true.into()
+}
+
+/// 开始菜单（全体用户与当前用户）里 `.lnk` 指向的、存在的 `.exe`。调用方已初始化 COM。
+fn start_menu_targets() -> Vec<String> {
+    let mut links = Vec::new();
+    for var in ["ProgramData", "APPDATA"] {
+        if let Some(root) = std::env::var_os(var) {
+            collect_links(
+                &PathBuf::from(root).join(r"Microsoft\Windows\Start Menu\Programs"),
+                &mut links,
+            );
+        }
+    }
+    links.iter().filter_map(|l| link_target(l)).collect()
+}
+
+/// 递归收集 `.lnk`；不跟随符号链接与联接点，避免循环。
+fn collect_links(dir: &Path, out: &mut Vec<PathBuf>) {
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if entry.file_type().is_ok_and(|t| t.is_dir()) {
+            collect_links(&path, out);
+        } else if path
+            .extension()
+            .is_some_and(|x| x.eq_ignore_ascii_case("lnk"))
+        {
+            out.push(path);
+        }
+    }
+}
+
+/// 快捷方式的目标；不是存在的 `.exe`（帮助文档、网址、安装程序公告的快捷方式等）时返回 None。
+fn link_target(lnk: &Path) -> Option<String> {
+    let wide = wide_path(lnk);
+    let mut buf = [0u16; 1024];
+    // SAFETY: wide 以 NUL 结尾、buf 是本地缓冲区，调用期间有效；不要 WIN32_FIND_DATAW，传 null；
+    // 两个 COM 对象在本函数返回前释放
+    unsafe {
+        let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).ok()?;
+        link.cast::<IPersistFile>()
+            .ok()?
+            .Load(PCWSTR(wide.as_ptr()), STGM_READ)
+            .ok()?;
+        link.GetPath(&mut buf, std::ptr::null_mut(), 0).ok()?;
+    }
+    let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    let target = String::from_utf16_lossy(&buf[..end]);
+    let path = Path::new(&target);
+    (path
+        .extension()
+        .is_some_and(|x| x.eq_ignore_ascii_case("exe"))
+        && path.is_file())
+    .then_some(target)
 }
