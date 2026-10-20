@@ -41,10 +41,10 @@ test('isHttpUrl 区分大小写、拒绝伪协议', () => {
   assert.ok(!isHttpUrl('HTTPS://a.b'));
 });
 
-test('FILTERS 顺序与 M06 一致', () =>
+test('FILTERS 为 全部、常用 加 6 种类型', () =>
   assert.deepEqual(
     FILTERS.map(([k]) => k),
-    ['all', 'fav', 'text', 'link', 'code', 'color', 'image', 'video', 'file'],
+    ['all', 'fav', 'text', 'link', 'code', 'image', 'video', 'file'],
   ));
 
 test('videoChips_skips_unknown', () => {

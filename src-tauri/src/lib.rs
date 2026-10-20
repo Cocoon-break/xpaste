@@ -161,8 +161,7 @@ pub fn run() {
             commands::records::undo_delete,
             commands::records::clear_history,
             commands::records::count_unpinned,
-            commands::records::copy,
-            commands::records::copy_text
+            commands::records::copy
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

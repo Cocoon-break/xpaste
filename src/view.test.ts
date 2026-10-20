@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { RecordSummary } from './api/types.ts';
-import { rel } from './format.ts';
+import { rel, type Filter } from './format.ts';
 import {
   armUndo, canUndo, counts, cycleFilter, ensureSelection, groupOf, groups, isStale, nextSelection, visible,
 } from './view.ts';
@@ -50,7 +50,7 @@ test('groups 按 groupOf 切成连续分组', () => {
 
 test('counts 不受搜索影响且常用按阈值', () => {
   const m = new Map([mk(1, { uses: 3 }), mk(2, { kind: 'code' })].map((r) => [r.id, r]));
-  assert.deepEqual(counts(m), { all: 2, fav: 1, text: 1, link: 0, code: 1, color: 0, image: 0, video: 0, file: 0 });
+  assert.deepEqual(counts(m), { all: 2, fav: 1, text: 1, link: 0, code: 1, image: 0, video: 0, file: 0 });
 });
 
 test('nextSelection 下一条、否则上一条、否则 null', () => {
@@ -66,7 +66,11 @@ test('ensureSelection 选中项被过滤掉时回到第一条', () => {
   assert.equal(ensureSelection([], 5), null);
 });
 
-test('cycleFilter 循环 9 个分类', () => {
+test('cycleFilter 循环 8 个分类', () => {
+  let f: Filter = 'all';
+  for (let i = 0; i < 7; i++) f = cycleFilter(f, 1);
+  assert.equal(f, 'file');
+  assert.equal(cycleFilter('code', 1), 'image');
   assert.equal(cycleFilter('file', 1), 'all');
   assert.equal(cycleFilter('all', -1), 'file');
 });

@@ -1,7 +1,7 @@
 import './styles.css';
 import { attachConsole, info } from './api/log';
 import {
-  accessibilityGranted, bootstrap, clearHistory, copy, copyText, countUnpinned, deleteRecord, finishOnboarding, getRecord, hidePanel, installedApps, openUrl, previewAppearance, prunePreview,
+  accessibilityGranted, bootstrap, clearHistory, copy, countUnpinned, deleteRecord, finishOnboarding, getRecord, hidePanel, installedApps, openUrl, previewAppearance, prunePreview,
   requestAccessibility, revealFile, saveSettings, search, setPaused, setPinned, undoDelete,
 } from './api/commands';
 import {
@@ -18,7 +18,6 @@ import {
   onRecordUpdated,
 } from './api/events';
 import type { AppError, Appearance, FileEntry, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
-import { grade, hexInfo, isHex } from './color';
 import { copyToast, needsAccessibility } from './copy-status';
 import {
   canInlinePlay, esc, FAV_MIN, FILTERS, FL, fmtBytes, fmtDateTime, fmtDur, fmtInt, hl, hlCode, host, isFav, isHttpUrl, LABEL, rel, truncate, videoChips,
@@ -39,7 +38,6 @@ const I = {
   text: '<path d="M4 5.5h12M4 10h12M4 14.5h7"/>',
   link: '<path d="M8.5 11.5a3 3 0 0 0 4.2 0l2.6-2.6a3 3 0 0 0-4.2-4.2l-.9.9"/><path d="M11.5 8.5a3 3 0 0 0-4.2 0l-2.6 2.6a3 3 0 0 0 4.2 4.2l.9-.9"/>',
   code: '<path d="M7 6 3 10l4 4M13 6l4 4-4 4"/>',
-  color: '<path d="M10 3.5c3 3.4 5 6 5 8.3a5 5 0 0 1-10 0c0-2.3 2-4.9 5-8.3z"/>',
   image: '<rect x="3" y="4" width="14" height="12" rx="2"/><circle cx="7.5" cy="8.5" r="1.5"/><path d="m4 15 4.5-4.5L12 14l2-2 3 3"/>',
   video: '<rect x="2.5" y="5" width="11" height="10" rx="2"/><path d="m13.5 9 4-2.5v7l-4-2.5"/>',
   file: '<path d="M5 3h6.5L15 6.5V17H5z"/><path d="M11 3v4h4"/>',
@@ -84,7 +82,6 @@ const instantly = (el: HTMLElement, on: boolean, fn: () => void) => {
     el.removeAttribute('data-instant');
   }
 };
-const nf2 = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const hf = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
 
 // —— 元素 ——
@@ -126,8 +123,7 @@ const rowEl = (id: number | null) => (id === null ? null : document.getElementBy
 const source = (r: RecordSummary) => r.app?.name || '未知来源';
 
 const thumb = (r: RecordSummary) =>
-  r.kind === 'color' && isHex(r.title) ? `<span class="thumb swatch-thumb" style="background:${esc(r.title)}"></span>`
-  : r.kind === 'image' && r.thumb ? `<span class="thumb"><img src="${esc(r.thumb)}" alt="" width="36" height="36"></span>`
+  r.kind === 'image' && r.thumb ? `<span class="thumb"><img src="${esc(r.thumb)}" alt="" width="36" height="36"></span>`
   : r.kind === 'video' && r.thumb ? `<span class="thumb"><img src="${esc(r.thumb)}" alt="" width="36" height="36"><span class="play">${svg('play')}</span></span>`
   : `<span class="thumb">${svg(r.kind)}</span>`;
 
@@ -143,7 +139,7 @@ const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id ===
         <div class="row-in">
           ${thumb(r)}
           <div class="main">
-            <div class="title${r.kind === 'code' || r.kind === 'color' ? ' mono' : ''}">${hl(r.title, S.q)}</div>
+            <div class="title${r.kind === 'code' ? ' mono' : ''}">${hl(r.title, S.q)}</div>
             <div class="meta">${metaLine(r)}</div>
           </div>
           <div class="tail">
@@ -357,10 +353,6 @@ function setPin(on: boolean, instant: boolean) {
 }
 
 // —— 预览 ——
-const gradeHTML = (c: number) => {
-  const g = grade(c);
-  return `<em class="${g === '不达标' ? 'fail' : 'pass'}">${g}</em>`;
-};
 const MISSING = '原文件已移动或删除';
 const UNPLAYABLE = '无法在预览中播放这个格式';
 
@@ -396,15 +388,6 @@ function bodyHTML(d: RecordDetail): string {
     }
     case 'code':
       return `<pre class="p-code" translate="no"><code>${text.split('\n').map((l) => `<span class="ln">${hlCode(l) || ' '}</span>`).join('')}</code></pre>${trunc}`;
-    case 'color': {
-      if (!isHex(text)) return `<div class="p-text">${esc(text)}</div>`;
-      const c = hexInfo(text);
-      const ink = c.onBlack > c.onWhite ? '#06080F' : '#FFFFFF';
-      return `<div class="p-color"><div class="swatch" style="background:${c.hex};--sw:${c.hex};color:${ink}"><b>${c.hex}</b></div>
-          <ul class="cvals">${[['HEX', c.hex], ['RGB', c.rgb], ['HSL', c.hsl]].map(([k, v]) =>
-            `<li><span class="k">${k}</span><code>${esc(v)}</code><button class="btn sm" type="button" data-copy="${esc(v)}">复制</button></li>`).join('')}</ul>
-          <div class="contrast"><div>放在白色背景上<b>${nf2.format(c.onWhite)} : 1${gradeHTML(c.onWhite)}</b></div><div>放在黑色背景上<b>${nf2.format(c.onBlack)} : 1${gradeHTML(c.onBlack)}</b></div></div></div>`;
-    }
     case 'image': {
       const im = d.image;
       if (!im) return `<div class="p-empty">${MISSING}</div>`;
@@ -1736,18 +1719,6 @@ pbody.addEventListener('click', (e) => {
     vid.focus();
     return;
   }
-  const btn = t.closest<HTMLElement>('[data-copy]');
-  if (!btn) return;
-  const v = btn.dataset.copy!;
-  copyText(v).then(
-    () => {
-      btn.textContent = '已复制';
-      fx(btn, [{ transform: 'scale(.9)' }, { transform: 'scale(1)' }], { duration: 320, easing: EASE_SPRING });
-      setTimeout(() => (btn.textContent = '复制'), 1200);
-      toast(`已复制 ${v}`);
-    },
-    (err: AppError) => toast(err.message),
-  );
 });
 
 // 非行区域不弹 WebView 原生菜单（含“重新加载”）；输入框保留系统的编辑菜单

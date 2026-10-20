@@ -543,22 +543,6 @@ fn bitmap_bgra(color: HBITMAP) -> Option<(u32, u32, Vec<u8>)> {
     (lines == h as i32).then_some((w, h, bgra))
 }
 
-/// 清空剪切板后写入 `CF_UNICODETEXT`，返回写入后的序号。
-pub fn write_text(text: &str) -> Result<u64, PlatformError> {
-    let bytes: Vec<u8> = text
-        .encode_utf16()
-        .chain([0])
-        .flat_map(u16::to_le_bytes)
-        .collect();
-    let guard = ClipboardGuard::open()?;
-    // SAFETY: 剪切板已打开
-    unsafe { EmptyClipboard() }
-        .map_err(|e| PlatformError::Clipboard(format!("清空剪切板失败：{e}")))?;
-    set_global(&guard, u32::from(CF_UNICODETEXT.0), &bytes)?;
-    drop(guard);
-    Ok(change_count())
-}
-
 /// 进程是否以提升权限运行；读不到令牌时返回 `None`。
 fn is_elevated(process: HANDLE) -> Option<bool> {
     let mut token = HANDLE::default();

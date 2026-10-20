@@ -13,7 +13,8 @@ use crate::{
 };
 
 /// 按版本排列的迁移脚本；第 i 项把 `user_version` 从 i 升到 i+1。
-const MIGRATIONS: &[&str] = &[r"
+const MIGRATIONS: &[&str] = &[
+    r"
 CREATE TABLE apps (id TEXT PRIMARY KEY, name TEXT NOT NULL, icon_path TEXT);
 CREATE TABLE records (
   id INTEGER PRIMARY KEY AUTOINCREMENT, hash BLOB NOT NULL UNIQUE, kind TEXT NOT NULL, title TEXT NOT NULL,
@@ -26,7 +27,10 @@ CREATE TABLE flavors (
   item INTEGER NOT NULL CHECK (item < 65536), format TEXT NOT NULL, data BLOB, file TEXT,
   PRIMARY KEY (record_id, item, format));
 CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-"];
+",
+    // 阶段 9：删去颜色类型，已有颜色记录按文本处理。颜色文本是单行 HEX，去掉首尾空白（含制表、换行）即文本标题规则
+    "UPDATE records SET kind = 'text', title = trim(text, ' ' || char(9, 10, 13)) WHERE kind = 'color';",
+];
 
 const SUBDIRS: [&str; 4] = ["blobs", "images", "thumbs", "icons"];
 
@@ -642,7 +646,7 @@ pub(crate) mod tests {
     fn open_creates_schema_and_dirs() {
         let dir = tmp();
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 1);
+        assert_eq!(s.schema_version().unwrap(), 2);
         for sub in ["blobs", "images", "thumbs", "icons"] {
             assert!(dir.join(sub).is_dir());
         }
@@ -658,11 +662,36 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn color_rows_become_text_after_migration() {
+        let dir = tmp();
+        make_dirs(&dir).unwrap();
+        let old = Connection::open(dir.join("xpaste.db")).unwrap();
+        old.execute_batch(MIGRATIONS[0]).unwrap();
+        old.pragma_update(None, "user_version", 1).unwrap();
+        old.execute(
+            "INSERT INTO records (hash, kind, title, text, copied_at, size, search_text) VALUES (x'01', 'color', '#6F8BFF', ' #6f8bff\n', 1, 9, '#6f8bff')",
+            [],
+        )
+        .unwrap();
+        drop(old);
+        let s = Store::open(&dir).unwrap();
+        assert_eq!(s.schema_version().unwrap(), 2);
+        let row: (String, String) = s
+            .conn
+            .query_row("SELECT kind, title FROM records", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(row, ("text".into(), "#6f8bff".into()));
+        assert_eq!(s.list_summaries().unwrap()[0].kind, Kind::Text);
+    }
+
+    #[test]
     fn reopen_does_not_rerun_migrations() {
         let dir = tmp();
         drop(Store::open(&dir).unwrap());
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 1);
+        assert_eq!(s.schema_version().unwrap(), 2);
     }
 
     #[test]

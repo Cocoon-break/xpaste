@@ -11,17 +11,15 @@ pub enum Kind {
     Text,
     Link,
     Code,
-    Color,
     Image,
     Video,
     File,
 }
 
-const KINDS: [(Kind, &str); 7] = [
+const KINDS: [(Kind, &str); 6] = [
     (Kind::Text, "text"),
     (Kind::Link, "link"),
     (Kind::Code, "code"),
-    (Kind::Color, "color"),
     (Kind::Image, "image"),
     (Kind::Video, "video"),
     (Kind::File, "file"),
@@ -520,6 +518,12 @@ mod tests {
             assert_eq!(serde_json::to_string(&k).unwrap(), format!("\"{name}\""));
         }
         assert_eq!(Kind::parse("nope"), None);
+    }
+
+    #[test]
+    fn parse_rejects_color() {
+        assert_eq!(Kind::parse("color"), None);
+        assert_eq!(KINDS.len(), 6);
     }
 
     #[test]

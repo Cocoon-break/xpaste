@@ -48,7 +48,6 @@ pub fn build_record(snapshot: Snapshot, kind: Kind, now_ms: i64) -> NewRecord {
             .and_then(|t| t.lines().map(str::trim).find(|l| !l.is_empty()))
             .map(Into::into),
         Kind::Link => link_title.clone().or_else(|| non_blank(text.as_deref())),
-        Kind::Color => non_blank(text.as_deref()).map(|t| t.to_uppercase()),
         Kind::Image | Kind::Video | Kind::File => match paths.as_slice() {
             [] => bitmap
                 .as_ref()
@@ -258,13 +257,6 @@ mod tests {
                 .chars()
                 .count(),
             200
-        );
-    }
-    #[test]
-    fn color_title_is_upper_hex() {
-        assert_eq!(
-            build_record(snap(" #6f8bff "), Kind::Color, 0).title,
-            "#6F8BFF"
         );
     }
     #[test]
