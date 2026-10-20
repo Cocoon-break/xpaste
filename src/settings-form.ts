@@ -7,6 +7,12 @@ export function parseLimit(s: string): number | null {
   return s.trim() !== '' && v >= 50 && v <= 5000 && v % 50 === 0 ? v : null;
 }
 
+/** 进入“常用”的使用次数：2–99 的整数（与 `Settings::validate` 同口径）。 */
+export function parseFrequent(s: string): number | null {
+  const v = Number(s);
+  return s.trim() !== '' && Number.isInteger(v) && v >= 2 && v <= 99 ? v : null;
+}
+
 export const retentionFromOption = (v: string): number | null => (v === 'forever' ? null : Number(v));
 export const optionFromRetention = (d: number | null): string => (d === null ? 'forever' : String(d));
 
@@ -37,6 +43,7 @@ export type SettingsForm = {
   hotkey: string;
   retain: string;
   limit: number;
+  frequent: number;
   ignored: string[];
   skipSensitive: boolean;
   moveToTop: boolean;
@@ -48,6 +55,7 @@ export const formToSettings = (base: Settings, f: SettingsForm): Settings => ({
   hotkey: f.hotkey,
   retentionDays: retentionFromOption(f.retain),
   maxRecords: f.limit,
+  frequentMinUses: f.frequent,
   ignoredApps: f.ignored,
   skipSensitive: f.skipSensitive,
   moveToTop: f.moveToTop,

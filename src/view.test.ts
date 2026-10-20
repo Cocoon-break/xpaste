@@ -13,14 +13,22 @@ const mk = (id: number, over: Partial<RecordSummary>): RecordSummary => ({
 
 test('visible：分类 ∩ 搜索 → 置顶优先、时间倒序', () => {
   const m = new Map([mk(1, { copiedAt: 10 }), mk(2, { copiedAt: 20, pinned: true }), mk(3, { copiedAt: 30, kind: 'code' })].map((r) => [r.id, r]));
-  assert.deepEqual(visible(m, 'all', null).map((r) => r.id), [2, 3, 1]);
-  assert.deepEqual(visible(m, 'code', null).map((r) => r.id), [3]);
-  assert.deepEqual(visible(m, 'all', new Set([1])).map((r) => r.id), [1]);
+  assert.deepEqual(visible(m, 'all', null, 3).map((r) => r.id), [2, 3, 1]);
+  assert.deepEqual(visible(m, 'code', null, 3).map((r) => r.id), [3]);
+  assert.deepEqual(visible(m, 'all', new Set([1]), 3).map((r) => r.id), [1]);
 });
 
 test('常用视图按次数降序', () => {
   const m = new Map([mk(1, { uses: 3, copiedAt: 1 }), mk(2, { uses: 5 }), mk(3, { uses: 2 })].map((r) => [r.id, r]));
-  assert.deepEqual(visible(m, 'fav', null).map((r) => r.id), [2, 1]);
+  assert.deepEqual(visible(m, 'fav', null, 3).map((r) => r.id), [2, 1]);
+});
+
+test('常用阈值可配置：阈值 2 时 uses = 2 进入常用，阈值 3 时不进入', () => {
+  const m = new Map([mk(1, { uses: 2 }), mk(2, { uses: 1 })].map((r) => [r.id, r]));
+  assert.deepEqual(visible(m, 'fav', null, 2).map((r) => r.id), [1]);
+  assert.deepEqual(visible(m, 'fav', null, 3).map((r) => r.id), []);
+  assert.equal(counts(m, 2).fav, 1);
+  assert.equal(counts(m, 3).fav, 0);
 });
 
 test('groupOf 今天/昨天/更早/置顶', () => {
@@ -50,7 +58,7 @@ test('groups 按 groupOf 切成连续分组', () => {
 
 test('counts 不受搜索影响且常用按阈值', () => {
   const m = new Map([mk(1, { uses: 3 }), mk(2, { kind: 'code' })].map((r) => [r.id, r]));
-  assert.deepEqual(counts(m), { all: 2, fav: 1, text: 1, link: 0, code: 1, image: 0, video: 0, file: 0 });
+  assert.deepEqual(counts(m, 3), { all: 2, fav: 1, text: 1, link: 0, code: 1, image: 0, video: 0, file: 0 });
 });
 
 test('nextSelection 下一条、否则上一条、否则 null', () => {
