@@ -75,7 +75,7 @@
         <span class="k"><kbd class="mod"></kbd><kbd>1–9</kbd> <span data-verb="快速">快速复制</span></span>
         <span class="k"><kbd class="mod"></kbd><kbd>P</kbd> 置顶</span>
         <span class="k"><kbd class="mod"></kbd><kbd>←→</kbd> 切换分类</span>
-        <span class="k"><kbd>Del</kbd> 删除</span>
+        <span class="k"><kbd class="del">Del</kbd> 删除</span>
         <span class="k" id="undoHint" hidden><kbd class="mod"></kbd><kbd>Z</kbd> 撤销</span>
         <span class="k"><kbd>Esc</kbd> <span id="escHint">隐藏</span></span>
       </footer>
@@ -85,7 +85,7 @@
         <button type="button" role="menuitem" data-m="pin" style="--i:1"><span data-icon="pin"></span><span id="mPin">置顶</span><kbd class="modp"></kbd></button>
         <button type="button" role="menuitem" data-m="open" style="--i:2" hidden><span data-icon="link"></span><span id="mOpen"></span></button>
         <div class="sep" role="separator"></div>
-        <button type="button" role="menuitem" data-m="del" class="danger" style="--i:3"><span data-icon="trash"></span>删除<kbd>Del</kbd></button>
+        <button type="button" role="menuitem" data-m="del" class="danger" style="--i:3"><span data-icon="trash"></span>删除<kbd class="del">Del</kbd></button>
       </div>
 
       <div class="toast" id="toast" data-open="false">
@@ -128,7 +128,7 @@
             </div>
           </div>
           <div class="field" style="--i:2">
-            <label class="line"><span><b>进入“常用”的使用次数</b><small>同一条内容被复制这么多次后出现在“常用”</small></span><span class="suffix"><input type="number" id="frequentIn" min="2" max="99" step="1" inputmode="numeric" autocomplete="off" aria-describedby="frequentErr"><span>次</span></span></label>
+            <div class="line"><span><label for="frequentIn"><b>进入“常用”的使用次数</b></label><small id="frequentHelp">同一条内容被复制这么多次后出现在“常用”</small></span><span class="suffix"><input type="number" id="frequentIn" min="2" max="99" step="1" inputmode="numeric" autocomplete="off" aria-describedby="frequentHelp frequentErr"><span>次</span></span></div>
             <p class="err" id="frequentErr" hidden>请输入 2 到 99 之间的整数</p>
           </div>
           <div class="field" style="--i:3">

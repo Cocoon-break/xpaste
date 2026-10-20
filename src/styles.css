@@ -165,7 +165,7 @@ kbd {
 }
 :root[data-material="opaque"] .window { background: var(--ink); }
 .window::before { /* 顶边的光谱细线：铺满窗内画在边框内侧顶端，两端随圆角收束 */
-  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  content: ""; position: absolute; inset: 0; border-radius: 13px; pointer-events: none; /* 边框内侧：14px − 1px */
   background: var(--spectrum) 50% 0 / 100% 1px no-repeat; opacity: .7;
 }
 /* 显隐由 Tauri 负责。前端发起的隐藏先把 data-shown 置 false 播 160ms 淡出再隐藏窗口
@@ -210,7 +210,7 @@ kbd {
   transition: border-color 200ms ease, background-color 200ms ease, color 200ms ease;
 }
 .search::after { /* 聚焦时从中间展开的光谱下划线：铺满框内贴边框内侧底边，两端随圆角收束 */
-  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  content: ""; position: absolute; inset: 0; border-radius: 11px; pointer-events: none; /* 边框内侧：12px − 1px */
   background: var(--spectrum) 50% 100% / 100% 2px no-repeat; transform: scaleX(0); opacity: 0;
   transition: transform 420ms var(--ease-enter), opacity 200ms ease;
 }

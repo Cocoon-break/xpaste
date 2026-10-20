@@ -1372,6 +1372,8 @@ async function submitSettings() {
     // 常用阈值只在前端用：立即按新阈值重算分类计数、列表与预览标签
     if (favChanged) {
       renderTabs(true);
+      // 先重绘频谱（常用分类下的变暗随阈值变），再 renderList，同 setFilter
+      renderSpectrum();
       renderList();
     }
     closeSettings();
@@ -1668,6 +1670,8 @@ root.toggleAttribute('data-native-fade', nativeFade());
 const MOD = b.platform.os === 'macos' ? '⌘' : 'Ctrl';
 document.querySelectorAll('.mod').forEach((k) => (k.textContent = MOD));
 $('.modp').textContent = `${MOD} P`;
+// macOS 没有 ⌦ 键（MacBook），删除提示写 ⌘ ⌫
+document.querySelectorAll('.del').forEach((k) => (k.textContent = b.platform.os === 'macos' ? '⌘ ⌫' : 'Del'));
 void paintVerb();
 await info(`bootstrap 完成，平台 ${b.platform.os}，材质 ${b.platform.material}`);
 // 首次启动后端在 setup 里就显示了面板，那时页面还没订阅，panel-shown 已丢失，这里补上
