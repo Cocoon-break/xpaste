@@ -399,15 +399,15 @@ mark { background: var(--mark-bg); color: var(--mark-fg); border-radius: 3px; pa
 
 /* —— 预览 —— */
 .preview { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-height: 0; background: var(--preview-bg); }
-.phead { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px 12px 18px; border-bottom: 1px solid var(--line); }
+.phead { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px 8px 16px; border-bottom: 1px solid var(--line); }
 .tchip { display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 10px; border-radius: 999px; font-size: 12.5px; color: var(--fg); background: color-mix(in srgb, var(--tc) 12%, transparent); border: 1px solid color-mix(in srgb, var(--tc) 30%, transparent); white-space: nowrap; }
 .tchip .ic { width: 14px; height: 14px; color: var(--tc); } /* 类型色只给图标与底色，文字用 --fg（M21） */
 .chip { font: 11px var(--font-mono); padding: 2px 7px; border-radius: 5px; background: var(--glass-2); border: 1px solid var(--line-2); color: var(--muted); white-space: nowrap; }
 .ptype { display: flex; gap: 8px; align-items: center; min-width: 0; flex-wrap: wrap; }
 .pact { display: flex; gap: 6px; }
-.pbody { overflow: auto; overscroll-behavior: contain; padding: 20px; min-width: 0; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+.pbody { overflow: auto; overscroll-behavior: contain; padding: 14px 16px; min-width: 0; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
 .p-empty { color: var(--faint); padding-top: 40px; text-align: center; }
-.p-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 16px; line-height: 1.8; max-width: 60ch; }
+.p-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: 1.7; }
 .p-link { display: grid; gap: 14px; }
 .lk-card { display: flex; gap: 14px; align-items: center; padding: 14px; border-radius: 14px; background: var(--glass-2); border: 1px solid var(--line-2); }
 .lk-fav { width: 44px; height: 44px; border-radius: 12px; flex: none; display: grid; place-items: center; font: 700 18px var(--font-display); color: var(--on-pill); background: linear-gradient(135deg, var(--c-link), var(--c-text)); }
@@ -447,7 +447,7 @@ button.poster { display: block; width: 100%; padding: 0; background: #000000; ba
 .p-file > div { min-width: 0; display: grid; gap: 6px; }
 .fname { font-size: 17px; font-weight: 500; overflow-wrap: anywhere; }
 .fpath { font: 12px/1.6 var(--font-mono); color: var(--muted); overflow-wrap: anywhere; }
-.pmeta { margin: 0; padding: 12px 18px; display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px 16px; border-top: 1px solid var(--line); }
+.pmeta { margin: 0; padding: 8px 16px; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, auto); gap: 12px; line-height: 1.35; border-top: 1px solid var(--line); }
 .pmeta dt { font-size: 11px; color: var(--faint); letter-spacing: .04em; }
 .pmeta dd { margin: 0; font-size: 12.5px; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 

@@ -426,16 +426,16 @@ function bodyHTML(d: RecordDetail): string {
 }
 
 function metaHTML(r: RecordSummary, d: RecordDetail | null) {
-  const meta: [string, string][] = [['来源', esc(source(r))], ['复制于', fmtDateTime(r.copiedAt)], ['大小', fmtBytes(r.size)], ['使用', `${fmtInt(r.uses)} 次`]];
+  const meta: [string, string][] = [['来源', source(r)], ['复制于', fmtDateTime(r.copiedAt)], ['大小', fmtBytes(r.size)], ['使用', `${fmtInt(r.uses)} 次`]];
   if (r.kind === 'video' && r.durationSec !== null) meta.push(['时长', fmtDur(r.durationSec)]);
   if (d) {
     const t = d.text ?? '', more = d.truncated ? '+' : '';
     if (r.kind === 'text') meta.push(['字符', fmtInt([...t].length) + more]);
     if (r.kind === 'code') meta.push(['行数', fmtInt(t.split('\n').length) + more]);
     if (r.kind === 'image' && d.image?.w) meta.push(['尺寸', `${d.image.w} × ${d.image.h}`]);
-    if (r.kind === 'link') meta.push(['域名', esc(host(t))]);
+    if (r.kind === 'link') meta.push(['域名', host(t)]);
   }
-  return meta.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('');
+  return meta.map(([k, v]) => `<div><dt>${k}</dt><dd title="${esc(v)}">${esc(v)}</dd></div>`).join('');
 }
 
 // 摘要立即渲染；正文异步取详情，序号过期的结果丢弃。同一条只取一次（摘要更新只刷新头部与信息栏）
