@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { Bootstrap, CopyResult, RecordDetail, Settings } from './types';
+import type { Bootstrap, CopyResult, RecordDetail, SearchHit, Settings } from './types';
 
 export const bootstrap = () => invoke<Bootstrap>('bootstrap');
 /** `animate`：没有开减少动态效果；macOS 系统材质下后端据此原生淡出整个窗口。 */
@@ -13,7 +13,7 @@ export const openUrl = (url: string) => invoke<void>('open_url', { url });
 export const revealFile = (path: string) => invoke<void>('reveal_file', { path });
 
 export const getRecord = (id: number) => invoke<RecordDetail | null>('get_record', { id });
-export const search = (q: string) => invoke<number[]>('search', { q });
+export const search = (q: string) => invoke<SearchHit[]>('search', { q });
 export const setPinned = (id: number, on: boolean) => invoke<void>('set_pinned', { id, on });
 export const deleteRecord = (id: number) => invoke<void>('delete', { id });
 export const undoDelete = (id: number) => invoke<boolean>('undo_delete', { id });

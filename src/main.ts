@@ -101,6 +101,8 @@ const S = {
   filter: 'all' as Filter,
   q: '',
   matchIds: null as Set<number> | null,
+  /** 命中来自识别文字时的片段（Task 5 显示） */
+  snippets: new Map<number, string>(),
   sel: null as number | null,
   detail: null as RecordDetail | null,
   undo: null as UndoState,
@@ -667,13 +669,15 @@ function fetchMatches(v: string, done: () => void) {
   const seq = ++searchSeq;
   if (!v.trim()) {
     S.matchIds = null;
+    S.snippets.clear();
     done();
     return;
   }
   search(v).then(
-    (ids) => {
+    (hits) => {
       if (isStale(seq, searchSeq)) return;
-      S.matchIds = new Set(ids);
+      S.matchIds = new Set(hits.map((h) => h.id));
+      S.snippets = new Map(hits.filter((h) => h.snippet).map((h) => [h.id, h.snippet!]));
       done();
     },
     (e: AppError) => void info(`search 失败 kind=${e.kind}`),
@@ -1358,6 +1362,8 @@ async function submitSettings() {
   const s = formToSettings(S.settings, {
     hotkey: pendingHotkey, retain: retainIn.value, limit, frequent, ignored: addIgnored(draftIgnored, ignoreIn.value), skipSensitive: sensitiveIn.checked,
     moveToTop: moveTopIn.checked, launchAtLogin: autostartIn.checked,
+    // 开关在 Task 5 接入，先沿用当前值
+    ocrEnabled: S.settings.ocrEnabled, ocrBackfill: S.settings.ocrBackfill,
   });
   saving = true;
   try {

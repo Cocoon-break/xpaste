@@ -105,6 +105,8 @@ pub fn changed_fields(old: &Settings, new: &Settings) -> Vec<&'static str> {
             "frequentMinUses",
             old.frequent_min_uses != new.frequent_min_uses,
         ),
+        ("ocrEnabled", old.ocr_enabled != new.ocr_enabled),
+        ("ocrBackfill", old.ocr_backfill != new.ocr_backfill),
     ]
     .into_iter()
     .filter_map(|(name, changed)| changed.then_some(name))
@@ -357,6 +359,8 @@ mod tests {
             panel_size: (1000.0, 700.0),
             spectrum_collapsed: true,
             frequent_min_uses: 5,
+            ocr_enabled: false,
+            ocr_backfill: false,
             ..Settings::default()
         };
         assert_eq!(
@@ -366,7 +370,9 @@ mod tests {
                 "appearance",
                 "panelSize",
                 "spectrumCollapsed",
-                "frequentMinUses"
+                "frequentMinUses",
+                "ocrEnabled",
+                "ocrBackfill"
             ]
         );
     }

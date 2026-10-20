@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
-use xpaste_core::{Flavor, ImageInfo, Kind, RecordDetail};
+use xpaste_core::{Flavor, ImageInfo, Kind, RecordDetail, SearchHit};
 use xpaste_platform::{PasteBlock, PlatformError};
 
 use crate::clock::now_ms;
@@ -71,8 +71,8 @@ fn needs_video_backfill(d: &RecordDetail) -> bool {
 }
 
 #[tauri::command(async)]
-pub fn search(state: State<'_, AppState>, q: String) -> Result<Vec<i64>, AppError> {
-    Ok(state.store().search_ids(&q)?)
+pub fn search(state: State<'_, AppState>, q: String) -> Result<Vec<SearchHit>, AppError> {
+    Ok(state.store().search_hits(&q)?)
 }
 
 #[tauri::command(async)]
