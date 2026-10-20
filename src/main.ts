@@ -1181,14 +1181,17 @@ function setTheme(mode: Appearance) {
 }
 async function applyAppearance(mode: Appearance) {
   if (mode === themeMode()) return;
+  // 先改本地设置：保存途中 persistUi 落盘或点“保存设置”带上的都是新外观，不会把主题改回去
+  const prev = S.settings.appearance;
+  S.settings = { ...S.settings, appearance: mode };
   setTheme(mode);
   try {
-    await saveSettings({ ...S.settings, appearance: mode });
-    S.settings = { ...S.settings, appearance: mode };
+    await saveSettings(S.settings);
   } catch (e) {
     void info(`保存外观失败 kind=${(e as AppError).kind}`);
     // 等待期间又点了别的：交给后一次
-    if (themeMode() !== mode) return;
+    if (S.settings.appearance !== mode) return;
+    S.settings = { ...S.settings, appearance: prev };
     setTheme(S.settings.appearance);
     toast('外观未能保存');
   }
