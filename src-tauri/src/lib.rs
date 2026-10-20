@@ -168,6 +168,7 @@ pub fn run() {
             commands::settings::finish_onboarding,
             commands::settings::installed_apps,
             commands::panel::hide_panel,
+            commands::panel::frontend_ready,
             commands::panel::set_dialog_open,
             commands::panel::accessibility_granted,
             commands::panel::request_accessibility,

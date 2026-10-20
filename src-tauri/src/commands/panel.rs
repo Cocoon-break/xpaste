@@ -13,6 +13,12 @@ pub fn hide_panel(app: AppHandle, animate: bool) -> Result<(), AppError> {
     Ok(())
 }
 
+/// 网页已渲染好启动数据：放行面板显示并补上积压的唤起（见 `panel::frontend_ready`）。
+#[tauri::command]
+pub fn frontend_ready(app: AppHandle) {
+    crate::panel::frontend_ready(&app);
+}
+
 /// 前端在对话框打开 / 全部关闭时同步；只写原子变量，同步命令即可。
 ///
 /// 只在 true→false 的转变时补一次 `hide_if_unfocused`：对话框在用户切走之后才关（Esc 收起计时、异步保存），

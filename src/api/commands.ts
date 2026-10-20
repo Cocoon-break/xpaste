@@ -11,6 +11,8 @@ import type {
 export const bootstrap = () => invoke<Bootstrap>('bootstrap');
 /** `animate`：没有开减少动态效果；macOS 系统材质下后端据此原生淡出整个窗口。 */
 export const hidePanel = (animate: boolean) => invoke<void>('hide_panel', { animate });
+/** 启动数据已渲染：后端据此放行面板显示，并补发就绪前积压的那次唤起。 */
+export const frontendReady = () => invoke<void>('frontend_ready');
 /** 有对话框打开时后端不因失焦或快捷键隐藏面板。 */
 export const setDialogOpen = (open: boolean) => invoke<void>('set_dialog_open', { open });
 export const copy = (id: number, paste: boolean) => invoke<CopyResult>('copy', { id, paste });

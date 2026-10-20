@@ -1,7 +1,7 @@
 import './styles.css';
 import { attachConsole, info } from './api/log';
 import {
-  accessibilityGranted, bootstrap, clearHistory, copy, copyTextPlain, countUnpinned, deleteRecord, finishOnboarding, getRecord, hidePanel, installedApps, ocrProgress,
+  accessibilityGranted, bootstrap, clearHistory, copy, copyTextPlain, countUnpinned, deleteRecord, finishOnboarding, frontendReady, getRecord, hidePanel, installedApps, ocrProgress,
   openUrl, prunePreview, reocr, requestAccessibility, revealFile, saveSettings, search, setDialogOpen, setPaused, setPinned, undoDelete,
 } from './api/commands';
 import {
@@ -1795,7 +1795,6 @@ obDlg.addEventListener('click', (e) => {
 });
 
 // —— 面板显隐 ——
-let booted = false;
 const shown = (t0: number | null, trigger?: PanelShown['trigger']) => {
   S.shown = true;
   // 授权可能在隐藏期间变化；bootstrap 之前平台未知，由 bootstrap 后那一次负责
@@ -1805,18 +1804,12 @@ const shown = (t0: number | null, trigger?: PanelShown['trigger']) => {
   // 键盘唤起几乎即时（90 / 120ms）；托盘单击是鼠标唤起，按原型 240 / 320ms 弹性回位
   win.toggleAttribute('data-instant', trigger !== 'tray');
   win.dataset.shown = 'true';
-  const first = !booted;
-  if (!booted) {
-    // 首次唤起才播放 720ms 编排；之后的快捷键唤起只做 90ms 淡入
-    booted = true;
-    win.classList.add('boot');
-    setTimeout(() => win.classList.remove('boot'), 1400);
-  }
   q.value = '';
   q.focus();
-  // 隐藏期间不刷新相对时间与分组，唤起时补一次；首次唤起逐行浮现（启动时窗口还不可见，不在那时播）
+  // 隐藏期间不刷新相对时间与分组，唤起时补一次。启动后第一次唤起与之后一样即时：列表在启动时已渲染好，
+  // 不再播 720 ms 首次编排（原型的首次编排让列表晚 260 ms 才出现，像“先空白再加载”）
   // 空查询同步完成，runSearch 里已按当前宽度与时刻重绘频谱；这里只让光束直接落位、不滑
-  runSearch('', first ? { stagger: true, base: 260 } : {});
+  runSearch('');
   paintSpectrumSel(false);
   // 引导没结束就被隐藏过：从当前步继续
   openOnboard();
@@ -1852,8 +1845,6 @@ const hidden = () => {
 let hideTimer = 0;
 const nativeFade = () => S.platform.os === 'macos' && S.platform.material === 'glass';
 const hide = () => {
-  // 首次唤起编排的动画会压住淡出（原型 setPanel 同样先去掉 boot）
-  win.classList.remove('boot');
   win.dataset.shown = 'false';
   clearTimeout(hideTimer);
   const animate = !reduced.matches;
@@ -1974,13 +1965,9 @@ $('.statusbar .delmod').hidden = !mac;
 $('#menu .del').textContent = mac ? '⌘ ⌫' : 'Del';
 void paintVerb();
 await info(`bootstrap 完成，平台 ${b.platform.os}，材质 ${b.platform.material}`);
-// 首次启动后端在 setup 里就显示了面板，那时页面还没订阅，panel-shown 已丢失，这里补上
-if (b.firstRun) {
-  startOnboarding();
-  // shown() 末尾会打开引导；panel-shown 已先到时直接打开
-  if (S.shown) openOnboard();
-  else shown(null);
-}
+// 首次启动后端在 setup 里就要显示面板，但会等到下面的 frontendReady() 才真正上屏；
+// 随后到的 panel-shown 走 shown()，末尾打开引导
+if (b.firstRun) startOnboarding();
 
 // —— 事件 ——
 // 按钮在标题行里，点击冒泡到这一个监听，不会切两次
@@ -2204,6 +2191,9 @@ setInterval(() => {
 renderTabs(true);
 renderSpectrum();
 renderList();
+// 列表已渲染好，后端这时才允许面板上屏：启动后网页就绪前按的快捷键 / 托盘 / 首次启动在这里补显示，
+// 用户看到的第一帧就是完整列表，不会先空白再出现
+void frontendReady().catch((e: AppError) => info(`frontend_ready 失败：${e?.message || e}`));
 void document.fonts?.ready.then(() => {
   renderTabs(true);
   moveInd({ instant: true });

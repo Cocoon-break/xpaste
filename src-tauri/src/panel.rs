@@ -1,5 +1,5 @@
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use tauri::{
@@ -323,8 +323,43 @@ fn on_main(app: &AppHandle, f: impl FnOnce(&AppHandle) + Send + 'static) {
     }
 }
 
+/// 网页已把启动数据渲染好（`frontend_ready` 命令）。之前不上屏：启动后 1–3 s 内网页还在加载，
+/// 这时按快捷键会先看到空面板、等数据到了列表才出现；改为记下这次唤起，就绪时再显示。
+static READY: AtomicBool = AtomicBool::new(false);
+/// 就绪前积压的唤起来源，只记最后一次；就绪时补显示一次
+static PENDING_SHOW: Mutex<Option<Trigger>> = Mutex::new(None);
+
+/// 就绪前的显示请求是否先积压：返回 true 表示现在显示；false 表示已记入 `pending`，等 `frontend_ready` 再显示
+pub fn gate_show(ready: bool, pending: &mut Option<Trigger>, trigger: Trigger) -> bool {
+    if !ready {
+        *pending = Some(trigger);
+    }
+    ready
+}
+
+/// 网页就绪：放行显示，并补上就绪前积压的那次唤起（首次启动的引导、启动后立刻按的快捷键）。
+/// 开发时页面重载会再调一次，这时已就绪且没有积压，什么也不做
+pub fn frontend_ready(app: &AppHandle) {
+    READY.store(true, Ordering::SeqCst);
+    let pending = PENDING_SHOW.lock().map(|mut p| p.take()).unwrap_or(None);
+    if let Some(trigger) = pending {
+        log::info!("网页就绪，补显示就绪前的唤起（{trigger:?}）");
+        show(app, None, trigger);
+    }
+}
+
 /// `trigger` 随 `panel-shown` 发给前端，决定进入动效的时长（托盘单击用鼠标时长）。
+/// 网页未就绪时只记下来源，`frontend_ready` 时再显示（见 `READY`）。
 pub fn show(app: &AppHandle, t0: Option<u64>, trigger: Trigger) {
+    let ready = READY.load(Ordering::SeqCst);
+    let now = PENDING_SHOW
+        .lock()
+        .map(|mut p| gate_show(ready, &mut p, trigger))
+        .unwrap_or(true);
+    if !now {
+        log::info!("网页未就绪，唤起（{trigger:?}）等就绪后显示");
+        return;
+    }
     app.state::<AppState>().previous_window.store(
         xpaste_platform::foreground_window().unwrap_or(0),
         std::sync::atomic::Ordering::Relaxed,
@@ -642,6 +677,18 @@ fn same_size(a: (f64, f64), b: (f64, f64)) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn show_waits_for_frontend_ready_and_keeps_last_trigger() {
+        use super::{Trigger, gate_show};
+        let mut pending = None;
+        assert!(!gate_show(false, &mut pending, Trigger::Relaunch));
+        assert!(!gate_show(false, &mut pending, Trigger::Hotkey));
+        assert_eq!(pending, Some(Trigger::Hotkey));
+        let mut none = None;
+        assert!(gate_show(true, &mut none, Trigger::Tray));
+        assert_eq!(none, None);
+    }
+
     use super::*;
     const SIZE: (f64, f64) = (960.0, 640.0);
 

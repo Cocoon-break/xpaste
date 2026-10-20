@@ -23,17 +23,18 @@ test('M20 曲线 enter / move / spring 与规格一致（CSS 变量与 main.ts �
   assert.match(ts, /EASE_ENTER = 'cubic-bezier\(\.22,1,\.36,1\)', EASE_MOVE = 'cubic-bezier\(\.25,1,\.5,1\)', EASE_SPRING = 'cubic-bezier\(\.34,1\.56,\.64,1\)'/);
 });
 
-test('M20-1 首次打开面板 720ms 上浮缩放 → 光柱 barIn 620ms spring、220ms + i×18ms → 列表 28ms 间隔，只在启动后第一次（有意偏差：系统材质下只位移不缩放，v0.5.1）', () => {
-  assert.match(rule('.window.boot'), /animation: panelIn 720ms var\(--ease-enter\) both/);
-  assert.match(css, /@keyframes panelIn \{ from \{ opacity: 0; transform: scale\(\.94\) translateY\(24px\); \} \}/);
-  // 系统材质：外层窗口圆角由系统画，内层缩放会错位
-  assert.match(rule(':root:not([data-material="opaque"]) .window.boot'), /animation-name: panelInGlass/);
-  assert.match(css, /@keyframes panelInGlass \{ from \{ opacity: 0; transform: translateY\(8px\); \} \}/);
-  assert.match(rule('.window.boot .bar'), /animation: barIn 620ms var\(--ease-spring\) both; animation-delay: calc\(220ms \+ var\(--i\) \* 18ms\)/);
+test('M20-1 首次打开面板与之后相同（有意偏差：不播 720ms 首次编排，列表启动时已渲染、唤起即在；逐行浮现只留给切换分类）', () => {
+  assert.doesNotMatch(css, /\.window\.boot/);
+  assert.doesNotMatch(css, /@keyframes panelIn/);
+  assert.doesNotMatch(ts, /booted|classList\.(add|remove)\('boot'\)/);
+  // shown() 的空查询不带 stagger / base，首次与之后一样即时
+  assert.match(ts, /q\.focus\(\);[\s\S]{0,400}?runSearch\(''\);\n\s*paintSpectrumSel\(false\);/);
   assert.match(ts, /--i:\$\{staggerIndex\(i, n\)\}/);
   assert.match(rule('.item.stg .row'), /animation: rowIn 420ms var\(--ease-enter\) both; animation-delay: calc\(var\(--base, 0ms\) \+ var\(--i\) \* 28ms\)/);
-  assert.match(ts, /if \(!booted\) \{[^}]*booted = true;\s*win\.classList\.add\('boot'\);/);
-  assert.match(ts, /runSearch\('', first \? \{ stagger: true, base: 260 \} : \{\}\)/);
+  // 后端：网页 frontend_ready 之前不上屏，积压最后一次唤起
+  assert.match(panelRs, /static READY: AtomicBool/);
+  assert.match(panelRs, /pub fn frontend_ready\(app: &AppHandle\)/);
+  assert.match(ts, /void frontendReady\(\)/);
 });
 
 test('M20-2 快捷键唤起 90ms enter / 托盘单击 320ms spring / 隐藏 160ms ease-out 淡出；macOS 系统材质下透明度由窗口 alpha 承担（进入 90ms、退出 160ms），内容只位移（有意偏差：系统材质下只位移不缩放，同 v0.5.1）', () => {

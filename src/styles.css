@@ -175,21 +175,15 @@ kbd {
 /* 显隐由 Tauri 负责。前端发起的隐藏先把 data-shown 置 false 播 160ms 淡出再隐藏窗口
    （macOS 系统材质下见下面 data-native-fade：内容只位移，透明度由窗口 alpha 承担）；唤起时 shown() 按来源设 data-instant：
    快捷键与再次启动照原型 data-instant 打开的时长（90 / 120ms），托盘单击是鼠标唤起（240 / 320ms 弹性回位）；
-   首次唤起另有 .boot 编排 */
+   启动后第一次唤起与之后相同，没有单独的首次编排（列表在启动时已渲染好） */
 .window[data-shown="false"] { opacity: 0; transform: scale(.965) translateY(10px); transition: opacity 140ms ease-out, transform 160ms ease-out; }
 .window[data-shown="true"] { transform: none; transition: opacity 240ms var(--ease-enter), transform 320ms var(--ease-spring); }
 .window[data-instant][data-shown="true"] { transition-duration: 90ms, 120ms; }
-.window.boot { animation: panelIn 720ms var(--ease-enter) both; }
-/* 系统材质由窗口外层提供圆角，内层缩放会让两层圆角错位：只位移 */
-:root:not([data-material="opaque"]) .window.boot { animation-name: panelInGlass; }
 :root:not([data-material="opaque"]) .window[data-shown="false"] { transform: translateY(10px); }
 /* macOS 系统材质：内容只位移、不自己变透明，整个面板的透明度由窗口 alpha 承担——隐藏 160ms 淡到 0
    （panel.rs hide_animated），唤起 90ms（托盘 240ms）从 0 淡入（try_show / fade_in_ms）；
    否则内容透明度 × 窗口 alpha 会让内容先消失、只剩底板 */
 :root[data-native-fade] .window[data-shown="false"] { opacity: 1; }
-.window.boot .sel-ind { animation: fadeIn 400ms ease 300ms both; }
-@keyframes panelIn { from { opacity: 0; transform: scale(.94) translateY(24px); } }
-@keyframes panelInGlass { from { opacity: 0; transform: translateY(8px); } }
 .glow { /* 跟随指针的描边高光，只改这一层的变量 */
   position: absolute; inset: -1px; border-radius: inherit; padding: 1px; pointer-events: none; z-index: 3;
   background: radial-gradient(260px circle at var(--mx, 50%) var(--my, -200px), var(--glow-a), var(--glow-b) 40%, transparent 70%);
@@ -266,11 +260,10 @@ kbd {
 .bar.multi { width: 4px; margin-left: -2px; }
 .bar.multi::after { content: ""; position: absolute; top: -3px; left: 50%; width: 3px; height: 3px; margin-left: -1.5px; border-radius: 50%; background: var(--fg); opacity: .7; }
 .bar.on { box-shadow: 0 0 14px 2px var(--tc); filter: brightness(1.25) saturate(1.2); opacity: 1; }
-.window.boot .bar { animation: barIn 620ms var(--ease-spring) both; animation-delay: calc(220ms + var(--i) * 18ms); }
 .bar.fresh { animation: barIn 700ms var(--ease-spring) both, ping 1200ms ease-out 200ms; }
 @keyframes barIn { from { transform: scaleY(0); } }
 @keyframes ping { from { box-shadow: 0 0 0 0 var(--tc), 0 0 16px 4px var(--tc), 0 0 var(--sp-glow-b) -4px var(--tc); } to { box-shadow: 0 0 0 10px transparent, 0 0 var(--sp-glow-a) 0 var(--tc), 0 0 var(--sp-glow-b) -4px var(--tc); } }
-/* 倒影：轨道正下方 22 px 的镜像，不响应指针，不播升起 / 脉冲（选择器带 .sp-track 才压得过 .window.boot .bar） */
+/* 倒影：轨道正下方 22 px 的镜像，不响应指针，不播升起 / 脉冲（选择器带 .sp-track 才压得过 .bar.fresh） */
 .mirror {
   top: 100%; height: 22px; transform: scaleY(-1); pointer-events: none; /* 绕自身中线翻转：原型的 transform-origin: top 会把倒影翻回轨道内底部 22 px */
   -webkit-mask-image: linear-gradient(to top, rgb(0 0 0 / var(--sp-mirror-a)), transparent 90%);
