@@ -1670,8 +1670,11 @@ root.toggleAttribute('data-native-fade', nativeFade());
 const MOD = b.platform.os === 'macos' ? '⌘' : 'Ctrl';
 document.querySelectorAll('.mod').forEach((k) => (k.textContent = MOD));
 $('.modp').textContent = `${MOD} P`;
-// macOS 没有 ⌦ 键（MacBook），删除提示写 ⌘ ⌫
-document.querySelectorAll('.del').forEach((k) => (k.textContent = b.platform.os === 'macos' ? '⌘ ⌫' : 'Del'));
+// macOS 没有 ⌦ 键（MacBook），删除提示写 ⌘ ⌫：状态栏与邻项一样拆成两枚键帽，菜单里是一枚
+const mac = b.platform.os === 'macos';
+$('.statusbar .del').textContent = mac ? '⌫' : 'Del';
+$('.statusbar .delmod').hidden = !mac;
+$('#menu .del').textContent = mac ? '⌘ ⌫' : 'Del';
 void paintVerb();
 await info(`bootstrap 完成，平台 ${b.platform.os}，材质 ${b.platform.material}`);
 // 首次启动后端在 setup 里就显示了面板，那时页面还没订阅，panel-shown 已丢失，这里补上
