@@ -27,6 +27,16 @@ const TEXT_EXTS: &[&str] = &[
 
 /// 由快照计算一条待入库记录。`bitmap` 与 `flavors` 从快照移入，不复制。
 pub fn build_record(snapshot: Snapshot, kind: Kind, now_ms: i64) -> NewRecord {
+    build_record_with(snapshot, kind, now_ms, false)
+}
+
+/// `file_text`：文件记录是否把文本类文件内容读进搜索文本（设置 `search_file_text`）。
+pub fn build_record_with(
+    snapshot: Snapshot,
+    kind: Kind,
+    now_ms: i64,
+    file_text: bool,
+) -> NewRecord {
     let hash = detect::content_hash(&snapshot, kind);
     let Snapshot {
         flavors,
@@ -86,7 +96,7 @@ pub fn build_record(snapshot: Snapshot, kind: Kind, now_ms: i64) -> NewRecord {
     parts.extend(app.as_ref().map(|a| a.name.clone()));
     // 标题也要能搜到：位图截图没有文本与路径，否则只剩来源应用名可搜
     parts.push(title.clone());
-    if kind == Kind::File {
+    if file_text && kind == Kind::File {
         parts.extend(files_text(&paths, FILE_TEXT_BYTES));
     }
     let search_text = parts.join("\n").to_lowercase();
@@ -170,7 +180,7 @@ pub fn process(
         }
         keep
     });
-    let record = build_record(snapshot, kind, now_ms);
+    let record = build_record_with(snapshot, kind, now_ms, settings.search_file_text);
     Ok(
         match store.insert_or_merge(&record, now_ms, settings.max_records)? {
             (Upsert::Added(id), removed) => Outcome::Added(id, removed),
@@ -406,16 +416,20 @@ mod tests {
         let other = dir.join("deck.pptx");
         std::fs::write(&other, "pptx-text-inside").unwrap();
 
-        let st = build_record(
+        let files = || {
             snap_files(&[
                 notes.to_str().unwrap(),
                 bin.to_str().unwrap(),
                 other.to_str().unwrap(),
-            ]),
-            Kind::File,
-            0,
-        )
-        .search_text;
+            ])
+        };
+        // 开关关着（默认）：只有文件名与路径
+        let st = build_record(files(), Kind::File, 0).search_text;
+        assert!(
+            !st.contains("季度预算") && st.contains("会议纪要.md"),
+            "{st}"
+        );
+        let st = build_record_with(files(), Kind::File, 0, true).search_text;
         assert!(
             st.contains("季度预算") && st.contains("budget 2026"),
             "{st}"
@@ -424,17 +438,19 @@ mod tests {
         assert!(!st.contains('\u{fffd}'), "二进制文件应整个跳过");
 
         // 预算用完即停：big.log 占满后 notes 不再读入；截断不留半个字符
-        let st = build_record(
+        let st = build_record_with(
             snap_files(&[big.to_str().unwrap(), notes.to_str().unwrap()]),
             Kind::File,
             0,
+            true,
         )
         .search_text;
         assert!(!st.contains("季度预算"), "{}", st.len());
         assert!(st.len() < FILE_TEXT_BYTES + 1024);
 
         // 图片类型的记录不读文件内容
-        let st = build_record(snap_files(&[notes.to_str().unwrap()]), Kind::Image, 0).search_text;
+        let st = build_record_with(snap_files(&[notes.to_str().unwrap()]), Kind::Image, 0, true)
+            .search_text;
         assert!(!st.contains("季度预算"));
         std::fs::remove_dir_all(&dir).unwrap();
     }

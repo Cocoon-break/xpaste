@@ -50,6 +50,7 @@ export type SettingsForm = {
   launchAtLogin: boolean;
   ocrEnabled: boolean;
   ocrBackfill: boolean;
+  searchFileText: boolean;
 };
 
 export const formToSettings = (base: Settings, f: SettingsForm): Settings => ({
@@ -64,4 +65,5 @@ export const formToSettings = (base: Settings, f: SettingsForm): Settings => ({
   launchAtLogin: f.launchAtLogin,
   ocrEnabled: f.ocrEnabled,
   ocrBackfill: f.ocrBackfill,
+  searchFileText: f.searchFileText,
 });

@@ -35,6 +35,22 @@ CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     // 阶段 10：图片文字识别。已有图片默认 0（待识别）进回填队列；非图片的 0 不被消费
     "ALTER TABLE records ADD COLUMN ocr_text TEXT;
 ALTER TABLE records ADD COLUMN ocr_state INTEGER NOT NULL DEFAULT 0;",
+    // 搜索索引：search_text 的 trigram 全文索引（外部内容表，不复制正文），三个触发器保持同步，
+    // 建表时按已有记录重建一次。≥ 3 个字符的查询走 MATCH，更短的仍用 instr 扫描（见 search_sql）
+    r"
+CREATE VIRTUAL TABLE fts USING fts5(search_text, content='records', content_rowid='id', tokenize='trigram');
+CREATE TRIGGER records_fts_ai AFTER INSERT ON records BEGIN
+  INSERT INTO fts(rowid, search_text) VALUES (new.id, new.search_text);
+END;
+CREATE TRIGGER records_fts_ad AFTER DELETE ON records BEGIN
+  INSERT INTO fts(fts, rowid, search_text) VALUES ('delete', old.id, old.search_text);
+END;
+CREATE TRIGGER records_fts_au AFTER UPDATE OF search_text ON records BEGIN
+  INSERT INTO fts(fts, rowid, search_text) VALUES ('delete', old.id, old.search_text);
+  INSERT INTO fts(rowid, search_text) VALUES (new.id, new.search_text);
+END;
+INSERT INTO fts(fts) VALUES ('rebuild');
+",
 ];
 
 const SUBDIRS: [&str; 4] = ["blobs", "images", "thumbs", "icons"];
@@ -395,20 +411,20 @@ impl Store {
             let sql = format!("SELECT id FROM records WHERE deleted_at IS NULL {order}");
             return ids_in(&self.conn, &sql, &[]);
         }
-        let sql = format!(
-            "SELECT id FROM records WHERE deleted_at IS NULL AND instr(search_text, ?1) > 0 {order}"
-        );
-        ids_in(&self.conn, &sql, &[&q.to_lowercase()])
+        let (clause, param) = search_sql(&q.to_lowercase());
+        let sql = format!("SELECT id FROM records WHERE deleted_at IS NULL AND {clause} {order}");
+        ids_in(&self.conn, &sql, &[&param])
     }
 
     /// 同 `search_ids` 的匹配与顺序；命中来自识别文字（标题不含关键词）时附带片段。
     pub fn search_hits(&self, q: &str) -> Result<Vec<SearchHit>, CoreError> {
         let q = q.to_lowercase();
-        let mut stmt = self.conn.prepare(
+        let (clause, param) = search_sql(&q);
+        let mut stmt = self.conn.prepare_cached(&format!(
             "SELECT id, title, ocr_text FROM records WHERE deleted_at IS NULL
-             AND instr(search_text, ?1) > 0 ORDER BY copied_at DESC, id DESC",
-        )?;
-        let rows = stmt.query_map([&q], |r| {
+             AND {clause} ORDER BY copied_at DESC, id DESC"
+        ))?;
+        let rows = stmt.query_map([&param], |r| {
             Ok((
                 r.get::<_, i64>(0)?,
                 r.get::<_, String>(1)?,
@@ -692,6 +708,19 @@ impl Store {
     }
 }
 
+/// 子串匹配的 WHERE 片段与参数（`q` 已小写）。≥ 3 个字符走 trigram 索引（`MATCH` 的短语查询，双引号加倍转义），
+/// 子串语义与 instr 相同；1–2 个字符 trigram 无法索引，仍顺序扫描 `search_text`（短词命中多，instr 遇首个命中即停，并不慢）。
+fn search_sql(q: &str) -> (&'static str, String) {
+    if q.chars().count() >= 3 {
+        (
+            "id IN (SELECT rowid FROM fts WHERE search_text MATCH ?1)",
+            format!("\"{}\"", q.replace('"', "\"\"")),
+        )
+    } else {
+        ("instr(search_text, ?1) > 0", q.to_string())
+    }
+}
+
 /// 可识别文字的记录：图片记录，或文件列表里有图片文件的文件记录。
 /// `paths` 是 JSON 字符串数组，每个路径以 `.ext"` 结束，用 LIKE 判断扩展名（文件记录只有几千行，不需要索引）。
 fn ocr_eligible_sql() -> String {
@@ -804,19 +833,32 @@ pub(crate) mod tests {
     fn open_creates_schema_and_dirs() {
         let dir = tmp();
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 4);
+        assert_eq!(s.schema_version().unwrap(), 5);
         for sub in ["blobs", "images", "thumbs", "icons"] {
             assert!(dir.join(sub).is_dir());
         }
         let tables: Vec<String> = s
             .conn
-            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'fts%' ORDER BY name")
             .unwrap()
             .query_map([], |r| r.get(0))
             .unwrap()
             .map(Result::unwrap)
             .collect();
         assert_eq!(tables, ["apps", "flavors", "kv", "records"]);
+        // 搜索索引是外部内容表：只有索引影子表，没有正文副本
+        let shadow: Vec<String> = s
+            .conn
+            .prepare("SELECT name FROM sqlite_master WHERE name LIKE 'fts%' ORDER BY name")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert!(
+            shadow.contains(&"fts".to_string()) && !shadow.contains(&"fts_content".to_string()),
+            "{shadow:?}"
+        );
     }
 
     #[test]
@@ -833,7 +875,7 @@ pub(crate) mod tests {
         .unwrap();
         drop(old);
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 4);
+        assert_eq!(s.schema_version().unwrap(), 5);
         let row: (String, String) = s
             .conn
             .query_row("SELECT kind, title FROM records", [], |r| {
@@ -858,7 +900,7 @@ pub(crate) mod tests {
         .unwrap();
         drop(old);
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 4);
+        assert_eq!(s.schema_version().unwrap(), 5);
         let l = s.list_summaries().unwrap();
         assert_eq!(
             (l[0].kind, l[0].ocr_state),
@@ -872,7 +914,69 @@ pub(crate) mod tests {
         let dir = tmp();
         drop(Store::open(&dir).unwrap());
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 4);
+        assert_eq!(s.schema_version().unwrap(), 5);
+    }
+
+    #[test]
+    fn migration_5_builds_search_index_for_existing_rows() {
+        let dir = tmp();
+        make_dirs(&dir).unwrap();
+        let old = Connection::open(dir.join("xpaste.db")).unwrap();
+        for m in &MIGRATIONS[..4] {
+            old.execute_batch(m).unwrap();
+        }
+        old.pragma_update(None, "user_version", 4).unwrap();
+        old.execute(
+            "INSERT INTO records (hash, kind, title, text, copied_at, size, search_text) VALUES (x'05', 'text', '旧记录', 'x', 1, 1, '季度预算 budget 2026')",
+            [],
+        )
+        .unwrap();
+        drop(old);
+        let s = Store::open(&dir).unwrap();
+        // ≥ 3 字走索引，必须在重建后能命中
+        assert_eq!(s.search_ids("budget").unwrap().len(), 1);
+        assert_eq!(s.search_ids("季度预算").unwrap().len(), 1);
+        assert_eq!(s.search_ids("预算").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn search_index_follows_insert_update_and_delete() {
+        let mut s = mem();
+        let a = added(&mut s, &rec("Quarterly Budget 报告"), 1);
+        let img = added(&mut s, &rec_image(7), 2);
+        assert_eq!(s.search_ids("budget 报").unwrap(), [a]);
+        assert_eq!(s.search_ids("rly bud").unwrap(), [a]);
+        assert!(s.search_ids("预算").unwrap().is_empty());
+        // 识别文字追加进 search_text：触发器同步索引
+        s.set_ocr(img, ocr_state::TEXT, Some("季度预算 2026"))
+            .unwrap();
+        assert_eq!(s.search_ids("季度预算").unwrap(), [img]);
+        assert_eq!(s.search_ids("2026").unwrap(), [img]);
+        // 软删除不改索引但被 deleted_at 过滤；硬删除后索引条目消失
+        s.soft_delete(img, 3).unwrap();
+        assert!(s.search_ids("季度预算").unwrap().is_empty());
+        assert!(s.purge_if_deleted_at(img, 3).unwrap());
+        let n: i64 = s
+            .conn
+            .query_row(
+                "SELECT count(*) FROM fts WHERE search_text MATCH '\"季度预算\"'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn search_quotes_and_short_queries() {
+        let mut s = mem();
+        let a = added(&mut s, &rec("say \"hi\" now"), 1);
+        assert_eq!(s.search_ids("\"hi\"").unwrap(), [a]);
+        assert_eq!(s.search_ids("y \"h").unwrap(), [a]);
+        assert_eq!(s.search_ids("hi").unwrap(), [a]);
+        assert_eq!(s.search_ids("H").unwrap(), [a]);
+        assert_eq!(search_sql("ab").0, "instr(search_text, ?1) > 0");
+        assert_eq!(search_sql("预算书").1, "\"预算书\"");
     }
 
     #[test]

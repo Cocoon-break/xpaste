@@ -19,6 +19,7 @@ export interface Settings {
   frequentMinUses: number;
   ocrEnabled: boolean;
   ocrBackfill: boolean;
+  searchFileText: boolean;
 }
 
 export interface PlatformInfo {

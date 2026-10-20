@@ -1184,7 +1184,7 @@ const hotkeyHelp = $('#hotkeyHelp'), retainIn = $<HTMLSelectElement>('#retain'),
 const frequentIn = $<HTMLInputElement>('#frequentIn'), frequentErr = $('#frequentErr');
 const ignoreIn = $<HTMLInputElement>('#ignore'), sensitiveIn = $<HTMLInputElement>('#sensitive');
 const moveTopIn = $<HTMLInputElement>('#moveTop'), autostartIn = $<HTMLInputElement>('#autostart');
-const ocrOnIn = $<HTMLInputElement>('#ocrOn'), ocrBackfillIn = $<HTMLInputElement>('#ocrBackfill');
+const ocrOnIn = $<HTMLInputElement>('#ocrOn'), ocrBackfillIn = $<HTMLInputElement>('#ocrBackfill'), fileTextIn = $<HTMLInputElement>('#fileText');
 const ocrProgressEl = $('#ocrProgress'), ocrUnsupportedEl = $('#ocrUnsupported');
 const permRow = $('#permRow'), permState = $('#permState'), permBtn = $<HTMLButtonElement>('#permBtn');
 const themeSeg = $('#themeSeg'), themePill = themeSeg.querySelector<HTMLElement>('.pill')!;
@@ -1409,6 +1409,7 @@ function openSettings() {
   autostartIn.checked = st.launchAtLogin;
   ocrOnIn.checked = st.ocrEnabled;
   ocrBackfillIn.checked = st.ocrBackfill;
+  fileTextIn.checked = st.searchFileText;
   paintOcrBackfill();
   pollOcr();
   ocrTimer ||= window.setInterval(pollOcr, 2000);
@@ -1479,7 +1480,7 @@ async function submitSettings() {
   if (frequent === null) return frequentIn.focus();
   const s = formToSettings(S.settings, {
     hotkey: pendingHotkey, retain: retainIn.value, limit, frequent, ignored: addIgnored(draftIgnored, ignoreIn.value), skipSensitive: sensitiveIn.checked,
-    moveToTop: moveTopIn.checked, launchAtLogin: autostartIn.checked, ocrEnabled: ocrOnIn.checked, ocrBackfill: ocrBackfillIn.checked,
+    moveToTop: moveTopIn.checked, launchAtLogin: autostartIn.checked, ocrEnabled: ocrOnIn.checked, ocrBackfill: ocrBackfillIn.checked, searchFileText: fileTextIn.checked,
   });
   saving = true;
   try {

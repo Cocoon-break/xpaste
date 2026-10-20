@@ -108,6 +108,10 @@ pub fn changed_fields(old: &Settings, new: &Settings) -> Vec<&'static str> {
         ),
         ("ocrEnabled", old.ocr_enabled != new.ocr_enabled),
         ("ocrBackfill", old.ocr_backfill != new.ocr_backfill),
+        (
+            "searchFileText",
+            old.search_file_text != new.search_file_text,
+        ),
     ]
     .into_iter()
     .filter_map(|(name, changed)| changed.then_some(name))
@@ -371,6 +375,7 @@ mod tests {
             frequent_min_uses: 5,
             ocr_enabled: false,
             ocr_backfill: false,
+            search_file_text: true,
             ..Settings::default()
         };
         assert_eq!(
@@ -382,7 +387,8 @@ mod tests {
                 "spectrumCollapsed",
                 "frequentMinUses",
                 "ocrEnabled",
-                "ocrBackfill"
+                "ocrBackfill",
+                "searchFileText"
             ]
         );
     }

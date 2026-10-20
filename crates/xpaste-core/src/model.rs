@@ -70,6 +70,8 @@ pub struct Settings {
     pub ocr_enabled: bool,
     /// 为已有图片补识别
     pub ocr_backfill: bool,
+    /// 复制文件时把文本类文件的内容读进搜索文本（每条最多 64 KB）；默认关：大库里的大段文本多半来自它
+    pub search_file_text: bool,
 }
 
 impl Default for Settings {
@@ -96,6 +98,7 @@ impl Default for Settings {
             frequent_min_uses: 3,
             ocr_enabled: true,
             ocr_backfill: true,
+            search_file_text: false,
         }
     }
 }
@@ -431,6 +434,7 @@ mod tests {
         assert!(!s.spectrum_collapsed);
         assert_eq!(s.frequent_min_uses, 3);
         assert!(s.ocr_enabled && s.ocr_backfill);
+        assert!(!s.search_file_text);
         #[cfg(target_os = "macos")]
         assert_eq!(s.ignored_apps, vec!["1Password", "钥匙串访问"]);
         #[cfg(windows)]
@@ -461,6 +465,7 @@ mod tests {
                 && json.contains(r#""frequentMinUses":3"#)
                 && json.contains(r#""ocrEnabled":true"#)
                 && json.contains(r#""ocrBackfill":true"#)
+                && json.contains(r#""searchFileText":false"#)
         );
     }
 
