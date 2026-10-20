@@ -21,7 +21,7 @@
 
 ## 安装
 
-**macOS 13 及以上**（Apple 芯片）：打开 `xPaste_<版本>_aarch64.dmg`，把 xPaste 拖进“应用程序”。安装包未签名（只有链接器自带的临时签名），从浏览器下载的安装包带隔离属性，第一次打开会被系统拦下，可能提示“xPaste”已损坏，无法打开，而且没有“仍要打开”。这不是文件坏了，按下面的顺序放行：
+**macOS 13 及以上**：Apple 芯片打开 `xPaste_<版本>_aarch64.dmg`，Intel 打开 `xPaste_<版本>_x64.dmg`，把 xPaste 拖进“应用程序”。安装包未签名（只有链接器自带的临时签名），从浏览器下载的安装包带隔离属性，第一次打开会被系统拦下，可能提示“xPaste”已损坏，无法打开，而且没有“仍要打开”。这不是文件坏了，按下面的顺序放行：
 
 1. 在终端运行 `xattr -dr com.apple.quarantine /Applications/xPaste.app`（去掉隔离属性），再正常打开。这一步在各版本 macOS 上都有效。
 2. 如果弹窗不是“已损坏”而是“无法验证开发者”，也可以先双击打开一次，再到系统设置 → 隐私与安全性，在页面底部点“仍要打开”（出现这个按钮时才行）。
@@ -60,7 +60,7 @@
 - 安装包未签名、未公证，首次打开要手动放行（见“安装”；拿到证书后的步骤见“签名与公证”）。
 - 没有自动更新，托盘菜单里也没有“检查更新…”，新版本要手动下载安装。
 - 数据库没有加密（本机明文 SQLite，靠系统账户权限保护）。
-- macOS 安装包只有 Apple 芯片（aarch64）版本，没有 Intel 或通用版本。
+- CI 产出的 macOS 安装包只有 Apple 芯片（aarch64）版本；Intel 版（`xPaste_<版本>_x64.dmg`）要在 Apple 芯片 Mac 上用 `make release-x64` 本地打，没有通用（universal）版本。
 - dmg 打开后没有窗口图标摆位（无界面打包跳过了 Finder 布局），“应用程序”快捷方式还在，拖进去即可。
 - Windows 安装界面只有简体中文。
 - 崩溃后不会自动重启。已写入的记录不丢，开机启动项保留，下次登录或手动打开即可恢复。
@@ -124,6 +124,7 @@ make check         # 提交前全量检查：格式、clippy、Rust + 前端单�
 make test          # 只跑单元测试
 make release       # 打发布包（未签名）：当前系统的安装包；macOS 上装了交叉工具时顺带打出 Windows 安装程序
 make release-win   # 在 macOS 上交叉打 Windows NSIS 安装程序（见下）
+make release-x64   # 在 Apple 芯片 Mac 上打 Intel 版 .dmg（rustup target add x86_64-apple-darwin 后，make release 也会顺带打）
 ```
 
 ### 在 macOS 上打 Windows 安装包
