@@ -3,30 +3,48 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
-use objc2::AllocAnyThread;
 use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::{AnyObject, ProtocolObject};
+use objc2::{AllocAnyThread, ClassType, msg_send};
 use objc2_app_kit::{
     NSApplicationActivationPolicy, NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard,
     NSPasteboardItem, NSPasteboardTypeFileURL, NSPasteboardTypeHTML, NSPasteboardTypeString,
     NSWorkspace,
 };
 use objc2_av_foundation::{AVAssetImageGenerator, AVAssetTrack, AVMediaTypeVideo, AVURLAsset};
-use objc2_core_graphics::{CGEvent, CGEventFlags, CGEventTapLocation};
+use objc2_core_foundation::CFData;
+use objc2_core_graphics::{
+    CGBitmapInfo, CGColorRenderingIntent, CGColorSpace, CGDataProvider, CGEvent, CGEventFlags,
+    CGEventTapLocation, CGImage, CGImageAlphaInfo,
+};
 use objc2_core_media::{CMFormatDescription, CMTime};
 use objc2_foundation::{
-    NSArray, NSData, NSDictionary, NSFileManager, NSNumber, NSPoint, NSRect, NSSize, NSString,
-    NSURL, ns_string,
+    NSArray, NSData, NSDictionary, NSFileManager, NSIndexSet, NSNumber, NSPoint, NSRect, NSSize,
+    NSString, NSURL, ns_string,
+};
+use objc2_vision::{
+    VNImageRequestHandler, VNRecognizeTextRequest, VNRequest, VNRequestTextRecognitionLevel,
 };
 use xpaste_core::{AppInfo, Flavor, Snapshot, VideoMeta};
 
-use crate::{PasteBlock, PlatformError};
+use crate::{OcrError, OcrText, PasteBlock, PlatformError};
 
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
     fn AXIsProcessTrusted() -> u8;
     fn AXIsProcessTrustedWithOptions(options: *const NSDictionary<NSString, NSNumber>) -> u8;
 }
+
+// libSystem，总是链接
+unsafe extern "C" {
+    fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
+}
+
+/// `VNRecognizeTextRequestRevision2`（SDK 里标了弃用，值固定）
+const TEXT_REVISION_2: usize = 2;
+
+/// `QOS_CLASS_UTILITY`
+const QOS_CLASS_UTILITY: u32 = 0x11;
 
 /// `kVK_ANSI_V`
 const KEY_V: u16 = 9;
@@ -307,6 +325,92 @@ fn round_fps(f: f32) -> f64 {
         return 0.0;
     }
     (f64::from(f) * 100.0).round() / 100.0
+}
+
+/// Vision 文字识别 macOS 10.15 起恒有。
+pub fn ocr_available() -> bool {
+    true
+}
+
+/// Vision `VNRecognizeTextRequest`（accurate、语言校正、简繁中英）。阻塞，只在工作线程调用。
+pub fn ocr_png(path: &Path, max_side_px: u32) -> Result<Option<OcrText>, OcrError> {
+    let img = crate::load_rgba(path, max_side_px)?;
+    let engine = |what: &str| OcrError::Engine(what.into());
+    autoreleasepool(|_| {
+        let (w, h) = (img.width() as usize, img.height() as usize);
+        let provider = CGDataProvider::with_cf_data(Some(&CFData::from_bytes(img.as_raw())))
+            .ok_or_else(|| engine("CGDataProvider 创建失败"))?;
+        let space = CGColorSpace::new_device_rgb().ok_or_else(|| engine("色彩空间创建失败"))?;
+        // SAFETY: 尺寸与 RGBA8 缓冲一致；decode 传 null
+        let cg = unsafe {
+            CGImage::new(
+                w,
+                h,
+                8,
+                32,
+                w * 4,
+                Some(&space),
+                CGBitmapInfo(CGImageAlphaInfo::Last.0),
+                Some(&provider),
+                std::ptr::null(),
+                false,
+                CGColorRenderingIntent::RenderingIntentDefault,
+            )
+        }
+        .ok_or_else(|| engine("CGImage 创建失败"))?;
+        // SAFETY: 空选项字典
+        let handler = unsafe {
+            VNImageRequestHandler::initWithCGImage_options(
+                VNImageRequestHandler::alloc(),
+                &cg,
+                &NSDictionary::new(),
+            )
+        };
+        let request = VNRecognizeTextRequest::new();
+        request.setRecognitionLevel(VNRequestTextRecognitionLevel::Accurate);
+        request.setUsesLanguageCorrection(true);
+        // 固定第 2 版模型（macOS 11+，含简繁中英）：默认的第 3 版在 macOS 27.0.1（M1）上首次识别要 30 s 以上，
+        // 之后同进程内每次都报 e5rt 错误；不支持第 2 版的旧系统用默认版本
+        // SAFETY: 无参数的类方法，返回 NSIndexSet
+        let revisions: Retained<NSIndexSet> =
+            unsafe { msg_send![VNRecognizeTextRequest::class(), supportedRevisions] };
+        if revisions.containsIndex(TEXT_REVISION_2) {
+            // SAFETY: 系统声明支持的版本号
+            unsafe { request.setRevision(TEXT_REVISION_2) };
+        }
+        // 只设本机支持的语言；查询失败或都不支持时用系统默认
+        // SAFETY: 只读查询
+        if let Ok(supported) = unsafe { request.supportedRecognitionLanguagesAndReturnError() } {
+            let langs: Vec<_> = ["zh-Hans", "zh-Hant", "en-US"]
+                .into_iter()
+                .map(NSString::from_str)
+                .filter(|l| supported.containsObject(l))
+                .collect();
+            if !langs.is_empty() {
+                request.setRecognitionLanguages(&NSArray::from_retained_slice(&langs));
+            }
+        }
+        let base: &VNRequest = &request;
+        handler
+            .performRequests_error(&NSArray::from_slice(&[base]))
+            .map_err(|e| OcrError::Engine(e.localizedDescription().to_string()))?;
+        let lines = request
+            .results()
+            .map(|obs| {
+                obs.iter()
+                    .filter_map(|o| o.topCandidates(1).firstObject())
+                    .map(|t| (t.string().to_string(), t.confidence()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(Some(crate::ocr_text(lines)))
+    })
+}
+
+/// 当前线程降到 utility QoS（后台识别用）。尽力而为。
+pub fn lower_thread_priority() {
+    // SAFETY: 只改本线程的 QoS
+    unsafe { pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0) };
 }
 
 pub fn frontmost_app() -> Option<AppInfo> {
