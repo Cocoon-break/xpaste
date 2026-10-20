@@ -20,7 +20,7 @@ import {
 import type { AppError, Appearance, FileEntry, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
 import { copyToast, needsAccessibility } from './copy-status';
 import {
-  canInlinePlay, esc, FAV_MIN, FILTERS, FL, fmtBytes, fmtDateTime, fmtDur, fmtInt, hl, hlCode, host, isFav, isHttpUrl, LABEL, rel, truncate, videoChips,
+  canInlinePlay, esc, FILTERS, FL, fmtBytes, fmtDateTime, fmtDur, fmtInt, hl, hlCode, host, isFav, isHttpUrl, LABEL, rel, truncate, videoChips,
   type Filter,
 } from './format';
 import { hotkeyFromEvent, hotkeyLabel } from './hotkey';
@@ -29,7 +29,7 @@ import { copyVerb, escHint, openLabel } from './labels';
 import { nextStep, onboardSteps, type Step } from './onboarding';
 import { applyAdded, applyRemoved, applyUpdated } from './records';
 import { layoutBars, sameColumns, spectrumStat, staggerIndex, xPct, type Layout } from './spectrum';
-import { addIgnored, formToSettings, optionFromRetention, parseLimit, pickerOptions, removeIgnored } from './settings-form';
+import { addIgnored, formToSettings, optionFromRetention, parseFrequent, parseLimit, pickerOptions, removeIgnored } from './settings-form';
 import {
   armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, nextSelection, UNDO_MS, visible, type UndoState,
 } from './view';
@@ -132,8 +132,9 @@ async function paintVerb() {
 }
 
 // —— 数据视图 ——
-const vis = () => visible(S.records, S.filter, S.matchIds);
-const matches = (r: RecordSummary) => inFilter(r, S.filter) && (S.matchIds === null || S.matchIds.has(r.id));
+const favMin = () => S.settings.frequentMinUses;
+const vis = () => visible(S.records, S.filter, S.matchIds, favMin());
+const matches = (r: RecordSummary) => inFilter(r, S.filter, favMin()) && (S.matchIds === null || S.matchIds.has(r.id));
 const rowEl = (id: number | null) => (id === null ? null : document.getElementById('opt-' + id));
 const source = (r: RecordSummary) => r.app?.name || '未知来源';
 
@@ -144,7 +145,7 @@ const thumb = (r: RecordSummary) =>
 
 const metaLine = (r: RecordSummary) => {
   const parts = [esc(source(r)), rel(r.copiedAt), r.kind === 'video' && r.durationSec !== null ? fmtDur(r.durationSec) : fmtBytes(r.size)];
-  if (isFav(r)) parts.push(`<span class="uses">用过 ${fmtInt(r.uses)} 次</span>`);
+  if (isFav(r, favMin())) parts.push(`<span class="uses">用过 ${fmtInt(r.uses)} 次</span>`);
   return parts.join(' · ');
 };
 
@@ -180,7 +181,7 @@ function emptyHTML() {
   if (bootError) return `<div class="empty"><span class="ring">${svg('inbox')}</span><p>无法读取历史记录：${esc(bootError)}</p></div>`;
   const qq = S.q.trim(), f = S.filter;
   const msg = qq ? `没有匹配“${esc(qq)}”的${f === 'all' ? '' : FL[f]}记录`
-    : f === 'fav' ? `还没有常用记录。同一条内容复制 ${FAV_MIN} 次以上就会出现在这里`
+    : f === 'fav' ? `还没有常用记录。同一条内容复制 ${favMin()} 次以上就会出现在这里`
     : `还没有${f === 'all' ? '' : FL[f]}记录，复制一次就会出现在这里`;
   return `<div class="empty"><span class="ring">${svg(qq ? 'search' : f === 'fav' ? 'star' : 'inbox')}</span><p>${msg}</p>
       ${qq || f !== 'all' ? '<button class="btn sm" type="button" data-act="reset">清除搜索与筛选</button>' : ''}</div>`;
@@ -466,7 +467,7 @@ function renderPreview(fade = false) {
     return;
   }
   ptype.innerHTML = `<span class="tchip" data-type="${r.kind}">${svg(r.kind)}${LABEL[r.kind]}</span>`
-    + (isFav(r) ? `<span class="tchip" data-type="fav">${svg('star')}常用</span>` : '')
+    + (isFav(r, favMin()) ? `<span class="tchip" data-type="fav">${svg('star')}常用</span>` : '')
     + (r.lang ? `<span class="chip">${esc(r.lang)}</span>` : '');
   setPin(r.pinned, true);
   pmeta.innerHTML = metaHTML(r, S.detail?.id === r.id ? S.detail : null);
@@ -604,7 +605,7 @@ spTrack.addEventListener('click', (e) => {
 // —— 分类标签 ——
 const tabColor = (k: string) => (k === 'all' ? 'var(--beam)' : `var(--c-${k})`);
 function renderTabs(instant: boolean) {
-  const c = counts(S.records);
+  const c = counts(S.records, favMin());
   const html = (real: boolean) => FILTERS.map(([k, l]) => {
     const mark = k === 'fav' ? svg('star', 'star') : '<i class="dot"></i>';
     const tag = real ? `button type="button" class="tab" data-f="${k}" aria-pressed="${S.filter === k}"` : 'span class="tab"';
@@ -737,8 +738,8 @@ function copyRecord(id: number) {
       const cur = S.records.get(id);
       // 事件可能还没到；并发的置顶、补全更新也不会让次数变少
       const uses = Math.max(cur?.uses ?? 0, before.uses + 1);
-      const fav = !isFav(before) && uses >= FAV_MIN;
-      const msg = copyToast(res, S.platform.os, fav);
+      const fav = !isFav(before, favMin()) && isFav({ uses }, favMin());
+      const msg = copyToast(res, S.platform.os, fav ? uses : null);
       if (msg) {
         toast(msg, {
           icon: fav ? 'star' : 'check',
@@ -1090,6 +1091,7 @@ async function confirmClear(): Promise<string | null> {
 const clearNote = $('#clearNote');
 const dlg = $<HTMLDialogElement>('#settings'), form = $<HTMLFormElement>('#settingsForm'), hotkeyIn = $<HTMLInputElement>('#hotkey');
 const hotkeyHelp = $('#hotkeyHelp'), retainIn = $<HTMLSelectElement>('#retain'), limitIn = $<HTMLInputElement>('#limit'), limitErr = $('#limitErr');
+const frequentIn = $<HTMLInputElement>('#frequentIn'), frequentErr = $('#frequentErr');
 const ignoreIn = $<HTMLInputElement>('#ignore'), sensitiveIn = $<HTMLInputElement>('#sensitive');
 const moveTopIn = $<HTMLInputElement>('#moveTop'), autostartIn = $<HTMLInputElement>('#autostart');
 const permRow = $('#permRow'), permState = $('#permState'), permBtn = $<HTMLButtonElement>('#permBtn');
@@ -1272,6 +1274,9 @@ function openSettings() {
   limitIn.value = String(st.maxRecords);
   limitErr.hidden = true;
   limitIn.removeAttribute('aria-invalid');
+  frequentIn.value = String(st.frequentMinUses);
+  frequentErr.hidden = true;
+  frequentIn.removeAttribute('aria-invalid');
   draftIgnored = [...st.ignoredApps];
   ignoreIn.value = '';
   paintChips();
@@ -1343,12 +1348,15 @@ form.addEventListener('submit', (e) => {
 });
 async function submitSettings() {
   if (saving) return;
-  const limit = parseLimit(limitIn.value);
+  const limit = parseLimit(limitIn.value), frequent = parseFrequent(frequentIn.value);
   limitErr.hidden = limit !== null;
   limitIn.setAttribute('aria-invalid', String(limit === null));
+  frequentErr.hidden = frequent !== null;
+  frequentIn.setAttribute('aria-invalid', String(frequent === null));
   if (limit === null) return limitIn.focus();
+  if (frequent === null) return frequentIn.focus();
   const s = formToSettings(S.settings, {
-    hotkey: pendingHotkey, retain: retainIn.value, limit, ignored: addIgnored(draftIgnored, ignoreIn.value), skipSensitive: sensitiveIn.checked,
+    hotkey: pendingHotkey, retain: retainIn.value, limit, frequent, ignored: addIgnored(draftIgnored, ignoreIn.value), skipSensitive: sensitiveIn.checked,
     moveToTop: moveTopIn.checked, launchAtLogin: autostartIn.checked,
   });
   saving = true;
@@ -1359,7 +1367,13 @@ async function submitSettings() {
       if (n > 0 && !(await confirm({ title: '保存设置', body: `将删除 ${n} 条记录`, ok: '删除并保存' }))) return;
     }
     await saveSettings(s);
+    const favChanged = s.frequentMinUses !== S.settings.frequentMinUses;
     S.settings = s;
+    // 常用阈值只在前端用：立即按新阈值重算分类计数、列表与预览标签
+    if (favChanged) {
+      renderTabs(true);
+      renderList();
+    }
     closeSettings();
     toast('设置已保存');
   } catch (e) {

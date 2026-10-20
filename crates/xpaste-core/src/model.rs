@@ -64,6 +64,8 @@ pub struct Settings {
     pub last_filter: String,
     /// 复制频谱收起（只剩标题行）
     pub spectrum_collapsed: bool,
+    /// 使用次数达到它即进入“常用”，2..=99
+    pub frequent_min_uses: u32,
 }
 
 impl Default for Settings {
@@ -87,6 +89,7 @@ impl Default for Settings {
             panel_size: (960.0, 640.0),
             last_filter: "all".into(),
             spectrum_collapsed: false,
+            frequent_min_uses: 3,
         }
     }
 }
@@ -123,6 +126,9 @@ impl Settings {
         }
         if !(50..=5000).contains(&self.max_records) || !self.max_records.is_multiple_of(50) {
             return fail("请输入 50 到 5000 之间、50 的整数倍");
+        }
+        if !(2..=99).contains(&self.frequent_min_uses) {
+            return fail("请输入 2 到 99 之间的整数");
         }
         let (w, h) = self.panel_size;
         if !(w >= 720.0 && h >= 520.0) {
@@ -395,6 +401,7 @@ mod tests {
         assert_eq!(s.panel_size, (960.0, 640.0));
         assert_eq!(s.last_filter, "all");
         assert!(!s.spectrum_collapsed);
+        assert_eq!(s.frequent_min_uses, 3);
         #[cfg(target_os = "macos")]
         assert_eq!(s.ignored_apps, vec!["1Password", "钥匙串访问"]);
         #[cfg(windows)]
@@ -406,6 +413,7 @@ mod tests {
     fn missing_fields_take_defaults() {
         let s: Settings = serde_json::from_str("{}").unwrap();
         assert_eq!(s.max_records, 500);
+        assert_eq!(s.frequent_min_uses, 3);
     }
 
     #[test]
@@ -421,6 +429,7 @@ mod tests {
             json.contains(r#""maxRecords":500"#)
                 && json.contains(r#""retentionDays":30"#)
                 && json.contains(r#""appearance":"dark""#)
+                && json.contains(r#""frequentMinUses":3"#)
         );
     }
 
@@ -455,6 +464,17 @@ mod tests {
                 .is_err()
             );
         }
+    }
+
+    #[test]
+    fn frequent_min_uses_boundaries() {
+        let with = |n| Settings {
+            frequent_min_uses: n,
+            ..Default::default()
+        };
+        assert!(with(2).validate().is_ok() && with(99).validate().is_ok());
+        assert_eq!(invalid(&with(1)), "请输入 2 到 99 之间的整数");
+        assert_eq!(invalid(&with(100)), "请输入 2 到 99 之间的整数");
     }
 
     #[test]

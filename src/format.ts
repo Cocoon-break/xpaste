@@ -62,9 +62,8 @@ export type Filter = 'all' | 'fav' | Kind;
 export const FILTERS: [Filter, string][] = [['all', '全部'], ['fav', '常用'], ...(Object.entries(LABEL) as [Kind, string][])];
 export const FL = Object.fromEntries(FILTERS) as Record<Filter, string>;
 
-// “常用”不是内容类型，而是按使用次数聚合的视图
-export const FAV_MIN = 3;
-export const isFav = (r: { uses: number }): boolean => r.uses >= FAV_MIN;
+// “常用”不是内容类型，而是按使用次数聚合的视图；阈值 `min` 来自设置 frequentMinUses
+export const isFav = (r: { uses: number }, min: number): boolean => r.uses >= min;
 
 export const truncate = (s: string, n: number): string => {
   const cs = [...s];
