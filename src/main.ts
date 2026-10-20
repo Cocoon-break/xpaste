@@ -27,6 +27,7 @@ import { hotkeyFromEvent, hotkeyLabel } from './hotkey';
 import { keyAction } from './keymap';
 import { copyVerb, escHint, openLabel } from './labels';
 import { ocrLabel, ocrProgressLabel, snippetHTML } from './ocr-label';
+import { searchGate } from './search-gate';
 import { nextStep, onboardSteps, type Step } from './onboarding';
 import { applyAdded, applyRemoved, applyUpdated } from './records';
 import { layoutBars, sameColumns, spectrumStat, staggerIndex, xPct, type Layout } from './spectrum';
@@ -708,48 +709,60 @@ function setFilter(k: Filter, instant: boolean) {
 }
 
 // —— 搜索 ——
-// 每次输入都查后端，不防抖；序号丢弃先发后到的结果
+// 用户输入经 searchGate 节流（首键立即、80 ms 内合并、查询进行中只留最新）；序号丢弃先发后到的结果
 let searchSeq = 0;
 // 唤起时后端带了 t0 说明 XPASTE_TIMING 已开启；搜索计时从第一次快捷键唤起之后才开始
 let timing = false;
-function fetchMatches(v: string, done: () => void) {
+// settled：无论结果是否采用都会调用（节流器据此知道查询已结束）
+function fetchMatches(v: string, done: () => void, settled: () => void = () => {}) {
   const seq = ++searchSeq;
   if (!v.trim()) {
     S.matchIds = null;
     S.snippets.clear();
     done();
+    settled();
     return;
   }
   search(v).then(
     (hits) => {
-      if (isStale(seq, searchSeq)) return;
-      S.matchIds = new Set(hits.map((h) => h.id));
-      S.snippets = new Map(hits.filter((h) => h.snippet).map((h) => [h.id, h.snippet!]));
-      done();
+      if (!isStale(seq, searchSeq)) {
+        S.matchIds = new Set(hits.map((h) => h.id));
+        S.snippets = new Map(hits.filter((h) => h.snippet).map((h) => [h.id, h.snippet!]));
+        done();
+      }
+      settled();
     },
-    (e: AppError) => void info(`search 失败 kind=${e.kind}`),
+    (e: AppError) => {
+      info(`search 失败 kind=${e.kind}`);
+      settled();
+    },
   );
 }
 // 用户搜索：结果回到顶部并选中第一条（唤起时也走这里）
 // timed：只有 input / compositionend 路径计时，唤起、清空等程序调用不算搜索样本
-function runSearch(v: string, opts: { stagger?: boolean; base?: number; timed?: boolean } = {}) {
+// 返回的 Promise 在查询结束时兑现；程序路径调用时丢掉用户输入的待查项
+function runSearch(v: string, opts: { stagger?: boolean; base?: number; timed?: boolean } = {}): Promise<void> {
   const t = performance.now();
+  typedSearch.cancel();
   S.q = v;
   clearQ.hidden = !v;
   escHintEl.textContent = escHint(!!v);
-  fetchMatches(v, () => {
-    list.scrollTop = 0;
-    S.sel = null;
-    renderSpectrum();
-    renderList(opts);
-    if (timing && opts.timed) {
-      const n = S.matchIds?.size ?? S.records.size;
-      requestAnimationFrame(
-        () => void info(`搜索耗时 ${Math.round(performance.now() - t)} ms，命中 ${n} 条`),
-      );
-    }
-  });
+  return new Promise((settled) =>
+    fetchMatches(v, () => {
+      list.scrollTop = 0;
+      S.sel = null;
+      renderSpectrum();
+      renderList(opts);
+      if (timing && opts.timed) {
+        const n = S.matchIds?.size ?? S.records.size;
+        requestAnimationFrame(
+          () => void info(`搜索耗时 ${Math.round(performance.now() - t)} ms，命中 ${n} 条`),
+        );
+      }
+    }, settled),
+  );
 }
+const typedSearch = searchGate((v) => runSearch(v, { timed: true }));
 
 // —— 提示条 ——
 // 连续触发时只换文字、不重播弹入；非撤销提示只顶掉撤销按钮，Mod + Z 在撤销期限内仍有效（canUndo 按时间判断）。undo 与 action 不同时出现
@@ -1696,6 +1709,8 @@ document.addEventListener('keydown', (e) => {
   if (!a) return;
   // 让这个字符照常输入到搜索框
   if (a.t === 'focusSearch') return q.focus();
+  // 动作键（回车、方向、删除…）前先把节流中的输入查出去，和未节流时一样只剩 IPC 往返的时间差
+  typedSearch.flush();
   e.preventDefault();
   const sel = S.sel;
   switch (a.t) {
@@ -1807,9 +1822,9 @@ $('.sp-head').addEventListener('click', () => {
 });
 q.addEventListener('input', (e) => {
   if ((e as InputEvent).isComposing) return;
-  runSearch(q.value, { timed: true });
+  typedSearch.push(q.value);
 });
-q.addEventListener('compositionend', () => runSearch(q.value, { timed: true }));
+q.addEventListener('compositionend', () => typedSearch.push(q.value));
 clearQ.addEventListener('click', () => {
   q.value = '';
   runSearch('');
