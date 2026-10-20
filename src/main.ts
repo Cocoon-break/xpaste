@@ -1650,7 +1650,11 @@ $('.sp-head').addEventListener('click', () => {
   persistUi({ spectrumCollapsed: c });
   // 收起期间没画光柱：展开后立即按当前宽度画（读 clientWidth 会同步排版，轨道已有真实宽度，不闪一帧旧光柱）；
   // renderSpectrum 末尾会重新标记选中光柱与游标
-  if (!c) renderSpectrum();
+  // 先清空光柱走整组重建：原地改 .dim / .on 会在显示时播 200ms 过渡，违背即时切换
+  if (!c) {
+    spBars.replaceChildren();
+    renderSpectrum();
+  }
 });
 q.addEventListener('input', (e) => {
   if ((e as InputEvent).isComposing) return;
