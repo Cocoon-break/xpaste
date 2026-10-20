@@ -439,6 +439,18 @@ impl Store {
         Ok(n > 0)
     }
 
+    /// 未删除记录的识别状态；已删除或不存在为 None。
+    pub fn ocr_state(&self, id: i64) -> Result<Option<u8>, CoreError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT ocr_state FROM records WHERE id = ?1 AND deleted_at IS NULL",
+                [id],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
     /// 处于 `states` 之一的未删除图片，最近复制的在前。
     pub fn ocr_pending_ids(&self, states: &[u8], limit: usize) -> Result<Vec<i64>, CoreError> {
         if states.is_empty() {
@@ -1439,5 +1451,17 @@ pub(crate) mod tests {
         assert!(s.ocr_pending_ids(&[p], 10).unwrap().is_empty());
         assert_eq!(s.ocr_pending_ids(&[p, ocr_state::FAILED], 10).unwrap(), [a]);
         assert_eq!(s.ocr_progress().unwrap(), (1, 2));
+    }
+
+    #[test]
+    fn ocr_state_reads_live_rows_only() {
+        let mut s = mem();
+        let a = added(&mut s, &rec_image(1), 1);
+        assert_eq!(s.ocr_state(a).unwrap(), Some(ocr_state::PENDING));
+        s.set_ocr(a, ocr_state::FAILED, None).unwrap();
+        assert_eq!(s.ocr_state(a).unwrap(), Some(ocr_state::FAILED));
+        s.soft_delete(a, 2).unwrap();
+        assert_eq!(s.ocr_state(a).unwrap(), None);
+        assert_eq!(s.ocr_state(a + 100).unwrap(), None);
     }
 }

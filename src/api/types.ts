@@ -57,6 +57,13 @@ export interface RecordSummary {
   ocrState: number;
 }
 
+/** 已识别（有文字或无文字）的图片数 / 图片总数；`supported` 为本机是否有可用识别引擎。 */
+export interface OcrProgress {
+  done: number;
+  total: number;
+  supported: boolean;
+}
+
 /** `snippet` 只在命中来自识别文字时出现。 */
 export interface SearchHit {
   id: number;

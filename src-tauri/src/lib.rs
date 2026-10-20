@@ -7,6 +7,7 @@ pub mod error;
 mod events;
 mod hotkey;
 mod housekeeping;
+mod ocr;
 mod panel;
 pub mod state;
 mod tray;
@@ -83,7 +84,15 @@ pub fn run() {
             let settings = store.load_settings();
             let (hotkey, appearance) = (settings.hotkey.clone(), settings.appearance);
             let enrich = enrich::start(app.handle().clone());
-            app.manage(AppState::new(settings, store, enrich, data_dir));
+            let ocr = ocr::start(app.handle().clone());
+            app.manage(AppState::new(
+                settings,
+                store,
+                enrich,
+                ocr.clone(),
+                data_dir,
+            ));
+            ocr.schedule_backfill(app.handle(), ocr::BACKFILL_DELAY);
             housekeeping::start(app.handle().clone());
             #[cfg(target_os = "macos")]
             panel::setup_macos(app)?;
@@ -171,7 +180,9 @@ pub fn run() {
             commands::records::undo_delete,
             commands::records::clear_history,
             commands::records::count_unpinned,
-            commands::records::copy
+            commands::records::copy,
+            commands::records::reocr,
+            commands::records::ocr_progress
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

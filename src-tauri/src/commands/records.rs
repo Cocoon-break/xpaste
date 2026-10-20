@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
-use xpaste_core::{Flavor, ImageInfo, Kind, RecordDetail, SearchHit};
+use xpaste_core::{Flavor, ImageInfo, Kind, RecordDetail, SearchHit, ocr_state};
 use xpaste_platform::{PasteBlock, PlatformError};
 
 use crate::clock::now_ms;
@@ -117,6 +117,41 @@ pub fn clear_history(app: AppHandle, state: State<'_, AppState>) -> Result<u32, 
 #[tauri::command(async)]
 pub fn count_unpinned(state: State<'_, AppState>) -> Result<u32, AppError> {
     Ok(state.store().count_unpinned()?)
+}
+
+/// 重新识别：只对失败、跳过、本机不支持的记录生效，置回待识别并插队；其他状态什么也不做。
+#[tauri::command(async)]
+pub fn reocr(app: AppHandle, state: State<'_, AppState>, id: i64) -> Result<(), AppError> {
+    let reset = {
+        let store = state.store();
+        matches!(
+            store.ocr_state(id)?,
+            Some(ocr_state::FAILED | ocr_state::SKIPPED | ocr_state::UNSUPPORTED)
+        ) && store.set_ocr(id, ocr_state::PENDING, None)?
+    };
+    if reset {
+        emit_summary(&app, RECORD_UPDATED, id);
+        state.ocr.push_front(id);
+    }
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrProgress {
+    pub done: u32,
+    pub total: u32,
+    pub supported: bool,
+}
+
+#[tauri::command(async)]
+pub fn ocr_progress(state: State<'_, AppState>) -> Result<OcrProgress, AppError> {
+    let (done, total) = state.store().ocr_progress()?;
+    Ok(OcrProgress {
+        done,
+        total,
+        supported: state.ocr.supported,
+    })
 }
 
 #[derive(Debug, Serialize)]

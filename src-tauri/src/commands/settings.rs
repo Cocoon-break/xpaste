@@ -1,4 +1,5 @@
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
@@ -184,10 +185,11 @@ pub fn save_settings(
     state: State<'_, AppState>,
     settings: Settings,
 ) -> Result<(), AppError> {
-    let (hotkey, appearance, launch) = (
+    let (hotkey, appearance, launch, ocr_on) = (
         settings.hotkey.clone(),
         settings.appearance,
         settings.launch_at_login,
+        settings.ocr_enabled,
     );
     let changed = commit_settings(&state, settings, |s| crate::hotkey::register(&app, s))?;
     // 快捷键改了必为 Register，与 commit_settings 内一致；没改时只决定是否尽力重试
@@ -211,6 +213,14 @@ pub fn save_settings(
     }
     if changed.contains(&"launchAtLogin") {
         set_autostart(&app, launch);
+    }
+    // 回填线程自己再看 ocrEnabled 与 ocrBackfill 是否都开着
+    if changed.contains(&"ocrEnabled") || changed.contains(&"ocrBackfill") {
+        if ocr_on {
+            state.ocr.schedule_backfill(&app, Duration::ZERO);
+        } else {
+            state.ocr.disable(&app);
+        }
     }
     Ok(())
 }
@@ -438,6 +448,7 @@ mod tests {
                 crate::commands::panel::accessibility_granted,
                 crate::commands::records::search,
                 crate::commands::records::count_unpinned,
+                crate::commands::records::ocr_progress,
             ])
             .build(tauri::test::mock_context(tauri::test::noop_assets()))
             .expect("app should build");
