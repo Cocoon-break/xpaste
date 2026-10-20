@@ -30,6 +30,8 @@ CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 ",
     // 阶段 9：删去颜色类型，已有颜色记录按文本处理。颜色文本是单行 HEX，去掉首尾空白（含制表、换行）即文本标题规则
     "UPDATE records SET kind = 'text', title = trim(text, ' ' || char(9, 10, 13)) WHERE kind = 'color';",
+    // 阶段 9.1：标题进搜索文本（位图截图的自动标题此前搜不到）
+    "UPDATE records SET search_text = search_text || char(10) || lower(title) WHERE title <> '' AND instr(search_text, lower(title)) = 0;",
 ];
 
 const SUBDIRS: [&str; 4] = ["blobs", "images", "thumbs", "icons"];
@@ -646,7 +648,7 @@ pub(crate) mod tests {
     fn open_creates_schema_and_dirs() {
         let dir = tmp();
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 2);
+        assert_eq!(s.schema_version().unwrap(), 3);
         for sub in ["blobs", "images", "thumbs", "icons"] {
             assert!(dir.join(sub).is_dir());
         }
@@ -675,7 +677,7 @@ pub(crate) mod tests {
         .unwrap();
         drop(old);
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 2);
+        assert_eq!(s.schema_version().unwrap(), 3);
         let row: (String, String) = s
             .conn
             .query_row("SELECT kind, title FROM records", [], |r| {
@@ -691,7 +693,25 @@ pub(crate) mod tests {
         let dir = tmp();
         drop(Store::open(&dir).unwrap());
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 2);
+        assert_eq!(s.schema_version().unwrap(), 3);
+    }
+
+    #[test]
+    fn titles_become_searchable_after_migration() {
+        let dir = tmp();
+        make_dirs(&dir).unwrap();
+        let old = Connection::open(dir.join("xpaste.db")).unwrap();
+        old.execute_batch(MIGRATIONS[0]).unwrap();
+        old.pragma_update(None, "user_version", 2).unwrap();
+        old.execute(
+            "INSERT INTO records (hash, kind, title, copied_at, size, search_text) VALUES (x'02', 'image', '截图 2026-10-20 03.20.png', 1, 9, 'ishot')",
+            [],
+        )
+        .unwrap();
+        drop(old);
+        let s = Store::open(&dir).unwrap();
+        assert_eq!(s.search_ids("03.20").unwrap().len(), 1);
+        assert_eq!(s.search_ids("iShot").unwrap().len(), 1);
     }
 
     #[test]

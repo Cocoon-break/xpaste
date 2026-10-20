@@ -42,7 +42,7 @@ pub fn build_record(snapshot: Snapshot, kind: Kind, now_ms: i64) -> NewRecord {
         _ => None,
     };
 
-    let title = match kind {
+    let title: String = match kind {
         Kind::Text | Kind::Code => text
             .as_deref()
             .and_then(|t| t.lines().map(str::trim).find(|l| !l.is_empty()))
@@ -75,6 +75,8 @@ pub fn build_record(snapshot: Snapshot, kind: Kind, now_ms: i64) -> NewRecord {
     parts.extend(paths.iter().map(|p| file_name(p)));
     parts.extend(paths.iter().map(|p| p.display().to_string()));
     parts.extend(app.as_ref().map(|a| a.name.clone()));
+    // 标题也要能搜到：位图截图没有文本与路径，否则只剩来源应用名可搜
+    parts.push(title.clone());
     let search_text = parts.join("\n").to_lowercase();
 
     NewRecord {
@@ -340,6 +342,15 @@ mod tests {
         });
         let st = build_record(s, Kind::File, 0).search_text;
         assert!(st.contains("spec.pdf") && st.contains("/docs/spec.pdf") && st.contains("finder"));
+    }
+    #[test]
+    fn bitmap_title_is_searchable() {
+        let r = build_record(snap_bitmap(), Kind::Image, 1_792_348_701_015);
+        assert!(
+            r.search_text.contains("截图 2026-10-18 18.38.png"),
+            "{}",
+            r.search_text
+        );
     }
     #[test]
     fn local_stamp_is_utc_civil() {
