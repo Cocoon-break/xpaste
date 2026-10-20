@@ -95,7 +95,7 @@ const ptype = $('#ptype'), pbody = $('#pbody'), pmeta = $('#pmeta'), countEl = $
 const pinBtn = $<HTMLButtonElement>('#pinBtn'), copyBtn = $<HTMLButtonElement>('#copyBtn');
 const delBtn = $<HTMLButtonElement>('#delBtn');
 const menu = $('#menu'), mOpen = $<HTMLButtonElement>('[data-m="open"]'), toastEl = $('#toast'), toastMsg = $('#toastMsg'), undoBtn = $<HTMLButtonElement>('#undoBtn'), toastAct = $<HTMLButtonElement>('#toastAct'), pauseBtn = $('#pauseBtn');
-const spBars = $('#spBars'), spTrack = $('#spTrack'), spCursor = $('#spCursor'), spTip = $('#spTip');
+const spBars = $('#spBars'), spTrack = $('#spTrack'), spCursor = $('#spBeam'), spTip = $('#spTip');
 
 // —— 状态 ——
 const S = {

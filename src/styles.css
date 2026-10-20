@@ -29,6 +29,8 @@
   --mark-bg: rgb(255 184 77 / .3); --mark-fg: #FFE2B0; --mark-ring: rgb(255 184 77 / .35);
   --glow-a: rgb(143 227 255 / .75); --glow-b: rgb(255 111 216 / .25);
   --img-check: rgb(255 255 255 / .04);
+  /* 霓光镜面：光柱顶端混入类型色的比例（0% = 纯白）、两层光晕半径、倒影遮罩起点、轨道底光浓度 */
+  --sp-top-mix: 0%; --sp-glow-a: 10px; --sp-glow-b: 24px; --sp-mirror-a: .55; --sp-under: 10%;
 
   --spectrum: linear-gradient(90deg, var(--c-text), var(--c-link) 28%, var(--c-code) 44%, var(--c-accent) 58%, var(--c-image) 72%, var(--c-video) 86%, var(--c-file));
   --ease-enter: cubic-bezier(.22, 1, .36, 1);
@@ -62,6 +64,7 @@
     --mark-bg: #FFE08A; --mark-fg: #3A2A00; --mark-ring: rgb(217 119 6 / .35);
     --glow-a: rgb(14 127 163 / .55); --glow-b: rgb(192 38 211 / .25);
     --img-check: rgb(20 30 80 / .05);
+    --sp-top-mix: 40%; --sp-glow-a: 6px; --sp-glow-b: 14px; --sp-mirror-a: .35; --sp-under: 6%;
   }
 }
 :root[data-theme="light"] {
@@ -87,6 +90,7 @@
   --mark-bg: #FFE08A; --mark-fg: #3A2A00; --mark-ring: rgb(217 119 6 / .35);
   --glow-a: rgb(14 127 163 / .55); --glow-b: rgb(192 38 211 / .25);
   --img-check: rgb(20 30 80 / .05);
+  --sp-top-mix: 40%; --sp-glow-a: 6px; --sp-glow-b: 14px; --sp-mirror-a: .35; --sp-under: 6%;
 }
 [data-type="text"]  { --tc: var(--c-text); }
 [data-type="link"]  { --tc: var(--c-link); }
@@ -228,45 +232,80 @@ kbd {
 .sp-head { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--muted); margin-bottom: 6px; cursor: pointer; }
 .sp-head b { color: var(--fg); font-weight: 500; }
 .sp-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.presets { flex: none; display: flex; gap: 4px; }
+.presets button { font: 11px var(--font-mono); color: var(--faint); background: none; border: 1px solid transparent; border-radius: 6px; padding: 1px 7px; cursor: pointer; }
+@media (hover: hover) and (pointer: fine) { .presets button:hover { color: var(--fg); } }
+.presets button.on { color: var(--fg); border-color: var(--line-2); background: var(--glass-2); }
 .sp-head .stat { margin-left: auto; white-space: nowrap; font-variant-numeric: tabular-nums; }
 /* 与其他图标按钮同尺寸（32px），负外边距让标题行只高出 2px，焦点环不压容器边框 */
 #spToggle { flex: none; margin: -6px -4px; }
 #spToggle .ic { transition: transform 140ms var(--ease-enter); }
 .spectrum[data-collapsed="true"] #spToggle .ic { transform: rotate(180deg); }
 .spectrum[data-collapsed="true"] .sp-track, .spectrum[data-collapsed="true"] .sp-axis { display: none; }
+.spectrum[data-collapsed="true"] .presets, .spectrum[data-collapsed="true"] .sp-mini { display: none; }
+/* 霓光镜面：网格 + 底部淡蓝底光；默认视图（含“更早”段）才画 6% 处的分隔线 */
 .sp-track {
-  position: relative; height: 46px;
-  background:
-    linear-gradient(90deg, transparent calc(6% - 1px), var(--line-2) calc(6% - 1px) 6%, transparent 6%),
-    repeating-linear-gradient(0deg, var(--line) 0 1px, transparent 1px 11.5px);
+  --sp-grid: repeating-linear-gradient(0deg, var(--line) 0 1px, transparent 1px 11.5px);
+  --sp-glow: radial-gradient(60% 120% at 50% 100%, color-mix(in srgb, var(--c-link) var(--sp-under), transparent), transparent 70%);
+  position: relative; height: 46px; cursor: crosshair; touch-action: none; user-select: none;
+  background: var(--sp-grid), var(--sp-glow);
 }
+.sp-track.has-early { background: linear-gradient(90deg, transparent calc(6% - 1px), var(--line-2) calc(6% - 1px) 6%, transparent 6%), var(--sp-grid), var(--sp-glow); }
+.sp-track.panning { cursor: grabbing; }
+.layer { position: absolute; inset: 0; }
 .bar {
   position: absolute; bottom: 0; width: 3px; margin-left: -1.5px; border-radius: 2px 2px 0 0;
-  background: linear-gradient(to top, color-mix(in srgb, var(--tc) 35%, transparent), var(--tc));
-  box-shadow: 0 0 8px -1px var(--tc); cursor: pointer;
+  background: linear-gradient(to top, color-mix(in srgb, var(--tc) 55%, transparent), var(--tc) 70%, color-mix(in srgb, var(--tc) var(--sp-top-mix), #fff) 100%);
+  box-shadow: 0 0 var(--sp-glow-a) 0 var(--tc), 0 0 var(--sp-glow-b) -4px var(--tc); cursor: pointer;
   transform-origin: 50% 100%;
   transition: filter 160ms ease, box-shadow 200ms ease, opacity 200ms ease;
 }
 .bar::before { content: ""; position: absolute; inset: -6px -5px 0; }
 .bar.dim { opacity: .25; }
+/* 合并光柱（一列多条）：略宽，顶端一个小圆点 */
+.bar.multi { width: 4px; margin-left: -2px; }
+.bar.multi::after { content: ""; position: absolute; top: -3px; left: 50%; width: 3px; height: 3px; margin-left: -1.5px; border-radius: 50%; background: var(--fg); opacity: .7; }
 .bar.on { box-shadow: 0 0 14px 2px var(--tc); filter: brightness(1.25) saturate(1.2); opacity: 1; }
 .window.boot .bar { animation: barIn 620ms var(--ease-spring) both; animation-delay: calc(220ms + var(--i) * 18ms); }
 .bar.fresh { animation: barIn 700ms var(--ease-spring) both, ping 1200ms ease-out 200ms; }
 @keyframes barIn { from { transform: scaleY(0); } }
-@keyframes ping { from { box-shadow: 0 0 0 0 var(--tc), 0 0 16px 4px var(--tc); } to { box-shadow: 0 0 0 10px transparent, 0 0 8px -1px var(--tc); } }
-.sp-cursor {
-  position: absolute; top: -4px; bottom: 0; left: 0; width: 1px; pointer-events: none;
-  background: linear-gradient(to bottom, var(--fg), transparent);
-  transition: transform 360ms var(--ease-move), opacity 200ms ease;
+@keyframes ping { from { box-shadow: 0 0 0 0 var(--tc), 0 0 16px 4px var(--tc), 0 0 var(--sp-glow-b) -4px var(--tc); } to { box-shadow: 0 0 0 10px transparent, 0 0 var(--sp-glow-a) 0 var(--tc), 0 0 var(--sp-glow-b) -4px var(--tc); } }
+/* 倒影：轨道正下方 22 px 的镜像，不响应指针，不播升起 / 脉冲（选择器带 .sp-track 才压得过 .window.boot .bar） */
+.mirror {
+  top: 100%; height: 22px; transform: scaleY(-1); pointer-events: none; /* 绕自身中线翻转：原型的 transform-origin: top 会把倒影翻回轨道内底部 22 px */
+  -webkit-mask-image: linear-gradient(to top, rgb(0 0 0 / var(--sp-mirror-a)), transparent 90%);
+  mask-image: linear-gradient(to top, rgb(0 0 0 / var(--sp-mirror-a)), transparent 90%);
 }
-.sp-cursor::before { content: ""; position: absolute; top: -3px; left: -3px; width: 7px; height: 7px; background: var(--fg); transform: rotate(45deg); border-radius: 1px; }
+.sp-track .mirror .bar { height: 100% !important; box-shadow: none; filter: blur(.4px); background: linear-gradient(to top, color-mix(in srgb, var(--tc) 60%, transparent), transparent); animation: none; }
+/* 光束：选中记录的位置，从轨道顶上 10 px 贯穿到倒影底部 */
+.sp-beam {
+  position: absolute; top: -10px; bottom: -22px; width: 1px; left: 0; pointer-events: none; opacity: 0;
+  background: linear-gradient(to bottom, transparent, var(--tc) 30%, var(--tc) 70%, transparent);
+  box-shadow: 0 0 18px 3px var(--tc);
+  transition: transform 360ms var(--ease-move), opacity 300ms ease; /* 位置用 translateX(px)，left 恒为 0（原则 4） */
+}
+.sp-beam.show { opacity: .9; }
 .sp-now { position: absolute; right: -3px; bottom: -3px; width: 6px; height: 6px; border-radius: 50%; background: var(--c-code); }
 .sp-now::after { content: ""; position: absolute; inset: 0; border-radius: 50%; border: 1px solid var(--c-code); animation: nowPulse 2.4s ease-out infinite; }
 @keyframes nowPulse { from { transform: scale(1); opacity: .9; } to { transform: scale(4); opacity: 0; } }
-.sp-axis { position: relative; height: 18px; font: 10.5px var(--font-mono); color: var(--faint); font-variant-numeric: tabular-nums; }
-.sp-axis span { position: absolute; top: 4px; transform: translateX(-50%); white-space: nowrap; }
-.sp-axis span:first-child { transform: translateX(-30%); }
-.sp-axis span:last-child { transform: translateX(-100%); color: var(--c-code); }
+.sp-axis { position: relative; height: 18px; margin-top: 22px; font: 10.5px var(--font-mono); color: var(--faint); font-variant-numeric: tabular-nums; } /* margin 给倒影让位 */
+.sp-axis span { position: absolute; top: 4px; transform: translateX(-50%); white-space: nowrap; transition: none; }
+.sp-axis span.early { transform: translateX(-30%); }
+.sp-axis span.now { transform: translateX(-100%); color: var(--c-code); }
+.sp-axis span.minor { top: 1px; height: 4px; width: 1px; background: var(--line-2); }
+/* 概览条：放大态出现，标出当前时间窗；默认视图淡出但仍占位 */
+.sp-mini { position: relative; height: 8px; margin-top: 2px; border-radius: 4px; background: var(--line); overflow: hidden; opacity: 0; transition: opacity 200ms ease; cursor: pointer; }
+.sp-mini.show { opacity: 1; }
+.sp-mini .band { position: absolute; inset: 0; background: var(--spectrum); opacity: .35; }
+.sp-mini .dots { position: absolute; inset: 0; width: 100%; height: 100%; }
+.sp-mini .win {
+  position: absolute; top: 0; bottom: 0; border-radius: 4px;
+  background: color-mix(in srgb, var(--fg) 22%, transparent); border: 1px solid color-mix(in srgb, var(--fg) 55%, transparent);
+  transition: left 360ms var(--ease-move), width 360ms var(--ease-move);
+}
+/* 手势期间光束与窗框即时跟手；.smooth 只在预设 / 复位 / 概览条点击等程序触发时短暂加上 */
+#spectrum:not(.smooth) .sp-beam { transition-duration: 0ms, 300ms; }
+#spectrum:not(.smooth) .sp-mini .win { transition-duration: 0ms; }
 .sp-tip {
   position: absolute; z-index: 4; bottom: calc(100% + 2px); left: 0; pointer-events: none;
   padding: 6px 10px; border-radius: 8px; font-size: 12px; white-space: nowrap; max-width: 280px; overflow: hidden; text-overflow: ellipsis;
@@ -631,4 +670,5 @@ dialog > form { display: contents; }
   *, *::before, *::after, ::backdrop { transition-duration: 0s !important; transition-delay: 0s !important; animation: none !important; }
   /* 过渡归零后悬停仍会瞬间放大，减少动态效果时干脆不缩放 */
   .poster:hover .play { transform: none; }
+  .sp-beam, .sp-mini .win { transition-property: opacity; }
 }
