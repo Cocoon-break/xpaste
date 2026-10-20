@@ -41,7 +41,7 @@ test('retention 选项往返', () => {
 test('formToSettings 只改表单字段，其余沿用 base', () => {
   const base: Settings = {
     hotkey: 'CommandOrControl+Shift+V', retentionDays: 30, maxRecords: 500, ignoredApps: ['1Password'], skipSensitive: true,
-    moveToTop: true, launchAtLogin: true, appearance: 'system', panelSize: [880, 600], lastFilter: 'code',
+    moveToTop: true, launchAtLogin: true, appearance: 'system', panelSize: [880, 600], lastFilter: 'code', spectrumCollapsed: true,
   };
   assert.deepEqual(
     formToSettings(base, {
@@ -50,7 +50,7 @@ test('formToSettings 只改表单字段，其余沿用 base', () => {
     }),
     {
       hotkey: 'CommandOrControl+Alt+C', retentionDays: null, maxRecords: 1000, ignoredApps: ['a', 'b'], skipSensitive: false,
-      moveToTop: false, launchAtLogin: false, appearance: 'dark', panelSize: [880, 600], lastFilter: 'code',
+      moveToTop: false, launchAtLogin: false, appearance: 'dark', panelSize: [880, 600], lastFilter: 'code', spectrumCollapsed: true,
     },
   );
 });

@@ -61,6 +61,7 @@ const I = {
   inbox: '<path d="M3 11h4l1 2h4l1-2h4"/><path d="M5 5h10l2 6v4H3v-4z"/>',
   sun: '<circle cx="10" cy="10" r="3.2"/><path d="M10 2.5v1.8M10 15.7v1.8M2.5 10h1.8M15.7 10h1.8M4.7 4.7 6 6M14 14l1.3 1.3M15.3 4.7 14 6M6 14l-1.3 1.3"/>',
   moon: '<path d="M15.5 12.2A6 6 0 0 1 7.8 4.5a6 6 0 1 0 7.7 7.7z"/>',
+  chevron: '<path d="m6 12 4-4 4 4"/>',
   monitor: '<rect x="3" y="4" width="14" height="9.5" rx="1.5"/><path d="M7.5 16.5h5M10 13.5v3"/>',
 };
 const svg = (n: keyof typeof I, cls = '') =>
@@ -507,8 +508,20 @@ function renderPreview(fade = false) {
 let sp: Layout = { bars: [], colOf: new Map() };
 let spNow = Date.now();
 let spOn: Element | null = null;
+// 收起状态以 data-collapsed 为准：S.settings 要等保存成功才更新，读它会落后 300ms 防抖
+const spectrum = $('#spectrum'), spToggle = $('#spToggle');
+const spCollapsed = () => spectrum.dataset.collapsed === 'true';
+function paintSpCollapsed(c: boolean) {
+  spectrum.dataset.collapsed = String(c);
+  spToggle.setAttribute('aria-expanded', String(!c));
+  spToggle.setAttribute('aria-label', c ? '展开复制频谱' : '收起复制频谱');
+}
 function renderSpectrum(freshId?: number) {
   spNow = Date.now();
+  // 统计不依赖轨道宽度，收起时照常更新
+  const { count, peak } = spectrumStat(S.records.values(), spNow);
+  $('#spStat').textContent = `24 小时内复制 ${fmtInt(count)} 次${peak ? ` · 最忙 ${peak.hour} 点（${peak.n} 次）` : ''}`;
+  if (spCollapsed()) return;
   // 删除中的记录不参与布局，否则重绘会把正在收起的光柱拉回来
   const recs = [...S.records.values()].filter((r) => !S.removing.has(r.id));
   const next = layoutBars(recs, spNow, spTrack.clientWidth, matches, freshId);
@@ -538,12 +551,11 @@ function renderSpectrum(freshId?: number) {
   spOn = null;
   const ticks: [number, string][] = [[3, '更早'], ...[18, 12, 6].map((h): [number, string] => [6 + 94 * (1 - h / 24), hf.format(spNow - h * 3600e3)]), [100, '现在']];
   $('#spAxis').innerHTML = ticks.map(([x, l]) => `<span style="left:${x}%">${l}</span>`).join('');
-  const { count, peak } = spectrumStat(S.records.values(), spNow);
-  $('#spStat').textContent = `24 小时内复制 ${fmtInt(count)} 次${peak ? ` · 最忙 ${peak.hour} 点（${peak.n} 次）` : ''}`;
   paintSpectrumSel(false);
 }
 // 只换上一根和这一根的 .on；变暗由布局决定，筛选变化时重绘
 function paintSpectrumSel(animate = true) {
+  if (spCollapsed()) return;
   const r = S.sel === null ? undefined : S.records.get(S.sel);
   const col = r && sp.colOf.get(r.id);
   const b = col === undefined ? null : spBars.children[col] ?? null;
@@ -1605,6 +1617,7 @@ const b = await bootstrap().catch((e: AppError) => {
   throw e;
 });
 S.settings = b.settings;
+paintSpCollapsed(b.settings.spectrumCollapsed);
 S.platform = b.platform;
 S.paused = b.paused;
 paintPause();
@@ -1630,6 +1643,15 @@ if (b.firstRun) {
 }
 
 // —— 事件 ——
+// 按钮在标题行里，点击冒泡到这一个监听，不会切两次
+$('.sp-head').addEventListener('click', () => {
+  const c = !spCollapsed();
+  paintSpCollapsed(c);
+  persistUi({ spectrumCollapsed: c });
+  // 收起期间没画光柱：展开后立即按当前宽度画（读 clientWidth 会同步排版，轨道已有真实宽度，不闪一帧旧光柱）；
+  // renderSpectrum 末尾会重新标记选中光柱与游标
+  if (!c) renderSpectrum();
+});
 q.addEventListener('input', (e) => {
   if ((e as InputEvent).isComposing) return;
   runSearch(q.value, { timed: true });

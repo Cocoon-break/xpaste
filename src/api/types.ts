@@ -15,6 +15,7 @@ export interface Settings {
   appearance: Appearance;
   panelSize: [number, number];
   lastFilter: string;
+  spectrumCollapsed: boolean;
 }
 
 export interface PlatformInfo {

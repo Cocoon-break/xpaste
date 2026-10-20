@@ -171,6 +171,15 @@ test('M20-16 描边跟随指针：.glow 读指针坐标变量，悬停时显现'
   assert.match(ts, /win\.addEventListener\('pointermove'[\s\S]*?requestAnimationFrame\([\s\S]*?glow\.style\.setProperty\('--mx', [\s\S]*?glow\.style\.setProperty\('--my', /);
 });
 
+test('M20-频谱开关 chevron 140ms enter：收起时旋转 180°，减少动态效果下即时；收起 / 展开本身不过渡高度', () => {
+  assert.match(html, /<button class="btn icon ghost" type="button" id="spToggle" aria-expanded="true" aria-controls="spTrack" aria-label="收起复制频谱"><span data-icon="chevron"><\/span><\/button>/);
+  assert.match(rule('#spToggle .ic'), /transition: transform 140ms var\(--ease-enter\)/);
+  assert.match(rule('.spectrum[data-collapsed="true"] #spToggle .ic'), /transform: rotate\(180deg\)/);
+  assert.match(rule('.spectrum[data-collapsed="true"] .sp-track, .spectrum[data-collapsed="true"] .sp-axis'), /display: none/);
+  // 减少动态效果：由全局规则把 transition-duration 归零（原则 3），这里确认没有用 !important 绕开
+  assert.doesNotMatch(rule('#spToggle .ic'), /!important/);
+});
+
 test('原则 2 键盘触发走 instant：方向键按住、分类、置顶、菜单、主题', () => {
   assert.match(keymap, /instant: e\.repeat/);
   assert.match(ts, /case 'filter': return setFilter\(cycleFilter\(S\.filter, a\.d\), true\);/);

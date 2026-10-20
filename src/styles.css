@@ -227,9 +227,16 @@ kbd {
 
 /* —— 复制频谱 —— */
 .spectrum { margin: 0 18px 12px; padding: 10px 12px 6px; border-radius: 12px; background: var(--well); border: 1px solid var(--line); position: relative; }
-.sp-head { display: flex; justify-content: space-between; gap: 4px 12px; font-size: 12px; color: var(--muted); margin-bottom: 6px; flex-wrap: wrap; }
+/* 整行可点收起 / 展开；一行放不下时说明文字截断，统计与按钮不换行 */
+.sp-head { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--muted); margin-bottom: 6px; cursor: pointer; }
 .sp-head b { color: var(--fg); font-weight: 500; }
-.sp-head .stat { font-variant-numeric: tabular-nums; }
+.sp-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-head .stat { margin-left: auto; white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* 与其他图标按钮同尺寸（32px），负外边距让标题行只高出 2px，焦点环不压容器边框 */
+#spToggle { flex: none; margin: -6px -4px; }
+#spToggle .ic { transition: transform 140ms var(--ease-enter); }
+.spectrum[data-collapsed="true"] #spToggle .ic { transform: rotate(180deg); }
+.spectrum[data-collapsed="true"] .sp-track, .spectrum[data-collapsed="true"] .sp-axis { display: none; }
 .sp-track {
   position: relative; height: 46px;
   background:

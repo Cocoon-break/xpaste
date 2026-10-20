@@ -97,6 +97,10 @@ pub fn changed_fields(old: &Settings, new: &Settings) -> Vec<&'static str> {
         ("appearance", old.appearance != new.appearance),
         ("panelSize", old.panel_size != new.panel_size),
         ("lastFilter", old.last_filter != new.last_filter),
+        (
+            "spectrumCollapsed",
+            old.spectrum_collapsed != new.spectrum_collapsed,
+        ),
     ]
     .into_iter()
     .filter_map(|(name, changed)| changed.then_some(name))
@@ -335,11 +339,12 @@ mod tests {
             hotkey: "Alt+Space".into(),
             appearance: xpaste_core::Appearance::Dark,
             panel_size: (1000.0, 700.0),
+            spectrum_collapsed: true,
             ..Settings::default()
         };
         assert_eq!(
             changed_fields(&old, &new),
-            ["hotkey", "appearance", "panelSize"]
+            ["hotkey", "appearance", "panelSize", "spectrumCollapsed"]
         );
     }
 

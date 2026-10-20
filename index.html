@@ -30,8 +30,8 @@
         <button class="btn icon" type="button" id="settingsBtn" aria-label="设置"><span data-icon="sliders"></span></button>
       </div>
 
-      <div class="spectrum" id="spectrum">
-        <div class="sp-head"><span><b>复制频谱</b> · 过去 24 小时，每根光柱是一次复制，越高内容越大</span><span class="stat" id="spStat"></span></div>
+      <div class="spectrum" id="spectrum" data-collapsed="false">
+        <div class="sp-head"><span class="sp-title"><b>复制频谱</b> · 过去 24 小时，每根光柱是一次复制，越高内容越大</span><span class="stat" id="spStat"></span><button class="btn icon ghost" type="button" id="spToggle" aria-expanded="true" aria-controls="spTrack" aria-label="收起复制频谱"><span data-icon="chevron"></span></button></div>
         <div class="sp-track" id="spTrack" aria-hidden="true">
           <div id="spBars"></div>
           <div class="sp-cursor" id="spCursor"></div>
