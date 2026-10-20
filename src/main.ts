@@ -1591,6 +1591,8 @@ await onHotkeyPressed(() => {
   if (obStep === 'hotkey' && obDlg.open) obSucceed();
 });
 
+// 页面重载时对话框都已关闭：先复位后端标志（重载前若有对话框开着，它会停在 true；读取失败也照样复位）
+syncDialogOpen();
 const b = await bootstrap().catch((e: AppError) => {
   // 之后的每次 renderList 都显示这条，不被空列表文案覆盖
   bootError = e?.message || String(e);

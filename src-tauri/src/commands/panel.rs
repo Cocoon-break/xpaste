@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::error::AppError;
@@ -15,8 +15,14 @@ pub fn hide_panel(app: AppHandle, animate: bool) -> Result<(), AppError> {
 
 /// 前端在对话框打开 / 全部关闭时同步；只写原子变量，同步命令即可。
 #[tauri::command]
-pub fn set_dialog_open(state: State<'_, AppState>, open: bool) {
-    state.dialog_open.store(open, Ordering::SeqCst);
+pub fn set_dialog_open(app: AppHandle, open: bool) {
+    app.state::<AppState>()
+        .dialog_open
+        .store(open, Ordering::SeqCst);
+    // 对话框在用户切走之后才关（Esc 收起计时、异步保存）：当时的失焦已被忽略，这里补隐藏，免得面板浮在别的应用上
+    if !open {
+        crate::panel::hide_if_unfocused(&app);
+    }
 }
 
 /// 系统设置中的辅助功能页（非 macOS 无操作）。AppKit 调用切到主线程。

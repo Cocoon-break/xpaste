@@ -393,11 +393,10 @@ mod tests {
         tauri::test::mock_builder()
             .manage(AppState::for_test())
             .invoke_handler(tauri::generate_handler![
-                // 带 AppHandle 参数的命令（含 get_record、finish_onboarding、preview_appearance）只能用于 Wry 运行时，由 lib.rs 的 generate_handler! 编译覆盖
+                // 带 AppHandle 参数的命令（含 get_record、finish_onboarding、preview_appearance、set_dialog_open）只能用于 Wry 运行时，由 lib.rs 的 generate_handler! 编译覆盖
                 bootstrap,
                 prune_preview,
                 crate::commands::panel::accessibility_granted,
-                crate::commands::panel::set_dialog_open,
                 crate::commands::records::search,
                 crate::commands::records::count_unpinned,
             ])

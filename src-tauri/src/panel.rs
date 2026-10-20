@@ -419,6 +419,14 @@ pub fn hide(app: &AppHandle) {
     });
 }
 
+/// 可见但已失焦时直接隐藏（对话框全部关闭时由 `set_dialog_open` 调用）。
+pub fn hide_if_unfocused(app: &AppHandle) {
+    let Some(w) = window(app) else { return };
+    if w.is_visible().unwrap_or(false) && !w.is_focused().unwrap_or(true) {
+        hide(app);
+    }
+}
+
 /// 待处理的隐藏请求编号，0 表示没有；`show_panel` / `hide` 时清零。
 static HIDE_REQ: AtomicU64 = AtomicU64::new(0);
 static REQ_SEQ: AtomicU64 = AtomicU64::new(1);
@@ -451,7 +459,7 @@ pub enum ToggleAction {
     /// 淡出途中重新唤起，不重记目标窗口（此时前台是面板自己）
     Reshow,
     RequestHide,
-    /// 引导中面板不隐藏，通知前端“快捷键已按下”
+    /// 引导中或设置 / 确认框打开时面板不隐藏，通知前端“快捷键已按下”
     HotkeyPressed,
     Ignore,
 }
