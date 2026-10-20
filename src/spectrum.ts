@@ -79,14 +79,15 @@ export function tickStep(span: number): [number, number] {
   return [major, minor];
 }
 
-/** 放大态刻度：t 对齐到步长整数倍，x 为百分比；major 为主刻度。贴 now（end ≥ now − 1000）时末尾追加 { x: 100, t: now, major: true, now: true } */
+/** 放大态刻度：t 按本地时间对齐到步长整数倍，x 为百分比；major 为主刻度。贴 now（end ≥ now − 1000）时末尾追加 { x: 100, t: now, major: true, now: true } */
 export function ticks(w: Win, now: number): { x: number; t: number; major: boolean; now?: boolean }[] {
   const span = spanOf(w), [major, minor] = tickStep(span);
   const out: { x: number; t: number; major: boolean; now?: boolean }[] = [];
   // 主步长都是次步长的整数倍：沿次刻度走一遍，落在主步长整数倍上的就是主刻度（不再重复出次刻度）
-  // ponytail: 按纪元对齐，2 h / 3 h 主刻度落在 UTC 的倍数上（仍是整点）；要按本地时区对齐再加时区偏移
-  for (let t = Math.ceil(w.start / minor) * minor; t <= w.end; t += minor)
-    out.push({ x: ((t - w.start) * 100) / span, t, major: t % major === 0 });
+  // 按本地时间对齐（+5:30 等时区整点不是 UTC 整点）；ponytail: 偏移只取窗口起点的，窗内跨夏令时切换时后半段刻度差一个偏移量
+  const off = new Date(w.start).getTimezoneOffset() * 60e3;
+  for (let t = Math.ceil((w.start - off) / minor) * minor + off; t <= w.end; t += minor)
+    out.push({ x: ((t - w.start) * 100) / span, t, major: (t - off) % major === 0 });
   if (w.end >= now - 1000) out.push({ x: 100, t: now, major: true, now: true });
   return out;
 }

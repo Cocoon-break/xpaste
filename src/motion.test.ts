@@ -72,7 +72,7 @@ test('M20-4 预览切换 180ms enter，下方 4px + 轻微模糊浮入；按住�
 
 test('M20-5 频谱光束 360ms move', () => {
   assert.match(rule('.sp-beam'), /transition: transform 360ms var\(--ease-move\), opacity 300ms ease/);
-  assert.match(ts, /spCursor\.style\.transitionDuration = animate && !reduced\.matches \? '' : '0ms';/);
+  assert.match(ts, /spBeam\.style\.transitionDuration = animate && !reduced\.matches \? '' : '0ms';/);
 });
 
 test('M20-6 切换分类 380ms enter，指示条换色，列表逐行浮现；键盘 0ms', () => {

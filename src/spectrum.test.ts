@@ -125,6 +125,11 @@ test('ticks 对齐整分钟，贴 now 时追加“现在”', () => {
   assert.deepEqual(ts[ts.length - 1], { x: 100, t: start + HOUR, major: true, now: true });
   assert.ok(!ticks({ ...w, end: start + HOUR, pinned: false }, start + HOUR + 5000).some((t) => t.now));
 });
+test('ticks 按本地时间对齐：6 小时窗 09:30–15:30 主刻度落在本地 10:00…15:00', () => {
+  const start = new Date(2026, 9, 20, 9, 30).getTime(), w = { start, end: start + 6 * HOUR, pinned: false };
+  const majors = ticks(w, w.end + HOUR).filter((t) => t.major);
+  assert.deepEqual(majors.map((t) => [new Date(t.t).getHours(), new Date(t.t).getMinutes()]), [10, 11, 12, 13, 14, 15].map((h) => [h, 0]));
+});
 test('miniWin 与 winLabel', () => {
   assert.deepEqual(miniWin({ start: now2 - 6 * HOUR, end: now2, pinned: true }, now2), { left: 75, width: 25 });
   assert.equal(miniWin({ start: now2 - MIN_SPAN, end: now2, pinned: true }, now2).width, 0.6);

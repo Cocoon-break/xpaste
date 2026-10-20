@@ -303,8 +303,8 @@ kbd {
   background: color-mix(in srgb, var(--fg) 22%, transparent); border: 1px solid color-mix(in srgb, var(--fg) 55%, transparent);
   transition: left 360ms var(--ease-move), width 360ms var(--ease-move);
 }
-/* 手势期间光束与窗框即时跟手；.smooth 只在预设 / 复位 / 概览条点击等程序触发时短暂加上 */
-#spectrum:not(.smooth) .sp-beam { transition-duration: 0ms, 300ms; }
+/* 手势期间窗框即时跟手；.smooth 只在预设 / 复位 / 概览条点击等程序触发时短暂加上。
+   光束不看 .smooth：paintSpectrumSel 用内联时长区分（手势、键盘 0ms；鼠标选中与 .smooth 换窗 360ms） */
 #spectrum:not(.smooth) .sp-mini .win { transition-duration: 0ms; }
 .sp-tip {
   position: absolute; z-index: 4; bottom: calc(100% + 2px); left: 0; pointer-events: none;
