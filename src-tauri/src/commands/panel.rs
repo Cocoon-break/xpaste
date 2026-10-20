@@ -1,13 +1,28 @@
-use tauri::AppHandle;
+use std::sync::atomic::Ordering;
+
+use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::error::AppError;
+use crate::state::AppState;
 
 /// `animate`：前端没有开减少动态效果；macOS 系统材质下据此决定是否原生淡出整个窗口。
 #[tauri::command(async)]
 pub fn hide_panel(app: AppHandle, animate: bool) -> Result<(), AppError> {
     crate::panel::hide_animated(&app, animate);
     Ok(())
+}
+
+/// 前端在对话框打开 / 全部关闭时同步；只写原子变量，同步命令即可。
+#[tauri::command]
+pub fn set_dialog_open(app: AppHandle, open: bool) {
+    app.state::<AppState>()
+        .dialog_open
+        .store(open, Ordering::SeqCst);
+    // 对话框在用户切走之后才关（Esc 收起计时、异步保存）：当时的失焦已被忽略，这里补隐藏，免得面板浮在别的应用上
+    if !open {
+        crate::panel::hide_if_unfocused(&app);
+    }
 }
 
 /// 请求系统辅助功能授权对话框并打开系统设置的辅助功能页（已授权或非 macOS 无操作）。AppKit 调用切到主线程。

@@ -1,9 +1,11 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { Appearance, Bootstrap, CopyResult, RecordDetail, Settings } from './types';
+import type { Bootstrap, CopyResult, RecordDetail, Settings } from './types';
 
 export const bootstrap = () => invoke<Bootstrap>('bootstrap');
 /** `animate`：没有开减少动态效果；macOS 系统材质下后端据此原生淡出整个窗口。 */
 export const hidePanel = (animate: boolean) => invoke<void>('hide_panel', { animate });
+/** 有对话框打开时后端不因失焦或快捷键隐藏面板。 */
+export const setDialogOpen = (open: boolean) => invoke<void>('set_dialog_open', { open });
 export const copy = (id: number, paste: boolean) => invoke<CopyResult>('copy', { id, paste });
 export const requestAccessibility = () => invoke<void>('request_accessibility');
 export const accessibilityGranted = () => invoke<boolean>('accessibility_granted');
@@ -20,7 +22,6 @@ export const countUnpinned = () => invoke<number>('count_unpinned');
 export const prunePreview = (retentionDays: number | null, maxRecords: number) =>
   invoke<number>('prune_preview', { retentionDays, maxRecords });
 export const saveSettings = (settings: Settings) => invoke<void>('save_settings', { settings });
-export const previewAppearance = (appearance: Appearance) => invoke<void>('preview_appearance', { appearance });
 export const setPaused = (on: boolean) => invoke<void>('set_paused', { on });
 export const finishOnboarding = () => invoke<void>('finish_onboarding');
 export const installedApps = () => invoke<string[]>('installed_apps');

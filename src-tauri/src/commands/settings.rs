@@ -2,7 +2,7 @@ use std::sync::atomic::Ordering;
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
-use xpaste_core::{Appearance, RecordSummary, Settings};
+use xpaste_core::{RecordSummary, Settings};
 
 use crate::clock::now_ms;
 use crate::error::AppError;
@@ -97,6 +97,10 @@ pub fn changed_fields(old: &Settings, new: &Settings) -> Vec<&'static str> {
         ("appearance", old.appearance != new.appearance),
         ("panelSize", old.panel_size != new.panel_size),
         ("lastFilter", old.last_filter != new.last_filter),
+        (
+            "spectrumCollapsed",
+            old.spectrum_collapsed != new.spectrum_collapsed,
+        ),
     ]
     .into_iter()
     .filter_map(|(name, changed)| changed.then_some(name))
@@ -205,14 +209,6 @@ pub fn save_settings(
     Ok(())
 }
 
-/// 设置页预览外观：窗口主题随预览切换（WKWebView 的 prefers-color-scheme 跟随窗口主题），不持久化。
-/// 同步命令（例外）：在主线程按 IPC 顺序执行，前端 await 返回后窗口主题的切换已排在前面，连点时也不乱序。
-#[tauri::command]
-pub fn preview_appearance(app: AppHandle, appearance: Appearance) -> Result<(), AppError> {
-    crate::panel::apply_theme(&app, appearance);
-    Ok(())
-}
-
 /// 按给定规则会清理掉的非置顶记录数（设置页确认用）。
 #[tauri::command(async)]
 pub fn prune_preview(
@@ -225,9 +221,14 @@ pub fn prune_preview(
         .prune_preview(retention_days, max_records, now_ms())?)
 }
 
-/// 命令与托盘菜单共用：写暂停标志、更新托盘、通知前端。
+/// 命令与托盘菜单共用：写暂停标志、记入 kv（跨重启）、更新托盘、通知前端。
 pub fn set_paused_inner(app: &AppHandle, on: bool) {
-    app.state::<AppState>().paused.store(on, Ordering::SeqCst);
+    let state = app.state::<AppState>();
+    state.paused.store(on, Ordering::SeqCst);
+    // 临时 guard 在语句末释放，托盘与事件不在锁内
+    if let Err(e) = state.store().kv_set("paused", if on { "1" } else { "0" }) {
+        log::warn!("记录暂停状态失败：{e}");
+    }
     crate::tray::set_paused(app, on);
     emit(app, PAUSED_CHANGED, on);
 }
@@ -330,11 +331,12 @@ mod tests {
             hotkey: "Alt+Space".into(),
             appearance: xpaste_core::Appearance::Dark,
             panel_size: (1000.0, 700.0),
+            spectrum_collapsed: true,
             ..Settings::default()
         };
         assert_eq!(
             changed_fields(&old, &new),
-            ["hotkey", "appearance", "panelSize"]
+            ["hotkey", "appearance", "panelSize", "spectrumCollapsed"]
         );
     }
 
@@ -393,7 +395,7 @@ mod tests {
         tauri::test::mock_builder()
             .manage(AppState::for_test())
             .invoke_handler(tauri::generate_handler![
-                // 带 AppHandle 参数的命令（含 get_record、finish_onboarding、preview_appearance）只能用于 Wry 运行时，由 lib.rs 的 generate_handler! 编译覆盖
+                // 带 AppHandle 参数的命令（含 get_record、finish_onboarding、set_dialog_open）只能用于 Wry 运行时，由 lib.rs 的 generate_handler! 编译覆盖
                 bootstrap,
                 prune_preview,
                 crate::commands::panel::accessibility_granted,

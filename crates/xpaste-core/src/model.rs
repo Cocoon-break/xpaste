@@ -62,6 +62,8 @@ pub struct Settings {
     /// 逻辑像素
     pub panel_size: (f64, f64),
     pub last_filter: String,
+    /// 复制频谱收起（只剩标题行）
+    pub spectrum_collapsed: bool,
 }
 
 impl Default for Settings {
@@ -84,6 +86,7 @@ impl Default for Settings {
             appearance: Appearance::System,
             panel_size: (960.0, 640.0),
             last_filter: "all".into(),
+            spectrum_collapsed: false,
         }
     }
 }
@@ -391,6 +394,7 @@ mod tests {
         assert_eq!(s.appearance, Appearance::System);
         assert_eq!(s.panel_size, (960.0, 640.0));
         assert_eq!(s.last_filter, "all");
+        assert!(!s.spectrum_collapsed);
         #[cfg(target_os = "macos")]
         assert_eq!(s.ignored_apps, vec!["1Password", "钥匙串访问"]);
         #[cfg(windows)]
