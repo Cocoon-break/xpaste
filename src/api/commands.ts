@@ -14,6 +14,8 @@ export const hidePanel = (animate: boolean) => invoke<void>('hide_panel', { anim
 /** 有对话框打开时后端不因失焦或快捷键隐藏面板。 */
 export const setDialogOpen = (open: boolean) => invoke<void>('set_dialog_open', { open });
 export const copy = (id: number, paste: boolean) => invoke<CopyResult>('copy', { id, paste });
+/** 只写纯文本，标记为自身写入，不产生新记录。 */
+export const copyTextPlain = (text: string) => invoke<void>('copy_text_plain', { text });
 export const requestAccessibility = () => invoke<void>('request_accessibility');
 export const accessibilityGranted = () => invoke<boolean>('accessibility_granted');
 export const openUrl = (url: string) => invoke<void>('open_url', { url });

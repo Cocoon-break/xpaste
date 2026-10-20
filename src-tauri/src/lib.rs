@@ -181,6 +181,7 @@ pub fn run() {
             commands::records::clear_history,
             commands::records::count_unpinned,
             commands::records::copy,
+            commands::records::copy_text_plain,
             commands::records::reocr,
             commands::records::ocr_progress
         ])

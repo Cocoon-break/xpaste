@@ -235,3 +235,10 @@ test('原则 4 只动 transform / opacity / filter 与颜色类属性（白名�
   assert.ok(waapiKeys.length > 10);
   assert.deepEqual([...new Set(waapiKeys)].filter((k) => !['transform', 'opacity', 'filter', 'strokeDashoffset'].includes(k)), []);
 });
+
+test('阶段 10 图中文字：区块、角标、片段、识别设置不加过渡或动画；details 开合无动效', () => {
+  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(([, sel]) => /ocr-|\.snip\b/.test(sel));
+  assert.ok(rules.length >= 8, `只找到 ${rules.length} 条图中文字规则`);
+  assert.deepEqual(rules.filter(([, , body]) => /\b(transition|animation)\b/.test(body)).map(([, sel]) => sel.trim()), []);
+  assert.doesNotMatch(css, /details|summary::|::-webkit-details/);
+});

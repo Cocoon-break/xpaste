@@ -449,6 +449,7 @@ mod tests {
                 crate::commands::records::search,
                 crate::commands::records::count_unpinned,
                 crate::commands::records::ocr_progress,
+                crate::commands::records::copy_text_plain,
             ])
             .build(tauri::test::mock_context(tauri::test::noop_assets()))
             .expect("app should build");
