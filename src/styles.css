@@ -164,9 +164,9 @@ kbd {
   transform-origin: 50% 12%;
 }
 :root[data-material="opaque"] .window { background: var(--ink); }
-.window::before { /* 顶边的光谱细线：铺满窗内、随圆角裁切，线画在边框内侧顶端，左右各内缩 24px */
+.window::before { /* 顶边的光谱细线：铺满窗内画在边框内侧顶端，两端随圆角收束 */
   content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
-  background: var(--spectrum) 50% 0 / calc(100% - 48px) 1px no-repeat; opacity: .7;
+  background: var(--spectrum) 50% 0 / 100% 1px no-repeat; opacity: .7;
 }
 /* 显隐由 Tauri 负责。前端发起的隐藏先把 data-shown 置 false 播 160ms 淡出再隐藏窗口
    （macOS 系统材质下见下面 data-native-fade：内容只位移，透明度由窗口 alpha 承担）；唤起时 shown() 按来源设 data-instant：
@@ -209,9 +209,9 @@ kbd {
   background: var(--well); border: 1px solid var(--line-2); border-radius: 12px; color: var(--muted);
   transition: border-color 200ms ease, background-color 200ms ease, color 200ms ease;
 }
-.search::after { /* 聚焦时从中间展开的光谱下划线：铺满框内、随圆角裁切，线贴边框内侧底边，左右各内缩 12px */
+.search::after { /* 聚焦时从中间展开的光谱下划线：铺满框内贴边框内侧底边，两端随圆角收束 */
   content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
-  background: var(--spectrum) 50% 100% / calc(100% - 24px) 2px no-repeat; transform: scaleX(0); opacity: 0;
+  background: var(--spectrum) 50% 100% / 100% 2px no-repeat; transform: scaleX(0); opacity: 0;
   transition: transform 420ms var(--ease-enter), opacity 200ms ease;
 }
 .search:focus-within { border-color: color-mix(in srgb, var(--beam) 40%, transparent); background: var(--well-2); color: var(--beam); }
