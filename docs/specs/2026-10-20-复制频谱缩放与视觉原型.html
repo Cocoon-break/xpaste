@@ -1,0 +1,483 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>复制频谱：缩放与视觉方案原型</title>
+<style>
+:root {
+  --bg: #0B0E1A; --fg: #EAF0FF; --muted: #9AA4CB; --faint: #646E94;
+  --line: rgb(170 190 255 / .09); --line-2: rgb(170 190 255 / .16);
+  --well: rgb(0 0 0 / .22); --pop: #161B30; --card: rgb(255 255 255 / .03);
+  --c-text: #8FE3FF; --c-link: #6F8BFF; --c-code: #4FE3C1; --c-accent: #FF6FD8;
+  --c-image: #FFB84D; --c-video: #FF6B6B; --c-file: #B48CFF;
+  --spectrum: linear-gradient(90deg, var(--c-text), var(--c-link) 28%, var(--c-code) 44%, var(--c-accent) 58%, var(--c-image) 72%, var(--c-video) 86%, var(--c-file));
+  --ease-move: cubic-bezier(.25, 1, .5, 1); --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
+  --font-ui: "Geist", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+  color-scheme: dark;
+}
+:root[data-theme="light"] {
+  --bg: #EEF1FA; --fg: #111632; --muted: #545C7C; --faint: #7A83A1;
+  --line: rgb(30 45 110 / .09); --line-2: rgb(30 45 110 / .18);
+  --well: rgb(20 30 80 / .05); --pop: #FFFFFF; --card: rgb(255 255 255 / .6);
+  --c-text: #0891B2; --c-link: #3B5BDB; --c-code: #0D9488; --c-accent: #C026D3;
+  --c-image: #D97706; --c-video: #E03131; --c-file: #7C3AED;
+  color-scheme: light;
+}
+[data-type="text"]  { --tc: var(--c-text); }
+[data-type="link"]  { --tc: var(--c-link); }
+[data-type="code"]  { --tc: var(--c-code); }
+[data-type="image"] { --tc: var(--c-image); }
+[data-type="video"] { --tc: var(--c-video); }
+[data-type="file"]  { --tc: var(--c-file); }
+
+* { box-sizing: border-box; }
+body { margin: 0; padding: 28px 16px 80px; background: var(--bg); color: var(--fg); font: 14px/1.5 var(--font-ui); }
+main { max-width: 960px; margin: 0 auto; }
+h1 { font-size: 20px; font-weight: 600; margin: 0 0 6px; }
+.lead { color: var(--muted); margin: 0 0 18px; max-width: 70ch; }
+.lead kbd { font: 12px var(--font-mono); padding: 1px 6px; border: 1px solid var(--line-2); border-radius: 5px; color: var(--fg); }
+.topbar { display: flex; gap: 10px; align-items: center; margin-bottom: 22px; flex-wrap: wrap; }
+.btn { font: inherit; font-size: 12.5px; color: var(--fg); background: var(--card); border: 1px solid var(--line-2); border-radius: 8px; padding: 5px 11px; cursor: pointer; }
+.btn:hover { border-color: var(--muted); }
+.btn.on { background: color-mix(in srgb, var(--c-link) 22%, transparent); border-color: var(--c-link); }
+
+.card { border: 1px solid var(--line); border-radius: 16px; background: var(--card); padding: 18px 18px 14px; margin-bottom: 26px; }
+.card h2 { font-size: 15px; font-weight: 600; margin: 0 0 4px; display: flex; gap: 10px; align-items: baseline; }
+.card h2 .tag { font: 11px var(--font-mono); color: var(--faint); border: 1px solid var(--line-2); border-radius: 999px; padding: 1px 8px; }
+.card p.desc { margin: 0 0 14px; color: var(--muted); font-size: 13px; max-width: 80ch; }
+.card p.desc b { color: var(--fg); font-weight: 500; }
+
+/* —— 频谱（与应用同尺寸：46px 轨道） —— */
+.spectrum { padding: 10px 12px 6px; border-radius: 12px; background: var(--well); border: 1px solid var(--line); position: relative; }
+.sp-head { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.sp-head b { color: var(--fg); font-weight: 500; }
+.sp-head .stat { margin-left: auto; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.presets { display: flex; gap: 4px; }
+.presets button { font: 11px var(--font-mono); color: var(--faint); background: none; border: 1px solid transparent; border-radius: 6px; padding: 1px 7px; cursor: pointer; }
+.presets button:hover { color: var(--fg); }
+.presets button.on { color: var(--fg); border-color: var(--line-2); background: var(--card); }
+.sp-track {
+  position: relative; height: 46px; cursor: crosshair; touch-action: none; user-select: none;
+  background: repeating-linear-gradient(0deg, var(--line) 0 1px, transparent 1px 11.5px);
+}
+.sp-track.has-early { background:
+  linear-gradient(90deg, transparent calc(6% - 1px), var(--line-2) calc(6% - 1px) 6%, transparent 6%),
+  repeating-linear-gradient(0deg, var(--line) 0 1px, transparent 1px 11.5px); }
+.sp-track.panning { cursor: grabbing; }
+.layer { position: absolute; inset: 0; }
+.bar {
+  position: absolute; bottom: 0; width: 3px; margin-left: -1.5px; border-radius: 2px 2px 0 0;
+  background: linear-gradient(to top, color-mix(in srgb, var(--tc) 35%, transparent), var(--tc));
+  box-shadow: 0 0 8px -1px var(--tc); cursor: pointer; transform-origin: 50% 100%;
+  transition: filter 160ms ease, box-shadow 200ms ease, opacity 200ms ease;
+}
+.bar::before { content: ""; position: absolute; inset: -6px -5px 0; }
+.bar.on { box-shadow: 0 0 14px 2px var(--tc); filter: brightness(1.25) saturate(1.2); }
+.bar.multi { width: 4px; margin-left: -2px; }
+.bar.multi::after { content: ""; position: absolute; top: -3px; left: 50%; width: 3px; height: 3px; margin-left: -1.5px; border-radius: 50%; background: var(--fg); opacity: .7; }
+.smooth .bar, .smooth .star { transition: left 360ms var(--ease-move), height 360ms var(--ease-move), top 360ms var(--ease-move), filter 160ms ease, box-shadow 200ms ease, opacity 200ms ease; }
+.sp-cursor { position: absolute; top: -4px; bottom: 0; left: 0; width: 1px; pointer-events: none; background: linear-gradient(to bottom, var(--fg), transparent); transition: left 360ms var(--ease-move), opacity 200ms ease; }
+.sp-cursor::before { content: ""; position: absolute; top: -3px; left: -3px; width: 7px; height: 7px; background: var(--fg); transform: rotate(45deg); border-radius: 1px; }
+.sp-cursor.hidden { opacity: 0; }
+.sp-now { position: absolute; right: -3px; bottom: -3px; width: 6px; height: 6px; border-radius: 50%; background: var(--c-code); pointer-events: none; }
+.sp-now::after { content: ""; position: absolute; inset: 0; border-radius: 50%; border: 1px solid var(--c-code); animation: nowPulse 2.4s ease-out infinite; }
+@keyframes nowPulse { from { transform: scale(1); opacity: .9; } to { transform: scale(4); opacity: 0; } }
+.sp-axis { position: relative; height: 18px; font: 10.5px var(--font-mono); color: var(--faint); font-variant-numeric: tabular-nums; }
+.sp-axis span { position: absolute; top: 4px; transform: translateX(-50%); white-space: nowrap; transition: left 360ms var(--ease-move); }
+.sp-axis span.early { transform: translateX(-30%); }
+.sp-axis span.now { transform: translateX(-100%); color: var(--c-code); }
+.sp-axis span.minor { top: 1px; height: 4px; width: 1px; background: var(--line-2); }
+.sp-tip {
+  position: absolute; z-index: 4; bottom: calc(100% + 2px); left: 0; pointer-events: none; padding: 6px 10px; border-radius: 8px; font-size: 12px; white-space: nowrap; max-width: 300px; overflow: hidden; text-overflow: ellipsis;
+  background: var(--pop); border: 1px solid var(--line-2); box-shadow: 0 10px 30px -10px rgb(0 0 0 / .6); opacity: 0; transform: translateY(4px); transition: opacity 120ms ease-out, transform 120ms ease-out;
+}
+.sp-tip.show { opacity: 1; transform: none; transition-duration: 0ms; }
+.sp-tip i { display: inline-block; width: 7px; height: 7px; border-radius: 2px; background: var(--tc); margin-right: 6px; box-shadow: 0 0 6px var(--tc); }
+.sp-tip span { color: var(--faint); margin-left: 6px; }
+
+/* 概览条：放大后出现，标出当前时间窗 */
+.sp-mini { position: relative; height: 8px; margin: 2px 0 0; border-radius: 4px; background: var(--line); overflow: hidden; opacity: 0; transition: opacity 200ms ease; cursor: pointer; }
+.sp-mini.show { opacity: 1; }
+.sp-mini .band { position: absolute; inset: 0; background: var(--spectrum); opacity: .35; }
+.sp-mini .win { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--fg) 22%, transparent); border: 1px solid color-mix(in srgb, var(--fg) 55%, transparent); border-radius: 4px; transition: left 360ms var(--ease-move), width 360ms var(--ease-move); }
+.sp-mini .dot { position: absolute; bottom: 1px; width: 1px; height: 6px; background: var(--fg); opacity: .4; }
+
+/* 选中说明：代表“列表跳到这条记录” */
+.sel-line { margin: 10px 0 0; font-size: 12.5px; color: var(--muted); display: flex; gap: 10px; align-items: center; min-height: 20px; }
+.sel-line .chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line-2); color: var(--fg); }
+.sel-line .chip i { width: 8px; height: 8px; border-radius: 2px; background: var(--tc); box-shadow: 0 0 6px var(--tc); }
+
+/* —— B 霓光镜面 —— */
+.neon .sp-track { background: repeating-linear-gradient(0deg, var(--line) 0 1px, transparent 1px 11.5px), radial-gradient(60% 120% at 50% 100%, color-mix(in srgb, var(--c-link) 10%, transparent), transparent 70%); }
+.neon .bar { box-shadow: 0 0 10px 0 var(--tc), 0 0 24px -4px var(--tc); background: linear-gradient(to top, color-mix(in srgb, var(--tc) 55%, transparent), var(--tc) 70%, #fff 100%); }
+.neon .mirror { top: 100%; height: 22px; transform: scaleY(-1); transform-origin: top; pointer-events: none; mask-image: linear-gradient(to top, rgb(0 0 0 / .55), transparent 90%); -webkit-mask-image: linear-gradient(to top, rgb(0 0 0 / .55), transparent 90%); opacity: .9; }
+.neon .mirror .bar { height: 100% !important; box-shadow: none; filter: blur(.4px); background: linear-gradient(to top, color-mix(in srgb, var(--tc) 60%, transparent), transparent); }
+.neon .spectrum { padding-bottom: 28px; }
+.neon .sp-axis { margin-top: 22px; }
+.neon .beam { position: absolute; top: -10px; bottom: -22px; width: 1px; left: 0; pointer-events: none; opacity: 0; background: linear-gradient(to bottom, transparent, var(--tc) 30%, var(--tc) 70%, transparent); box-shadow: 0 0 18px 3px var(--tc); transition: left 360ms var(--ease-move), opacity 300ms ease; }
+.neon .beam.show { opacity: .9; }
+.neon .sp-cursor { display: none; }
+
+/* —— C 密度热带 —— */
+.ribbon canvas.density { position: absolute; left: 0; right: 0; bottom: 0; width: 100%; height: 100%; pointer-events: none; }
+.ribbon .bar { opacity: .95; }
+
+/* —— D 星河 —— */
+.stars .sp-track { background: radial-gradient(80% 100% at 50% 100%, color-mix(in srgb, var(--c-file) 8%, transparent), transparent 70%); }
+.stars .star { position: absolute; border-radius: 50%; background: var(--tc); box-shadow: 0 0 6px 1px var(--tc); transform: translate(-50%, -50%); cursor: pointer; transition: filter 160ms ease, box-shadow 200ms ease, opacity 200ms ease; }
+.stars .star::before { content: ""; position: absolute; inset: -6px; }
+.stars .star.on { box-shadow: 0 0 0 3px color-mix(in srgb, var(--tc) 35%, transparent), 0 0 16px 4px var(--tc); filter: brightness(1.3); }
+.stars .nebula { filter: blur(7px); opacity: .55; pointer-events: none; }
+.stars .nebula .star { box-shadow: none; transform: translate(-50%, -50%) scale(2.2); }
+.stars .sp-cursor { background: linear-gradient(to bottom, var(--fg), transparent 85%); }
+
+/* —— E 鱼眼 —— */
+.lens .sp-track { cursor: ew-resize; }
+.lens .glass { position: absolute; top: -6px; bottom: -6px; width: 0; left: 0; pointer-events: none; opacity: 0; border-radius: 10px; border: 1px solid var(--line-2); background: color-mix(in srgb, var(--fg) 3%, transparent); backdrop-filter: brightness(1.15); transition: opacity 160ms ease; }
+.lens .glass.show { opacity: 1; }
+
+.footer { color: var(--faint); font-size: 12.5px; margin-top: 30px; max-width: 80ch; }
+@media (prefers-reduced-motion: reduce) { .smooth .bar, .sp-cursor, .sp-axis span, .sp-mini .win { transition: none !important; } .sp-now::after { animation: none; } }
+</style>
+</head>
+<body>
+<main>
+<h1>复制频谱：缩放与视觉方案</h1>
+<p class="lead">五个方案用同一份模拟数据（7 天、183 次复制，其中 62 次挤在约 2 小时 40 分前的 18 分钟里）。每个频谱都能缩放：在轨道上<b>滚轮</b>或<b>触控板双指捏合</b>围绕指针放大 / 缩小，放大后<b>横向滚动</b>或<b>按住拖动</b>平移，<b>双击</b>回到 24 小时；右上角的 <kbd>24h</kbd> <kbd>6h</kbd> <kbd>1h</kbd> <kbd>10m</kbd> 直接跳到预设时间窗。点一根光柱即“选中并让列表跳到这条记录”，下方一行会显示选中的是哪条。A 是现状加缩放，B–E 是在它之上的四种视觉方向。</p>
+<div class="topbar">
+  <button class="btn" id="themeBtn">切换亮色 / 暗色</button>
+  <button class="btn" id="burstBtn">模拟一次新复制</button>
+  <span style="color:var(--faint);font-size:12.5px">面板按正式宽度 960 px 排版，轨道高度与应用一致（46 px）</span>
+</div>
+
+<section class="card base" data-variant="base">
+  <h2>A · 现状 + 缩放 <span class="tag">基线</span></h2>
+  <p class="desc">只加交互，视觉不变：放大后光柱按新时间窗重排，刻度按窗口大小自动切到小时 / 10 分钟 / 分钟；轨道下方出现一条细细的<b>概览条</b>，标出当前看的是 24 小时中的哪一段，点概览条可以把窗口挪过去。几根挤在同一列的光柱在未放大时合并成一根稍粗、顶上带点的光柱，放大后自然分开。</p>
+</section>
+
+<section class="card neon" data-variant="neon">
+  <h2>B · 霓光镜面 <span class="tag">光效</span></h2>
+  <p class="desc">光柱顶端发白、光晕更大，轨道下方有一层<b>倒影</b>，像霓虹灯管映在玻璃桌面上；选中一条时整列亮起一道<b>光束</b>贯穿轨道和倒影，游标不再是细线。整体最“舞台感”，代价是视觉重量最大，浅色主题下光效会弱一些。</p>
+</section>
+
+<section class="card ribbon" data-variant="ribbon">
+  <h2>C · 密度热带 <span class="tag">信息</span></h2>
+  <p class="desc">光柱底下铺一条<b>密度带</b>：某段时间复制越密，那一段越亮越厚，颜色取这段里最多的类型。缩小时你一眼看出“下午三点那团”在哪里，放大后密度摊平、光柱分开，密度带退成淡淡的底色。它是五个里唯一在不放大时就多给一层信息的方案。</p>
+</section>
+
+<section class="card stars" data-variant="stars">
+  <h2>D · 星河 <span class="tag">换隐喻</span></h2>
+  <p class="desc">每次复制是一颗<b>星</b>而不是光柱：横坐标是时间，纵坐标和大小由内容大小决定，密集处叠成一团<b>星云</b>。换掉了“频谱 = 柱子”的隐喻，更安静也更特别；缺点是单颗星比光柱难点中，放大之后才好选，和缩放功能是互补的。</p>
+</section>
+
+<section class="card lens" data-variant="lens">
+  <h2>E · 鱼眼放大镜 <span class="tag">交互</span></h2>
+  <p class="desc">保留缩放之外，再加一层<b>随鼠标走的局部放大</b>：指针附近的时间被拉开、远处压缩，像 macOS 程序坞的放大效果。不用先缩放就能在密集处挑一条；移开鼠标恢复。适合“顺手一探”，但光柱会随鼠标漂移，对运动敏感的人可能觉得晃。</p>
+</section>
+
+<p class="footer">数据是随机生成的，刷新页面会变。这个文件只在本机打开，不发布。选定方向后我再写设计与实现计划；也可以组合，比如 A 的概览条 + C 的密度带 + B 的选中光束。</p>
+</main>
+
+<script>
+// ===== 模拟数据 =====
+const DAY = 864e5, HOUR = 36e5, MIN = 6e4;
+const KINDS = ['text', 'link', 'code', 'image', 'video', 'file'];
+const TITLES = { text: ['会议纪要 10/20', '季度预算说明', 'npm ERR! code ERESOLVE', '张三 138-xxxx-1234', '关于 Q4 的几点想法'], link: ['https://github.com/xpaste/xpaste', 'https://developer.apple.com/vision', 'https://sqlite.org/fts5.html'], code: ['fn search_sql(q: &str)', 'SELECT id FROM records…', 'const gate = searchGate(…)'], image: ['截图 2026-10-20 14.11.png', '截图 2026-10-20 15.02.png', 'budget-chart.png'], video: ['demo-cut.mp4', 'screen-rec.mov'], file: ['报告.pdf 等 3 个', 'xpaste-0.1.0.dmg', '会议纪要.md'] };
+let seed = 20261020;
+const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32;
+const pick = (a) => a[Math.floor(rnd() * a.length)];
+const NOW = Date.now();
+function genRecords() {
+  const recs = []; let id = 1;
+  const add = (t, kind) => { const k = kind || pick(KINDS); const size = Math.round(10 ** (1 + rnd() * (k === 'image' || k === 'video' || k === 'file' ? 6.5 : 4.5))); recs.push({ id: id++, copiedAt: Math.round(t), kind: k, size, title: pick(TITLES[k]) }); };
+  for (let i = 0; i < 70; i++) add(NOW - rnd() * DAY);                      // 24 小时内散布
+  for (let i = 0; i < 62; i++) add(NOW - 2.67 * HOUR + (rnd() - .5) * 18 * MIN); // 密集团
+  for (let i = 0; i < 12; i++) add(NOW - (8 + rnd() * 4) * MIN);              // 刚刚一小段
+  for (let i = 0; i < 39; i++) add(NOW - DAY - rnd() * 6 * DAY);              // 更早
+  return recs.sort((a, b) => a.copiedAt - b.copiedAt);
+}
+let RECORDS = genRecords();
+
+// ===== 共用计算 =====
+const COL_PX = 2;
+const hPct = (size) => 16 + Math.min(1, Math.log10(Math.max(10, size)) / 8) * 84;
+const hf = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+const df = new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+const fmtBytes = (n) => n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
+const fmtRel = (t) => { const d = NOW - t; return d < HOUR ? Math.round(d / MIN) + ' 分钟前' : d < DAY ? Math.round(d / HOUR) + ' 小时前' : Math.round(d / DAY) + ' 天前'; };
+// 刻度步长：窗口越小步长越细；返回 [主刻度 ms, 次刻度 ms]
+function tickStep(span) {
+  const steps = [[MIN, 15e3], [2 * MIN, 30e3], [5 * MIN, MIN], [10 * MIN, 2 * MIN], [15 * MIN, 5 * MIN], [30 * MIN, 10 * MIN], [HOUR, 15 * MIN], [2 * HOUR, 30 * MIN], [3 * HOUR, HOUR], [6 * HOUR, HOUR]];
+  for (const s of steps) if (span / s[0] <= 8) return s;
+  return [6 * HOUR, HOUR];
+}
+
+class Spectrum {
+  constructor(card) {
+    this.card = card; this.variant = card.dataset.variant;
+    this.win = null;            // null = 默认 24 小时 + 更早；否则 {start,end}
+    this.sel = null; this.lensX = null; this.panning = null;
+    card.insertAdjacentHTML('beforeend', `
+      <div class="spectrum">
+        <div class="sp-head"><span><b>复制频谱</b> · <span class="range">过去 24 小时</span></span>
+          <span class="presets">${[['24h', 0], ['6h', 6 * HOUR], ['1h', HOUR], ['10m', 10 * MIN]].map(([l, v]) => `<button data-span="${v}">${l}</button>`).join('')}</span>
+          <span class="stat"></span></div>
+        <div class="sp-track has-early">
+          <canvas class="density layer" hidden></canvas>
+          <div class="layer nebula" hidden></div>
+          <div class="layer bars"></div>
+          <div class="layer mirror" hidden></div>
+          <div class="beam"></div>
+          <div class="glass"></div>
+          <div class="sp-cursor hidden"></div>
+          <span class="sp-now"></span>
+          <div class="sp-tip"></div>
+        </div>
+        <div class="sp-axis"></div>
+        <div class="sp-mini"><div class="band"></div><div class="dots"></div><div class="win"></div></div>
+      </div>
+      <div class="sel-line"><span class="hint">点一根光柱：列表跳到那条记录</span></div>`);
+    const $ = (s) => card.querySelector(s);
+    this.track = $('.sp-track'); this.bars = $('.bars'); this.mirror = $('.mirror'); this.nebula = $('.nebula');
+    this.canvas = $('.density'); this.beam = $('.beam'); this.glass = $('.glass'); this.cursor = $('.sp-cursor');
+    this.axis = $('.sp-axis'); this.tip = $('.sp-tip'); this.mini = $('.sp-mini'); this.stat = $('.stat'); this.range = $('.range'); this.selLine = $('.sel-line');
+    if (this.variant === 'neon') this.mirror.hidden = false;
+    if (this.variant === 'ribbon') this.canvas.hidden = false;
+    if (this.variant === 'stars') this.nebula.hidden = false;
+    this.bind();
+    this.render(true);
+  }
+  // ---- 时间窗 ----
+  get start() { return this.win ? this.win.start : NOW - DAY; }
+  get end() { return this.win ? this.win.end : NOW; }
+  get span() { return this.end - this.start; }
+  // 记录时间 → 轨道百分比；默认态左侧 6% 为“更早”
+  xOf(t) {
+    if (!this.win) {
+      const age = NOW - t;
+      if (age > 7 * DAY) return null;
+      if (age > DAY) return Math.max(1, 5 - ((age - DAY) / (6 * DAY)) * 4);
+      return Math.min(99.4, 6 + 94 * (1 - age / DAY));
+    }
+    const x = ((t - this.start) / this.span) * 100;
+    return x < -1 || x > 101 ? null : x;
+  }
+  tOf(px) { // 轨道像素 → 时间（默认态只在 24 小时区内有意义）
+    const w = this.track.clientWidth; const f = px / w;
+    if (!this.win) return NOW - DAY * (1 - Math.max(0, (f - .06) / .94));
+    return this.start + f * this.span;
+  }
+  setWindow(start, end, smooth) {
+    const span = Math.min(DAY, Math.max(5 * MIN, end - start));
+    let s = start, e = start + span;
+    if (e > NOW) { e = NOW; s = NOW - span; }
+    if (s < NOW - DAY) { s = NOW - DAY; e = s + span; }
+    this.win = span >= DAY ? null : { start: s, end: e };
+    this.card.classList.toggle('smooth', !!smooth);
+    this.render();
+  }
+  zoomAt(px, factor) {
+    const t = this.tOf(px);
+    const span = this.span * factor;
+    const f = this.win ? px / this.track.clientWidth : Math.max(0, (px / this.track.clientWidth - .06) / .94);
+    this.setWindow(t - span * f, t - span * f + span, false);
+  }
+  // ---- 绑定手势 ----
+  bind() {
+    const tr = this.track;
+    tr.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const px = e.clientX - tr.getBoundingClientRect().left;
+      if (e.ctrlKey || e.metaKey || Math.abs(e.deltaY) >= Math.abs(e.deltaX)) {
+        // 捏合（浏览器给 ctrlKey）或竖向滚轮：缩放
+        this.zoomAt(px, Math.exp(e.deltaY * (e.ctrlKey ? 0.01 : 0.0025)));
+      } else if (this.win) {
+        this.setWindow(this.start + e.deltaX / tr.clientWidth * this.span, this.end + e.deltaX / tr.clientWidth * this.span, false);
+      }
+    }, { passive: false });
+    // Safari 的捏合事件
+    let gScale = 1;
+    tr.addEventListener('gesturestart', (e) => { e.preventDefault(); gScale = 1; });
+    tr.addEventListener('gesturechange', (e) => { e.preventDefault(); const px = e.clientX - tr.getBoundingClientRect().left; this.zoomAt(px, gScale / e.scale); gScale = e.scale; });
+    tr.addEventListener('dblclick', () => this.setWindow(NOW - DAY, NOW, true));
+    tr.addEventListener('pointerdown', (e) => { if (!this.win || e.button !== 0) return; this.panning = { x: e.clientX, start: this.start, end: this.end, moved: false }; tr.setPointerCapture(e.pointerId); });
+    tr.addEventListener('pointermove', (e) => {
+      const px = e.clientX - tr.getBoundingClientRect().left;
+      if (this.panning) {
+        const dx = this.panning.x - e.clientX; if (Math.abs(dx) > 2) this.panning.moved = true;
+        const dt = dx / tr.clientWidth * this.span; tr.classList.add('panning');
+        this.setWindow(this.panning.start + dt, this.panning.end + dt, false); return;
+      }
+      if (this.variant === 'lens') { this.lensX = px; this.render(); }
+      const bar = e.target.closest('.bar, .star');
+      if (bar) this.showTip(bar, px); else this.tip.classList.remove('show');
+    });
+    const endPan = () => { if (this.panning) { tr.classList.remove('panning'); this.panning = null; } };
+    tr.addEventListener('pointerup', endPan); tr.addEventListener('pointercancel', endPan);
+    tr.addEventListener('pointerleave', () => { this.tip.classList.remove('show'); if (this.variant === 'lens') { this.lensX = null; this.card.classList.add('smooth'); this.render(); } });
+    tr.addEventListener('click', (e) => {
+      if (this.panning?.moved) return;
+      const el = e.target.closest('.bar, .star'); if (!el) return;
+      const ids = el.dataset.ids.split(',').map(Number);
+      // 合并列：选最新的一条；放大能分开它们
+      this.select(ids[ids.length - 1]);
+    });
+    this.mini.addEventListener('click', (e) => {
+      if (!this.win) return;
+      const f = (e.clientX - this.mini.getBoundingClientRect().left) / this.mini.clientWidth;
+      const c = NOW - DAY + f * DAY; this.setWindow(c - this.span / 2, c + this.span / 2, true);
+    });
+    this.card.querySelectorAll('.presets button').forEach((b) => b.addEventListener('click', () => {
+      const span = +b.dataset.span; if (!span) return this.setWindow(NOW - DAY, NOW, true);
+      // 以选中记录为中心，没有就贴着“现在”
+      const c = this.sel ? RECORDS.find((r) => r.id === this.sel).copiedAt : NOW - span / 2;
+      this.setWindow(c - span / 2, c + span / 2, true);
+    }));
+  }
+  showTip(el, px) {
+    const ids = el.dataset.ids.split(',').map(Number);
+    const r = RECORDS.find((x) => x.id === ids[ids.length - 1]);
+    const more = ids.length > 1 ? `<span>等 ${ids.length} 条 · 放大可分开</span>` : `<span>${fmtRel(r.copiedAt)} · ${fmtBytes(r.size)}</span>`;
+    this.tip.innerHTML = `<i data-type="${r.kind}"></i>${r.title}${more}`;
+    this.tip.classList.add('show');
+    const w = this.track.clientWidth, tw = this.tip.offsetWidth;
+    this.tip.style.left = Math.max(0, Math.min(w - tw, px - tw / 2)) + 'px';
+  }
+  select(id) {
+    this.sel = id; const r = RECORDS.find((x) => x.id === id);
+    this.selLine.innerHTML = `<span class="chip" data-type="${r.kind}"><i></i>${r.title}</span><span>${df.format(r.copiedAt)} · ${fmtBytes(r.size)} · 列表滚到这一条并选中</span>`;
+    // 选中项在窗口外：平移过去
+    if (this.win && (r.copiedAt < this.start || r.copiedAt > this.end)) this.setWindow(r.copiedAt - this.span / 2, r.copiedAt + this.span / 2, true);
+    else this.render();
+  }
+  // ---- 鱼眼：x(0..1) → x'(0..1)，指针附近拉伸、两侧压缩，总宽不变 ----
+  lensMap() {
+    if (this.variant !== 'lens' || this.lensX === null) return (x) => x;
+    const cx = this.lensX / this.track.clientWidth, N = 240, sigma = .07, A = 3.2;
+    const cum = new Float64Array(N + 1); let acc = 0;
+    for (let i = 0; i < N; i++) { const t = (i + .5) / N; acc += 1 + A * Math.exp(-(((t - cx) / sigma) ** 2)); cum[i + 1] = acc; }
+    return (x) => { const p = Math.max(0, Math.min(N - 1e-9, x * N)); const i = Math.floor(p); return (cum[i] + (cum[i + 1] - cum[i]) * (p - i)) / acc; };
+  }
+  // ---- 渲染 ----
+  render(first) {
+    const w = this.track.clientWidth || 900;
+    const cols = Math.max(1, Math.floor(w / COL_PX));
+    const map = this.lensMap();
+    const groups = new Map();
+    for (const r of RECORDS) {
+      let x = this.xOf(r.copiedAt); if (x === null) continue;
+      x = map(x / 100) * 100;
+      const col = Math.min(cols - 1, Math.max(0, Math.floor((x / 100) * cols)));
+      const g = groups.get(col);
+      if (!g) groups.set(col, { x, h: hPct(r.size), r, ids: [r.id], maxSize: r.size });
+      else { g.ids.push(r.id); if (r.size > g.maxSize) { g.maxSize = r.size; g.h = hPct(r.size); g.r = r; } g.x = (g.x + x) / 2; }
+    }
+    const bars = [...groups.values()].sort((a, b) => a.x - b.x);
+    const n = bars.length;
+    const html = bars.map((b, i) => {
+      const on = b.ids.includes(this.sel) ? ' on' : '', multi = b.ids.length > 1 ? ' multi' : '';
+      if (this.variant === 'stars') {
+        const d = 3 + Math.min(1, Math.log10(Math.max(10, b.maxSize)) / 8) * 7;
+        const y = 92 - Math.min(1, Math.log10(Math.max(10, b.maxSize)) / 8) * 78;
+        return `<span class="star${on}" data-type="${b.r.kind}" data-ids="${b.ids}" style="left:${b.x}%;top:${y}%;width:${d}px;height:${d}px;--i:${i}"></span>`;
+      }
+      return `<span class="bar${on}${multi}" data-type="${b.r.kind}" data-ids="${b.ids}" style="left:${b.x}%;height:${b.h}%;--i:${i}"></span>`;
+    }).join('');
+    this.bars.innerHTML = html;
+    if (this.variant === 'neon') this.mirror.innerHTML = html.replaceAll(' on', '').replaceAll(' multi', '');
+    if (this.variant === 'stars') this.nebula.innerHTML = html.replaceAll(' on', '');
+    if (this.variant === 'ribbon') this.drawDensity();
+    this.track.classList.toggle('has-early', !this.win);
+    // 时间窗右端不是“现在”时，右下角的脉冲点没有意义
+    this.track.querySelector('.sp-now').hidden = this.end < NOW - 1000;
+    // 游标 / 光束
+    const sr = this.sel ? RECORDS.find((r) => r.id === this.sel) : null;
+    const sx = sr ? this.xOf(sr.copiedAt) : null;
+    const cx = sx === null ? null : map(sx / 100) * 100;
+    this.cursor.classList.toggle('hidden', cx === null);
+    if (cx !== null) this.cursor.style.left = cx + '%';
+    if (this.variant === 'neon') { this.beam.classList.toggle('show', cx !== null); if (cx !== null) { this.beam.style.left = cx + '%'; this.beam.dataset.type = sr.kind; } }
+    if (this.variant === 'lens') { const show = this.lensX !== null; this.glass.classList.toggle('show', show); if (show) { const gw = 0.14 * w; this.glass.style.left = (this.lensX - gw / 2) + 'px'; this.glass.style.width = gw + 'px'; } }
+    this.renderAxis(map);
+    this.renderMini();
+    const inWin = RECORDS.filter((r) => r.copiedAt >= this.start && r.copiedAt <= this.end).length;
+    this.stat.textContent = this.win ? `窗口内 ${inWin} 次 · 24 小时内 ${RECORDS.filter((r) => NOW - r.copiedAt <= DAY).length} 次` : `24 小时内复制 ${inWin} 次`;
+    this.range.textContent = this.win ? `${hf.format(this.start)} – ${hf.format(this.end)}（${this.span >= HOUR ? (this.span / HOUR).toFixed(this.span % HOUR ? 1 : 0) + ' 小时' : Math.round(this.span / MIN) + ' 分钟'}）` : '过去 24 小时，每根光柱是一次复制，越高内容越大';
+    this.card.querySelectorAll('.presets button').forEach((b) => b.classList.toggle('on', (+b.dataset.span || DAY) === Math.round(this.span / MIN) * MIN || (!this.win && !+b.dataset.span)));
+    if (first) this.card.classList.add('smooth');
+  }
+  renderAxis(map) {
+    const out = [];
+    if (!this.win) {
+      out.push(`<span class="early" style="left:3%">更早</span>`);
+      for (const h of [18, 12, 6]) out.push(`<span style="left:${6 + 94 * (1 - h / 24)}%">${hf.format(NOW - h * HOUR)}</span>`);
+      out.push(`<span class="now" style="left:100%">现在</span>`);
+    } else {
+      const [major, minor] = tickStep(this.span);
+      const first = Math.ceil(this.start / minor) * minor;
+      for (let t = first; t <= this.end; t += minor) {
+        const x = map((t - this.start) / this.span) * 100;
+        const isMajor = Math.abs(t / major - Math.round(t / major)) < 1e-6;
+        out.push(isMajor ? `<span style="left:${x}%">${hf.format(t)}</span>` : `<span class="minor" style="left:${x}%"></span>`);
+      }
+      if (this.end >= NOW - 1000) out.push(`<span class="now" style="left:100%">现在</span>`);
+    }
+    this.axis.innerHTML = out.join('');
+  }
+  renderMini() {
+    this.mini.classList.toggle('show', !!this.win);
+    if (!this.win) return;
+    const dots = this.mini.querySelector('.dots');
+    if (!dots.childElementCount) dots.innerHTML = RECORDS.filter((r) => NOW - r.copiedAt <= DAY).map((r) => `<span class="dot" style="left:${(1 - (NOW - r.copiedAt) / DAY) * 100}%"></span>`).join('');
+    const win = this.mini.querySelector('.win');
+    win.style.left = ((this.start - (NOW - DAY)) / DAY) * 100 + '%';
+    win.style.width = Math.max(.6, (this.span / DAY) * 100) + '%';
+  }
+  drawDensity() {
+    const c = this.canvas, w = this.track.clientWidth, h = this.track.clientHeight, dpr = devicePixelRatio || 1;
+    c.width = w * dpr; c.height = h * dpr; const g = c.getContext('2d'); g.scale(dpr, dpr); g.clearRect(0, 0, w, h);
+    const N = 160, bins = new Array(N).fill(0), kinds = Array.from({ length: N }, () => ({}));
+    for (const r of RECORDS) { const x = this.xOf(r.copiedAt); if (x === null) continue; const i = Math.min(N - 1, Math.max(0, Math.floor(x / 100 * N))); bins[i]++; kinds[i][r.kind] = (kinds[i][r.kind] || 0) + 1; }
+    // 高斯平滑：窗口越大越需要平滑；放大后几乎是原始直方图
+    const sigma = this.win ? Math.max(.6, 2.2 * (this.span / DAY) ** .5) : 2.2;
+    const sm = bins.map((_, i) => { let s = 0, ws = 0; for (let j = -6; j <= 6; j++) { const k = i + j; if (k < 0 || k >= N) continue; const wgt = Math.exp(-(j * j) / (2 * sigma * sigma)); s += bins[k] * wgt; ws += wgt; } return s / ws; });
+    const max = Math.max(...sm, 1e-6);
+    const col = (i) => { const k = Object.entries(kinds[i]).sort((a, b) => b[1] - a[1])[0]; return k ? getComputedStyle(this.card).getPropertyValue(`--c-${k[0]}`).trim() : getComputedStyle(this.card).getPropertyValue('--c-link').trim(); };
+    for (let i = 0; i < N; i++) {
+      const v = sm[i] / max; if (v < .02) continue;
+      const x0 = i / N * w, x1 = (i + 1) / N * w + .5, hh = (0.1 + v * 0.75) * h;
+      // 找到最近有记录的 bin 决定颜色
+      let ci = i; for (let d = 0; d < N && !Object.keys(kinds[ci]).length; d++) ci = (i + (d % 2 ? -1 : 1) * Math.ceil(d / 2) + N) % N;
+      const grad = g.createLinearGradient(0, h - hh, 0, h);
+      const color = col(ci);
+      grad.addColorStop(0, color + '00'); grad.addColorStop(.35, color + Math.round(40 + v * 70).toString(16).padStart(2, '0')); grad.addColorStop(1, color + Math.round(90 + v * 110).toString(16).padStart(2, '0'));
+      g.fillStyle = grad; g.fillRect(x0, h - hh, x1 - x0, hh);
+    }
+    g.globalCompositeOperation = 'source-over';
+  }
+}
+
+const specs = [...document.querySelectorAll('.card')].map((c) => new Spectrum(c));
+// 调试：#1h / #10m 直接进入放大状态，#light 用亮色，逗号分隔
+{
+  const h = location.hash.slice(1).split(',');
+  if (h.includes('light')) document.documentElement.dataset.theme = 'light';
+  const spans = { '6h': 6 * HOUR, '1h': HOUR, '10m': 10 * MIN };
+  const k = h.find((x) => spans[x]);
+  if (k) specs.forEach((s) => { const c = NOW - 2.67 * HOUR; s.setWindow(c - spans[k] / 2, c + spans[k] / 2, false); s.select(RECORDS.find((r) => Math.abs(r.copiedAt - c) < 9 * MIN).id); });
+}
+document.getElementById('themeBtn').addEventListener('click', () => {
+  const r = document.documentElement; r.dataset.theme = r.dataset.theme === 'dark' ? 'light' : 'dark';
+  specs.forEach((s) => s.render());
+});
+document.getElementById('burstBtn').addEventListener('click', () => {
+  const k = pick(KINDS);
+  RECORDS.push({ id: RECORDS.length + 1, copiedAt: Date.now(), kind: k, size: Math.round(10 ** (1 + rnd() * 5)), title: pick(TITLES[k]) });
+  specs.forEach((s) => { s.render(); const last = s.bars.lastElementChild; if (last) { last.style.animation = 'none'; last.offsetWidth; last.style.animation = ''; last.animate([{ transform: 'scaleY(0)' }, { transform: 'scaleY(1)' }], { duration: 700, easing: 'cubic-bezier(.34,1.56,.64,1)' }); } });
+});
+addEventListener('resize', () => specs.forEach((s) => s.render()));
+</script>
+</body>
+</html>
