@@ -396,10 +396,12 @@ function bodyHTML(d: RecordDetail): string {
       return `<div class="p-text">${esc(text)}</div>${trunc}`;
     case 'link': {
       const h = host(text);
-      const href = isHttpUrl(text) ? ` href="${esc(text)}" target="_blank" rel="noopener noreferrer"` : '';
+      // 链接判定按去掉首尾空白的文字，库里存的是原文
+      const u = text.trim();
+      const href = isHttpUrl(u) ? ` href="${esc(u)}" target="_blank" rel="noopener noreferrer"` : '';
       return `<div class="p-link"><div class="lk-card"><span class="lk-fav">${esc((h.replace(/^www\./, '')[0] || '?').toUpperCase())}</span><div><div class="lk-title">${esc(d.linkTitle || h)}</div><div class="lk-host">${esc(h)}</div></div></div>
           <a${href}>${esc(text)} ${svg('open')}</a>
-          <div class="chips">${text.startsWith('https:') ? '<span class="chip ok">HTTPS</span>' : '<span class="chip">HTTP</span>'}<span class="chip">${esc(h)}</span></div></div>`;
+          <div class="chips">${u.startsWith('https:') ? '<span class="chip ok">HTTPS</span>' : '<span class="chip">HTTP</span>'}<span class="chip">${esc(h)}</span></div></div>`;
     }
     case 'code':
       return `<pre class="p-code" translate="no"><code>${text.split('\n').map((l) => `<span class="ln">${hlCode(l) || ' '}</span>`).join('')}</code></pre>${trunc}`;
@@ -891,7 +893,7 @@ function openMenu(id: number, x: number, y: number, viaKb: boolean, detail = det
   $('#mPin').textContent = r.pinned ? '取消置顶' : '置顶';
   const open = openLabel(r.kind, !!detail?.files.length, S.platform.os);
   mOpen.hidden = !open;
-  mOpen.lastElementChild!.textContent = open ?? '';
+  $('#mOpen').textContent = open ?? '';
   // stagger 序号按可见项重排，隐藏的项不留空拍
   menu.querySelectorAll<HTMLElement>('button:not([hidden])').forEach((b, i) => b.style.setProperty('--i', String(i)));
   menuReturn = document.activeElement as HTMLElement | null;
@@ -931,7 +933,7 @@ function openFromMenu(id: number) {
   const hit = details.get(id);
   (hit ? Promise.resolve(hit) : getRecord(id))
     .then((d) => {
-      if (d?.kind === 'link') return openUrl(d.text ?? '');
+      if (d?.kind === 'link') return openUrl((d.text ?? '').trim());
       if (d?.files[0]) return revealFile(d.files[0].path);
     })
     .catch((err: AppError) => toast(err.kind === 'fileMissing' ? MISSING : err.message));
@@ -1528,12 +1530,12 @@ const hidden = () => {
   pbody.querySelectorAll('video').forEach((v) => v.pause());
   pbody.innerHTML = '';
   closeMenu(false);
-  // 对话框不播收起动画，直接关（close 事件里还原外观预览）
+  // 对话框不播收起动画，直接关（各自的 close 事件里交还焦点、结算确认框并同步后端的对话框标志）
   document.querySelectorAll<HTMLDialogElement>('dialog[open]').forEach((d) => d.close());
   (document.activeElement as HTMLElement | null)?.blur();
 };
 
-// 键盘与隐藏按钮在 bootstrap 之前接线：读取失败的错误页也能 Esc / 关闭
+// 键盘在 bootstrap 之前接线：读取失败的错误页也能按 Esc 收起
 // 前端发起的隐藏先播 160ms 淡出；失焦隐藏由后端直接做，没有淡出。
 // macOS 系统材质的底板不归网页画：内容只位移（data-native-fade），立即调 hide_panel，后端在 160ms 内把整个窗口 alpha 淡到 0；
 // 唤起时后端同样把 alpha 从 0 淡入（90ms，托盘 240ms）
@@ -1616,11 +1618,13 @@ await onRecordsRemoved((ids) => handlers.removed(ids));
 await onPausedChanged((p) => handlers.paused(p));
 // 托盘“设置…”：后端已先唤起面板
 await onOpenSettings(openSettings);
-await onConfirmClear(() => void confirmClear());
+// 设置对话框开着时提示条被它盖住，结果同样写进“历史记录”行内
+await onConfirmClear(() => void confirmClear().then((m) => m && dlg.open && (clearNote.textContent = m)));
 // 引导中按唤起快捷键：可见时面板不隐藏，隐藏时先 panel-shown 再到这里；只在“试按快捷键”这一步算成功
 // 设置对话框打开时按唤起快捷键：面板同样不隐藏；录制框有焦点就当作按下了当前快捷键（网页收不到被全局注册拦下的按键）
 await onHotkeyPressed(() => {
-  if (document.activeElement === hotkeyIn) return recordHotkey(S.settings.hotkey);
+  // 只认面板有焦点时的按键：失焦时后端只把面板拉回焦点，这里再防一道
+  if (document.activeElement === hotkeyIn && document.hasFocus()) return recordHotkey(S.settings.hotkey);
   if (obStep === 'hotkey' && obDlg.open) obSucceed();
 });
 

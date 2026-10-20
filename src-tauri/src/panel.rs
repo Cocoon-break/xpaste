@@ -235,22 +235,7 @@ fn try_show(
     if let Err(e) = animate_alpha(w, start, 0.0) {
         log::warn!("复位面板透明度失败：{e}");
     }
-    #[cfg(target_os = "macos")]
-    {
-        use tauri_nspanel::ManagerExt;
-        match app.get_webview_panel(LABEL) {
-            // orderFrontRegardless + makeKeyWindow，不激活应用，前台应用保持不变
-            Ok(p) => p.show(),
-            Err(_) => w.show()?,
-        }
-        // 键盘交给 WKWebView（只设 first responder，不激活应用）
-        w.as_ref().set_focus()?;
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        w.show()?;
-        w.set_focus()?;
-    }
+    front_and_focus(app, w)?;
     if let Some(ms) = fade_in
         && let Err(e) = animate_alpha(w, 1.0, ms as f64 / 1000.0)
     {
@@ -305,6 +290,28 @@ fn reduce_motion() -> bool {
 #[cfg(not(target_os = "macos"))]
 fn reduce_motion() -> bool {
     false
+}
+
+/// 上屏并取得键盘焦点；macOS 上不激活应用，前台应用保持不变。主线程调用。
+fn front_and_focus(app: &AppHandle, w: &WebviewWindow) -> tauri::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        use tauri_nspanel::ManagerExt;
+        match app.get_webview_panel(LABEL) {
+            // orderFrontRegardless + makeKeyWindow
+            Ok(p) => p.show(),
+            Err(_) => w.show()?,
+        }
+        // 键盘交给 WKWebView（只设 first responder，不激活应用）
+        w.as_ref().set_focus()?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        w.show()?;
+        w.set_focus()?;
+    }
+    Ok(())
 }
 
 /// AppKit 只能在主线程调用；已在主线程时同步执行（hide_panel 命令跑在异步线程上）。
@@ -524,7 +531,23 @@ pub fn toggle(app: &AppHandle, t0: Option<u64>, trigger: Trigger) {
         }
         ToggleAction::Reshow => show_panel(app, t0, trigger),
         ToggleAction::RequestHide => request_hide(app),
-        ToggleAction::HotkeyPressed => crate::events::emit(app, crate::events::HOTKEY_PRESSED, ()),
+        ToggleAction::HotkeyPressed => {
+            // 对话框开着、面板却已失焦（用户点去了别的应用）：这次按键只把面板拉回焦点，不发 hotkey-pressed，
+            // 免得录制框把它当成按下了当前快捷键。引导中照发：首次运行面板可见但未取得焦点时试按也算成功
+            let focused = w.is_focused().unwrap_or(true);
+            if !focused {
+                on_main(app, |app| {
+                    if let Some(w) = window(app)
+                        && let Err(e) = front_and_focus(app, &w)
+                    {
+                        log::warn!("面板取得焦点失败：{e}");
+                    }
+                });
+            }
+            if focused || state.onboarding.load(Ordering::SeqCst) {
+                crate::events::emit(app, crate::events::HOTKEY_PRESSED, ())
+            }
+        }
         ToggleAction::Ignore => {}
     }
 }
