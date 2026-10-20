@@ -67,6 +67,8 @@ fn ingest(app: &AppHandle, snap: Snapshot) {
     // process 会消耗快照，先记下补全任务要用的信息
     let kind = detect::kind(&snap);
     let first_path = snap.file_paths.first().cloned();
+    // 文件列表里夹着图片的文件记录也识别文字（没有缩略图任务，直接入队）
+    let ocr_files = kind == Kind::File && detect::has_image_file(&snap.file_paths);
     let source = snap.source.as_ref().map(|a| a.id.clone());
     let settings = state.settings().clone();
     let paused = state.paused.load(Ordering::SeqCst);
@@ -79,7 +81,7 @@ fn ingest(app: &AppHandle, snap: Snapshot) {
             emit_summary(app, RECORD_UPDATED, id);
             emit_removed(app, &removed);
             // 再次复制还没识别的图片（例如补识别关着）：插队识别，已识别的由识别线程丢弃
-            if kind == Kind::Image {
+            if kind == Kind::Image || ocr_files {
                 state.ocr.push_front(id);
             }
         }
@@ -96,6 +98,9 @@ fn ingest(app: &AppHandle, snap: Snapshot) {
                 }
                 (Kind::Video, Some(path)) => jobs.push(Job::Video { id, path }),
                 _ => {}
+            }
+            if ocr_files {
+                state.ocr.push_front(id);
             }
             if let Some(app_id) = source
                 && !icon_path(dir, &app_id).exists()

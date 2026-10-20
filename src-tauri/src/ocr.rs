@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use image::ImageReader;
 use tauri::{AppHandle, Manager};
+use xpaste_core::detect;
 use xpaste_core::ocr_state::{EMPTY, FAILED, PENDING, SKIPPED, TEXT, UNSUPPORTED};
 use xpaste_platform::OcrError;
 
@@ -22,6 +23,8 @@ const BACKFILL_GAP: Duration = Duration::from_millis(500);
 const BACKFILL_LIMIT: usize = 5000;
 const MAX_BYTES: u64 = 20 * 1024 * 1024;
 const MAX_SIDE: u32 = 8000;
+/// 一条记录最多识别的图片文件数（复制一批图片时）
+const MAX_IMAGES: usize = 10;
 /// 交给引擎前缩到的长边
 const OCR_SIDE: u32 = 2000;
 const MIN_CONFIDENCE: f32 = 0.3;
@@ -250,41 +253,77 @@ fn dimensions(path: &Path) -> Option<(u32, u32)> {
         .ok()
 }
 
-/// 位图记录识别 `images/<id>.png`；图片文件引用识别源文件。
-fn source(state: &AppState, id: i64) -> Option<PathBuf> {
+/// 位图记录识别 `images/<id>.png`；文件引用识别其中仍存在的图片文件（最多 `MAX_IMAGES` 个，混合文件列表也算）。
+fn sources(state: &AppState, id: i64) -> Vec<PathBuf> {
     let bitmap = state.data_dir.join("images").join(format!("{id}.png"));
     if bitmap.exists() {
-        return Some(bitmap);
+        return vec![bitmap];
     }
-    let d = state.store().detail(id).ok()??;
+    let Ok(Some(d)) = state.store().detail(id) else {
+        return Vec::new();
+    };
     d.files
         .into_iter()
-        .next()
         .filter(|f| f.exists)
-        .map(|f| f.path.into())
+        .map(|f| PathBuf::from(f.path))
+        .filter(|p| detect::is_image_file(p))
+        .take(MAX_IMAGES)
+        .collect()
 }
 
-/// `(状态, 文字, 是否调用了引擎)`
+/// `(状态, 文字, 是否调用了引擎)`。多张图片的文字按顺序用换行拼接；
+/// 状态取最有信息量的一个：有文字 > 识别失败 > 本机不支持 > 已跳过 > 无文字。
 fn recognize(state: &AppState, id: i64) -> (u8, Option<String>, bool) {
-    let Some(path) = source(state, id) else {
+    let paths = sources(state, id);
+    if paths.is_empty() {
         return (FAILED, None, false);
-    };
-    let too_big = std::fs::metadata(&path).is_ok_and(|m| m.len() > MAX_BYTES)
-        || dimensions(&path).is_some_and(|(w, h)| w.max(h) > MAX_SIDE);
-    if too_big {
-        return (SKIPPED, None, false);
     }
     let t0 = Instant::now();
-    let r = xpaste_platform::ocr_png(&path, OCR_SIDE);
+    let mut texts = Vec::new();
+    let mut worst = EMPTY;
+    let mut ran = false;
+    for path in &paths {
+        match recognize_one(id, path) {
+            Ok(Some(t)) => {
+                ran = true;
+                texts.push(t);
+            }
+            Ok(None) => ran = true,
+            Err(k) => {
+                ran |= k != SKIPPED;
+                worst = fold_state(worst, k);
+            }
+        }
+    }
     if t0.elapsed() > SLOW {
         log::warn!("ocr id={id} 超过 {} s", SLOW.as_secs());
     }
-    let (k, text) = match r {
+    if !texts.is_empty() {
+        return (TEXT, Some(texts.join("\n")), ran);
+    }
+    (worst, None, ran)
+}
+
+/// 多张都没有文字时的状态合并：识别失败 > 本机不支持 > 已跳过 > 无文字
+fn fold_state(a: u8, b: u8) -> u8 {
+    const ORDER: [u8; 4] = [EMPTY, SKIPPED, UNSUPPORTED, FAILED];
+    let rank = |k: u8| ORDER.iter().position(|&x| x == k).unwrap_or(0);
+    if rank(b) > rank(a) { b } else { a }
+}
+
+/// 单张：`Ok(Some)` 有文字，`Ok(None)` 无文字，`Err(状态)` 为跳过 / 不支持 / 失败。
+fn recognize_one(id: i64, path: &Path) -> Result<Option<String>, u8> {
+    let too_big = std::fs::metadata(path).is_ok_and(|m| m.len() > MAX_BYTES)
+        || dimensions(path).is_some_and(|(w, h)| w.max(h) > MAX_SIDE);
+    if too_big {
+        return Err(SKIPPED);
+    }
+    match xpaste_platform::ocr_png(path, OCR_SIDE) {
         Ok(Some(t)) if !t.text.trim().is_empty() && t.confidence >= MIN_CONFIDENCE => {
-            (TEXT, Some(t.text))
+            Ok(Some(t.text))
         }
-        Ok(Some(_)) => (EMPTY, None),
-        Ok(None) => (UNSUPPORTED, None),
+        Ok(Some(_)) => Ok(None),
+        Ok(None) => Err(UNSUPPORTED),
         Err(e) => {
             // 只记错误类别：引擎描述不进日志
             let kind = match e {
@@ -293,15 +332,23 @@ fn recognize(state: &AppState, id: i64) -> (u8, Option<String>, bool) {
                 OcrError::Engine(_) => "engine",
             };
             log::info!("ocr id={id} 失败 {kind}");
-            (FAILED, None)
+            Err(FAILED)
         }
-    };
-    (k, text, true)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::Queue;
+    use super::*;
+
+    #[test]
+    fn fold_state_prefers_failed_then_unsupported_then_skipped() {
+        assert_eq!(fold_state(EMPTY, SKIPPED), SKIPPED);
+        assert_eq!(fold_state(SKIPPED, EMPTY), SKIPPED);
+        assert_eq!(fold_state(SKIPPED, UNSUPPORTED), UNSUPPORTED);
+        assert_eq!(fold_state(FAILED, UNSUPPORTED), FAILED);
+        assert_eq!(fold_state(EMPTY, EMPTY), EMPTY);
+    }
 
     #[test]
     fn queue_pauses_while_visible() {

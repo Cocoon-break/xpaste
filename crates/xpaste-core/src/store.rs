@@ -481,8 +481,9 @@ impl Store {
         ids_in(
             &self.conn,
             &format!(
-                "SELECT id FROM records WHERE kind = 'image' AND deleted_at IS NULL
-                 AND ocr_state IN ({list}) ORDER BY copied_at DESC, id DESC LIMIT ?1"
+                "SELECT id FROM records WHERE {} AND deleted_at IS NULL
+                 AND ocr_state IN ({list}) ORDER BY copied_at DESC, id DESC LIMIT ?1",
+                ocr_eligible_sql()
             ),
             &[&(limit as i64)],
         )
@@ -491,8 +492,11 @@ impl Store {
     /// (已处理：待识别以外的状态 1–5, 未删除图片总数)
     pub fn ocr_progress(&self) -> Result<(u32, u32), CoreError> {
         Ok(self.conn.query_row(
-            "SELECT COALESCE(SUM(ocr_state BETWEEN 1 AND 5), 0), COUNT(*) FROM records
-             WHERE kind = 'image' AND deleted_at IS NULL",
+            &format!(
+                "SELECT COALESCE(SUM(ocr_state BETWEEN 1 AND 5), 0), COUNT(*) FROM records
+                 WHERE {} AND deleted_at IS NULL",
+                ocr_eligible_sql()
+            ),
             [],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?)
@@ -686,6 +690,17 @@ impl Store {
             }
         }
     }
+}
+
+/// 可识别文字的记录：图片记录，或文件列表里有图片文件的文件记录。
+/// `paths` 是 JSON 字符串数组，每个路径以 `.ext"` 结束，用 LIKE 判断扩展名（文件记录只有几千行，不需要索引）。
+fn ocr_eligible_sql() -> String {
+    let exts = crate::detect::IMAGE_EXTS
+        .iter()
+        .map(|e| format!("lower(paths) LIKE '%.{e}\"%'"))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    format!("(kind = 'image' OR (kind = 'file' AND ({exts})))")
 }
 
 /// 关键词（已小写）在 `text` 中首次出现处前后各取 12 个字符，保留原文大小写；被截断的一侧加 `…`。
@@ -1468,6 +1483,18 @@ pub(crate) mod tests {
         assert_eq!(s.ocr_pending_ids(&[p, ocr_state::FAILED], 10).unwrap(), [a]);
         // a 失败、b 有文字：都算已处理
         assert_eq!(s.ocr_progress().unwrap(), (2, 2));
+    }
+
+    #[test]
+    fn ocr_pending_includes_file_records_that_contain_images() {
+        let mut s = mem();
+        let mixed = added(&mut s, &rec_files(&["/d/报告.pdf", "/d/图.JPG"]), 1);
+        added(&mut s, &rec_files(&["/d/报告.pdf", "/d/数据.csv"]), 2);
+        added(&mut s, &rec_files(&["/v/a.mp4"]), 3);
+        let img = added(&mut s, &rec_image(1), 4);
+        let p = ocr_state::PENDING;
+        assert_eq!(s.ocr_pending_ids(&[p], 10).unwrap(), [img, mixed]);
+        assert_eq!(s.ocr_progress().unwrap(), (0, 2));
     }
 
     #[test]

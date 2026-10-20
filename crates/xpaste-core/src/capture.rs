@@ -15,6 +15,15 @@ pub const MAX_FLAVOR_BYTES: usize = 50 * 1024 * 1024;
 
 const TITLE_MAX_CHARS: usize = 200;
 const EMPTY_TITLE: &str = "(空)";
+/// 文件记录里文本类文件读入搜索文本的总预算（每条记录）
+pub const FILE_TEXT_BYTES: usize = 64 * 1024;
+/// 按扩展名判定的文本类文件：内容进搜索文本（只搜，不显示）。无扩展名、`.env` 一类点文件不在其中
+const TEXT_EXTS: &[&str] = &[
+    "txt", "md", "markdown", "csv", "tsv", "json", "yaml", "yml", "toml", "xml", "html", "htm",
+    "css", "js", "mjs", "ts", "jsx", "tsx", "py", "rs", "go", "java", "kt", "swift", "c", "h",
+    "cpp", "hpp", "cc", "m", "rb", "php", "sh", "zsh", "bash", "sql", "log", "ini", "conf", "cfg",
+    "srt", "tex", "rtf",
+];
 
 /// 由快照计算一条待入库记录。`bitmap` 与 `flavors` 从快照移入，不复制。
 pub fn build_record(snapshot: Snapshot, kind: Kind, now_ms: i64) -> NewRecord {
@@ -77,6 +86,9 @@ pub fn build_record(snapshot: Snapshot, kind: Kind, now_ms: i64) -> NewRecord {
     parts.extend(app.as_ref().map(|a| a.name.clone()));
     // 标题也要能搜到：位图截图没有文本与路径，否则只剩来源应用名可搜
     parts.push(title.clone());
+    if kind == Kind::File {
+        parts.extend(files_text(&paths, FILE_TEXT_BYTES));
+    }
     let search_text = parts.join("\n").to_lowercase();
 
     NewRecord {
@@ -185,6 +197,53 @@ fn file_name(p: &Path) -> String {
 }
 
 /// 目录与不存在的文件记 0。
+/// 文件记录中文本类文件的内容，按顺序读到预算用完；非 UTF-8（二进制）与读不到的文件跳过。
+fn files_text(paths: &[std::path::PathBuf], budget: usize) -> Vec<String> {
+    let mut left = budget;
+    let mut out = Vec::new();
+    for p in paths {
+        if left == 0 {
+            break;
+        }
+        let is_text = p
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| TEXT_EXTS.iter().any(|x| e.eq_ignore_ascii_case(x)));
+        if !is_text {
+            continue;
+        }
+        let Some(t) = read_text_prefix(p, left) else {
+            continue;
+        };
+        left -= t.len();
+        out.push(t);
+    }
+    out
+}
+
+/// 读文件前 `max` 字节；末尾被截断的多字节字符丢掉，中间出现无效 UTF-8 或 NUL 视为二进制返回 None。
+fn read_text_prefix(p: &Path, max: usize) -> Option<String> {
+    use std::io::Read;
+    let mut buf = Vec::new();
+    std::fs::File::open(p)
+        .ok()?
+        .take(max as u64)
+        .read_to_end(&mut buf)
+        .ok()?;
+    if buf.contains(&0) {
+        return None;
+    }
+    let valid = match std::str::from_utf8(&buf) {
+        Ok(_) => buf.len(),
+        // 只有读满 max 时才可能截在字符中间；其他位置的错误是二进制
+        Err(e) if e.error_len().is_none() && buf.len() == max => e.valid_up_to(),
+        Err(_) => return None,
+    };
+    buf.truncate(valid);
+    let t = String::from_utf8(buf).ok()?;
+    (!t.trim().is_empty()).then_some(t)
+}
+
 fn file_len(p: &Path) -> u64 {
     std::fs::metadata(p)
         .map(|m| if m.is_file() { m.len() } else { 0 })
@@ -333,6 +392,51 @@ mod tests {
         });
         let st = build_record(s, Kind::File, 0).search_text;
         assert!(st.contains("spec.pdf") && st.contains("/docs/spec.pdf") && st.contains("finder"));
+    }
+    #[test]
+    fn text_files_content_is_searchable_within_budget() {
+        let dir = std::env::temp_dir().join(format!("xpaste-capture-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let notes = dir.join("会议纪要.md");
+        std::fs::write(&notes, "# 季度预算\nBudget 2026 讨论").unwrap();
+        let bin = dir.join("data.json");
+        std::fs::write(&bin, [b'{', 0xff, 0xfe, 0, b'}']).unwrap();
+        let big = dir.join("big.log");
+        std::fs::write(&big, "字".repeat(FILE_TEXT_BYTES)).unwrap();
+        let other = dir.join("deck.pptx");
+        std::fs::write(&other, "pptx-text-inside").unwrap();
+
+        let st = build_record(
+            snap_files(&[
+                notes.to_str().unwrap(),
+                bin.to_str().unwrap(),
+                other.to_str().unwrap(),
+            ]),
+            Kind::File,
+            0,
+        )
+        .search_text;
+        assert!(
+            st.contains("季度预算") && st.contains("budget 2026"),
+            "{st}"
+        );
+        assert!(!st.contains("pptx-text-inside"), "非文本扩展名不读内容");
+        assert!(!st.contains('\u{fffd}'), "二进制文件应整个跳过");
+
+        // 预算用完即停：big.log 占满后 notes 不再读入；截断不留半个字符
+        let st = build_record(
+            snap_files(&[big.to_str().unwrap(), notes.to_str().unwrap()]),
+            Kind::File,
+            0,
+        )
+        .search_text;
+        assert!(!st.contains("季度预算"), "{}", st.len());
+        assert!(st.len() < FILE_TEXT_BYTES + 1024);
+
+        // 图片类型的记录不读文件内容
+        let st = build_record(snap_files(&[notes.to_str().unwrap()]), Kind::Image, 0).search_text;
+        assert!(!st.contains("季度预算"));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
     #[test]
     fn bitmap_title_is_searchable() {

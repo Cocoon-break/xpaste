@@ -138,6 +138,15 @@ pub fn content_hash(snapshot: &Snapshot, kind: Kind) -> [u8; 32] {
     h.finalize().into()
 }
 
+/// 文件列表里是否有图片文件（按扩展名）：这类文件记录也做文字识别。
+pub fn has_image_file(paths: &[std::path::PathBuf]) -> bool {
+    paths.iter().any(|p| is_image_file(p))
+}
+
+pub fn is_image_file(path: &Path) -> bool {
+    has_ext(path, &IMAGE_EXTS)
+}
+
 fn has_ext(path: &Path, exts: &[&str]) -> bool {
     path.extension()
         .and_then(|e| e.to_str())

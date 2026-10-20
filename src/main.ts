@@ -146,7 +146,7 @@ const thumb = (r: RecordSummary) =>
   r.kind === 'image' && r.thumb
     ? `<span class="thumb"><img src="${esc(r.thumb)}" alt="" width="36" height="36">${r.ocrState === 1 ? '<span class="ocr-badge" aria-hidden="true">T</span>' : ''}</span>`
   : r.kind === 'video' && r.thumb ? `<span class="thumb"><img src="${esc(r.thumb)}" alt="" width="36" height="36"><span class="play">${svg('play')}</span></span>`
-  : `<span class="thumb">${svg(r.kind)}</span>`;
+  : `<span class="thumb">${svg(r.kind)}${r.kind === 'file' && r.ocrState === 1 ? '<span class="ocr-badge" aria-hidden="true">T</span>' : ''}</span>`;
 
 const metaLine = (r: RecordSummary) => {
   const parts = [esc(source(r)), rel(r.copiedAt), r.kind === 'video' && r.durationSec !== null ? fmtDur(r.durationSec) : fmtBytes(r.size)];
@@ -440,7 +440,8 @@ function bodyHTML(d: RecordDetail): string {
           ${f.exists ? '' : `<div class="fpath">${MISSING}</div>`}</div></div>`;
       // 视频：第一个文件用封面卡片（点击才建 <video>，掠过时不加载），其余沿用文件行
       if (d.kind === 'video' && d.files[0]) return videoHTML(d) + d.files.slice(1).map((f, i) => row(f, i + 1)).join('');
-      return d.files.map(row).join('');
+      // 文件列表里的图片也识别文字：区块挂在文件行之后（没识别过的文件记录 ocrBlockHTML 为空）
+      return d.files.map(row).join('') + (d.kind === 'file' ? `<div class="ocr-slot">${ocrBlockHTML(d)}</div>` : '');
     }
   }
 }
@@ -458,7 +459,9 @@ function metaHTML(r: RecordSummary, d: RecordDetail | null) {
   // 有文字时字数来自详情：摘要已变成 1 而详情还没重取到时先不显示
   // 重新识别进行中（状态 0 且预览里还留着区块）信息栏与区块标题一致写“识别中…”
   const reocrNow = r.ocrState === 0 && bodyFor === r.id && !!pbody.querySelector('.ocr-block');
-  if (r.kind === 'image' && (r.ocrState !== 1 || d?.ocrText)) meta.push(['文字', reocrNow ? '识别中…' : ocrLabel(r.ocrState, d?.ocrText)]);
+  // 文件记录里夹着图片时也识别：不含图片的文件记录状态永远是 0，不显示字段
+  const ocrable = r.kind === 'image' || (r.kind === 'file' && r.ocrState !== 0);
+  if (ocrable && (r.ocrState !== 1 || d?.ocrText)) meta.push(['文字', reocrNow ? '识别中…' : ocrLabel(r.ocrState, d?.ocrText)]);
   return meta.map(([k, v]) => `<div><dt>${k}</dt><dd title="${esc(v)}">${esc(v)}</dd></div>`).join('');
 }
 
@@ -1061,7 +1064,7 @@ const handlers = {
     // 置顶、复制计数、图标等其他更新不重取，免得预览滚动位置与焦点丢失
     if (s.id === bodyFor && s.kind === 'video' && !pbody.querySelector('video')
       && (prev?.durationSec !== s.durationSec || prev?.thumb !== s.thumb)) bodyFor = null;
-    if (s.id === bodyFor && s.kind === 'image' && prev?.ocrState !== s.ocrState) refreshOcr(s.id);
+    if (s.id === bodyFor && (s.kind === 'image' || s.kind === 'file') && prev?.ocrState !== s.ocrState) refreshOcr(s.id);
     // 去重命中会改 copiedAt，需要重新排序；选中项的头部与信息栏随 select 刷新，不重取详情
     scheduleUpdatedPaint(
       prev && prev.copiedAt !== s.copiedAt ? s.id : undefined,
