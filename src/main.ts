@@ -1209,7 +1209,7 @@ function setTheme(mode: Appearance) {
 }
 // save_settings 是异步命令，连点时并发保存可能乱序落盘：串行，上一次结束后再发当时最新的设置。
 // savedAppearance 是最近一次确认落盘的外观，保存失败时回到它
-let themeSave: Promise<unknown> = Promise.resolve(), savedAppearance: Appearance = 'system';
+let themeSave: Promise<unknown> = Promise.resolve(), savedAppearance: Appearance = 'dark';
 async function applyAppearance(mode: Appearance) {
   if (mode === themeMode()) return;
   // 先改本地设置：保存途中 persistUi 落盘或点“保存设置”带上的都是新外观，不会把主题改回去

@@ -329,7 +329,7 @@ mod tests {
         assert!(changed_fields(&old, &old).is_empty());
         let new = Settings {
             hotkey: "Alt+Space".into(),
-            appearance: xpaste_core::Appearance::Dark,
+            appearance: xpaste_core::Appearance::Light,
             panel_size: (1000.0, 700.0),
             spectrum_collapsed: true,
             ..Settings::default()

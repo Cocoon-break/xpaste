@@ -83,7 +83,7 @@ impl Default for Settings {
             skip_sensitive: true,
             move_to_top: true,
             launch_at_login: true,
-            appearance: Appearance::System,
+            appearance: Appearance::Dark,
             panel_size: (960.0, 640.0),
             last_filter: "all".into(),
             spectrum_collapsed: false,
@@ -391,7 +391,7 @@ mod tests {
         assert_eq!(s.retention_days, Some(30));
         assert_eq!(s.max_records, 500);
         assert!(s.skip_sensitive && s.move_to_top && s.launch_at_login);
-        assert_eq!(s.appearance, Appearance::System);
+        assert_eq!(s.appearance, Appearance::Dark);
         assert_eq!(s.panel_size, (960.0, 640.0));
         assert_eq!(s.last_filter, "all");
         assert!(!s.spectrum_collapsed);
@@ -420,7 +420,7 @@ mod tests {
         assert!(
             json.contains(r#""maxRecords":500"#)
                 && json.contains(r#""retentionDays":30"#)
-                && json.contains(r#""appearance":"system""#)
+                && json.contains(r#""appearance":"dark""#)
         );
     }
 
