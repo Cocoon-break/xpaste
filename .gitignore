@@ -12,3 +12,8 @@ dist
 .superpowers
 /target
 /.xpaste-dev
+
+/宣传片/
+skills-lock.json
+.claude
+.agents
