@@ -122,8 +122,21 @@ make dev-isolated  # 开发运行，数据目录隔离在 .xpaste-dev/，开启�
 make measure       # macOS 性能与可靠性测量（先 make release-app；离开电脑时运行，约 15 分钟；终端要有“辅助功能”权限，脚本用 osascript 发按键）
 make check         # 提交前全量检查：格式、clippy、Rust + 前端单元测试、前端构建
 make test          # 只跑单元测试
-make release       # 打发布包（未签名）
+make release       # 打发布包（未签名）：当前系统的安装包；macOS 上装了交叉工具时顺带打出 Windows 安装程序
+make release-win   # 在 macOS 上交叉打 Windows NSIS 安装程序（见下）
 ```
+
+### 在 macOS 上打 Windows 安装包
+
+`tauri build` 只给当前系统打包，所以 Mac 上默认只有 `.dmg`。装好下面的工具后，`make release-win`（或 `make release`）会用 Tauri 的交叉编译把 Windows 安装程序也打出来，产物在 `target/x86_64-pc-windows-msvc/release/bundle/nsis/`：
+
+```sh
+rustup target add x86_64-pc-windows-msvc
+brew install nsis llvm lld     # makensis、clang-cl / llvm-rc、lld-link
+cargo install cargo-xwin        # MSVC 运行库与 Windows SDK（首次运行下载约 1.5 GB 到 ~/.cache/cargo-xwin）
+```
+
+这是 Tauri 标为实验性的路径：产物没有在 Windows 上签名，WebView2 引导下载和安装脚本的行为仍要在真实 Windows 上验证一次；CI 的 Windows 矩阵打出来的包才是正式发布用的。
 
 ### 签名与公证（拿到证书后）
 

@@ -7,8 +7,12 @@ SHELL := /bin/bash
 # Windows 交叉检查只在装了该 target 时执行（rustup target add x86_64-pc-windows-msvc）
 WIN_TARGET := x86_64-pc-windows-msvc
 HAS_WIN_TARGET := $(shell rustup target list --installed 2>/dev/null | grep -c $(WIN_TARGET))
+# macOS 上交叉打 Windows 安装包的工具：brew install nsis llvm lld；cargo install cargo-xwin。
+# llvm 是 keg-only，clang-cl / llvm-rc 不在 PATH 上，打包时临时加进去
+LLVM_BIN := /opt/homebrew/opt/llvm/bin
+HAS_XWIN := $(shell command -v cargo-xwin >/dev/null 2>&1 && command -v makensis >/dev/null 2>&1 && test -x $(LLVM_BIN)/clang-cl && command -v lld-link >/dev/null 2>&1 && echo 1 || echo 0)
 
-.PHONY: help install dev dev-isolated fmt lint test-rust test-web test check build build-check release release-app release-report measure icons fonts clean
+.PHONY: help install dev dev-isolated fmt lint test-rust test-web test check build build-check release release-win release-app release-report measure icons fonts clean
 
 help: ## 列出可用目标
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{ printf "  %-14s %s\n", $$1, $$2 }'
@@ -53,8 +57,16 @@ build-check: ## 编译应用但不打安装包（CI 用）
 # CI=true：Tauri 打 dmg 时检测到它会给 bundle_dmg.sh 加 --skip-jenkins，跳过 Finder AppleScript
 # 窗口布局（阶段 1 在这里超时 -1712），无界面环境也能完成；代价是 dmg 打开后没有图标摆位，
 # “应用程序”快捷方式仍在。
-release: ## 打发布包（未签名）：macOS 产出 .dmg（Tauri 打完会清掉 bundle/macos 下的 .app），Windows 产出 NSIS 安装程序
+release: ## 打发布包（未签名）：macOS 产出 .dmg（装了交叉工具时顺带产出 Windows 安装程序），Windows 产出 NSIS 安装程序
 	CI=true pnpm tauri build
+ifeq ($(HAS_XWIN),1)
+	@$(MAKE) --no-print-directory release-win
+else
+	@$(MAKE) --no-print-directory release-report
+endif
+
+release-win: ## 在 macOS 上交叉打 Windows NSIS 安装程序（需 brew install nsis llvm lld 与 cargo install cargo-xwin；首次会下载约 1.5 GB 的 Windows SDK 到 ~/.cache/cargo-xwin）
+	PATH="$(LLVM_BIN):$$PATH" CI=true pnpm tauri build --runner cargo-xwin --target $(WIN_TARGET)
 	@$(MAKE) --no-print-directory release-report
 
 release-app: ## 只打 .app（macOS，测量用，比 release 快）
@@ -63,7 +75,7 @@ release-app: ## 只打 .app（macOS，测量用，比 release 快）
 
 release-report: ## 列出产物及大小
 	@echo "== 产物 =="
-	@find target/release/bundle -maxdepth 2 \( -name '*.app' -o -name '*.dmg' -o -name '*.exe' -o -name '*.msi' \) 2>/dev/null | while read -r f; do \
+	@find target/release/bundle target/$(WIN_TARGET)/release/bundle -maxdepth 2 \( -name '*.app' -o -name '*.dmg' -o -name '*.exe' -o -name '*.msi' \) 2>/dev/null | while read -r f; do \
 	  h=$$(du -sh "$$f" | cut -f1); \
 	  if [ -d "$$f" ]; then echo "$$f  $$h  $$(du -sk "$$f" | cut -f1) KiB"; \
 	  else echo "$$f  $$h  $$(wc -c < "$$f" | tr -d ' ') B"; fi; \
