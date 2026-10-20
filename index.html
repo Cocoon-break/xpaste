@@ -60,7 +60,7 @@
               </button>
               <button class="btn icon" type="button" id="delBtn" aria-label="删除"><span data-icon="trash"></span></button>
               <button class="btn primary" type="button" id="copyBtn">
-                <span class="swap" data-state="a"><span data-s="a" data-icon="copy"></span><span data-s="b" data-icon="check"></span></span>复制<kbd>Enter</kbd>
+                <span class="swap" data-state="a"><span data-s="a" data-icon="copy"></span><span data-s="b" data-icon="check"></span></span><span data-verb>复制</span><kbd>Enter</kbd>
               </button>
             </div>
           </header>
@@ -72,15 +72,16 @@
       <footer class="statusbar">
         <span class="k" id="selHint"></span>
         <span class="k"><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
-        <span class="k"><kbd class="mod"></kbd><kbd>1–9</kbd> 快速复制</span>
+        <span class="k"><kbd class="mod"></kbd><kbd>1–9</kbd> <span data-verb="快速">快速复制</span></span>
         <span class="k"><kbd class="mod"></kbd><kbd>P</kbd> 置顶</span>
         <span class="k"><kbd class="mod"></kbd><kbd>←→</kbd> 切换分类</span>
         <span class="k"><kbd>Del</kbd> 删除</span>
-        <span class="k"><kbd>Esc</kbd> 隐藏</span>
+        <span class="k" id="undoHint" hidden><kbd class="mod"></kbd><kbd>Z</kbd> 撤销</span>
+        <span class="k"><kbd>Esc</kbd> <span id="escHint">隐藏</span></span>
       </footer>
 
       <div class="menu" id="menu" role="menu" aria-label="条目操作" data-open="false">
-        <button type="button" role="menuitem" data-m="copy" style="--i:0"><span data-icon="copy"></span>复制<kbd>Enter</kbd></button>
+        <button type="button" role="menuitem" data-m="copy" style="--i:0"><span data-icon="copy"></span><span data-verb>复制</span><kbd>Enter</kbd></button>
         <button type="button" role="menuitem" data-m="pin" style="--i:1"><span data-icon="pin"></span><span id="mPin">置顶</span><kbd class="modp"></kbd></button>
         <div class="sep" role="separator"></div>
         <button type="button" role="menuitem" data-m="del" class="danger" style="--i:2"><span data-icon="trash"></span>删除<kbd>Del</kbd></button>
@@ -131,7 +132,7 @@
             <ul class="apps-list" id="ignoreList" role="listbox" aria-labelledby="ignoreLabel" hidden></ul>
           </div>
           <div class="switches" style="--i:3">
-            <label class="switch"><span><b>跳过密码与验证码</b><small>来自密码管理器或被标记为敏感的内容不会被记录</small></span><input type="checkbox" id="sensitive" name="sensitive" checked></label>
+            <label class="switch"><span><b>跳过密码管理器与敏感内容</b><small>来自密码管理器或被标记为敏感的内容不会被记录</small></span><input type="checkbox" id="sensitive" name="sensitive" checked></label>
             <label class="switch"><span><b>复制后移到顶部</b><small>再次使用的条目会排到列表最前</small></span><input type="checkbox" id="moveTop" name="moveTop" checked></label>
             <label class="switch"><span><b>开机时启动</b><small>登录系统后在后台待命</small></span><input type="checkbox" id="autostart" name="autostart" checked></label>
           </div>
@@ -147,6 +148,10 @@
           <div class="line" id="permRow" style="--i:5" hidden>
             <span><b>自动粘贴权限</b><small id="permState"></small></span>
             <button class="btn sm" type="button" id="permBtn" hidden>前往授权</button>
+          </div>
+          <div class="line" style="--i:6">
+            <span><b>历史记录</b><small>置顶记录会保留</small></span>
+            <button class="btn" type="button" id="clearBtn">清空历史…</button>
           </div>
         </div>
         <footer class="dlg-foot">

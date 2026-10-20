@@ -25,6 +25,7 @@ import {
 } from './format';
 import { hotkeyFromEvent, hotkeyLabel } from './hotkey';
 import { keyAction } from './keymap';
+import { copyVerb, escHint } from './labels';
 import { nextStep, onboardSteps, type Step } from './onboarding';
 import { applyAdded, applyRemoved, applyUpdated } from './records';
 import { layoutBars, sameColumns, spectrumStat, staggerIndex, xPct, type Layout } from './spectrum';
@@ -109,12 +110,25 @@ const S = {
   settings: {} as Settings,
   platform: {} as PlatformInfo,
   paused: false,
+  /** macOS 已授权辅助功能 / Windows：Enter 直接粘贴 */
+  canPaste: false,
   cells: [] as Cell[],
   total: 0,
   /** 当前可见条数，供 aria-setsize */
   count: 0,
 };
 const menuOpen = () => menu.dataset.open === 'true';
+
+// —— 随状态变化的文案 ——
+const undoHint = $('#undoHint'), escHintEl = $('#escHint');
+const paintUndoHint = () => (undoHint.hidden = !canUndo(S.undo, Date.now()));
+// macOS 看辅助功能权限（bootstrap 后取一次，每次唤起刷新），Windows 恒能粘贴
+async function paintVerb() {
+  S.canPaste = S.platform.os !== 'macos' || (await accessibilityGranted().catch(() => false));
+  const v = copyVerb(S.canPaste);
+  document.querySelectorAll<HTMLElement>('[data-verb]').forEach((e) => (e.textContent = (e.dataset.verb ?? '') + v));
+  rowsEl.querySelectorAll<HTMLElement>('[data-qa="copy"]').forEach((b) => (b.title = v));
+}
 
 // —— 数据视图 ——
 const vis = () => visible(S.records, S.filter, S.matchIds);
@@ -146,7 +160,7 @@ const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id ===
             ${r.pinned ? `<span class="pin-mark">${svg('pinFill')}</span>` : ''}${i < 9 ? `<kbd class="idx">${i + 1}</kbd>` : ''}
             <span class="qa" aria-hidden="true">
               <button type="button" tabindex="-1" data-qa="pin" title="${r.pinned ? '取消置顶' : '置顶'}">${svg(r.pinned ? 'pinFill' : 'pin')}</button>
-              <button type="button" tabindex="-1" data-qa="copy" title="复制">${svg('copy')}</button>
+              <button type="button" tabindex="-1" data-qa="copy" title="${copyVerb(S.canPaste)}">${svg('copy')}</button>
             </span>
           </div>
         </div>
@@ -651,6 +665,7 @@ function runSearch(v: string, opts: { stagger?: boolean; base?: number; timed?: 
   const t = performance.now();
   S.q = v;
   clearQ.hidden = !v;
+  escHintEl.textContent = escHint(!!v);
   fetchMatches(v, () => {
     list.scrollTop = 0;
     S.sel = null;
@@ -672,6 +687,7 @@ let toastTimer = 0;
 let toastRun: (() => void) | null = null;
 function toast(msg: string, { undo = false, icon = 'check' as keyof typeof I, action = undefined as ToastAction | undefined } = {}) {
   if (!undo) S.undo = null;
+  paintUndoHint();
   $('#toastIc').innerHTML = svg(icon);
   if (toastEl.dataset.open === 'true') fx(toastMsg, [{ opacity: 0, transform: 'translateY(4px)', filter: 'blur(2px)' }, { opacity: 1, transform: 'none', filter: 'blur(0)' }], { duration: 180, easing: EASE_ENTER });
   toastMsg.textContent = msg;
@@ -808,6 +824,8 @@ function remove(id: number) {
       }, reduced.matches ? 0 : 360);
       toast(`已删除“${truncate(r.title, 14)}”`, { undo: true, icon: 'trash' });
       S.undo = armUndo(S.undo, id, r.title, Date.now());
+      paintUndoHint();
+      setTimeout(paintUndoHint, UNDO_MS);
     },
     (err: AppError) => {
       S.removing.delete(id);
@@ -830,6 +848,7 @@ function undo() {
   const u = S.undo;
   if (!u || !canUndo(u, Date.now())) return;
   S.undo = null;
+  paintUndoHint();
   restoring = u.id;
   undoDelete(u.id).then(
     (ok) => {
@@ -930,6 +949,7 @@ const handlers = {
     ids.forEach((id) => details.delete(id));
     if (S.undo && foreign.includes(S.undo.id)) {
       S.undo = null;
+      paintUndoHint();
       clearTimeout(toastTimer);
       undoBtn.hidden = true;
       toastEl.dataset.open = 'false';
@@ -1427,6 +1447,8 @@ obDlg.addEventListener('click', (e) => {
 let booted = false;
 const shown = (t0: number | null, trigger?: PanelShown['trigger']) => {
   S.shown = true;
+  // 授权可能在隐藏期间变化；bootstrap 之前平台未知，由 bootstrap 后那一次负责
+  if (S.platform.os) void paintVerb();
   // 淡出途中又被唤起：取消待发的隐藏
   clearTimeout(hideTimer);
   // 键盘唤起几乎即时（90 / 120ms）；托盘单击是鼠标唤起，按原型 240 / 320ms 弹性回位
@@ -1578,6 +1600,7 @@ root.toggleAttribute('data-native-fade', nativeFade());
 const MOD = b.platform.os === 'macos' ? '⌘' : 'Ctrl';
 document.querySelectorAll('.mod').forEach((k) => (k.textContent = MOD));
 $('.modp').textContent = `${MOD} P`;
+void paintVerb();
 await info(`bootstrap 完成，平台 ${b.platform.os}，材质 ${b.platform.material}`);
 // 首次启动后端在 setup 里就显示了面板，那时页面还没订阅，panel-shown 已丢失，这里补上
 if (b.firstRun) {
@@ -1647,6 +1670,8 @@ list.addEventListener('contextmenu', (e) => {
 
 pinBtn.addEventListener('click', (e) => S.sel !== null && togglePin(S.sel, e.detail !== 0));
 copyBtn.addEventListener('click', () => S.sel !== null && copyRecord(S.sel));
+// 设置对话框留在确认框下面；列表与频谱由 records-removed 刷新
+$('#clearBtn').addEventListener('click', () => void confirmClear());
 delBtn.addEventListener('click', () => S.sel !== null && remove(S.sel));
 menu.addEventListener('click', (e) => {
   if (!menuOpen()) return;

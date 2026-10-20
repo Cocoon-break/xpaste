@@ -590,6 +590,9 @@ dialog > form { display: contents; }
 .steps i { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); opacity: .45; transition: background-color 200ms ease, opacity 200ms ease; }
 .steps i.on { background: var(--beam); opacity: 1; }
 
+/* 761–800px：Windows 上 Ctrl 较宽，撤销提示与“清空搜索”同时出现时收紧间距，最后一项不被裁掉 */
+@media (max-width: 800px) { .statusbar { gap: 12px; } }
+
 /* —— 窄窗口（720–760px）：列表与预览上下叠放 —— */
 @media (max-width: 760px) {
   .body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }

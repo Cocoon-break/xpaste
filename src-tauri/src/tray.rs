@@ -33,6 +33,10 @@ pub fn pause_label(paused: bool) -> &'static str {
     }
 }
 
+pub fn version_label(v: &str) -> String {
+    format!("xPaste {v}")
+}
+
 // macOS 用模板图，系统按菜单栏明暗自动反色；Windows 用彩色图
 fn icon(paused: bool) -> Image<'static> {
     #[cfg(target_os = "macos")]
@@ -101,6 +105,13 @@ pub fn setup(app: &App) -> tauri::Result<()> {
     let pause = MenuItem::with_id(app, "pause", pause_label(paused), true, None::<&str>)?;
     let clear = MenuItem::with_id(app, "clear", "清空历史…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
+    let version = MenuItem::with_id(
+        app,
+        "version",
+        version_label(&app.package_info().version.to_string()),
+        false,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", "退出 xPaste", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
@@ -110,6 +121,8 @@ pub fn setup(app: &App) -> tauri::Result<()> {
             &pause,
             &clear,
             &settings,
+            &PredefinedMenuItem::separator(app)?,
+            &version,
             &PredefinedMenuItem::separator(app)?,
             &quit,
         ],
@@ -162,6 +175,7 @@ mod tests {
         assert_eq!(open_label("⌘ + Shift + V"), "打开 xPaste（⌘ + Shift + V）");
         assert_eq!(pause_label(true), "继续记录");
         assert_eq!(pause_label(false), "暂停记录");
+        assert_eq!(version_label("0.1.0"), "xPaste 0.1.0");
     }
 
     // 托盘未建时 set_text 不做事，只验失败标志；本文件外的测试不碰 HOTKEY_FAILED
