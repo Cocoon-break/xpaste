@@ -1870,7 +1870,8 @@ document.addEventListener('keydown', (e) => {
   // 其他输入控件（设置里的快捷键、保留时长）自己处理按键
   if (!inSearch && t.closest?.('input, textarea, select')) return;
   const a = keyAction(
-    { key: e.key, code: e.code, mod: e.ctrlKey || e.metaKey, alt: e.altKey, shift: e.shiftKey, repeat: e.repeat },
+    // Mod 按平台：macOS 只认 ⌘，⌃ 单独传入只作排除；Windows 只认 Ctrl，Win 键不参与
+    { key: e.key, code: e.code, mod: S.platform.os === 'macos' ? e.metaKey : e.ctrlKey, ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey, repeat: e.repeat },
     {
       inSearch,
       onControl: !inSearch && !!t.closest?.('button, a, video, summary'),

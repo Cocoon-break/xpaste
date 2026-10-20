@@ -11,8 +11,9 @@ export type KeyCtx = {
   dialogOpen: boolean;
 };
 
-/** `mod = ctrlKey || metaKey` */
-export type KeyEv = { key: string; code: string; mod: boolean; alt: boolean; shift: boolean; repeat: boolean };
+/** `mod` 是平台的 Mod 键：macOS 只认 ⌘（metaKey），Windows 只认 Ctrl；`ctrl` 是字面的 Control 键（macOS 的 ⌃），
+ *  只用来排除——⌃ + 字母在 macOS 上是系统 / 文本编辑组合，不当作搜索输入或 Enter 复制 */
+export type KeyEv = { key: string; code: string; mod: boolean; ctrl?: boolean; alt: boolean; shift: boolean; repeat: boolean };
 
 export type Action =
   | { t: 'menuClose' }
@@ -42,7 +43,7 @@ export const keyAction = (e: KeyEv, c: KeyCtx): Action => {
   if (e.mod && k === ',') return e.repeat ? null : { t: 'settings' };
   if (vert) return { t: 'move', d: vert, instant: e.repeat };
   // 按住不连发：删除、复制（次数 +1）、置顶（来回翻转）都只认第一次按下
-  if (k === 'Enter' && !e.mod && !c.onControl && !e.repeat) return { t: 'copy' };
+  if (k === 'Enter' && !e.mod && !e.ctrl && !c.onControl && !e.repeat) return { t: 'copy' };
   const digit = /^Digit([1-9])$/.exec(e.code);
   if (digit && e.mod) return e.repeat ? null : { t: 'copyIndex', i: Number(digit[1]) - 1 };
   if (e.mod && lk === 'p') return e.repeat ? null : { t: 'pin' };
@@ -52,6 +53,6 @@ export const keyAction = (e: KeyEv, c: KeyCtx): Action => {
   if (((k === 'Delete' && !e.mod) || (k === 'Backspace' && e.mod)) && !c.searchHasText && c.hasSel && !c.onControl && !e.repeat) return { t: 'delete' };
   if (k === 'Escape') return c.searchHasText ? { t: 'clearSearch' } : { t: 'hide' };
   if ((k === 'ContextMenu' || (e.shift && k === 'F10')) && c.hasSel) return { t: 'menu' };
-  if (k.length === 1 && !c.inSearch && !c.onControl && !e.mod && !e.alt) return { t: 'focusSearch' };
+  if (k.length === 1 && !c.inSearch && !c.onControl && !e.mod && !e.ctrl && !e.alt) return { t: 'focusSearch' };
   return null;
 };

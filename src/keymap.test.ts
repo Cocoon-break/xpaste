@@ -76,3 +76,12 @@ test('dialog_open_blocks_panel_actions', () => {
 });
 
 test('Mod+, 打开设置', () => assert.deepEqual(keyAction(ev({ key: ',', mod: true }), ctx()), { t: 'settings' }));
+
+test('⌃ + 字母不进搜索框，⌃ + Enter 不复制（macOS 上 ⌃ 不是 Mod）', () => {
+  const base = { key: '', code: '', mod: false, alt: false, shift: false, repeat: false };
+  const ctx = { inSearch: false, onControl: false, searchHasText: false, menuOpen: false, hasSel: true, canUndo: false, dialogOpen: false };
+  assert.equal(keyAction({ ...base, key: 'a', code: 'KeyA', ctrl: true }, ctx), null);
+  assert.deepEqual(keyAction({ ...base, key: 'a', code: 'KeyA' }, ctx), { t: 'focusSearch' });
+  assert.equal(keyAction({ ...base, key: 'Enter', code: 'Enter', ctrl: true }, ctx), null);
+  assert.deepEqual(keyAction({ ...base, key: 'Enter', code: 'Enter' }, ctx), { t: 'copy' });
+});
