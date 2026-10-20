@@ -23,6 +23,8 @@ pub struct AppState {
     pub previous_window: AtomicIsize,
     /// 首次启动引导进行中：快捷键不隐藏面板，改发 `hotkey-pressed`
     pub onboarding: AtomicBool,
+    /// 面板上有对话框打开：失焦与快捷键都不隐藏面板（快捷键改发 `hotkey-pressed`）；面板隐藏时复位
+    pub dialog_open: AtomicBool,
 }
 
 impl AppState {
@@ -42,6 +44,7 @@ impl AppState {
             writing: AtomicBool::new(false),
             previous_window: AtomicIsize::new(0),
             onboarding: AtomicBool::new(false),
+            dialog_open: AtomicBool::new(false),
         }
     }
 

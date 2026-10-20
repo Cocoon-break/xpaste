@@ -136,7 +136,17 @@ pub fn run() {
                 return;
             }
             match event {
-                WindowEvent::Focused(false) => panel::hide(window.app_handle()),
+                // 对话框打开时（例如设置里切去别的应用查东西）失焦不隐藏
+                WindowEvent::Focused(false) => {
+                    let app = window.app_handle();
+                    if !app
+                        .state::<AppState>()
+                        .dialog_open
+                        .load(std::sync::atomic::Ordering::SeqCst)
+                    {
+                        panel::hide(app);
+                    }
+                }
                 WindowEvent::Resized(_) => panel::remember_size(window.app_handle()),
                 _ => {}
             }
@@ -150,6 +160,7 @@ pub fn run() {
             commands::settings::preview_appearance,
             commands::settings::installed_apps,
             commands::panel::hide_panel,
+            commands::panel::set_dialog_open,
             commands::panel::open_accessibility_settings,
             commands::panel::accessibility_granted,
             commands::panel::request_accessibility,

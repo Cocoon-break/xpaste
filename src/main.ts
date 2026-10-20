@@ -2,7 +2,7 @@ import './styles.css';
 import { attachConsole, info } from './api/log';
 import {
   accessibilityGranted, bootstrap, clearHistory, copy, copyText, countUnpinned, deleteRecord, finishOnboarding, getRecord, hidePanel, installedApps, openUrl, previewAppearance, prunePreview,
-  requestAccessibility, revealFile, saveSettings, search, setPaused, setPinned, undoDelete,
+  requestAccessibility, revealFile, saveSettings, search, setDialogOpen, setPaused, setPinned, undoDelete,
 } from './api/commands';
 import {
   onConfirmClear,
@@ -685,12 +685,11 @@ function runSearch(v: string, opts: { stagger?: boolean; base?: number; timed?: 
 }
 
 // —— 提示条 ——
-// 连续触发时只换文字、不重播弹入；非撤销提示会顶掉未完成的撤销。undo 与 action 不同时出现
+// 连续触发时只换文字、不重播弹入；非撤销提示只顶掉撤销按钮，Mod + Z 在撤销期限内仍有效（canUndo 按时间判断）。undo 与 action 不同时出现
 type ToastAction = { label: string; run: () => void };
 let toastTimer = 0;
 let toastRun: (() => void) | null = null;
 function toast(msg: string, { undo = false, icon = 'check' as keyof typeof I, action = undefined as ToastAction | undefined } = {}) {
-  if (!undo) S.undo = null;
   $('#toastIc').innerHTML = svg(icon);
   if (toastEl.dataset.open === 'true') fx(toastMsg, [{ opacity: 0, transform: 'translateY(4px)', filter: 'blur(2px)' }, { opacity: 1, transform: 'none', filter: 'blur(0)' }], { duration: 180, easing: EASE_ENTER });
   toastMsg.textContent = msg;
@@ -707,7 +706,6 @@ function toast(msg: string, { undo = false, icon = 'check' as keyof typeof I, ac
   clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => {
     toastEl.dataset.open = 'false';
-    if (undo) S.undo = null;
   }, undo || action ? UNDO_MS : 2400);
 }
 
@@ -949,10 +947,13 @@ const handlers = {
     ids.forEach((id) => details.delete(id));
     if (S.undo && foreign.includes(S.undo.id)) {
       S.undo = null;
-      clearTimeout(toastTimer);
-      undoBtn.hidden = true;
-      toastEl.dataset.open = 'false';
-      $('#ring').getAnimations().forEach((a) => a.cancel());
+      // 提示条已换成别的提示时不收起它
+      if (!undoBtn.hidden) {
+        clearTimeout(toastTimer);
+        undoBtn.hidden = true;
+        toastEl.dataset.open = 'false';
+        $('#ring').getAnimations().forEach((a) => a.cancel());
+      }
     }
     if (S.menuFor !== null && foreign.includes(S.menuFor)) closeMenu(false);
     // 自己发起的删除由 remove() 的计时器移除，这里跳过
@@ -977,6 +978,10 @@ const handlers = {
 // 结果在点击时就交出去（调用方不必等收起动画），面板隐藏时直接 close 也按 false 结算。
 // 同一时间只有一个确认框：已有一个在等待时，新的请求直接得到 false
 const cfDlg = $<HTMLDialogElement>('#confirm'), cfOk = $<HTMLButtonElement>('#cfOk');
+// 有对话框打开时后端不因失焦或快捷键隐藏面板：每次 showModal 之后与每个 close 事件里按 DOM 实际状态同步
+const syncDialogOpen = () =>
+  void setDialogOpen(document.querySelector('dialog[open]') !== null).catch((e: AppError) => void info(`同步对话框状态失败 kind=${e.kind}`));
+document.querySelectorAll('dialog').forEach((d) => d.addEventListener('close', syncDialogOpen));
 let cfResolve: ((ok: boolean) => void) | null = null, cfReturn: HTMLElement | null = null, cfTimer = 0;
 function confirm({ title, body, ok, danger = false }: { title: string; body: string; ok: string; danger?: boolean }) {
   if (cfResolve) return Promise.resolve(false);
@@ -988,6 +993,7 @@ function confirm({ title, body, ok, danger = false }: { title: string; body: str
   cfOk.textContent = ok;
   cfOk.className = `btn ${danger ? 'danger' : 'primary'}`;
   if (!cfDlg.open) cfDlg.showModal();
+  syncDialogOpen();
   void cfDlg.offsetWidth;
   cfDlg.classList.add('is-shown');
   $('#cfCancel').focus();
@@ -1247,6 +1253,7 @@ function openSettings() {
   paintTheme(true);
   void paintPerm();
   if (!dlg.open) dlg.showModal();
+  syncDialogOpen();
   // 关闭时 display:none 不会清掉滚动位置，打开后再回到顶部
   dlg.querySelector('.dlg-body')!.scrollTop = 0;
   void dlg.offsetWidth;
@@ -1285,11 +1292,14 @@ hotkeyIn.addEventListener('keydown', (e) => {
   if (e.repeat || ['Control', 'Meta', 'Shift', 'Alt'].includes(e.key)) return;
   const h = hotkeyFromEvent({ key: e.key, code: e.code, mod: e.ctrlKey || e.metaKey, alt: e.altKey, shift: e.shiftKey, repeat: e.repeat });
   if (!h) return setHotkeyHelp(`至少需要包含 ${MOD} 或 Alt`);
+  recordHotkey(h);
+});
+function recordHotkey(h: string) {
   pendingHotkey = h;
   hotkeyIn.value = hotkeyLabel(h, S.platform.os);
   setHotkeyHelp('已记录，保存后生效');
   fx(hotkeyIn, [{ transform: 'scale(.98)' }, { transform: 'scale(1)' }], { duration: 300, easing: EASE_SPRING });
-});
+}
 permBtn.addEventListener('click', () => void requestAccessibility().catch((err: AppError) => toast(err.message)));
 form.addEventListener('submit', (e) => {
   e.preventDefault();
@@ -1393,6 +1403,7 @@ function openOnboard() {
     obReturn = document.activeElement as HTMLElement | null;
     obDlg.showModal();
   }
+  syncDialogOpen();
   void obDlg.offsetWidth;
   obDlg.classList.add('is-shown');
   paintOb();
@@ -1572,7 +1583,9 @@ await onPausedChanged((p) => handlers.paused(p));
 await onOpenSettings(openSettings);
 await onConfirmClear(() => void confirmClear());
 // 引导中按唤起快捷键：可见时面板不隐藏，隐藏时先 panel-shown 再到这里；只在“试按快捷键”这一步算成功
+// 设置对话框打开时按唤起快捷键：面板同样不隐藏；录制框有焦点就当作按下了当前快捷键（网页收不到被全局注册拦下的按键）
 await onHotkeyPressed(() => {
+  if (document.activeElement === hotkeyIn) return recordHotkey(S.settings.hotkey);
   if (obStep === 'hotkey' && obDlg.open) obSucceed();
 });
 

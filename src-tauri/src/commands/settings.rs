@@ -397,6 +397,7 @@ mod tests {
                 bootstrap,
                 prune_preview,
                 crate::commands::panel::accessibility_granted,
+                crate::commands::panel::set_dialog_open,
                 crate::commands::records::search,
                 crate::commands::records::count_unpinned,
             ])

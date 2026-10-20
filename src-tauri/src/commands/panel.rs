@@ -1,13 +1,22 @@
-use tauri::AppHandle;
+use std::sync::atomic::Ordering;
+
+use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::error::AppError;
+use crate::state::AppState;
 
 /// `animate`：前端没有开减少动态效果；macOS 系统材质下据此决定是否原生淡出整个窗口。
 #[tauri::command(async)]
 pub fn hide_panel(app: AppHandle, animate: bool) -> Result<(), AppError> {
     crate::panel::hide_animated(&app, animate);
     Ok(())
+}
+
+/// 前端在对话框打开 / 全部关闭时同步；只写原子变量，同步命令即可。
+#[tauri::command]
+pub fn set_dialog_open(state: State<'_, AppState>, open: bool) {
+    state.dialog_open.store(open, Ordering::SeqCst);
 }
 
 /// 系统设置中的辅助功能页（非 macOS 无操作）。AppKit 调用切到主线程。
