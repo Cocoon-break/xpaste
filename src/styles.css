@@ -164,9 +164,9 @@ kbd {
   transform-origin: 50% 12%;
 }
 :root[data-material="opaque"] .window { background: var(--ink); }
-.window::before { /* 顶边的光谱细线 */
-  content: ""; position: absolute; left: 24px; right: 24px; top: -1px; height: 1px;
-  background: var(--spectrum); opacity: .7; border-radius: 1px;
+.window::before { /* 顶边的光谱细线：铺满窗内画在边框内侧顶端，两端随圆角收束 */
+  content: ""; position: absolute; inset: 0; border-radius: 13px; pointer-events: none; /* 边框内侧：14px − 1px */
+  background: var(--spectrum) 50% 0 / 100% 1px no-repeat; opacity: .7;
 }
 /* 显隐由 Tauri 负责。前端发起的隐藏先把 data-shown 置 false 播 160ms 淡出再隐藏窗口
    （macOS 系统材质下见下面 data-native-fade：内容只位移，透明度由窗口 alpha 承担）；唤起时 shown() 按来源设 data-instant：
@@ -209,9 +209,9 @@ kbd {
   background: var(--well); border: 1px solid var(--line-2); border-radius: 12px; color: var(--muted);
   transition: border-color 200ms ease, background-color 200ms ease, color 200ms ease;
 }
-.search::after { /* 聚焦时从中间展开的光谱下划线 */
-  content: ""; position: absolute; left: 12px; right: 12px; bottom: -1px; height: 2px; border-radius: 2px;
-  background: var(--spectrum); transform: scaleX(0); opacity: 0;
+.search::after { /* 聚焦时从中间展开的光谱下划线：铺满框内贴边框内侧底边，两端随圆角收束 */
+  content: ""; position: absolute; inset: 0; border-radius: 11px; pointer-events: none; /* 边框内侧：12px − 1px */
+  background: var(--spectrum) 50% 100% / 100% 2px no-repeat; transform: scaleX(0); opacity: 0;
   transition: transform 420ms var(--ease-enter), opacity 200ms ease;
 }
 .search:focus-within { border-color: color-mix(in srgb, var(--beam) 40%, transparent); background: var(--well-2); color: var(--beam); }
@@ -399,15 +399,15 @@ mark { background: var(--mark-bg); color: var(--mark-fg); border-radius: 3px; pa
 
 /* —— 预览 —— */
 .preview { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-height: 0; background: var(--preview-bg); }
-.phead { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px 12px 18px; border-bottom: 1px solid var(--line); }
+.phead { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px 8px 16px; border-bottom: 1px solid var(--line); }
 .tchip { display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 10px; border-radius: 999px; font-size: 12.5px; color: var(--fg); background: color-mix(in srgb, var(--tc) 12%, transparent); border: 1px solid color-mix(in srgb, var(--tc) 30%, transparent); white-space: nowrap; }
 .tchip .ic { width: 14px; height: 14px; color: var(--tc); } /* 类型色只给图标与底色，文字用 --fg（M21） */
 .chip { font: 11px var(--font-mono); padding: 2px 7px; border-radius: 5px; background: var(--glass-2); border: 1px solid var(--line-2); color: var(--muted); white-space: nowrap; }
 .ptype { display: flex; gap: 8px; align-items: center; min-width: 0; flex-wrap: wrap; }
 .pact { display: flex; gap: 6px; }
-.pbody { overflow: auto; overscroll-behavior: contain; padding: 20px; min-width: 0; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+.pbody { overflow: auto; overscroll-behavior: contain; padding: 14px 16px; min-width: 0; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
 .p-empty { color: var(--faint); padding-top: 40px; text-align: center; }
-.p-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 16px; line-height: 1.8; max-width: 60ch; }
+.p-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: 1.7; }
 .p-link { display: grid; gap: 14px; }
 .lk-card { display: flex; gap: 14px; align-items: center; padding: 14px; border-radius: 14px; background: var(--glass-2); border: 1px solid var(--line-2); }
 .lk-fav { width: 44px; height: 44px; border-radius: 12px; flex: none; display: grid; place-items: center; font: 700 18px var(--font-display); color: var(--on-pill); background: linear-gradient(135deg, var(--c-link), var(--c-text)); }
@@ -447,7 +447,7 @@ button.poster { display: block; width: 100%; padding: 0; background: #000000; ba
 .p-file > div { min-width: 0; display: grid; gap: 6px; }
 .fname { font-size: 17px; font-weight: 500; overflow-wrap: anywhere; }
 .fpath { font: 12px/1.6 var(--font-mono); color: var(--muted); overflow-wrap: anywhere; }
-.pmeta { margin: 0; padding: 12px 18px; display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px 16px; border-top: 1px solid var(--line); }
+.pmeta { margin: 0; padding: 8px 16px; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, auto); gap: 12px; line-height: 1.35; border-top: 1px solid var(--line); }
 .pmeta dt { font-size: 11px; color: var(--faint); letter-spacing: .04em; }
 .pmeta dd { margin: 0; font-size: 12.5px; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -555,6 +555,7 @@ dialog > form { display: contents; }
 .suffix { position: relative; }
 .suffix span { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); color: var(--faint); font-size: 13px; pointer-events: none; }
 .suffix input { padding-right: 34px; font-variant-numeric: tabular-nums; }
+.line .suffix { flex: none; width: 96px; }
 .switches { display: grid; border-top: 1px solid var(--line); }
 .switch { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
 .switch b, .line b { display: block; font-weight: 500; font-size: 13px; }

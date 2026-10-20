@@ -101,6 +101,10 @@ pub fn changed_fields(old: &Settings, new: &Settings) -> Vec<&'static str> {
             "spectrumCollapsed",
             old.spectrum_collapsed != new.spectrum_collapsed,
         ),
+        (
+            "frequentMinUses",
+            old.frequent_min_uses != new.frequent_min_uses,
+        ),
     ]
     .into_iter()
     .filter_map(|(name, changed)| changed.then_some(name))
@@ -302,6 +306,26 @@ mod tests {
     }
 
     #[test]
+    fn save_settings_inner_checks_frequent_min_uses_range() {
+        let state = AppState::for_test();
+        let with = |n| Settings {
+            frequent_min_uses: n,
+            ..Settings::default()
+        };
+        for bad in [1, 100] {
+            assert!(matches!(
+                save_settings_inner(&state, with(bad)),
+                Err(AppError::Core(CoreError::InvalidSettings(_)))
+            ));
+        }
+        assert_eq!(*state.settings(), Settings::default());
+        for ok in [2, 99] {
+            save_settings_inner(&state, with(ok)).unwrap();
+            assert_eq!(state.store().load_settings().frequent_min_uses, ok);
+        }
+    }
+
+    #[test]
     fn save_settings_inner_persists_valid() {
         let state = AppState::for_test();
         let s = Settings {
@@ -329,14 +353,21 @@ mod tests {
         assert!(changed_fields(&old, &old).is_empty());
         let new = Settings {
             hotkey: "Alt+Space".into(),
-            appearance: xpaste_core::Appearance::Dark,
+            appearance: xpaste_core::Appearance::Light,
             panel_size: (1000.0, 700.0),
             spectrum_collapsed: true,
+            frequent_min_uses: 5,
             ..Settings::default()
         };
         assert_eq!(
             changed_fields(&old, &new),
-            ["hotkey", "appearance", "panelSize", "spectrumCollapsed"]
+            [
+                "hotkey",
+                "appearance",
+                "panelSize",
+                "spectrumCollapsed",
+                "frequentMinUses"
+            ]
         );
     }
 

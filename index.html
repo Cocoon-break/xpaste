@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -75,7 +75,7 @@
         <span class="k"><kbd class="mod"></kbd><kbd>1–9</kbd> <span data-verb="快速">快速复制</span></span>
         <span class="k"><kbd class="mod"></kbd><kbd>P</kbd> 置顶</span>
         <span class="k"><kbd class="mod"></kbd><kbd>←→</kbd> 切换分类</span>
-        <span class="k"><kbd>Del</kbd> 删除</span>
+        <span class="k"><kbd class="delmod" hidden>⌘</kbd><kbd class="del">Del</kbd> 删除</span>
         <span class="k" id="undoHint" hidden><kbd class="mod"></kbd><kbd>Z</kbd> 撤销</span>
         <span class="k"><kbd>Esc</kbd> <span id="escHint">隐藏</span></span>
       </footer>
@@ -85,7 +85,7 @@
         <button type="button" role="menuitem" data-m="pin" style="--i:1"><span data-icon="pin"></span><span id="mPin">置顶</span><kbd class="modp"></kbd></button>
         <button type="button" role="menuitem" data-m="open" style="--i:2" hidden><span data-icon="link"></span><span id="mOpen"></span></button>
         <div class="sep" role="separator"></div>
-        <button type="button" role="menuitem" data-m="del" class="danger" style="--i:3"><span data-icon="trash"></span>删除<kbd>Del</kbd></button>
+        <button type="button" role="menuitem" data-m="del" class="danger" style="--i:3"><span data-icon="trash"></span>删除<kbd class="del">Del</kbd></button>
       </div>
 
       <div class="toast" id="toast" data-open="false">
@@ -128,16 +128,20 @@
             </div>
           </div>
           <div class="field" style="--i:2">
+            <div class="line"><span><label for="frequentIn"><b>进入“常用”的使用次数</b></label><small id="frequentHelp">同一条内容被复制这么多次后出现在“常用”</small></span><span class="suffix"><input type="number" id="frequentIn" min="2" max="99" step="1" inputmode="numeric" autocomplete="off" aria-describedby="frequentHelp frequentErr"><span>次</span></span></div>
+            <p class="err" id="frequentErr" hidden>请输入 2 到 99 之间的整数</p>
+          </div>
+          <div class="field" style="--i:3">
             <label for="ignore" id="ignoreLabel">不记录这些应用</label>
             <div class="apps-box" id="ignoreBox"><span id="ignoreChips"></span><input id="ignore" role="combobox" aria-expanded="false" aria-controls="ignoreList" aria-autocomplete="list" autocomplete="off" spellcheck="false" placeholder="搜索已安装或正在运行的应用，回车添加"></div>
             <ul class="apps-list" id="ignoreList" role="listbox" aria-labelledby="ignoreLabel" hidden></ul>
           </div>
-          <div class="switches" style="--i:3">
+          <div class="switches" style="--i:4">
             <label class="switch"><span><b>跳过密码管理器与敏感内容</b><small>来自密码管理器或被标记为敏感的内容不会被记录</small></span><input type="checkbox" id="sensitive" name="sensitive" checked></label>
             <label class="switch"><span><b>复制后移到顶部</b><small>再次使用的条目会排到列表最前</small></span><input type="checkbox" id="moveTop" name="moveTop" checked></label>
             <label class="switch"><span><b>开机时启动</b><small>登录系统后在后台待命</small></span><input type="checkbox" id="autostart" name="autostart" checked></label>
           </div>
-          <div class="line" style="--i:4">
+          <div class="line" style="--i:5">
             <span><b id="themeLabel">外观</b><small>点选即生效</small></span>
             <div class="seg" id="themeSeg" role="radiogroup" aria-labelledby="themeLabel">
               <span class="pill" aria-hidden="true"></span>
@@ -146,11 +150,11 @@
               <button type="button" role="radio" data-theme-opt="dark" aria-label="暗色主题" title="暗色"><span data-icon="moon"></span></button>
             </div>
           </div>
-          <div class="line" id="permRow" style="--i:5" hidden>
+          <div class="line" id="permRow" style="--i:6" hidden>
             <span><b>自动粘贴权限</b><small id="permState"></small></span>
             <button class="btn sm" type="button" id="permBtn" hidden>前往授权</button>
           </div>
-          <div class="line" style="--i:6">
+          <div class="line" style="--i:7">
             <span><b>历史记录</b><small id="clearNote" aria-live="polite">置顶记录会保留</small></span>
             <button class="btn sm" type="button" id="clearBtn">清空历史…</button>
           </div>

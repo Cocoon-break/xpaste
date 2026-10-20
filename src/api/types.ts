@@ -16,6 +16,7 @@ export interface Settings {
   panelSize: [number, number];
   lastFilter: string;
   spectrumCollapsed: boolean;
+  frequentMinUses: number;
 }
 
 export interface PlatformInfo {

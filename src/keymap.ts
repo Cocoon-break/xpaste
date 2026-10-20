@@ -48,7 +48,8 @@ export const keyAction = (e: KeyEv, c: KeyCtx): Action => {
   if (e.mod && lk === 'p') return e.repeat ? null : { t: 'pin' };
   if (e.mod && (k === 'ArrowLeft' || k === 'ArrowRight')) return { t: 'filter', d: k === 'ArrowRight' ? 1 : -1 };
   if (e.mod && !e.shift && lk === 'z' && c.canUndo && !(c.inSearch && c.searchHasText)) return { t: 'undo' };
-  if ((k === 'Delete' || k === 'Backspace') && !c.searchHasText && c.hasSel && !c.onControl && !e.repeat) return { t: 'delete' };
+  // 单独 ⌫ 只作用于搜索框；删记录用 ⌦ 或 Mod+⌫
+  if (((k === 'Delete' && !e.mod) || (k === 'Backspace' && e.mod)) && !c.searchHasText && c.hasSel && !c.onControl && !e.repeat) return { t: 'delete' };
   if (k === 'Escape') return c.searchHasText ? { t: 'clearSearch' } : { t: 'hide' };
   if ((k === 'ContextMenu' || (e.shift && k === 'F10')) && c.hasSel) return { t: 'menu' };
   if (k.length === 1 && !c.inSearch && !c.onControl && !e.mod && !e.alt) return { t: 'focusSearch' };

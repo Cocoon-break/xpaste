@@ -20,7 +20,7 @@ import {
 import type { AppError, Appearance, FileEntry, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
 import { copyToast, needsAccessibility } from './copy-status';
 import {
-  canInlinePlay, esc, FAV_MIN, FILTERS, FL, fmtBytes, fmtDateTime, fmtDur, fmtInt, hl, hlCode, host, isFav, isHttpUrl, LABEL, rel, truncate, videoChips,
+  canInlinePlay, esc, FILTERS, FL, fmtBytes, fmtDateTime, fmtDur, fmtInt, hl, hlCode, host, isFav, isHttpUrl, LABEL, rel, truncate, videoChips,
   type Filter,
 } from './format';
 import { hotkeyFromEvent, hotkeyLabel } from './hotkey';
@@ -29,7 +29,7 @@ import { copyVerb, escHint, openLabel } from './labels';
 import { nextStep, onboardSteps, type Step } from './onboarding';
 import { applyAdded, applyRemoved, applyUpdated } from './records';
 import { layoutBars, sameColumns, spectrumStat, staggerIndex, xPct, type Layout } from './spectrum';
-import { addIgnored, formToSettings, optionFromRetention, parseLimit, pickerOptions, removeIgnored } from './settings-form';
+import { addIgnored, formToSettings, optionFromRetention, parseFrequent, parseLimit, pickerOptions, removeIgnored } from './settings-form';
 import {
   armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, nextSelection, UNDO_MS, visible, type UndoState,
 } from './view';
@@ -132,8 +132,9 @@ async function paintVerb() {
 }
 
 // —— 数据视图 ——
-const vis = () => visible(S.records, S.filter, S.matchIds);
-const matches = (r: RecordSummary) => inFilter(r, S.filter) && (S.matchIds === null || S.matchIds.has(r.id));
+const favMin = () => S.settings.frequentMinUses;
+const vis = () => visible(S.records, S.filter, S.matchIds, favMin());
+const matches = (r: RecordSummary) => inFilter(r, S.filter, favMin()) && (S.matchIds === null || S.matchIds.has(r.id));
 const rowEl = (id: number | null) => (id === null ? null : document.getElementById('opt-' + id));
 const source = (r: RecordSummary) => r.app?.name || '未知来源';
 
@@ -144,7 +145,7 @@ const thumb = (r: RecordSummary) =>
 
 const metaLine = (r: RecordSummary) => {
   const parts = [esc(source(r)), rel(r.copiedAt), r.kind === 'video' && r.durationSec !== null ? fmtDur(r.durationSec) : fmtBytes(r.size)];
-  if (isFav(r)) parts.push(`<span class="uses">用过 ${fmtInt(r.uses)} 次</span>`);
+  if (isFav(r, favMin())) parts.push(`<span class="uses">用过 ${fmtInt(r.uses)} 次</span>`);
   return parts.join(' · ');
 };
 
@@ -180,7 +181,7 @@ function emptyHTML() {
   if (bootError) return `<div class="empty"><span class="ring">${svg('inbox')}</span><p>无法读取历史记录：${esc(bootError)}</p></div>`;
   const qq = S.q.trim(), f = S.filter;
   const msg = qq ? `没有匹配“${esc(qq)}”的${f === 'all' ? '' : FL[f]}记录`
-    : f === 'fav' ? `还没有常用记录。同一条内容复制 ${FAV_MIN} 次以上就会出现在这里`
+    : f === 'fav' ? `还没有常用记录。同一条内容复制 ${favMin()} 次以上就会出现在这里`
     : `还没有${f === 'all' ? '' : FL[f]}记录，复制一次就会出现在这里`;
   return `<div class="empty"><span class="ring">${svg(qq ? 'search' : f === 'fav' ? 'star' : 'inbox')}</span><p>${msg}</p>
       ${qq || f !== 'all' ? '<button class="btn sm" type="button" data-act="reset">清除搜索与筛选</button>' : ''}</div>`;
@@ -426,16 +427,16 @@ function bodyHTML(d: RecordDetail): string {
 }
 
 function metaHTML(r: RecordSummary, d: RecordDetail | null) {
-  const meta: [string, string][] = [['来源', esc(source(r))], ['复制于', fmtDateTime(r.copiedAt)], ['大小', fmtBytes(r.size)], ['使用', `${fmtInt(r.uses)} 次`]];
+  const meta: [string, string][] = [['来源', source(r)], ['复制于', fmtDateTime(r.copiedAt)], ['大小', fmtBytes(r.size)], ['使用', `${fmtInt(r.uses)} 次`]];
   if (r.kind === 'video' && r.durationSec !== null) meta.push(['时长', fmtDur(r.durationSec)]);
   if (d) {
     const t = d.text ?? '', more = d.truncated ? '+' : '';
     if (r.kind === 'text') meta.push(['字符', fmtInt([...t].length) + more]);
     if (r.kind === 'code') meta.push(['行数', fmtInt(t.split('\n').length) + more]);
     if (r.kind === 'image' && d.image?.w) meta.push(['尺寸', `${d.image.w} × ${d.image.h}`]);
-    if (r.kind === 'link') meta.push(['域名', esc(host(t))]);
+    if (r.kind === 'link') meta.push(['域名', host(t)]);
   }
-  return meta.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('');
+  return meta.map(([k, v]) => `<div><dt>${k}</dt><dd title="${esc(v)}">${esc(v)}</dd></div>`).join('');
 }
 
 // 摘要立即渲染；正文异步取详情，序号过期的结果丢弃。同一条只取一次（摘要更新只刷新头部与信息栏）
@@ -466,7 +467,7 @@ function renderPreview(fade = false) {
     return;
   }
   ptype.innerHTML = `<span class="tchip" data-type="${r.kind}">${svg(r.kind)}${LABEL[r.kind]}</span>`
-    + (isFav(r) ? `<span class="tchip" data-type="fav">${svg('star')}常用</span>` : '')
+    + (isFav(r, favMin()) ? `<span class="tchip" data-type="fav">${svg('star')}常用</span>` : '')
     + (r.lang ? `<span class="chip">${esc(r.lang)}</span>` : '');
   setPin(r.pinned, true);
   pmeta.innerHTML = metaHTML(r, S.detail?.id === r.id ? S.detail : null);
@@ -604,7 +605,7 @@ spTrack.addEventListener('click', (e) => {
 // —— 分类标签 ——
 const tabColor = (k: string) => (k === 'all' ? 'var(--beam)' : `var(--c-${k})`);
 function renderTabs(instant: boolean) {
-  const c = counts(S.records);
+  const c = counts(S.records, favMin());
   const html = (real: boolean) => FILTERS.map(([k, l]) => {
     const mark = k === 'fav' ? svg('star', 'star') : '<i class="dot"></i>';
     const tag = real ? `button type="button" class="tab" data-f="${k}" aria-pressed="${S.filter === k}"` : 'span class="tab"';
@@ -737,8 +738,8 @@ function copyRecord(id: number) {
       const cur = S.records.get(id);
       // 事件可能还没到；并发的置顶、补全更新也不会让次数变少
       const uses = Math.max(cur?.uses ?? 0, before.uses + 1);
-      const fav = !isFav(before) && uses >= FAV_MIN;
-      const msg = copyToast(res, S.platform.os, fav);
+      const fav = !isFav(before, favMin()) && isFav({ uses }, favMin());
+      const msg = copyToast(res, S.platform.os, fav ? uses : null);
       if (msg) {
         toast(msg, {
           icon: fav ? 'star' : 'check',
@@ -1090,6 +1091,7 @@ async function confirmClear(): Promise<string | null> {
 const clearNote = $('#clearNote');
 const dlg = $<HTMLDialogElement>('#settings'), form = $<HTMLFormElement>('#settingsForm'), hotkeyIn = $<HTMLInputElement>('#hotkey');
 const hotkeyHelp = $('#hotkeyHelp'), retainIn = $<HTMLSelectElement>('#retain'), limitIn = $<HTMLInputElement>('#limit'), limitErr = $('#limitErr');
+const frequentIn = $<HTMLInputElement>('#frequentIn'), frequentErr = $('#frequentErr');
 const ignoreIn = $<HTMLInputElement>('#ignore'), sensitiveIn = $<HTMLInputElement>('#sensitive');
 const moveTopIn = $<HTMLInputElement>('#moveTop'), autostartIn = $<HTMLInputElement>('#autostart');
 const permRow = $('#permRow'), permState = $('#permState'), permBtn = $<HTMLButtonElement>('#permBtn');
@@ -1209,7 +1211,7 @@ function setTheme(mode: Appearance) {
 }
 // save_settings 是异步命令，连点时并发保存可能乱序落盘：串行，上一次结束后再发当时最新的设置。
 // savedAppearance 是最近一次确认落盘的外观，保存失败时回到它
-let themeSave: Promise<unknown> = Promise.resolve(), savedAppearance: Appearance = 'system';
+let themeSave: Promise<unknown> = Promise.resolve(), savedAppearance: Appearance = 'dark';
 async function applyAppearance(mode: Appearance) {
   if (mode === themeMode()) return;
   // 先改本地设置：保存途中 persistUi 落盘或点“保存设置”带上的都是新外观，不会把主题改回去
@@ -1272,6 +1274,9 @@ function openSettings() {
   limitIn.value = String(st.maxRecords);
   limitErr.hidden = true;
   limitIn.removeAttribute('aria-invalid');
+  frequentIn.value = String(st.frequentMinUses);
+  frequentErr.hidden = true;
+  frequentIn.removeAttribute('aria-invalid');
   draftIgnored = [...st.ignoredApps];
   ignoreIn.value = '';
   paintChips();
@@ -1343,12 +1348,15 @@ form.addEventListener('submit', (e) => {
 });
 async function submitSettings() {
   if (saving) return;
-  const limit = parseLimit(limitIn.value);
+  const limit = parseLimit(limitIn.value), frequent = parseFrequent(frequentIn.value);
   limitErr.hidden = limit !== null;
   limitIn.setAttribute('aria-invalid', String(limit === null));
+  frequentErr.hidden = frequent !== null;
+  frequentIn.setAttribute('aria-invalid', String(frequent === null));
   if (limit === null) return limitIn.focus();
+  if (frequent === null) return frequentIn.focus();
   const s = formToSettings(S.settings, {
-    hotkey: pendingHotkey, retain: retainIn.value, limit, ignored: addIgnored(draftIgnored, ignoreIn.value), skipSensitive: sensitiveIn.checked,
+    hotkey: pendingHotkey, retain: retainIn.value, limit, frequent, ignored: addIgnored(draftIgnored, ignoreIn.value), skipSensitive: sensitiveIn.checked,
     moveToTop: moveTopIn.checked, launchAtLogin: autostartIn.checked,
   });
   saving = true;
@@ -1359,7 +1367,15 @@ async function submitSettings() {
       if (n > 0 && !(await confirm({ title: '保存设置', body: `将删除 ${n} 条记录`, ok: '删除并保存' }))) return;
     }
     await saveSettings(s);
+    const favChanged = s.frequentMinUses !== S.settings.frequentMinUses;
     S.settings = s;
+    // 常用阈值只在前端用：立即按新阈值重算分类计数、列表与预览标签
+    if (favChanged) {
+      renderTabs(true);
+      // 先重绘频谱（常用分类下的变暗随阈值变），再 renderList，同 setFilter
+      renderSpectrum();
+      renderList();
+    }
     closeSettings();
     toast('设置已保存');
   } catch (e) {
@@ -1654,6 +1670,11 @@ root.toggleAttribute('data-native-fade', nativeFade());
 const MOD = b.platform.os === 'macos' ? '⌘' : 'Ctrl';
 document.querySelectorAll('.mod').forEach((k) => (k.textContent = MOD));
 $('.modp').textContent = `${MOD} P`;
+// macOS 没有 ⌦ 键（MacBook），删除提示写 ⌘ ⌫：状态栏与邻项一样拆成两枚键帽，菜单里是一枚
+const mac = b.platform.os === 'macos';
+$('.statusbar .del').textContent = mac ? '⌫' : 'Del';
+$('.statusbar .delmod').hidden = !mac;
+$('#menu .del').textContent = mac ? '⌘ ⌫' : 'Del';
 void paintVerb();
 await info(`bootstrap 完成，平台 ${b.platform.os}，材质 ${b.platform.material}`);
 // 首次启动后端在 setup 里就显示了面板，那时页面还没订阅，panel-shown 已丢失，这里补上

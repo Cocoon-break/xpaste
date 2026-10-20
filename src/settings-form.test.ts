@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Settings } from './api/types';
 import {
-  addIgnored, formToSettings, optionFromRetention, parseIgnored, parseLimit, pickerOptions, removeIgnored, retentionFromOption,
+  addIgnored, formToSettings, optionFromRetention, parseFrequent, parseIgnored, parseLimit, pickerOptions, removeIgnored, retentionFromOption,
 } from './settings-form.ts';
 
 test('parseLimit 只接受 50–5000 的 50 倍数', () => {
@@ -31,6 +31,13 @@ test('pickerOptions 去重、排除已选、前缀优先', () => {
 });
 test('removeIgnored 按原名移除', () => assert.deepEqual(removeIgnored(['A', 'B'], 'A'), ['B']));
 
+test('parseFrequent 只接受 2–99 的整数', () => {
+  assert.equal(parseFrequent('2'), 2);
+  assert.equal(parseFrequent('99'), 99);
+  assert.equal(parseFrequent(' 5 '), 5);
+  for (const bad of ['1', '100', '2.5', '', 'abc']) assert.equal(parseFrequent(bad), null);
+});
+
 test('retention 选项往返', () => {
   assert.equal(retentionFromOption('forever'), null);
   assert.equal(retentionFromOption('7'), 7);
@@ -42,15 +49,17 @@ test('formToSettings 只改表单字段，其余（含外观：点选即保存�
   const base: Settings = {
     hotkey: 'CommandOrControl+Shift+V', retentionDays: 30, maxRecords: 500, ignoredApps: ['1Password'], skipSensitive: true,
     moveToTop: true, launchAtLogin: true, appearance: 'system', panelSize: [880, 600], lastFilter: 'code', spectrumCollapsed: true,
+    frequentMinUses: 3,
   };
   assert.deepEqual(
     formToSettings(base, {
       hotkey: 'CommandOrControl+Alt+C', retain: 'forever', limit: 1000, ignored: ['a', 'b'], skipSensitive: false, moveToTop: false,
-      launchAtLogin: false,
+      launchAtLogin: false, frequent: 5,
     }),
     {
       hotkey: 'CommandOrControl+Alt+C', retentionDays: null, maxRecords: 1000, ignoredApps: ['a', 'b'], skipSensitive: false,
       moveToTop: false, launchAtLogin: false, appearance: 'system', panelSize: [880, 600], lastFilter: 'code', spectrumCollapsed: true,
+      frequentMinUses: 5,
     },
   );
 });

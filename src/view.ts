@@ -2,17 +2,19 @@
 import type { RecordSummary } from './api/types';
 import { FILTERS, isFav, type Filter } from './format.ts';
 
-export const inFilter = (r: RecordSummary, f: Filter): boolean =>
-  f === 'all' || (f === 'fav' ? isFav(r) : r.kind === f);
+/** `min`：进入“常用”的使用次数（设置 frequentMinUses）。 */
+export const inFilter = (r: RecordSummary, f: Filter, min: number): boolean =>
+  f === 'all' || (f === 'fav' ? isFav(r, min) : r.kind === f);
 
 /** 分类 ∩ 搜索结果（`null` 表示无搜索），常用按次数排，其余置顶优先再按时间、id 倒序。 */
 export const visible = (
   records: Map<number, RecordSummary>,
   f: Filter,
   matchIds: Set<number> | null,
+  min: number,
 ): RecordSummary[] =>
   [...records.values()]
-    .filter((r) => inFilter(r, f) && (matchIds === null || matchIds.has(r.id)))
+    .filter((r) => inFilter(r, f, min) && (matchIds === null || matchIds.has(r.id)))
     .sort(
       f === 'fav'
         ? (a, b) => b.uses - a.uses || b.copiedAt - a.copiedAt
@@ -42,12 +44,12 @@ export const groups = (vis: RecordSummary[], f: Filter, now = Date.now()): { nam
 };
 
 /** 各分类条数，基于全部记录，不受搜索影响。 */
-export const counts = (records: Map<number, RecordSummary>): Record<Filter, number> => {
+export const counts = (records: Map<number, RecordSummary>, min: number): Record<Filter, number> => {
   const c = Object.fromEntries(FILTERS.map(([f]) => [f, 0])) as Record<Filter, number>;
   for (const r of records.values()) {
     c.all++;
     c[r.kind]++;
-    if (isFav(r)) c.fav++;
+    if (isFav(r, min)) c.fav++;
   }
   return c;
 };
