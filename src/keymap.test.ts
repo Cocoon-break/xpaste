@@ -16,8 +16,17 @@ test('Mod+3 复制第 3 条', () =>
 test('Backspace 搜索框有字时不删记录', () =>
   assert.equal(keyAction(ev({ key: 'Backspace' }), ctx({ searchHasText: true })), null));
 
-test('Backspace 搜索框为空时删除', () =>
-  assert.deepEqual(keyAction(ev({ key: 'Backspace' }), ctx()), { t: 'delete' }));
+test('单独 Backspace 搜索框为空时也不删记录', () =>
+  assert.equal(keyAction(ev({ key: 'Backspace' }), ctx()), null));
+
+test('Mod+Backspace 搜索框为空时删除', () =>
+  assert.deepEqual(keyAction(ev({ key: 'Backspace', mod: true }), ctx()), { t: 'delete' }));
+
+test('Mod+Backspace 搜索框有字时不删记录', () =>
+  assert.equal(keyAction(ev({ key: 'Backspace', mod: true }), ctx({ searchHasText: true })), null));
+
+test('Delete 搜索框为空时删除', () =>
+  assert.deepEqual(keyAction(ev({ key: 'Delete' }), ctx()), { t: 'delete' }));
 
 test('Esc 先清搜索再隐藏', () => {
   assert.deepEqual(keyAction(ev({ key: 'Escape' }), ctx({ searchHasText: true })), { t: 'clearSearch' });
@@ -48,7 +57,7 @@ test('Mod+→ 切换分类', () =>
   assert.deepEqual(keyAction(ev({ key: 'ArrowRight', mod: true }), ctx()), { t: 'filter', d: 1 }));
 
 test('按住不重复触发删除、复制、置顶', () => {
-  assert.equal(keyAction(ev({ key: 'Backspace', repeat: true }), ctx()), null);
+  assert.equal(keyAction(ev({ key: 'Backspace', mod: true, repeat: true }), ctx()), null);
   assert.equal(keyAction(ev({ key: 'Delete', repeat: true }), ctx()), null);
   assert.equal(keyAction(ev({ key: 'Enter', repeat: true }), ctx()), null);
   assert.equal(keyAction(ev({ key: 'p', mod: true, repeat: true }), ctx()), null);
