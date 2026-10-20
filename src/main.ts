@@ -1326,9 +1326,11 @@ function pollOcr() {
       ocrProgressEl.hidden = p.total === 0;
       ocrProgressEl.textContent = `已识别 ${fmtInt(p.done)} / ${fmtInt(p.total)}`;
       ocrUnsupportedEl.hidden = p.supported;
-      ocrUnsupportedEl.textContent = S.platform.os === 'windows'
-        ? '当前系统没有可用的文字识别语言，可在“设置 > 时间和语言 > 语言”中为中文添加“光学字符识别”'
-        : '需要 macOS 10.15 或更高';
+      // 支持时清空：#ocrOn 通过 aria-describedby 指向这里，隐藏元素的文字仍会被读屏念出
+      ocrUnsupportedEl.textContent = p.supported ? ''
+        : S.platform.os === 'windows'
+          ? '当前系统没有可用的文字识别语言，可在“设置 > 时间和语言 > 语言”中为中文添加“光学字符识别”'
+          : '需要 macOS 10.15 或更高';
     },
     () => {},
   );
