@@ -1024,18 +1024,23 @@ cfDlg.addEventListener('click', (e) => {
   else if (t.closest('#cfCancel') || (t === cfDlg && cfDownOnBackdrop)) closeConfirm(false);
 });
 // 托盘“清空历史…”：后端已先唤起面板。置顶记录保留；列表由 records-removed 更新，toast 顺带清掉待撤销状态
-async function confirmClear() {
+// 返回提示文案（取消时为 null），设置对话框里的入口把它写进行内（提示条在对话框下面看不见）
+async function confirmClear(): Promise<string | null> {
+  let msg: string, icon: keyof typeof I = 'check';
   try {
     const n = await countUnpinned();
-    if (n === 0) return toast('没有可删除的记录');
-    if (!(await confirm({ title: '清空历史', body: `将删除 ${n} 条未置顶的记录，置顶记录会保留`, ok: `删除 ${n} 条记录`, danger: true }))) return;
-    toast(`已删除 ${await clearHistory()} 条记录`, { icon: 'trash' });
+    if (n === 0) msg = '没有可删除的记录';
+    else if (!(await confirm({ title: '清空历史', body: `将删除 ${n} 条未置顶的记录，置顶记录会保留`, ok: `删除 ${n} 条记录`, danger: true }))) return null;
+    else [msg, icon] = [`已删除 ${await clearHistory()} 条记录`, 'trash'];
   } catch (e) {
-    toast((e as AppError).message);
+    msg = (e as AppError).message;
   }
+  toast(msg, { icon });
+  return msg;
 }
 
 // —— 设置 ——
+const clearNote = $('#clearNote');
 const dlg = $<HTMLDialogElement>('#settings'), form = $<HTMLFormElement>('#settingsForm'), hotkeyIn = $<HTMLInputElement>('#hotkey');
 const hotkeyHelp = $('#hotkeyHelp'), retainIn = $<HTMLSelectElement>('#retain'), limitIn = $<HTMLInputElement>('#limit'), limitErr = $('#limitErr');
 const ignoreIn = $<HTMLInputElement>('#ignore'), sensitiveIn = $<HTMLInputElement>('#sensitive');
@@ -1222,6 +1227,7 @@ function openSettings() {
   if (!S.settings.hotkey || dlg.classList.contains('is-shown')) return;
   clearTimeout(closeTimer);
   if (!dlg.open) dlgReturn = document.activeElement as HTMLElement | null;
+  clearNote.textContent = '置顶记录会保留';
   const st = S.settings;
   pendingHotkey = st.hotkey;
   hotkeyIn.value = hotkeyLabel(st.hotkey, S.platform.os);
@@ -1352,6 +1358,7 @@ function obSucceed() {
   if (obOk) return;
   obOk = true;
   clearInterval(obPoll);
+  void paintVerb();
   paintObOk(true);
   obNext.disabled = false;
   obNext.focus();
@@ -1671,7 +1678,7 @@ list.addEventListener('contextmenu', (e) => {
 pinBtn.addEventListener('click', (e) => S.sel !== null && togglePin(S.sel, e.detail !== 0));
 copyBtn.addEventListener('click', () => S.sel !== null && copyRecord(S.sel));
 // 设置对话框留在确认框下面；列表与频谱由 records-removed 刷新
-$('#clearBtn').addEventListener('click', () => void confirmClear());
+$('#clearBtn').addEventListener('click', () => void confirmClear().then((m) => m && (clearNote.textContent = m)));
 delBtn.addEventListener('click', () => S.sel !== null && remove(S.sel));
 menu.addEventListener('click', (e) => {
   if (!menuOpen()) return;
