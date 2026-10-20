@@ -52,8 +52,6 @@ const I = {
   copy: '<rect x="7" y="7" width="9.5" height="9.5" rx="2"/><path d="M13 7V5a1.5 1.5 0 0 0-1.5-1.5h-6A1.5 1.5 0 0 0 4 5v6.5A1.5 1.5 0 0 0 5.5 13H7"/>',
   check: '<path d="m4.5 10.5 3.5 3.5 7.5-8"/>',
   trash: '<path d="M4 6h12M8 6V4h4v2M6 6l.7 10h6.6L14 6"/>',
-  more: '<circle cx="5" cy="10" r="1.3" fill="currentColor" stroke="none"/><circle cx="10" cy="10" r="1.3" fill="currentColor" stroke="none"/><circle cx="15" cy="10" r="1.3" fill="currentColor" stroke="none"/>',
-  min: '<path d="M5 10h10"/>',
   x: '<path d="m5.5 5.5 9 9M14.5 5.5l-9 9"/>',
   open: '<path d="M11 4h5v5M16 4l-7 7M14 11.5V16H4V6h4.5"/>',
   plus: '<path d="M10 4v12M4 10h12"/>',
@@ -94,7 +92,7 @@ const win = $('#win'), list = $('#list'), rowsEl = $('#rows'), ind = $('#ind'), 
 const tabs = $('#tabs'), tabsBase = $('#tabsBase'), tabsOver = $('#tabsOver');
 const ptype = $('#ptype'), pbody = $('#pbody'), pmeta = $('#pmeta'), countEl = $('#count');
 const pinBtn = $<HTMLButtonElement>('#pinBtn'), copyBtn = $<HTMLButtonElement>('#copyBtn');
-const moreBtn = $<HTMLButtonElement>('#moreBtn'), delBtn = $<HTMLButtonElement>('#delBtn');
+const delBtn = $<HTMLButtonElement>('#delBtn');
 const menu = $('#menu'), toastEl = $('#toast'), toastMsg = $('#toastMsg'), undoBtn = $<HTMLButtonElement>('#undoBtn'), toastAct = $<HTMLButtonElement>('#toastAct'), pauseBtn = $('#pauseBtn');
 const spBars = $('#spBars'), spTrack = $('#spTrack'), spCursor = $('#spCursor'), spTip = $('#spTip');
 
@@ -455,7 +453,7 @@ function showBody(d: RecordDetail | null, fade: boolean) {
 }
 function renderPreview(fade = false) {
   const r = S.sel === null ? undefined : S.records.get(S.sel);
-  [pinBtn, copyBtn, moreBtn, delBtn].forEach((b) => (b.disabled = !r));
+  [pinBtn, copyBtn, delBtn].forEach((b) => (b.disabled = !r));
   $('#selHint').textContent = r ? `已选中：${truncate(r.title, 18)}` : '没有选中的记录';
   if (!r) {
     ++detailSeq;
@@ -1503,7 +1501,6 @@ const hide = () => {
     toast(err.message);
   }), animate && !nativeFade() ? 160 : 0);
 };
-document.querySelectorAll('[data-hide]').forEach((b) => b.addEventListener('click', hide));
 
 // —— 键盘 ——
 document.addEventListener('keydown', (e) => {
@@ -1668,11 +1665,6 @@ list.addEventListener('contextmenu', (e) => {
 pinBtn.addEventListener('click', (e) => S.sel !== null && togglePin(S.sel, e.detail !== 0));
 copyBtn.addEventListener('click', () => S.sel !== null && copyRecord(S.sel));
 delBtn.addEventListener('click', () => S.sel !== null && remove(S.sel));
-moreBtn.addEventListener('click', (e) => {
-  if (menuOpen()) return closeMenu(true);
-  const r = moreBtn.getBoundingClientRect();
-  if (S.sel !== null) openMenu(S.sel, r.right, r.bottom + 6, e.detail === 0);
-});
 menu.addEventListener('click', (e) => {
   if (!menuOpen()) return;
   const m = (e.target as Element).closest<HTMLElement>('[data-m]')?.dataset.m;
@@ -1685,7 +1677,7 @@ menu.addEventListener('click', (e) => {
 });
 document.addEventListener('pointerdown', (e) => {
   const t = e.target as Node;
-  if (menuOpen() && !menu.contains(t) && !moreBtn.contains(t)) closeMenu(false);
+  if (menuOpen() && !menu.contains(t)) closeMenu(false);
 }, true);
 undoBtn.addEventListener('click', undo);
 toastAct.addEventListener('click', () => {

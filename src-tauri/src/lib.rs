@@ -150,7 +150,6 @@ pub fn run() {
             commands::settings::preview_appearance,
             commands::settings::installed_apps,
             commands::panel::hide_panel,
-            commands::panel::open_accessibility_settings,
             commands::panel::accessibility_granted,
             commands::panel::request_accessibility,
             commands::panel::open_url,

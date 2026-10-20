@@ -200,11 +200,10 @@ kbd {
 .titlebar { display: flex; align-items: center; gap: 10px; height: 42px; padding: 0 8px 0 18px; }
 .titlebar b { font: 700 13px var(--font-display); letter-spacing: -.01em; }
 .titlebar .sub { color: var(--faint); font-size: 12px; }
-.titlebar .live { cursor: pointer; display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--c-code); padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, var(--c-code) 9%, transparent); border: 1px solid color-mix(in srgb, var(--c-code) 22%, transparent); }
+.titlebar .live { margin-left: auto; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--c-code); padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, var(--c-code) 9%, transparent); border: 1px solid color-mix(in srgb, var(--c-code) 22%, transparent); }
 .titlebar .live i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
 .titlebar .live[data-paused="true"] { color: var(--muted); background: transparent; border-color: var(--line-2); }
 .titlebar .live[data-paused="true"] i { box-shadow: none; }
-.titlebar .ctrls { margin-left: auto; display: flex; }
 
 .searchbar { display: flex; gap: 10px; align-items: center; padding: 2px 18px 12px; }
 .search {
