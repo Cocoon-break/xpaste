@@ -157,8 +157,11 @@ test('M20-14 提示条 420ms spring 弹入 / 160ms ease-out 退出；连续触�
 test('M20-15 切换主题：点选即时切换并立即保存；data-theme-switching 两帧内关闭全部过渡，各元素不各自渐变；圆形扩散已删除（阶段 9 F01）', () => {
   assert.match(css, /\[data-theme-switching\] \*, \[data-theme-switching\] \*::before, \[data-theme-switching\] \*::after \{ transition: none !important; \}/);
   assert.match(ts, /function setTheme\(mode: Appearance\) \{\s*root\.setAttribute\('data-theme-switching', ''\);[\s\S]*?requestAnimationFrame\(\(\) => requestAnimationFrame\(\(\) => root\.removeAttribute\('data-theme-switching'\)\)\);/);
-  // 不防抖、不预览：先改本地设置再直接保存，失败时还原到之前的外观
-  assert.match(ts, /async function applyAppearance\(mode: Appearance\) \{[\s\S]*?const prev = S\.settings\.appearance;\s*S\.settings = \{ \.\.\.S\.settings, appearance: mode \};\s*setTheme\(mode\);[\s\S]*?await saveSettings\(S\.settings\);[\s\S]*?S\.settings = \{ \.\.\.S\.settings, appearance: prev \};\s*setTheme\(S\.settings\.appearance\);/);
+  // 不防抖、不预览：先改本地设置再保存；串行保存，每次发当时最新的设置；失败回到最近已确认落盘的外观
+  assert.match(ts, /async function applyAppearance\(mode: Appearance\) \{[\s\S]*?S\.settings = \{ \.\.\.S\.settings, appearance: mode \};\s*setTheme\(mode\);\s*const save = \(themeSave = themeSave\.catch\(\(\) => \{\}\)\.then\(\(\) => \{\s*const s = S\.settings;\s*return saveSettings\(s\)\.then\(\(\) => void \(savedAppearance = s\.appearance\)\);[\s\S]*?await save;[\s\S]*?S\.settings = \{ \.\.\.S\.settings, appearance: savedAppearance \};\s*setTheme\(S\.settings\.appearance\);/);
+  assert.match(ts, /S\.settings = b\.settings;\nsavedAppearance = b\.settings\.appearance;/);
+  // 按住方向键只切一次
+  assert.match(ts, /themeSeg\.addEventListener\('keydown', [\s\S]*?e\.stopPropagation\(\);\s*\/\/ [^\n]*\n\s*if \(e\.repeat\) return;/);
   assert.match(ts, /if \(b\) void applyAppearance\(b\.dataset\.themeOpt as Appearance\);/);
   assert.match(html, /<span><b id="themeLabel">外观<\/b><small>点选即生效<\/small><\/span>/);
   // 圆形扩散、预览与关闭还原都已删除

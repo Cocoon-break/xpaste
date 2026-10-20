@@ -1179,19 +1179,25 @@ function setTheme(mode: Appearance) {
   paintTheme(true);
   requestAnimationFrame(() => requestAnimationFrame(() => root.removeAttribute('data-theme-switching')));
 }
+// save_settings 是异步命令，连点时并发保存可能乱序落盘：串行，上一次结束后再发当时最新的设置。
+// savedAppearance 是最近一次确认落盘的外观，保存失败时回到它
+let themeSave: Promise<unknown> = Promise.resolve(), savedAppearance: Appearance = 'system';
 async function applyAppearance(mode: Appearance) {
   if (mode === themeMode()) return;
   // 先改本地设置：保存途中 persistUi 落盘或点“保存设置”带上的都是新外观，不会把主题改回去
-  const prev = S.settings.appearance;
   S.settings = { ...S.settings, appearance: mode };
   setTheme(mode);
+  const save = (themeSave = themeSave.catch(() => {}).then(() => {
+    const s = S.settings;
+    return saveSettings(s).then(() => void (savedAppearance = s.appearance));
+  }));
   try {
-    await saveSettings(S.settings);
+    await save;
   } catch (e) {
     void info(`保存外观失败 kind=${(e as AppError).kind}`);
     // 等待期间又点了别的：交给后一次
     if (S.settings.appearance !== mode) return;
-    S.settings = { ...S.settings, appearance: prev };
+    S.settings = { ...S.settings, appearance: savedAppearance };
     setTheme(S.settings.appearance);
     toast('外观未能保存');
   }
@@ -1204,6 +1210,8 @@ themeSeg.addEventListener('keydown', (e) => {
   if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
   e.preventDefault();
   e.stopPropagation();
+  // 按住不放：只切一次，不每次重复都保存
+  if (e.repeat) return;
   const i = themeOpts.findIndex((b) => b.dataset.themeOpt === themeMode());
   const n = themeOpts[(i + (e.key === 'ArrowRight' ? 1 : -1) + themeOpts.length) % themeOpts.length];
   void applyAppearance(n.dataset.themeOpt as Appearance);
@@ -1596,6 +1604,7 @@ const b = await bootstrap().catch((e: AppError) => {
   throw e;
 });
 S.settings = b.settings;
+savedAppearance = b.settings.appearance;
 paintSpCollapsed(b.settings.spectrumCollapsed);
 S.platform = b.platform;
 S.paused = b.paused;
