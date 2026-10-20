@@ -122,14 +122,14 @@ make dev-isolated  # 开发运行，数据目录隔离在 .xpaste-dev/，开启�
 make measure       # macOS 性能与可靠性测量（先 make release-app；离开电脑时运行，约 15 分钟；终端要有“辅助功能”权限，脚本用 osascript 发按键）
 make check         # 提交前全量检查：格式、clippy、Rust + 前端单元测试、前端构建
 make test          # 只跑单元测试
-make release       # 打发布包（未签名）：当前系统的安装包；macOS 上装了交叉工具时顺带打出 Windows 安装程序
+make release       # 打发布包（未签名）：当前系统的安装包；macOS 上装了交叉工具时顺带打出 Windows 安装程序；全部收拢到 target/installers/
 make release-win   # 在 macOS 上交叉打 Windows NSIS 安装程序（见下）
 make release-x64   # 在 Apple 芯片 Mac 上打 Intel 版 .dmg（rustup target add x86_64-apple-darwin 后，make release 也会顺带打）
 ```
 
 ### 在 macOS 上打 Windows 安装包
 
-`tauri build` 只给当前系统打包，所以 Mac 上默认只有 `.dmg`。装好下面的工具后，`make release-win`（或 `make release`）会用 Tauri 的交叉编译把 Windows 安装程序也打出来，产物在 `target/x86_64-pc-windows-msvc/release/bundle/nsis/`：
+`tauri build` 只给当前系统打包，所以 Mac 上默认只有 `.dmg`。装好下面的工具后，`make release-win`（或 `make release`）会用 Tauri 的交叉编译把 Windows 安装程序也打出来，产物和其他安装包一起收拢到 `target/installers/`（原始位置 `target/x86_64-pc-windows-msvc/release/bundle/nsis/`）：
 
 ```sh
 rustup target add x86_64-pc-windows-msvc

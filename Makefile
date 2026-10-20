@@ -82,13 +82,14 @@ release-app: ## 只打 .app（macOS，测量用，比 release 快）
 	pnpm tauri build --bundles app
 	@$(MAKE) --no-print-directory release-report
 
-release-report: ## 列出产物及大小
-	@echo "== 产物 =="
+INSTALLERS := target/installers
+release-report: ## 把各目标的安装包收拢到 target/installers/ 并列出大小
+	@rm -rf $(INSTALLERS) && mkdir -p $(INSTALLERS)
 	@find target/release/bundle target/$(MAC_X64)/release/bundle target/$(WIN_TARGET)/release/bundle -maxdepth 2 \( -name '*.app' -o -name '*.dmg' -o -name '*.exe' -o -name '*.msi' \) 2>/dev/null | while read -r f; do \
-	  h=$$(du -sh "$$f" | cut -f1); \
-	  if [ -d "$$f" ]; then echo "$$f  $$h  $$(du -sk "$$f" | cut -f1) KiB"; \
-	  else echo "$$f  $$h  $$(wc -c < "$$f" | tr -d ' ') B"; fi; \
+	  if [ -d "$$f" ]; then echo "$$f  $$(du -sh "$$f" | cut -f1)"; else cp "$$f" $(INSTALLERS)/; fi; \
 	done || true
+	@echo "== 安装包（$(INSTALLERS)/）=="
+	@ls -1 $(INSTALLERS) 2>/dev/null | while read -r f; do echo "  $$f  $$(du -sh $(INSTALLERS)/$$f | cut -f1)"; done
 
 measure: ## macOS 性能与可靠性测量（先 make release-app；离开电脑时运行，约 15 分钟；终端要有辅助功能权限）
 	bash scripts/measure.sh all
