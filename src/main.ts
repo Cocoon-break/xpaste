@@ -613,6 +613,8 @@ function renderSpectrum(freshId?: number, stat = true) {
         });
       }
     });
+    // 固定窗口下的新记录落在窗外、列不变，点阵也要补上这一根
+    if (spWin && freshId !== undefined) paintMiniDots(recs);
   } else {
     spBars.innerHTML = next.bars.map((b, i) =>
       `<span class="${base(b)}${b.fresh ? ' fresh' : ''}" data-col="${i}" data-type="${b.kind}" style="left:${b.x}%;height:${b.h}%;--i:${staggerIndex(i, n)}"></span>`).join('');
