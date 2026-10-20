@@ -119,7 +119,7 @@ pub fn count_unpinned(state: State<'_, AppState>) -> Result<u32, AppError> {
     Ok(state.store().count_unpinned()?)
 }
 
-/// 重新识别：只对失败、跳过、本机不支持的记录生效，置回待识别并插队；其他状态什么也不做。
+/// 重新识别：只对失败、跳过、本机不支持的记录生效，置回待识别并插队（面板可见也立即开始）；其他状态什么也不做。
 #[tauri::command(async)]
 pub fn reocr(app: AppHandle, state: State<'_, AppState>, id: i64) -> Result<(), AppError> {
     let reset = {
@@ -131,7 +131,7 @@ pub fn reocr(app: AppHandle, state: State<'_, AppState>, id: i64) -> Result<(), 
     };
     if reset {
         emit_summary(&app, RECORD_UPDATED, id);
-        state.ocr.push_front(id);
+        state.ocr.push_forced(id);
     }
     Ok(())
 }

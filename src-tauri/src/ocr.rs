@@ -2,10 +2,11 @@
 //! 日志只记 id、状态与耗时，不记文字与路径。
 
 use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
+use image::ImageReader;
 use tauri::{AppHandle, Manager};
 use xpaste_core::ocr_state::{EMPTY, FAILED, PENDING, SKIPPED, TEXT, UNSUPPORTED};
 use xpaste_platform::OcrError;
@@ -26,24 +27,48 @@ const MIN_CONFIDENCE: f32 = 0.3;
 /// 软超时：只记日志。macOS 每个进程首次调用要加载模型（约 8 s），慢但成功的结果照常记录
 const SLOW: Duration = Duration::from_secs(10);
 
-/// 待识别的 id，`bool` 为回填项。纯逻辑，不碰库与线程。
+struct Item {
+    id: i64,
+    backfill: bool,
+    /// 用户点了“重新识别”：面板可见也照做
+    force: bool,
+}
+
+/// 待识别的 id。纯逻辑，不碰库与线程。
 #[derive(Default)]
 pub struct Queue {
-    items: VecDeque<(i64, bool)>,
+    items: VecDeque<Item>,
     paused: bool,
 }
 
 impl Queue {
+    fn insert_front(&mut self, id: i64, force: bool) {
+        self.items.retain(|it| it.id != id);
+        self.items.push_front(Item {
+            id,
+            backfill: false,
+            force,
+        });
+    }
+
     /// 插队；已在队中的移到队首。
     pub fn push_front(&mut self, id: i64) {
-        self.items.retain(|&(i, _)| i != id);
-        self.items.push_front((id, false));
+        self.insert_front(id, false);
+    }
+
+    /// 插队且面板可见时也取出（重新识别）。
+    pub fn push_forced(&mut self, id: i64) {
+        self.insert_front(id, true);
     }
 
     /// 回填排队尾；已在队中的不动。
     pub fn push_back(&mut self, id: i64) {
-        if !self.items.iter().any(|&(i, _)| i == id) {
-            self.items.push_back((id, true));
+        if !self.items.iter().any(|it| it.id == id) {
+            self.items.push_back(Item {
+                id,
+                backfill: true,
+                force: false,
+            });
         }
     }
 
@@ -51,17 +76,18 @@ impl Queue {
         self.paused = on;
     }
 
-    /// 暂停时为 None（队列保留）。
+    /// `(id, 是否回填项)`。暂停时只取强制项，其余保留。
     pub fn next(&mut self) -> Option<(i64, bool)> {
-        if self.paused {
-            None
+        let i = if self.paused {
+            self.items.iter().position(|it| it.force)?
         } else {
-            self.items.pop_front()
-        }
+            0
+        };
+        self.items.remove(i).map(|it| (it.id, it.backfill))
     }
 
     pub fn drain(&mut self) -> Vec<i64> {
-        self.items.drain(..).map(|(i, _)| i).collect()
+        self.items.drain(..).map(|it| it.id).collect()
     }
 }
 
@@ -86,6 +112,12 @@ impl Handle {
 
     pub fn push_front(&self, id: i64) {
         self.queue().push_front(id);
+        self.inner.1.notify_one();
+    }
+
+    /// 重新识别：有意例外于“面板可见期间不开始新的识别”，用户明确要求，立即开始。
+    pub fn push_forced(&self, id: i64) {
+        self.queue().push_forced(id);
         self.inner.1.notify_one();
     }
 
@@ -181,8 +213,11 @@ pub fn start(app: AppHandle) -> Handle {
             xpaste_platform::lower_thread_priority();
             loop {
                 let (id, backfill) = worker.wait_next();
-                process(&app, worker.supported, id);
-                if backfill {
+                // 回填中途关掉“补识别”：剩余回填项原样留着，重新打开时再入队
+                if backfill && !app.state::<AppState>().settings().ocr_backfill {
+                    continue;
+                }
+                if process(&app, worker.supported, id) && backfill {
                     std::thread::sleep(BACKFILL_GAP);
                 }
             }
@@ -193,37 +228,51 @@ pub fn start(app: AppHandle) -> Handle {
     h
 }
 
-fn process(app: &AppHandle, supported: bool, id: i64) {
+/// 处理一张；返回是否真的调用了识别引擎（回填据此决定要不要歇 500 ms）。
+fn process(app: &AppHandle, supported: bool, id: i64) -> bool {
     let state = app.state::<AppState>();
-    // 只处理待识别与已跳过的：重复入队或已被处理、已删除的直接丢弃
+    // 只处理待识别、已跳过、本机不支持的：重复入队或已被处理、已删除的直接丢弃
     let prior = state.store().ocr_state(id);
     let prior = match prior {
-        Ok(Some(s @ (PENDING | SKIPPED))) => s,
+        Ok(Some(s @ (PENDING | SKIPPED | UNSUPPORTED))) => s,
         Ok(_) => {
             log::debug!("ocr id={id} 无需识别");
-            return;
+            return false;
         }
         Err(e) => {
             log::warn!("ocr id={id} 读取状态失败：{e}");
-            return;
+            return false;
         }
     };
     let enabled = state.settings().ocr_enabled;
     let t0 = Instant::now();
-    let (k, text) = match (enabled, supported) {
-        (false, _) => (SKIPPED, None),
-        (true, false) => (UNSUPPORTED, None),
+    let (k, text, ran) = match (enabled, supported) {
+        (false, _) => (SKIPPED, None, false),
+        (true, false) => (UNSUPPORTED, None, false),
         (true, true) => recognize(&state, id),
     };
     let ms = t0.elapsed().as_millis();
     log::info!("ocr id={id} state={k} ms={ms}");
+    if k == prior {
+        return ran;
+    }
     // 记录在识别期间被删除时 set_ocr 返回 false，结果丢弃。先绑定再 match：store 锁在本语句末释放，emit 不在锁内
     let written = state.store().set_ocr(id, k, text.as_deref());
     match written {
-        Ok(true) if k != prior => emit_summary(app, RECORD_UPDATED, id),
-        Ok(_) => {}
+        Ok(true) => emit_summary(app, RECORD_UPDATED, id),
+        Ok(false) => {}
         Err(e) => log::warn!("ocr id={id} 写入失败：{e}"),
     }
+    ran
+}
+
+/// 按内容识别格式读尺寸（只读文件头），不信扩展名。
+fn dimensions(path: &Path) -> Option<(u32, u32)> {
+    ImageReader::open(path)
+        .and_then(|r| r.with_guessed_format())
+        .ok()?
+        .into_dimensions()
+        .ok()
 }
 
 /// 位图记录识别 `images/<id>.png`；图片文件引用识别源文件。
@@ -240,21 +289,22 @@ fn source(state: &AppState, id: i64) -> Option<PathBuf> {
         .map(|f| f.path.into())
 }
 
-fn recognize(state: &AppState, id: i64) -> (u8, Option<String>) {
+/// `(状态, 文字, 是否调用了引擎)`
+fn recognize(state: &AppState, id: i64) -> (u8, Option<String>, bool) {
     let Some(path) = source(state, id) else {
-        return (FAILED, None);
+        return (FAILED, None, false);
     };
     let too_big = std::fs::metadata(&path).is_ok_and(|m| m.len() > MAX_BYTES)
-        || image::image_dimensions(&path).is_ok_and(|(w, h)| w.max(h) > MAX_SIDE);
+        || dimensions(&path).is_some_and(|(w, h)| w.max(h) > MAX_SIDE);
     if too_big {
-        return (SKIPPED, None);
+        return (SKIPPED, None, false);
     }
     let t0 = Instant::now();
     let r = xpaste_platform::ocr_png(&path, OCR_SIDE);
     if t0.elapsed() > SLOW {
         log::warn!("ocr id={id} 超过 {} s", SLOW.as_secs());
     }
-    match r {
+    let (k, text) = match r {
         Ok(Some(t)) if !t.text.trim().is_empty() && t.confidence >= MIN_CONFIDENCE => {
             (TEXT, Some(t.text))
         }
@@ -270,7 +320,8 @@ fn recognize(state: &AppState, id: i64) -> (u8, Option<String>) {
             log::info!("ocr id={id} 失败 {kind}");
             (FAILED, None)
         }
-    }
+    };
+    (k, text, true)
 }
 
 #[cfg(test)]
@@ -296,6 +347,16 @@ mod tests {
         q.push_front(2);
         assert_eq!(q.next(), Some((2, false)));
         assert_eq!(q.next(), Some((1, true)));
+        assert_eq!(q.next(), None);
+    }
+
+    #[test]
+    fn forced_item_runs_while_paused() {
+        let mut q = Queue::default();
+        q.set_paused(true);
+        q.push_back(1);
+        q.push_forced(2);
+        assert_eq!(q.next(), Some((2, false)));
         assert_eq!(q.next(), None);
     }
 

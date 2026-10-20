@@ -78,6 +78,10 @@ fn ingest(app: &AppHandle, snap: Snapshot) {
             log::info!("记录更新 id={id}");
             emit_summary(app, RECORD_UPDATED, id);
             emit_removed(app, &removed);
+            // 再次复制还没识别的图片（例如补识别关着）：插队识别，已识别的由识别线程丢弃
+            if kind == Kind::Image {
+                state.ocr.push_front(id);
+            }
         }
         Ok(Outcome::Added(id, removed)) => {
             log::info!("记录新增 id={id}");
