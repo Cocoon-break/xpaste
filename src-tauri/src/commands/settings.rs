@@ -225,9 +225,14 @@ pub fn prune_preview(
         .prune_preview(retention_days, max_records, now_ms())?)
 }
 
-/// 命令与托盘菜单共用：写暂停标志、更新托盘、通知前端。
+/// 命令与托盘菜单共用：写暂停标志、记入 kv（跨重启）、更新托盘、通知前端。
 pub fn set_paused_inner(app: &AppHandle, on: bool) {
-    app.state::<AppState>().paused.store(on, Ordering::SeqCst);
+    let state = app.state::<AppState>();
+    state.paused.store(on, Ordering::SeqCst);
+    // 临时 guard 在语句末释放，托盘与事件不在锁内
+    if let Err(e) = state.store().kv_set("paused", if on { "1" } else { "0" }) {
+        log::warn!("记录暂停状态失败：{e}");
+    }
     crate::tray::set_paused(app, on);
     emit(app, PAUSED_CHANGED, on);
 }

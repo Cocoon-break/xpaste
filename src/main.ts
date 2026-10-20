@@ -584,6 +584,7 @@ spTrack.addEventListener('click', (e) => {
   if (!hit || S.removing.has(hit.r.id)) return;
   if (!matches(hit.r)) {
     S.filter = 'all';
+    persistFilter();
     q.value = '';
     renderTabs(false);
     runSearch('', { stagger: true });
@@ -615,20 +616,24 @@ function renderTabs(instant: boolean) {
   });
   if (instant) b.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
-// 分类记忆（M06）：写进 settings.lastFilter，失败不提示。
-// 防抖 300ms：按住 Mod+←/→ 连续切换时只写最后落定的分类；成功后只合并 lastFilter，不回滚同时进行的设置保存
-let filterTimer = 0;
-function persistFilter() {
-  clearTimeout(filterTimer);
-  filterTimer = window.setTimeout(() => {
-    const f = S.filter;
-    if (S.settings.lastFilter === f) return;
-    saveSettings({ ...S.settings, lastFilter: f }).then(
-      () => void (S.settings = { ...S.settings, lastFilter: f }),
-      (e: AppError) => void info(`保存分类失败 kind=${e.kind}`),
+// 界面记忆（分类 M06 等）：合并写进 settings，失败不提示。
+// 防抖 300ms：按住 Mod+←/→ 连续切换时只写最后落定的值；成功后只合并本次 patch，不回滚同时进行的设置保存
+let uiTimer = 0;
+let uiPending: Partial<Settings> = {};
+function persistUi(patch: Partial<Settings>) {
+  uiPending = { ...uiPending, ...patch };
+  clearTimeout(uiTimer);
+  uiTimer = window.setTimeout(() => {
+    const p = uiPending;
+    uiPending = {};
+    if ((Object.keys(p) as (keyof Settings)[]).every((k) => S.settings[k] === p[k])) return;
+    saveSettings({ ...S.settings, ...p }).then(
+      () => void (S.settings = { ...S.settings, ...p }),
+      (e: AppError) => void info(`保存界面状态失败 kind=${e.kind}`),
     );
   }, 300);
 }
+function persistFilter() { persistUi({ lastFilter: S.filter }); }
 function setFilter(k: Filter, instant: boolean) {
   if (S.filter === k) return;
   S.filter = k;

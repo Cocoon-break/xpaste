@@ -34,12 +34,14 @@ impl AppState {
         enrich: mpsc::Sender<enrich::Job>,
         data_dir: PathBuf,
     ) -> Self {
+        // 暂停跨重启：kv `paused` 为 "1" 即暂停；托盘与 bootstrap 都从这个原子读初值
+        let paused = matches!(store.kv_get("paused"), Ok(Some(v)) if v == "1");
         Self {
             settings: Mutex::new(settings),
             store: Mutex::new(store),
             enrich,
             data_dir,
-            paused: AtomicBool::new(false),
+            paused: AtomicBool::new(paused),
             last_write_seq: AtomicU64::new(u64::MAX),
             writing: AtomicBool::new(false),
             previous_window: AtomicIsize::new(0),
@@ -62,5 +64,24 @@ impl AppState {
         let dir = std::env::temp_dir().join(format!("xpaste-app-test-{}", std::process::id()));
         let store = Store::open_in_memory(&dir).expect("内存数据库");
         Self::new(Settings::default(), store, mpsc::channel().0, dir)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn paused_initial_from_kv() {
+        let dir = std::env::temp_dir().join("xpaste-paused-kv-test");
+        for (value, want) in [(Some("1"), true), (Some("0"), false), (None, false)] {
+            let store = Store::open_in_memory(&dir).expect("内存数据库");
+            if let Some(v) = value {
+                store.kv_set("paused", v).unwrap();
+            }
+            let state = AppState::new(Settings::default(), store, mpsc::channel().0, dir.clone());
+            assert_eq!(state.paused.load(Ordering::SeqCst), want, "{value:?}");
+        }
     }
 }
