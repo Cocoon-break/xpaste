@@ -66,6 +66,10 @@ pub struct Settings {
     pub spectrum_collapsed: bool,
     /// 使用次数达到它即进入“常用”，2..=99
     pub frequent_min_uses: u32,
+    /// 识别图片中的文字（本机离线）
+    pub ocr_enabled: bool,
+    /// 为已有图片补识别
+    pub ocr_backfill: bool,
 }
 
 impl Default for Settings {
@@ -90,6 +94,8 @@ impl Default for Settings {
             last_filter: "all".into(),
             spectrum_collapsed: false,
             frequent_min_uses: 3,
+            ocr_enabled: true,
+            ocr_backfill: true,
         }
     }
 }
@@ -239,6 +245,24 @@ impl fmt::Debug for NewRecord {
     }
 }
 
+/// `records.ocr_state` 的取值（设计 §3）。
+pub mod ocr_state {
+    pub const PENDING: u8 = 0;
+    pub const TEXT: u8 = 1;
+    pub const EMPTY: u8 = 2;
+    pub const FAILED: u8 = 3;
+    pub const SKIPPED: u8 = 4;
+    pub const UNSUPPORTED: u8 = 5;
+}
+
+/// 搜索命中。`snippet` 只在命中来自识别文字（标题不含关键词）时给出。不派生 `Debug`：片段是内容。
+#[derive(Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchHit {
+    pub id: i64,
+    pub snippet: Option<String>,
+}
+
 /// 列表项。`thumb`、`app.icon` 为绝对文件路径，应用层再转 asset URL。
 /// `Debug` 不输出标题与来源应用。
 #[derive(Clone, PartialEq, Serialize)]
@@ -255,6 +279,8 @@ pub struct RecordSummary {
     pub lang: Option<String>,
     pub thumb: Option<String>,
     pub duration_sec: Option<f64>,
+    /// 见 [`ocr_state`]；非图片记录恒为 0，不被消费
+    pub ocr_state: u8,
 }
 
 impl fmt::Debug for RecordSummary {
@@ -289,6 +315,8 @@ pub struct RecordDetail {
     pub files: Vec<FileEntry>,
     pub image: Option<ImageInfo>,
     pub video: Option<VideoInfo>,
+    /// 识别出的原文（未小写）
+    pub ocr_text: Option<String>,
 }
 
 impl fmt::Debug for RecordDetail {
@@ -402,6 +430,7 @@ mod tests {
         assert_eq!(s.last_filter, "all");
         assert!(!s.spectrum_collapsed);
         assert_eq!(s.frequent_min_uses, 3);
+        assert!(s.ocr_enabled && s.ocr_backfill);
         #[cfg(target_os = "macos")]
         assert_eq!(s.ignored_apps, vec!["1Password", "钥匙串访问"]);
         #[cfg(windows)]
@@ -430,6 +459,8 @@ mod tests {
                 && json.contains(r#""retentionDays":30"#)
                 && json.contains(r#""appearance":"dark""#)
                 && json.contains(r#""frequentMinUses":3"#)
+                && json.contains(r#""ocrEnabled":true"#)
+                && json.contains(r#""ocrBackfill":true"#)
         );
     }
 
@@ -582,6 +613,7 @@ mod tests {
             lang: None,
             thumb: None,
             duration_sec: None,
+            ocr_state: ocr_state::TEXT,
         };
         let d = RecordDetail {
             summary,
@@ -591,12 +623,16 @@ mod tests {
             files: vec![],
             image: None,
             video: None,
+            ocr_text: Some("secret-ocr".into()),
         };
         let out = format!("{d:?} {:?}", d.summary);
         assert!(!out.contains("secret"), "{out}");
         let json = serde_json::to_string(&d).unwrap();
         assert!(
-            json.contains(r#""copiedAt":0"#) && json.contains(r#""linkTitle":null"#),
+            json.contains(r#""copiedAt":0"#)
+                && json.contains(r#""linkTitle":null"#)
+                && json.contains(r#""ocrState":1"#)
+                && json.contains(r#""ocrText":"secret-ocr""#),
             "{json}"
         );
     }

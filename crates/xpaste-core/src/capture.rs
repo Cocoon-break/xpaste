@@ -202,26 +202,17 @@ fn anchor_text(html: &str, url: &str) -> Option<String> {
     ok.then(|| label.into())
 }
 
-/// `YYYY-MM-DD HH.mm`。
-// ponytail: UTC；本地时间由前端按 copiedAt 显示
+/// 本地时间 `YYYY-MM-DD HH.mm`；夏令时边界取"现在"的偏移。
 fn local_stamp(ms: i64) -> String {
-    let secs = ms.div_euclid(1000);
-    let (days, sod) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
-    // Howard Hinnant 的 civil_from_days
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = yoe + era * 400 + i64::from(m <= 2);
-    format!(
-        "{y:04}-{m:02}-{d:02} {:02}.{:02}",
-        sod / 3600,
-        sod % 3600 / 60
-    )
+    stamp_at(ms, *chrono::Local::now().offset())
+}
+
+fn stamp_at(ms: i64, offset: chrono::FixedOffset) -> String {
+    chrono::DateTime::from_timestamp_millis(ms)
+        .unwrap_or_default()
+        .with_timezone(&offset)
+        .format("%Y-%m-%d %H.%M")
+        .to_string()
 }
 
 #[cfg(test)]
@@ -347,16 +338,23 @@ mod tests {
     fn bitmap_title_is_searchable() {
         let r = build_record(snap_bitmap(), Kind::Image, 1_792_348_701_015);
         assert!(
-            r.search_text.contains("截图 2026-10-18 18.38.png"),
+            r.title.starts_with("截图 ") && r.title.ends_with(".png"),
             "{}",
-            r.search_text
+            r.title
         );
+        assert!(r.search_text.contains(&r.title), "{}", r.search_text);
     }
     #[test]
-    fn local_stamp_is_utc_civil() {
-        assert_eq!(local_stamp(0), "1970-01-01 00.00");
-        assert_eq!(local_stamp(951_782_400_000), "2000-02-29 00.00");
-        assert_eq!(local_stamp(1_792_348_701_015), "2026-10-18 18.38");
+    fn stamp_at_applies_offset() {
+        use chrono::FixedOffset;
+        assert_eq!(
+            stamp_at(1_792_348_701_015, FixedOffset::east_opt(8 * 3600).unwrap()),
+            "2026-10-19 02.38"
+        );
+        assert_eq!(
+            stamp_at(0, FixedOffset::west_opt(5 * 3600).unwrap()),
+            "1969-12-31 19.00"
+        );
     }
     #[test]
     fn debug_hides_content() {

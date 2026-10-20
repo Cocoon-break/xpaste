@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::{
     AppSummary, CoreError, FileEntry, Flavor, ImageInfo, Kind, NewRecord, RecordDetail,
-    RecordSummary, Settings, VideoInfo,
+    RecordSummary, SearchHit, Settings, VideoInfo, ocr_state,
 };
 
 /// 按版本排列的迁移脚本；第 i 项把 `user_version` 从 i 升到 i+1。
@@ -32,6 +32,9 @@ CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     "UPDATE records SET kind = 'text', title = trim(text, ' ' || char(9, 10, 13)) WHERE kind = 'color';",
     // 阶段 9.1：标题进搜索文本（位图截图的自动标题此前搜不到）
     "UPDATE records SET search_text = search_text || char(10) || lower(title) WHERE title <> '' AND instr(search_text, lower(title)) = 0;",
+    // 阶段 10：图片文字识别。已有图片默认 0（待识别）进回填队列；非图片的 0 不被消费
+    "ALTER TABLE records ADD COLUMN ocr_text TEXT;
+ALTER TABLE records ADD COLUMN ocr_state INTEGER NOT NULL DEFAULT 0;",
 ];
 
 const SUBDIRS: [&str; 4] = ["blobs", "images", "thumbs", "icons"];
@@ -45,7 +48,7 @@ const DAY_MS: i64 = 86_400_000;
 const LIVE_UNPINNED: &str = "pinned = 0 AND deleted_at IS NULL";
 
 const SUMMARY_SQL: &str = "SELECT r.id, r.kind, r.title, a.name, a.icon_path, r.copied_at, r.uses,
-  r.pinned, r.size, r.lang, r.meta FROM records r LEFT JOIN apps a ON a.id = r.app_id";
+  r.pinned, r.size, r.lang, r.meta, r.ocr_state FROM records r LEFT JOIN apps a ON a.id = r.app_id";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Upsert {
@@ -265,12 +268,25 @@ impl Store {
         let Some(summary) = self.summary(id)? else {
             return Ok(None);
         };
-        let (text, link_title, paths, meta): (Option<String>, _, Option<String>, Option<String>) =
-            self.conn.query_row(
-                "SELECT text, link_title, paths, meta FROM records WHERE id = ?1",
-                [id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )?;
+        let (text, link_title, paths, meta, ocr_text): (
+            Option<String>,
+            _,
+            Option<String>,
+            Option<String>,
+            _,
+        ) = self.conn.query_row(
+            "SELECT text, link_title, paths, meta, ocr_text FROM records WHERE id = ?1",
+            [id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )?;
         let meta = parse_meta(meta);
         let (text, truncated) = match text {
             Some(mut t) if t.len() > DETAIL_TEXT_MAX => {
@@ -341,6 +357,7 @@ impl Store {
             files,
             image,
             video,
+            ocr_text,
         }))
     }
 
@@ -382,6 +399,103 @@ impl Store {
             "SELECT id FROM records WHERE deleted_at IS NULL AND instr(search_text, ?1) > 0 {order}"
         );
         ids_in(&self.conn, &sql, &[&q.to_lowercase()])
+    }
+
+    /// 同 `search_ids` 的匹配与顺序；命中来自识别文字（标题不含关键词）时附带片段。
+    pub fn search_hits(&self, q: &str) -> Result<Vec<SearchHit>, CoreError> {
+        let q = q.to_lowercase();
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, ocr_text FROM records WHERE deleted_at IS NULL
+             AND instr(search_text, ?1) > 0 ORDER BY copied_at DESC, id DESC",
+        )?;
+        let rows = stmt.query_map([&q], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (id, title, ocr) = row?;
+            let snippet = match ocr {
+                Some(t) if !title.to_lowercase().contains(&q) => snippet(&t, &q),
+                _ => None,
+            };
+            Ok(SearchHit { id, snippet })
+        })
+        .collect()
+    }
+
+    /// 写识别结果；只有 `TEXT` 保存原文并把小写文本追加进 `search_text`。返回是否更新了未删除的记录。
+    pub fn set_ocr(&self, id: i64, state: u8, text: Option<&str>) -> Result<bool, CoreError> {
+        let text = text.filter(|_| state == ocr_state::TEXT);
+        // 单条 UPDATE 即一个事务
+        let n = self.conn.execute(
+            "UPDATE records SET ocr_state = ?1, ocr_text = ?2,
+               search_text = CASE WHEN ?3 IS NULL OR ocr_text IS NOT NULL THEN search_text ELSE search_text || char(10) || ?3 END
+             WHERE id = ?4 AND deleted_at IS NULL",
+            params![state, text, text.map(str::to_lowercase), id],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// 把 `ids` 里仍待识别的未删除记录一条语句改成 `state`；返回真正改了的 id（顺序不定）。
+    pub fn set_ocr_many(&self, ids: &[i64], state: u8) -> Result<Vec<i64>, CoreError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // u8 直接拼进 SQL，id 走占位符；队列上限约 5000，低于 SQLite 变量上限 32766
+        let marks = vec!["?"; ids.len()].join(",");
+        let sql = format!(
+            "UPDATE records SET ocr_state = {state}
+             WHERE ocr_state = {} AND deleted_at IS NULL AND id IN ({marks}) RETURNING id",
+            ocr_state::PENDING
+        );
+        let args: Vec<&dyn ToSql> = ids.iter().map(|id| id as &dyn ToSql).collect();
+        ids_in(&self.conn, &sql, &args)
+    }
+
+    /// 未删除记录的识别状态；已删除或不存在为 None。
+    pub fn ocr_state(&self, id: i64) -> Result<Option<u8>, CoreError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT ocr_state FROM records WHERE id = ?1 AND deleted_at IS NULL",
+                [id],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    /// 处于 `states` 之一的未删除图片，最近复制的在前。
+    pub fn ocr_pending_ids(&self, states: &[u8], limit: usize) -> Result<Vec<i64>, CoreError> {
+        if states.is_empty() {
+            return Ok(Vec::new());
+        }
+        // u8 直接拼进 SQL，无注入面
+        let list = states
+            .iter()
+            .map(u8::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        ids_in(
+            &self.conn,
+            &format!(
+                "SELECT id FROM records WHERE kind = 'image' AND deleted_at IS NULL
+                 AND ocr_state IN ({list}) ORDER BY copied_at DESC, id DESC LIMIT ?1"
+            ),
+            &[&(limit as i64)],
+        )
+    }
+
+    /// (已处理：待识别以外的状态 1–5, 未删除图片总数)
+    pub fn ocr_progress(&self) -> Result<(u32, u32), CoreError> {
+        Ok(self.conn.query_row(
+            "SELECT COALESCE(SUM(ocr_state BETWEEN 1 AND 5), 0), COUNT(*) FROM records
+             WHERE kind = 'image' AND deleted_at IS NULL",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?)
     }
 
     pub fn set_pinned(&self, id: i64, on: bool) -> Result<(), CoreError> {
@@ -542,6 +656,7 @@ impl Store {
                 .as_ref()
                 .and_then(|m| m.get("duration")?.as_f64())
                 .filter(|&d| d > 0.0),
+            ocr_state: row.get(11)?,
         })
     }
 
@@ -571,6 +686,32 @@ impl Store {
             }
         }
     }
+}
+
+/// 关键词（已小写）在 `text` 中首次出现处前后各取 12 个字符，保留原文大小写；被截断的一侧加 `…`。
+/// ponytail: 按字符小写定位，与整串 `to_lowercase` 只在希腊词尾 Σ 这类上下文相关规则上不同，此时不给片段。
+fn snippet(text: &str, q: &str) -> Option<String> {
+    const CTX: usize = 12;
+    let chars: Vec<char> = text.chars().collect();
+    let mut lower = String::new();
+    let mut starts = Vec::with_capacity(chars.len());
+    for c in &chars {
+        starts.push(lower.len());
+        lower.extend(c.to_lowercase());
+    }
+    let at = lower.find(q)?;
+    let first = starts.partition_point(|&b| b <= at) - 1;
+    let end = starts.partition_point(|&b| b < at + q.len());
+    let (from, to) = (first.saturating_sub(CTX), (end + CTX).min(chars.len()));
+    let mut out = String::new();
+    if from > 0 {
+        out.push('…');
+    }
+    out.extend(&chars[from..to]);
+    if to < chars.len() {
+        out.push('…');
+    }
+    Some(out)
 }
 
 fn ids_in(conn: &Connection, sql: &str, args: &[&dyn ToSql]) -> Result<Vec<i64>, CoreError> {
@@ -648,7 +789,7 @@ pub(crate) mod tests {
     fn open_creates_schema_and_dirs() {
         let dir = tmp();
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 3);
+        assert_eq!(s.schema_version().unwrap(), 4);
         for sub in ["blobs", "images", "thumbs", "icons"] {
             assert!(dir.join(sub).is_dir());
         }
@@ -677,7 +818,7 @@ pub(crate) mod tests {
         .unwrap();
         drop(old);
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 3);
+        assert_eq!(s.schema_version().unwrap(), 4);
         let row: (String, String) = s
             .conn
             .query_row("SELECT kind, title FROM records", [], |r| {
@@ -689,11 +830,34 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn migration_4_adds_ocr_columns_and_opens_old_db() {
+        let dir = tmp();
+        make_dirs(&dir).unwrap();
+        let old = Connection::open(dir.join("xpaste.db")).unwrap();
+        old.execute_batch(MIGRATIONS[0]).unwrap();
+        old.pragma_update(None, "user_version", 3).unwrap();
+        old.execute(
+            "INSERT INTO records (hash, kind, title, copied_at, size, search_text) VALUES (x'03', 'image', '截图', 1, 9, '截图')",
+            [],
+        )
+        .unwrap();
+        drop(old);
+        let s = Store::open(&dir).unwrap();
+        assert_eq!(s.schema_version().unwrap(), 4);
+        let l = s.list_summaries().unwrap();
+        assert_eq!(
+            (l[0].kind, l[0].ocr_state),
+            (Kind::Image, ocr_state::PENDING)
+        );
+        assert_eq!(s.detail(l[0].id).unwrap().unwrap().ocr_text, None);
+    }
+
+    #[test]
     fn reopen_does_not_rerun_migrations() {
         let dir = tmp();
         drop(Store::open(&dir).unwrap());
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 3);
+        assert_eq!(s.schema_version().unwrap(), 4);
     }
 
     #[test]
@@ -756,7 +920,9 @@ pub(crate) mod tests {
     }
 
     use crate::capture::build_record;
-    use crate::{AppInfo, Flavor, Kind, NewRecord, Snapshot, VideoInfo, VideoMeta, detect};
+    use crate::{
+        AppInfo, Flavor, Kind, NewRecord, Snapshot, VideoInfo, VideoMeta, detect, ocr_state,
+    };
 
     fn mem() -> Store {
         Store::open_in_memory(&tmp()).unwrap()
@@ -770,6 +936,18 @@ pub(crate) mod tests {
             text: Some(t.into()),
             ..Default::default()
         })
+    }
+    fn rec_image(seed: u8) -> NewRecord {
+        rec_of(Snapshot {
+            bitmap: Some(vec![0x89, b'P', b'N', b'G', seed]),
+            ..Default::default()
+        })
+    }
+    fn added(s: &mut Store, r: &NewRecord, at: i64) -> i64 {
+        match s.insert_or_merge(r, at, 500).unwrap().0 {
+            Upsert::Added(id) => id,
+            Upsert::Merged(_) => panic!("expected new record"),
+        }
     }
     fn rec_files(p: &[&str]) -> NewRecord {
         rec_of(Snapshot {
@@ -1179,5 +1357,146 @@ pub(crate) mod tests {
         s.bump_use(a, true, 20).unwrap();
         let l = s.list_summaries().unwrap();
         assert_eq!((l[0].id, l[0].uses, l[0].copied_at), (a, 3, 10));
+    }
+
+    #[test]
+    fn set_ocr_appends_lowercased_text_to_search_text() {
+        let mut s = mem();
+        let id = added(&mut s, &rec_image(1), 1);
+        assert!(s.set_ocr(id, ocr_state::TEXT, Some("Q3 季度预算")).unwrap());
+        assert_eq!(s.search_ids("季度预算").unwrap(), [id]);
+        assert_eq!(s.search_ids("q3").unwrap(), [id]);
+        let d = s.detail(id).unwrap().unwrap();
+        assert_eq!(
+            (d.summary.ocr_state, d.ocr_text.as_deref()),
+            (ocr_state::TEXT, Some("Q3 季度预算"))
+        );
+
+        let other = added(&mut s, &rec_image(2), 2);
+        let before: String = s
+            .conn
+            .query_row(
+                "SELECT search_text FROM records WHERE id = ?1",
+                [other],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(s.set_ocr(other, ocr_state::EMPTY, Some("ignored")).unwrap());
+        let after: String = s
+            .conn
+            .query_row(
+                "SELECT search_text FROM records WHERE id = ?1",
+                [other],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(before, after);
+        let d = s.detail(other).unwrap().unwrap();
+        assert_eq!((d.summary.ocr_state, d.ocr_text), (ocr_state::EMPTY, None));
+
+        s.soft_delete(other, 3).unwrap();
+        assert!(!s.set_ocr(other, ocr_state::TEXT, Some("x")).unwrap());
+    }
+
+    #[test]
+    fn set_ocr_twice_appends_search_text_once() {
+        let mut s = mem();
+        let id = added(&mut s, &rec_image(1), 1);
+        for _ in 0..2 {
+            assert!(s.set_ocr(id, ocr_state::TEXT, Some("xyzocr")).unwrap());
+        }
+        let st: String = s
+            .conn
+            .query_row("SELECT search_text FROM records WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(st.matches("xyzocr").count(), 1);
+    }
+
+    #[test]
+    fn search_hits_returns_snippet_only_for_ocr_matches() {
+        let mut s = mem();
+        let titled = added(&mut s, &rec("预算报告"), 1);
+        let img = added(&mut s, &rec_image(1), 2);
+        s.set_ocr(
+            img,
+            ocr_state::TEXT,
+            Some("第一行说明文字很长很长很长 Q3 季度预算 2026 年度计划与执行情况汇总"),
+        )
+        .unwrap();
+        let short = added(&mut s, &rec_image(2), 3);
+        s.set_ocr(short, ocr_state::TEXT, Some("预算")).unwrap();
+        let hits: Vec<(i64, Option<String>)> = s
+            .search_hits("预算")
+            .unwrap()
+            .into_iter()
+            .map(|h| (h.id, h.snippet))
+            .collect();
+        assert_eq!(
+            hits,
+            [
+                (short, Some("预算".into())),
+                (
+                    img,
+                    Some("…很长很长很长 Q3 季度预算 2026 年度计划与执…".into())
+                ),
+                (titled, None),
+            ]
+        );
+        // 大小写不敏感，片段保留原文大小写
+        assert_eq!(
+            s.search_hits("q3").unwrap()[0].snippet.as_deref(),
+            Some("…行说明文字很长很长很长 Q3 季度预算 2026 年…")
+        );
+    }
+
+    #[test]
+    fn ocr_pending_ids_orders_recent_first_and_filters_kind() {
+        let mut s = mem();
+        let a = added(&mut s, &rec_image(1), 1);
+        let b = added(&mut s, &rec_image(2), 2);
+        let c = added(&mut s, &rec_image(3), 3);
+        added(&mut s, &rec("text"), 4);
+        let p = ocr_state::PENDING;
+        assert_eq!(s.ocr_pending_ids(&[p], 10).unwrap(), [c, b, a]);
+        assert_eq!(s.ocr_pending_ids(&[p], 1).unwrap(), [c]);
+        s.set_ocr(a, ocr_state::FAILED, None).unwrap();
+        s.set_ocr(b, ocr_state::TEXT, Some("x")).unwrap();
+        s.soft_delete(c, 5).unwrap();
+        assert!(s.ocr_pending_ids(&[p], 10).unwrap().is_empty());
+        assert_eq!(s.ocr_pending_ids(&[p, ocr_state::FAILED], 10).unwrap(), [a]);
+        // a 失败、b 有文字：都算已处理
+        assert_eq!(s.ocr_progress().unwrap(), (2, 2));
+    }
+
+    #[test]
+    fn set_ocr_many_changes_only_live_pending_rows() {
+        let mut s = mem();
+        let a = added(&mut s, &rec_image(1), 1);
+        let b = added(&mut s, &rec_image(2), 2);
+        let c = added(&mut s, &rec_image(3), 3);
+        let d = added(&mut s, &rec_image(4), 4);
+        s.set_ocr(b, ocr_state::TEXT, Some("x")).unwrap();
+        s.soft_delete(c, 5).unwrap();
+        assert!(s.set_ocr_many(&[], ocr_state::SKIPPED).unwrap().is_empty());
+        let mut changed = s.set_ocr_many(&[a, b, c, d], ocr_state::SKIPPED).unwrap();
+        changed.sort_unstable();
+        assert_eq!(changed, [a, d]);
+        assert_eq!(s.ocr_state(a).unwrap(), Some(ocr_state::SKIPPED));
+        assert_eq!(s.ocr_state(b).unwrap(), Some(ocr_state::TEXT));
+        assert_eq!(s.ocr_progress().unwrap(), (3, 3));
+    }
+
+    #[test]
+    fn ocr_state_reads_live_rows_only() {
+        let mut s = mem();
+        let a = added(&mut s, &rec_image(1), 1);
+        assert_eq!(s.ocr_state(a).unwrap(), Some(ocr_state::PENDING));
+        s.set_ocr(a, ocr_state::FAILED, None).unwrap();
+        assert_eq!(s.ocr_state(a).unwrap(), Some(ocr_state::FAILED));
+        s.soft_delete(a, 2).unwrap();
+        assert_eq!(s.ocr_state(a).unwrap(), None);
+        assert_eq!(s.ocr_state(a + 100).unwrap(), None);
     }
 }

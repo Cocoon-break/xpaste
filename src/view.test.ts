@@ -8,7 +8,7 @@ import {
 
 const mk = (id: number, over: Partial<RecordSummary>): RecordSummary => ({
   id, kind: 'text', title: '', app: null, copiedAt: 0, uses: 0, pinned: false,
-  size: 0, lang: null, thumb: null, durationSec: null, ...over,
+  size: 0, lang: null, thumb: null, durationSec: null, ocrState: 0, ...over,
 });
 
 test('visible：分类 ∩ 搜索 → 置顶优先、时间倒序', () => {

@@ -242,6 +242,7 @@ fn try_show(
         log::warn!("面板淡入失败：{e}");
         let _ = animate_alpha(w, 1.0, 0.0);
     }
+    app.state::<AppState>().ocr.set_paused(true);
     w.emit(
         crate::events::PANEL_SHOWN,
         serde_json::json!({ "t0": t0, "trigger": trigger }),
@@ -419,6 +420,7 @@ pub fn hide(app: &AppHandle) {
                     log::warn!("复位面板透明度失败：{e}");
                 }
                 LAST_HIDE_MS.store(crate::clock::now_ms(), Ordering::Relaxed);
+                app.state::<AppState>().ocr.set_paused(false);
                 crate::events::emit(app, crate::events::PANEL_HIDDEN, ())
             }
             Err(e) => log::warn!("隐藏面板失败：{e}"),

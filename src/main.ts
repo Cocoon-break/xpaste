@@ -1,8 +1,8 @@
 import './styles.css';
 import { attachConsole, info } from './api/log';
 import {
-  accessibilityGranted, bootstrap, clearHistory, copy, countUnpinned, deleteRecord, finishOnboarding, getRecord, hidePanel, installedApps, openUrl, prunePreview,
-  requestAccessibility, revealFile, saveSettings, search, setDialogOpen, setPaused, setPinned, undoDelete,
+  accessibilityGranted, bootstrap, clearHistory, copy, copyTextPlain, countUnpinned, deleteRecord, finishOnboarding, getRecord, hidePanel, installedApps, ocrProgress,
+  openUrl, prunePreview, reocr, requestAccessibility, revealFile, saveSettings, search, setDialogOpen, setPaused, setPinned, undoDelete,
 } from './api/commands';
 import {
   onConfirmClear,
@@ -26,6 +26,7 @@ import {
 import { hotkeyFromEvent, hotkeyLabel } from './hotkey';
 import { keyAction } from './keymap';
 import { copyVerb, escHint, openLabel } from './labels';
+import { ocrLabel, ocrProgressLabel, snippetHTML } from './ocr-label';
 import { nextStep, onboardSteps, type Step } from './onboarding';
 import { applyAdded, applyRemoved, applyUpdated } from './records';
 import { layoutBars, sameColumns, spectrumStat, staggerIndex, xPct, type Layout } from './spectrum';
@@ -101,6 +102,8 @@ const S = {
   filter: 'all' as Filter,
   q: '',
   matchIds: null as Set<number> | null,
+  /** 命中来自识别文字时的片段：显示在列表元信息行最前 */
+  snippets: new Map<number, string>(),
   sel: null as number | null,
   detail: null as RecordDetail | null,
   undo: null as UndoState,
@@ -139,19 +142,23 @@ const rowEl = (id: number | null) => (id === null ? null : document.getElementBy
 const source = (r: RecordSummary) => r.app?.name || '未知来源';
 
 const thumb = (r: RecordSummary) =>
-  r.kind === 'image' && r.thumb ? `<span class="thumb"><img src="${esc(r.thumb)}" alt="" width="36" height="36"></span>`
+  r.kind === 'image' && r.thumb
+    ? `<span class="thumb"><img src="${esc(r.thumb)}" alt="" width="36" height="36">${r.ocrState === 1 ? '<span class="ocr-badge" aria-hidden="true">T</span>' : ''}</span>`
   : r.kind === 'video' && r.thumb ? `<span class="thumb"><img src="${esc(r.thumb)}" alt="" width="36" height="36"><span class="play">${svg('play')}</span></span>`
   : `<span class="thumb">${svg(r.kind)}</span>`;
 
 const metaLine = (r: RecordSummary) => {
   const parts = [esc(source(r)), rel(r.copiedAt), r.kind === 'video' && r.durationSec !== null ? fmtDur(r.durationSec) : fmtBytes(r.size)];
   if (isFav(r, favMin())) parts.push(`<span class="uses">用过 ${fmtInt(r.uses)} 次</span>`);
+  // 命中来自图中文字时片段放最前：它是这一行出现在结果里的原因，放末尾在常见宽度下关键词会被省略号截掉
+  const snip = S.snippets.get(r.id);
+  if (snip) parts.unshift(`<span class="snip">识别文字中含“${snippetHTML(snip, S.q)}”</span>`);
   return parts.join(' · ');
 };
 
 const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id === S.newId) => `
     <div class="item${isNew ? ' is-new' : ''}${S.removing.has(r.id) ? ' is-removing' : ''}${stagger && i < 12 ? ' stg' : ''}" data-id="${r.id}" style="--i:${i}">
-      <div class="row" role="option" id="opt-${r.id}" aria-selected="false" aria-posinset="${i + 1}" aria-label="${esc(r.title)}，${LABEL[r.kind]}" data-type="${r.kind}">
+      <div class="row" role="option" id="opt-${r.id}" aria-selected="false" aria-posinset="${i + 1}" aria-label="${esc(r.title)}，${LABEL[r.kind]}${S.snippets.has(r.id) ? `，识别文字中含“${esc(S.snippets.get(r.id))}”` : ''}" data-type="${r.kind}">
         <div class="row-in">
           ${thumb(r)}
           <div class="main">
@@ -389,6 +396,17 @@ function videoHTML(d: RecordDetail, failed = false): string {
   return `<figure class="p-video">${poster}<figcaption>${esc(f.name)}</figcaption>${chips ? `<div class="chips">${chips}</div>` : ''}${note ? `<div class="fpath">${note}</div>` : ''}</figure>`;
 }
 
+/** 图中文字区块：有文字、失败、跳过时出现；识别结果到达时只替换 .ocr-slot，不重绘图片。
+ *  跳过的原因前端分不出（过大或关闭识别），“重新识别”对 3、4 都显示，后端做不了就不改状态 */
+function ocrBlockHTML(d: RecordDetail): string {
+  const st = d.ocrState;
+  if (st !== 1 && st !== 3 && st !== 4) return '';
+  const act = st === 1
+    ? '<button class="btn sm" type="button" data-ocr="copy">复制文字</button>'
+    : '<button class="btn sm" type="button" data-ocr="again">重新识别</button>';
+  return `<details class="ocr-block"><summary>图中文字 <span class="muted">${esc(ocrLabel(st, d.ocrText))}</span></summary><div class="ocr-actions">${act}</div>${st === 1 ? `<pre class="ocr-text">${esc(d.ocrText ?? '')}</pre>` : ''}</details>`;
+}
+
 function bodyHTML(d: RecordDetail): string {
   const text = d.text ?? '';
   const trunc = d.truncated ? '<p class="trunc">仅显示前 200 KB，复制时为完整内容</p>' : '';
@@ -410,7 +428,7 @@ function bodyHTML(d: RecordDetail): string {
       const im = d.image;
       if (!im) return `<div class="p-empty">${MISSING}</div>`;
       const wh = im.w && im.h ? ` width="${im.w}" height="${im.h}"` : '';
-      return `<figure class="p-img"><img src="${esc(im.src)}"${wh} alt="${esc(d.title)}"></figure>`;
+      return `<figure class="p-img"><img src="${esc(im.src)}"${wh} alt="${esc(d.title)}"></figure><div class="ocr-slot">${ocrBlockHTML(d)}</div>`;
     }
     case 'video':
     case 'file': {
@@ -436,6 +454,10 @@ function metaHTML(r: RecordSummary, d: RecordDetail | null) {
     if (r.kind === 'image' && d.image?.w) meta.push(['尺寸', `${d.image.w} × ${d.image.h}`]);
     if (r.kind === 'link') meta.push(['域名', host(t)]);
   }
+  // 有文字时字数来自详情：摘要已变成 1 而详情还没重取到时先不显示
+  // 重新识别进行中（状态 0 且预览里还留着区块）信息栏与区块标题一致写“识别中…”
+  const reocrNow = r.ocrState === 0 && bodyFor === r.id && !!pbody.querySelector('.ocr-block');
+  if (r.kind === 'image' && (r.ocrState !== 1 || d?.ocrText)) meta.push(['文字', reocrNow ? '识别中…' : ocrLabel(r.ocrState, d?.ocrText)]);
   return meta.map(([k, v]) => `<div><dt>${k}</dt><dd title="${esc(v)}">${esc(v)}</dd></div>`).join('');
 }
 
@@ -490,6 +512,8 @@ function renderPreview(fade = false) {
         if (details.size > 20) details.delete(details.keys().next().value!);
       }
       showBody(d, fade);
+      // 请求途中识别状态变了（那次 record-updated 因详情未到没能刷新）：补取一次
+      if (d && S.records.get(d.id)?.ocrState !== d.ocrState) refreshOcr(d.id);
     },
     (e: AppError) => {
       if (isStale(seq, detailSeq)) return;
@@ -498,6 +522,31 @@ function renderPreview(fade = false) {
       pbody.innerHTML = '<div class="p-empty">在左侧选择一条记录查看完整内容</div>';
       void info(`get_record 失败 id=${r.id} kind=${e.kind}`);
     },
+  );
+}
+
+// 正在预览的图片识别状态变了：只重取详情，换掉信息栏与图中文字区块，图片元素不动。
+// 区块展开状态保留；焦点在区块里时交给新区块的标题，区块没了交还搜索框；待识别（0）时不动已有区块
+let ocrSeq = 0;
+function refreshOcr(id: number) {
+  const seq = ++ocrSeq;
+  getRecord(id).then(
+    (d) => {
+      if (seq !== ocrSeq || !d || bodyFor !== id || S.detail?.id !== id) return;
+      S.detail = d;
+      const slot = pbody.querySelector('.ocr-slot');
+      // 重新识别中（0）：区块已显示“识别中…”并收起了操作，保持原样，展开状态与焦点留到最终结果
+      if (slot && !(d.ocrState === 0 && slot.querySelector('.ocr-block'))) {
+        const had = slot.contains(document.activeElement), open = !!slot.querySelector('details')?.open;
+        slot.innerHTML = ocrBlockHTML(d);
+        const det = slot.querySelector('details');
+        if (det) det.open = open;
+        if (had) (det?.querySelector('summary') ?? q).focus({ preventScroll: true });
+      }
+      const cur = S.records.get(id);
+      if (cur) pmeta.innerHTML = metaHTML(cur, d);
+    },
+    (e: AppError) => void info(`get_record 失败 id=${id} kind=${e.kind}`),
   );
 }
 
@@ -667,13 +716,15 @@ function fetchMatches(v: string, done: () => void) {
   const seq = ++searchSeq;
   if (!v.trim()) {
     S.matchIds = null;
+    S.snippets.clear();
     done();
     return;
   }
   search(v).then(
-    (ids) => {
+    (hits) => {
       if (isStale(seq, searchSeq)) return;
-      S.matchIds = new Set(ids);
+      S.matchIds = new Set(hits.map((h) => h.id));
+      S.snippets = new Map(hits.filter((h) => h.snippet).map((h) => [h.id, h.snippet!]));
       done();
     },
     (e: AppError) => void info(`search 失败 kind=${e.kind}`),
@@ -947,6 +998,27 @@ function paintPause() {
 }
 
 // —— 后端事件 ——
+// 成批的 record-updated（关闭识别、回填）一帧只重绘一次分类、列表与频谱；合并与预览刷新逐条立即做。
+// 搜索中有图片识别出文字时，这一帧先重取命中集合（不重置选中）再重绘
+let updRaf = 0, updMoved: number | undefined, updSearch = false;
+function scheduleUpdatedPaint(moved: number | undefined, research: boolean) {
+  if (moved !== undefined) updMoved = moved;
+  updSearch ||= research;
+  if (updRaf) return;
+  updRaf = requestAnimationFrame(() => {
+    updRaf = 0;
+    const m = updMoved, again = updSearch && !!S.q.trim();
+    updMoved = undefined;
+    updSearch = false;
+    const paint = () => {
+      renderTabs(true);
+      renderList();
+      renderSpectrum(m);
+    };
+    if (again) fetchMatches(S.q, paint);
+    else paint();
+  });
+}
 // 外部新记录（设计 §2 回写项 2）：不改搜索、分类、选中项，不弹提示；只有撤销恢复的那条会被选中
 const handlers = {
   added: (s: RecordSummary) => {
@@ -972,14 +1044,16 @@ const handlers = {
     const prev = S.records.get(s.id);
     details.delete(s.id);
     applyUpdated(S.records, s);
-    renderTabs(true);
     // 选中视频的补全到了（时长或封面变了）：正文重取以显示封面与标签；正在播放（已有 <video>）时不打断。
     // 置顶、复制计数、图标等其他更新不重取，免得预览滚动位置与焦点丢失
     if (s.id === bodyFor && s.kind === 'video' && !pbody.querySelector('video')
       && (prev?.durationSec !== s.durationSec || prev?.thumb !== s.thumb)) bodyFor = null;
+    if (s.id === bodyFor && s.kind === 'image' && prev?.ocrState !== s.ocrState) refreshOcr(s.id);
     // 去重命中会改 copiedAt，需要重新排序；选中项的头部与信息栏随 select 刷新，不重取详情
-    renderList();
-    renderSpectrum(prev && prev.copiedAt !== s.copiedAt ? s.id : undefined);
+    scheduleUpdatedPaint(
+      prev && prev.copiedAt !== s.copiedAt ? s.id : undefined,
+      s.ocrState === 1 && prev?.ocrState !== 1,
+    );
   },
   removed: (ids: number[]) => {
     // 别处的删除（保留时长清理、清空历史）清掉了待撤销的记录：撤销已无意义
@@ -1094,6 +1168,8 @@ const hotkeyHelp = $('#hotkeyHelp'), retainIn = $<HTMLSelectElement>('#retain'),
 const frequentIn = $<HTMLInputElement>('#frequentIn'), frequentErr = $('#frequentErr');
 const ignoreIn = $<HTMLInputElement>('#ignore'), sensitiveIn = $<HTMLInputElement>('#sensitive');
 const moveTopIn = $<HTMLInputElement>('#moveTop'), autostartIn = $<HTMLInputElement>('#autostart');
+const ocrOnIn = $<HTMLInputElement>('#ocrOn'), ocrBackfillIn = $<HTMLInputElement>('#ocrBackfill');
+const ocrProgressEl = $('#ocrProgress'), ocrUnsupportedEl = $('#ocrUnsupported');
 const permRow = $('#permRow'), permState = $('#permState'), permBtn = $<HTMLButtonElement>('#permBtn');
 const themeSeg = $('#themeSeg'), themePill = themeSeg.querySelector<HTMLElement>('.pill')!;
 const themeOpts = [...themeSeg.querySelectorAll<HTMLElement>('[data-theme-opt]')];
@@ -1260,6 +1336,29 @@ async function paintPerm() {
   permState.textContent = ok ? '已授予' : '未授予';
   permBtn.hidden = ok;
 }
+// 识别设置：总开关关闭时子开关置灰（保存时照样带上它的勾选，后端两个都看）
+function paintOcrBackfill() {
+  ocrBackfillIn.disabled = !ocrOnIn.checked;
+  $('#ocrBackfillRow').classList.toggle('is-disabled', !ocrOnIn.checked);
+}
+ocrOnIn.addEventListener('change', paintOcrBackfill);
+// 进度只在设置对话框打开时每 2 s 取一次；取不到就保持上一次的显示（纯展示，不提示）
+let ocrTimer = 0;
+function pollOcr() {
+  ocrProgress().then(
+    (p) => {
+      ocrProgressEl.hidden = p.total === 0;
+      ocrProgressEl.textContent = ocrProgressLabel(p.done, p.total);
+      ocrUnsupportedEl.hidden = p.supported;
+      // 支持时清空：#ocrOn 通过 aria-describedby 指向这里，隐藏元素的文字仍会被读屏念出
+      ocrUnsupportedEl.textContent = p.supported ? ''
+        : S.platform.os === 'windows'
+          ? '当前系统没有可用的文字识别语言，可在“设置 > 时间和语言 > 语言”中为中文添加“光学字符识别”'
+          : '需要 macOS 10.15 或更高';
+    },
+    () => {},
+  );
+}
 function openSettings() {
   // bootstrap 之前没有设置可填；已打开时（托盘再点“设置…”）不重填，保留正在改的内容
   if (!S.settings.hotkey || dlg.classList.contains('is-shown')) return;
@@ -1292,6 +1391,11 @@ function openSettings() {
   sensitiveIn.checked = st.skipSensitive;
   moveTopIn.checked = st.moveToTop;
   autostartIn.checked = st.launchAtLogin;
+  ocrOnIn.checked = st.ocrEnabled;
+  ocrBackfillIn.checked = st.ocrBackfill;
+  paintOcrBackfill();
+  pollOcr();
+  ocrTimer ||= window.setInterval(pollOcr, 2000);
   paintTheme(true);
   void paintPerm();
   if (!dlg.open) dlg.showModal();
@@ -1310,6 +1414,8 @@ function closeSettings() {
 // 所有关闭路径（含面板隐藏时直接 close）都到这里：清掉弹入状态、焦点回到打开前的元素
 dlg.addEventListener('close', () => {
   dlg.classList.remove('is-shown');
+  clearInterval(ocrTimer);
+  ocrTimer = 0;
   if (S.shown && dlgReturn?.isConnected) dlgReturn.focus({ preventScroll: true });
   dlgReturn = null;
 });
@@ -1357,7 +1463,7 @@ async function submitSettings() {
   if (frequent === null) return frequentIn.focus();
   const s = formToSettings(S.settings, {
     hotkey: pendingHotkey, retain: retainIn.value, limit, frequent, ignored: addIgnored(draftIgnored, ignoreIn.value), skipSensitive: sensitiveIn.checked,
-    moveToTop: moveTopIn.checked, launchAtLogin: autostartIn.checked,
+    moveToTop: moveTopIn.checked, launchAtLogin: autostartIn.checked, ocrEnabled: ocrOnIn.checked, ocrBackfill: ocrBackfillIn.checked,
   });
   saving = true;
   try {
@@ -1579,7 +1685,7 @@ document.addEventListener('keydown', (e) => {
     { key: e.key, code: e.code, mod: e.ctrlKey || e.metaKey, alt: e.altKey, shift: e.shiftKey, repeat: e.repeat },
     {
       inSearch,
-      onControl: !inSearch && !!t.closest?.('button, a, video'),
+      onControl: !inSearch && !!t.closest?.('button, a, video, summary'),
       searchHasText: !!q.value,
       menuOpen: menuOpen(),
       hasSel: S.sel !== null,
@@ -1800,6 +1906,27 @@ pbody.addEventListener('click', (e) => {
     const f = S.detail?.files[Number(rv.dataset.reveal)];
     // 后端的 fileMissing 文案是“无法粘贴”，这里按 kind 给自己的文案
     if (f) revealFile(f.path).catch((err: AppError) => toast(err.kind === 'fileMissing' ? MISSING : err.message));
+    return;
+  }
+  const oc = t.closest<HTMLElement>('[data-ocr]');
+  if (oc) {
+    const d = S.detail;
+    if (!d) return;
+    if (oc.dataset.ocr === 'copy') {
+      copyTextPlain(d.ocrText ?? '').then(() => toast('已复制图中文字'), (err: AppError) => toast(err.message, { icon: 'copy' }));
+      return;
+    }
+    // 先改成“识别中…”并收起操作；之后的 record-updated 按真实状态重绘，失败时重取一次还原
+    const block = oc.closest('.ocr-block')!;
+    block.querySelector('.muted')!.textContent = '识别中…';
+    block.querySelector<HTMLElement>('.ocr-actions')!.hidden = true;
+    block.querySelector<HTMLElement>('summary')!.focus({ preventScroll: true });
+    const cur = S.records.get(d.id);
+    if (cur) pmeta.innerHTML = metaHTML({ ...cur, ocrState: 0 }, d);
+    reocr(d.id).catch((err: AppError) => {
+      toast(err.message);
+      refreshOcr(d.id);
+    });
     return;
   }
   const play = t.closest<HTMLElement>('[data-play]');

@@ -1,4 +1,5 @@
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
@@ -105,6 +106,8 @@ pub fn changed_fields(old: &Settings, new: &Settings) -> Vec<&'static str> {
             "frequentMinUses",
             old.frequent_min_uses != new.frequent_min_uses,
         ),
+        ("ocrEnabled", old.ocr_enabled != new.ocr_enabled),
+        ("ocrBackfill", old.ocr_backfill != new.ocr_backfill),
     ]
     .into_iter()
     .filter_map(|(name, changed)| changed.then_some(name))
@@ -182,10 +185,11 @@ pub fn save_settings(
     state: State<'_, AppState>,
     settings: Settings,
 ) -> Result<(), AppError> {
-    let (hotkey, appearance, launch) = (
+    let (hotkey, appearance, launch, ocr_on) = (
         settings.hotkey.clone(),
         settings.appearance,
         settings.launch_at_login,
+        settings.ocr_enabled,
     );
     let changed = commit_settings(&state, settings, |s| crate::hotkey::register(&app, s))?;
     // 快捷键改了必为 Register，与 commit_settings 内一致；没改时只决定是否尽力重试
@@ -209,6 +213,14 @@ pub fn save_settings(
     }
     if changed.contains(&"launchAtLogin") {
         set_autostart(&app, launch);
+    }
+    // 回填线程自己再看 ocrEnabled 与 ocrBackfill 是否都开着
+    if changed.contains(&"ocrEnabled") || changed.contains(&"ocrBackfill") {
+        if ocr_on {
+            state.ocr.schedule_backfill(&app, Duration::ZERO);
+        } else {
+            state.ocr.disable(&app);
+        }
     }
     Ok(())
 }
@@ -357,6 +369,8 @@ mod tests {
             panel_size: (1000.0, 700.0),
             spectrum_collapsed: true,
             frequent_min_uses: 5,
+            ocr_enabled: false,
+            ocr_backfill: false,
             ..Settings::default()
         };
         assert_eq!(
@@ -366,7 +380,9 @@ mod tests {
                 "appearance",
                 "panelSize",
                 "spectrumCollapsed",
-                "frequentMinUses"
+                "frequentMinUses",
+                "ocrEnabled",
+                "ocrBackfill"
             ]
         );
     }
@@ -432,6 +448,8 @@ mod tests {
                 crate::commands::panel::accessibility_granted,
                 crate::commands::records::search,
                 crate::commands::records::count_unpinned,
+                crate::commands::records::ocr_progress,
+                crate::commands::records::copy_text_plain,
             ])
             .build(tauri::test::mock_context(tauri::test::noop_assets()))
             .expect("app should build");

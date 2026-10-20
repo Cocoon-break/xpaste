@@ -5,6 +5,8 @@ pub mod error;
 pub mod winfmt;
 pub use error::PlatformError;
 
+use std::path::Path;
+
 /// 模拟粘贴前的检查结果：不是 `None` 时只复制，提示用户手动粘贴。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PasteBlock {
@@ -34,6 +36,50 @@ pub fn codec_label(fourcc: &str) -> String {
     label.into()
 }
 
+/// 图片文字识别结果：按阅读顺序以 `'\n'` 连接的行，`confidence` 为各行置信度均值（0–1）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct OcrText {
+    pub text: String,
+    pub confidence: f32,
+}
+
+#[derive(Debug)]
+pub enum OcrError {
+    /// 文件不存在或解码失败
+    Decode,
+    /// 预留：超时由调用方线程计时
+    Timeout,
+    /// 引擎异常；消息不含路径
+    Engine(String),
+}
+
+/// 读图（按内容识别格式）并把长边缩到 `max_side` 以内（不放大），RGBA8。
+fn load_rgba(path: &Path, max_side: u32) -> Result<image::RgbaImage, OcrError> {
+    let bytes = std::fs::read(path).map_err(|_| OcrError::Decode)?;
+    let img = image::load_from_memory(&bytes).map_err(|_| OcrError::Decode)?;
+    let img = if img.width().max(img.height()) > max_side {
+        img.resize(max_side, max_side, image::imageops::FilterType::Triangle)
+    } else {
+        img
+    };
+    Ok(img.to_rgba8())
+}
+
+/// 行文本与置信度拼成结果；没有行时置信度为 0。
+fn ocr_text(lines: Vec<(String, f32)>) -> OcrText {
+    let confidence = if lines.is_empty() {
+        0.0
+    } else {
+        lines.iter().map(|l| l.1).sum::<f32>() / lines.len() as f32
+    };
+    let text = lines
+        .into_iter()
+        .map(|l| l.0)
+        .collect::<Vec<_>>()
+        .join("\n");
+    OcrText { text, confidence }
+}
+
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
@@ -48,6 +94,14 @@ mod tests {
     #[test]
     fn os_is_a_supported_platform() {
         assert!(matches!(super::OS, "macos" | "windows"));
+    }
+
+    #[test]
+    fn ocr_text_joins_lines_and_averages() {
+        let r = super::ocr_text(vec![("a".into(), 0.5), ("b".into(), 1.0)]);
+        assert_eq!((r.text.as_str(), r.confidence), ("a\nb", 0.75));
+        let empty = super::ocr_text(vec![]);
+        assert_eq!((empty.text.as_str(), empty.confidence), ("", 0.0));
     }
 
     #[test]

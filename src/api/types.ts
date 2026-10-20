@@ -17,6 +17,8 @@ export interface Settings {
   lastFilter: string;
   spectrumCollapsed: boolean;
   frequentMinUses: number;
+  ocrEnabled: boolean;
+  ocrBackfill: boolean;
 }
 
 export interface PlatformInfo {
@@ -51,6 +53,21 @@ export interface RecordSummary {
   lang: string | null;
   thumb: string | null;
   durationSec: number | null;
+  /** 0 待识别 1 有文字 2 无文字 3 失败 4 跳过 5 本机不支持（crates/xpaste-core `ocr_state`） */
+  ocrState: number;
+}
+
+/** 已识别（有文字或无文字）的图片数 / 图片总数；`supported` 为本机是否有可用识别引擎。 */
+export interface OcrProgress {
+  done: number;
+  total: number;
+  supported: boolean;
+}
+
+/** `snippet` 只在命中来自识别文字时出现。 */
+export interface SearchHit {
+  id: number;
+  snippet: string | null;
 }
 
 export interface FileEntry {
@@ -82,6 +99,7 @@ export interface RecordDetail extends RecordSummary {
   files: FileEntry[];
   image: ImageInfo | null;
   video: VideoInfo | null;
+  ocrText: string | null;
 }
 
 export interface AppError {

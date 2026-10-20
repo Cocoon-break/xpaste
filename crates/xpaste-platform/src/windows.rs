@@ -4,6 +4,10 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use windows::Globalization::Language;
+use windows::Graphics::Imaging::{BitmapPixelFormat, SoftwareBitmap};
+use windows::Media::Ocr::OcrEngine;
+use windows::Storage::Streams::DataWriter;
 use windows::Win32::Foundation::{
     CloseHandle, GlobalFree, HANDLE, HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, PROPERTYKEY,
     RPC_E_CHANGED_MODE, SIZE, WPARAM,
@@ -40,8 +44,9 @@ use windows::Win32::System::Memory::{
 };
 use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::System::Threading::{
-    GetCurrentProcess, GetCurrentProcessId, OpenProcess, OpenProcessToken, PROCESS_NAME_WIN32,
-    PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+    GetCurrentProcess, GetCurrentProcessId, GetCurrentThread, OpenProcess, OpenProcessToken,
+    PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+    SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
 };
 use windows::Win32::System::Variant::VT_EMPTY;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -61,17 +66,17 @@ use windows::Win32::UI::WindowsAndMessaging::{
     HICON, HWND_MESSAGE, ICONINFO, IsWindowVisible, MSG, RegisterClassW, SetForegroundWindow,
     WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLIPBOARDUPDATE, WNDCLASSW,
 };
-use windows::core::{BOOL, Error, Interface, PCWSTR, PWSTR, w};
+use windows::core::{BOOL, Error, HSTRING, Interface, PCWSTR, PWSTR, w};
 use xpaste_core::capture::MAX_FLAVOR_BYTES;
 use xpaste_core::{AppInfo, Flavor, Snapshot};
 
 use crate::decode::normalize_newlines;
 use crate::winfmt::{
     VideoProps, bgra_to_png, bgra_to_png_within, bitmap_from_flavors, cf_html_fragment,
-    file_description_query, formats_to_read, is_shell_tray_class, parse_hdrop, standard_format_id,
-    standard_format_name, video_meta_from_props, write_bytes,
+    file_description_query, formats_to_read, is_shell_tray_class, join_ocr_words, parse_hdrop,
+    standard_format_id, standard_format_name, video_meta_from_props, write_bytes,
 };
-use crate::{PasteBlock, PlatformError};
+use crate::{OcrError, OcrText, PasteBlock, PlatformError};
 
 pub const OS: &str = "windows";
 
@@ -781,6 +786,75 @@ pub fn video_poster(path: &Path, max_px: u32) -> Option<Vec<u8>> {
         let _ = DeleteObject(bitmap.into());
         png
     }
+}
+
+/// 依次试用户语言、简体中文、美式英语；系统没有对应 OCR 语言包时 None。
+fn ocr_engine() -> Option<OcrEngine> {
+    OcrEngine::TryCreateFromUserProfileLanguages()
+        .ok()
+        .or_else(|| {
+            ["zh-Hans-CN", "en-US"].into_iter().find_map(|tag| {
+                let lang = Language::CreateLanguage(&HSTRING::from(tag)).ok()?;
+                OcrEngine::TryCreateFromLanguage(&lang).ok()
+            })
+        })
+}
+
+pub fn ocr_available() -> bool {
+    let _com = ComGuard::init();
+    ocr_engine().is_some()
+}
+
+/// `Windows.Media.Ocr`。阻塞（`RecognizeAsync` 在本线程 `join`），只在工作线程调用。
+/// WinRT 不给行置信度，固定 1.0。行由 `Words()` 按 `join_ocr_words` 拼接：`Text()` 在中文词之间也插空格。
+pub fn ocr_png(path: &Path, max_side_px: u32) -> Result<Option<OcrText>, OcrError> {
+    // COM 失败时后续 WinRT 调用自会报错，这里不单独处理
+    let _com = ComGuard::init();
+    let max = OcrEngine::MaxImageDimension().map_or(max_side_px, |m| m.min(max_side_px));
+    let mut img = crate::load_rgba(path, max)?;
+    let Some(engine) = ocr_engine() else {
+        return Ok(None);
+    };
+    let err = |e: Error| OcrError::Engine(e.message());
+    let (w, h) = img.dimensions();
+    for px in img.pixels_mut() {
+        px.0.swap(0, 2); // RGBA → BGRA
+    }
+    let writer = DataWriter::new().map_err(err)?;
+    writer.WriteBytes(img.as_raw()).map_err(err)?;
+    let bitmap = SoftwareBitmap::CreateCopyFromBuffer(
+        &writer.DetachBuffer().map_err(err)?,
+        BitmapPixelFormat::Bgra8,
+        w as i32,
+        h as i32,
+    )
+    .map_err(err)?;
+    let result = engine
+        .RecognizeAsync(&bitmap)
+        .map_err(err)?
+        .join()
+        .map_err(err)?;
+    let lines = result
+        .Lines()
+        .map_err(err)?
+        .into_iter()
+        .map(|l| {
+            let words = l
+                .Words()?
+                .into_iter()
+                .map(|w| w.Text().map(|t| t.to_string()))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok((join_ocr_words(&words), 1.0))
+        })
+        .collect::<Result<Vec<_>, Error>>()
+        .map_err(err)?;
+    Ok(Some(crate::ocr_text(lines)))
+}
+
+/// 当前线程降到低于正常优先级（后台识别用）。尽力而为。
+pub fn lower_thread_priority() {
+    // SAFETY: 当前线程伪句柄，只改本线程
+    let _ = unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL) };
 }
 
 /// 选择器候选：有可见（未被 DWM 隐藏）、带标题顶层窗口的进程（本进程除外），加上开始菜单快捷方式指向的 exe，

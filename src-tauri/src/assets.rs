@@ -88,6 +88,7 @@ mod tests {
                 lang: None,
                 thumb: None,
                 duration_sec: None,
+                ocr_state: 0,
             },
             text: None,
             truncated: false,
@@ -101,6 +102,7 @@ mod tests {
                 fps: 0.0,
                 codec: String::new(),
             }),
+            ocr_text: None,
         };
         let src = |s| detail_dto(d(s)).video.unwrap().src;
         assert_eq!(

@@ -4,7 +4,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError, mpsc};
 
 use xpaste_core::{Settings, Store};
 
-use crate::enrich;
+use crate::{enrich, ocr};
 
 /// 由 Tauri 托管、各命令共享的应用状态。
 /// 锁顺序：不同时持有 `settings` 与 `store`；持锁期间不发事件。
@@ -12,6 +12,7 @@ pub struct AppState {
     pub settings: Mutex<Settings>,
     pub store: Mutex<Store>,
     pub enrich: mpsc::Sender<enrich::Job>,
+    pub ocr: ocr::Handle,
     /// `<应用数据目录>/xPaste`，与 `store.dir` 相同
     pub data_dir: PathBuf,
     pub paused: AtomicBool,
@@ -32,6 +33,7 @@ impl AppState {
         settings: Settings,
         store: Store,
         enrich: mpsc::Sender<enrich::Job>,
+        ocr: ocr::Handle,
         data_dir: PathBuf,
     ) -> Self {
         // 暂停跨重启：kv `paused` 为 "1" 即暂停；托盘与 bootstrap 都从这个原子读初值
@@ -40,6 +42,7 @@ impl AppState {
             settings: Mutex::new(settings),
             store: Mutex::new(store),
             enrich,
+            ocr,
             data_dir,
             paused: AtomicBool::new(paused),
             last_write_seq: AtomicU64::new(u64::MAX),
@@ -58,12 +61,18 @@ impl AppState {
         self.settings.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// 测试用：内存数据库、无人接收的补全通道。
+    /// 测试用：内存数据库、无人接收的补全通道、没有识别线程的队列。
     #[cfg(test)]
     pub fn for_test() -> Self {
         let dir = std::env::temp_dir().join(format!("xpaste-app-test-{}", std::process::id()));
         let store = Store::open_in_memory(&dir).expect("内存数据库");
-        Self::new(Settings::default(), store, mpsc::channel().0, dir)
+        Self::new(
+            Settings::default(),
+            store,
+            mpsc::channel().0,
+            ocr::Handle::new(false),
+            dir,
+        )
     }
 }
 
@@ -80,7 +89,13 @@ mod tests {
             if let Some(v) = value {
                 store.kv_set("paused", v).unwrap();
             }
-            let state = AppState::new(Settings::default(), store, mpsc::channel().0, dir.clone());
+            let state = AppState::new(
+                Settings::default(),
+                store,
+                mpsc::channel().0,
+                crate::ocr::Handle::new(false),
+                dir.clone(),
+            );
             assert_eq!(state.paused.load(Ordering::SeqCst), want, "{value:?}");
         }
     }

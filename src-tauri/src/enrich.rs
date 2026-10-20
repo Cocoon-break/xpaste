@@ -51,16 +51,20 @@ pub fn start(app: AppHandle) -> mpsc::Sender<Job> {
 
 fn handle(app: &AppHandle, job: Job) {
     let state = app.state::<AppState>();
+    // 缩略图之后识别文字；解码失败也交给识别线程，由它按结果标记
+    let ocr = match &job {
+        Job::Bitmap { id } | Job::ImageFile { id, .. } => Some(*id),
+        _ => None,
+    };
     match job {
         Job::Bitmap { id } => {
-            let Some(img) = decode(&state.data_dir.join("images").join(format!("{id}.png"))) else {
-                return;
-            };
-            let meta = json!({ "w": img.width(), "h": img.height() });
-            if let Err(e) = state.store().set_meta(id, &meta) {
-                log::warn!("记录 {id} 写入尺寸失败：{e}");
+            if let Some(img) = decode(&state.data_dir.join("images").join(format!("{id}.png"))) {
+                let meta = json!({ "w": img.width(), "h": img.height() });
+                if let Err(e) = state.store().set_meta(id, &meta) {
+                    log::warn!("记录 {id} 写入尺寸失败：{e}");
+                }
+                thumb(app, &state.data_dir, id, &img);
             }
-            thumb(app, &state.data_dir, id, &img);
         }
         Job::ImageFile { id, path } => {
             if let Some(img) = decode(&path) {
@@ -120,6 +124,9 @@ fn handle(app: &AppHandle, job: Job) {
                 Err(e) => log::warn!("保存应用图标失败：{e}"),
             }
         }
+    }
+    if let Some(id) = ocr {
+        state.ocr.push_front(id);
     }
 }
 

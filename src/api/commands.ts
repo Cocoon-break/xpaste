@@ -1,5 +1,12 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { Bootstrap, CopyResult, RecordDetail, Settings } from './types';
+import type {
+  Bootstrap,
+  CopyResult,
+  OcrProgress,
+  RecordDetail,
+  SearchHit,
+  Settings,
+} from './types';
 
 export const bootstrap = () => invoke<Bootstrap>('bootstrap');
 /** `animate`：没有开减少动态效果；macOS 系统材质下后端据此原生淡出整个窗口。 */
@@ -7,18 +14,23 @@ export const hidePanel = (animate: boolean) => invoke<void>('hide_panel', { anim
 /** 有对话框打开时后端不因失焦或快捷键隐藏面板。 */
 export const setDialogOpen = (open: boolean) => invoke<void>('set_dialog_open', { open });
 export const copy = (id: number, paste: boolean) => invoke<CopyResult>('copy', { id, paste });
+/** 只写纯文本，标记为自身写入，不产生新记录。 */
+export const copyTextPlain = (text: string) => invoke<void>('copy_text_plain', { text });
 export const requestAccessibility = () => invoke<void>('request_accessibility');
 export const accessibilityGranted = () => invoke<boolean>('accessibility_granted');
 export const openUrl = (url: string) => invoke<void>('open_url', { url });
 export const revealFile = (path: string) => invoke<void>('reveal_file', { path });
 
 export const getRecord = (id: number) => invoke<RecordDetail | null>('get_record', { id });
-export const search = (q: string) => invoke<number[]>('search', { q });
+export const search = (q: string) => invoke<SearchHit[]>('search', { q });
 export const setPinned = (id: number, on: boolean) => invoke<void>('set_pinned', { id, on });
 export const deleteRecord = (id: number) => invoke<void>('delete', { id });
 export const undoDelete = (id: number) => invoke<boolean>('undo_delete', { id });
 export const clearHistory = () => invoke<number>('clear_history');
 export const countUnpinned = () => invoke<number>('count_unpinned');
+/** 只对失败、跳过、本机不支持的记录生效。 */
+export const reocr = (id: number) => invoke<void>('reocr', { id });
+export const ocrProgress = () => invoke<OcrProgress>('ocr_progress');
 export const prunePreview = (retentionDays: number | null, maxRecords: number) =>
   invoke<number>('prune_preview', { retentionDays, maxRecords });
 export const saveSettings = (settings: Settings) => invoke<void>('save_settings', { settings });
