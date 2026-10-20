@@ -27,14 +27,16 @@
       </div>
 
       <div class="spectrum" id="spectrum" data-collapsed="false">
-        <div class="sp-head"><span class="sp-title"><b>复制频谱</b> · 过去 24 小时，每根光柱是一次复制，越高内容越大</span><span class="stat" id="spStat"></span><button class="btn icon ghost" type="button" id="spToggle" aria-expanded="true" aria-controls="spTrack" aria-label="收起复制频谱"><span data-icon="chevron"></span></button></div>
-        <div class="sp-track" id="spTrack" aria-hidden="true">
-          <div id="spBars"></div>
-          <div class="sp-cursor" id="spCursor"></div>
+        <div class="sp-head"><span class="sp-title"><b>复制频谱</b> · <span id="spDesc">过去 24 小时，每根光柱是一次复制，越高内容越大</span></span><span class="presets" id="spPresets" aria-hidden="true"><button type="button" tabindex="-1" data-span="0">24h</button><button type="button" tabindex="-1" data-span="21600000">6h</button><button type="button" tabindex="-1" data-span="3600000">1h</button><button type="button" tabindex="-1" data-span="600000">10m</button></span><span class="stat" id="spStat"></span><button class="btn icon ghost" type="button" id="spToggle" aria-expanded="true" aria-controls="spTrack" aria-label="收起复制频谱"><span data-icon="chevron"></span></button></div>
+        <div class="sp-track has-early" id="spTrack" aria-hidden="true">
+          <div class="layer" id="spBars"></div>
+          <div class="layer mirror" id="spMirror"></div>
+          <div class="sp-beam" id="spBeam"></div>
           <span class="sp-now"></span>
           <div class="sp-tip" id="spTip"></div>
         </div>
         <div class="sp-axis" id="spAxis" aria-hidden="true"></div>
+        <div class="sp-mini" id="spMini" aria-hidden="true"><span class="band"></span><canvas class="dots"></canvas><span class="win"></span></div>
       </div>
 
       <div class="tabs-scroll">

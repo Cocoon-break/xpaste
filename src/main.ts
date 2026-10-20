@@ -30,7 +30,10 @@ import { ocrLabel, ocrProgressLabel, snippetHTML } from './ocr-label';
 import { searchGate } from './search-gate';
 import { nextStep, onboardSteps, type Step } from './onboarding';
 import { applyAdded, applyRemoved, applyUpdated } from './records';
-import { layoutBars, sameColumns, spectrumStat, staggerIndex, xPct, type Layout } from './spectrum';
+import {
+  centerWin, clampWin, DAY, followNow, HOUR, layoutBars, miniWin, panWin, sameColumns, spanOf, spectrumStat, staggerIndex,
+  ticks as winTicks, winLabel, xOf, zoomWin, type Layout, type Win,
+} from './spectrum';
 import { addIgnored, formToSettings, optionFromRetention, parseFrequent, parseLimit, pickerOptions, removeIgnored } from './settings-form';
 import {
   armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, nextSelection, UNDO_MS, visible, type UndoState,
@@ -95,7 +98,8 @@ const ptype = $('#ptype'), pbody = $('#pbody'), pmeta = $('#pmeta'), countEl = $
 const pinBtn = $<HTMLButtonElement>('#pinBtn'), copyBtn = $<HTMLButtonElement>('#copyBtn');
 const delBtn = $<HTMLButtonElement>('#delBtn');
 const menu = $('#menu'), mOpen = $<HTMLButtonElement>('[data-m="open"]'), toastEl = $('#toast'), toastMsg = $('#toastMsg'), undoBtn = $<HTMLButtonElement>('#undoBtn'), toastAct = $<HTMLButtonElement>('#toastAct'), pauseBtn = $('#pauseBtn');
-const spBars = $('#spBars'), spTrack = $('#spTrack'), spCursor = $('#spCursor'), spTip = $('#spTip');
+const spBars = $('#spBars'), spMirror = $('#spMirror'), spTrack = $('#spTrack'), spBeam = $('#spBeam'), spTip = $('#spTip');
+const spMini = $('#spMini'), spPresets = $('#spPresets');
 
 // —— 状态 ——
 const S = {
@@ -338,8 +342,9 @@ function moveInd({ instant = false, dur = 130, ease = EASE_MOVE }: { instant?: b
   indShown = true;
 }
 
-type SelectOpts = { scroll?: boolean; glide?: boolean; instant?: boolean; fade?: boolean; indDur?: number; indEase?: string };
-function select(id: number | null, { scroll = false, glide = true, instant = false, fade = true, indDur, indEase }: SelectOpts = {}) {
+// pan：用户直接的选中动作（方向键、数字键、点行、点光柱、删除失败回滚）才给，放大态下把窗外的记录移到窗口中间（设计 §4.4）
+type SelectOpts = { scroll?: boolean; glide?: boolean; instant?: boolean; fade?: boolean; indDur?: number; indEase?: string; pan?: 'instant' | 'smooth' };
+function select(id: number | null, { scroll = false, glide = true, instant = false, fade = true, indDur, indEase, pan }: SelectOpts = {}) {
   const changed = S.sel !== id;
   S.sel = id;
   const top = id === null ? undefined : shownTop(id);
@@ -354,7 +359,10 @@ function select(id: number | null, { scroll = false, glide = true, instant = fal
   markSel();
   moveInd({ instant: !glide || instant, dur: indDur, ease: indEase });
   renderPreview(changed && fade && !instant);
-  paintSpectrumSel(!instant);
+  const r = id === null ? undefined : S.records.get(id);
+  // 24 小时外的记录不移窗口，光束隐藏。setWin 的重绘已按 smooth 摆好光束：再画一次会让同一帧里先 0ms 后 360ms，键盘出窗也滑
+  if (pan && spWin && r && r.copiedAt >= spNow - DAY && xOf(spWin, r.copiedAt, spNow) === null) setWin(centerWin(r.copiedAt, spanOf(spWin), spNow), pan === 'smooth');
+  else paintSpectrumSel(!instant);
 }
 
 // 键盘上下移动
@@ -363,7 +371,7 @@ function move(d: 1 | -1, instant: boolean) {
   if (!v.length) return;
   const i = v.findIndex((r) => r.id === S.sel);
   const n = Math.max(0, Math.min(v.length - 1, i + d));
-  select(v[n].id, { scroll: true, instant });
+  select(v[n].id, { scroll: true, instant, pan: 'instant' });
 }
 
 function setPin(on: boolean, instant: boolean) {
@@ -555,9 +563,11 @@ function refreshOcr(id: number) {
 }
 
 // —— 复制频谱 ——
-// 每 2px 一列、一列一根光柱（spectrum.ts）；sp 是当前布局，spNow 是布局用的时刻，游标按同一时刻定位
+// 每 2px 一列、一列一根光柱（spectrum.ts）；sp 是当前布局，spNow 是布局用的时刻，光束按同一时刻定位
+// spWin：放大后的时间窗（设计 §4.1），null 为 24 小时视图；面板隐藏、收起频谱时清空
 let sp: Layout = { bars: [], colOf: new Map() };
 let spNow = Date.now();
+let spWin: Win | null = null;
 let spOn: Element | null = null;
 // 收起状态以 data-collapsed 为准：S.settings 要等保存成功才更新，读它会落后 300ms 防抖
 const spectrum = $('#spectrum'), spToggle = $('#spToggle');
@@ -567,42 +577,88 @@ function paintSpCollapsed(c: boolean) {
   spToggle.setAttribute('aria-expanded', String(!c));
   spToggle.setAttribute('aria-label', c ? '展开复制频谱' : '收起复制频谱');
 }
-function renderSpectrum(freshId?: number) {
+const SP_DESC = '过去 24 小时，每根光柱是一次复制，越高内容越大';
+// stat = false：缩放 / 平移只换时间窗，不重算统计（设计 §4.8）
+function renderSpectrum(freshId?: number, stat = true) {
   spNow = Date.now();
+  // pinned 窗口跟着时间走；固定窗口随时间流逝会滑出 24 小时，夹回来
+  if (spWin) spWin = spWin.pinned ? followNow(spWin, spNow) : clampWin(spWin.start, spWin.end, spNow);
   // 统计不依赖轨道宽度，收起时照常更新
-  const { count, peak } = spectrumStat(S.records.values(), spNow);
-  $('#spStat').textContent = `24 小时内复制 ${fmtInt(count)} 次${peak ? ` · 最忙 ${peak.hour} 点（${peak.n} 次）` : ''}`;
+  if (stat) {
+    const { count, peak } = spectrumStat(S.records.values(), spNow);
+    $('#spStat').textContent = `24 小时内复制 ${fmtInt(count)} 次${peak ? ` · 最忙 ${peak.hour} 点（${peak.n} 次）` : ''}`;
+  }
+  $('#spDesc').textContent = spWin ? winLabel(spWin, hf.format) : SP_DESC;
+  const span = spWin ? spanOf(spWin) : 0;
+  for (const b of spPresets.querySelectorAll<HTMLElement>('[data-span]')) b.classList.toggle('on', +b.dataset.span! === span);
   if (spCollapsed()) return;
   // 删除中的记录不参与布局，否则重绘会把正在收起的光柱拉回来
   const recs = [...S.records.values()].filter((r) => !S.removing.has(r.id));
-  const next = layoutBars(recs, spNow, spTrack.clientWidth, matches, freshId);
-  const cls = (b: Layout['bars'][number]) => `bar${b.dim ? ' dim' : ''}${b.fresh ? ' fresh' : ''}`;
+  const next = layoutBars(recs, spNow, spTrack.clientWidth, matches, freshId, spWin);
+  // 倒影不带 .on / .fresh
+  const base = (b: Layout['bars'][number]) => `bar${b.ids.length > 1 ? ' multi' : ''}${b.dim ? ' dim' : ''}`;
   const n = next.bars.length;
   if (sameColumns(sp, next) && spBars.children.length === n) {
     // 列没变（切分类、搜索、时间小幅流逝）：原地改，.dim/.on 的 200ms 过渡照常播放（原型同样是原地切类）
     next.bars.forEach((b, i) => {
-      const el = spBars.children[i] as HTMLElement;
-      el.className = cls(b);
-      el.dataset.type = b.kind;
-      el.style.left = b.x + '%';
-      el.style.height = b.h + '%';
-      // 撤销删除时光柱还在原列，但 remove() 的收起动画 fill: forwards 仍压着它：取消脚本动画，CSS 过渡照常
-      el.getAnimations().forEach((a) => {
-        if (!(a instanceof CSSAnimation) && !(a instanceof CSSTransition)) a.cancel();
-      });
+      for (const el of [spBars.children[i], spMirror.children[i]] as HTMLElement[]) {
+        if (!el) continue;
+        el.className = base(b) + (b.fresh && el.parentElement === spBars ? ' fresh' : '');
+        el.dataset.type = b.kind;
+        el.style.left = b.x + '%';
+        el.style.height = b.h + '%';
+        // 撤销删除时光柱还在原列，但 remove() 的收起动画 fill: forwards 仍压着它：取消脚本动画，CSS 过渡照常
+        el.getAnimations().forEach((a) => {
+          if (!(a instanceof CSSAnimation) && !(a instanceof CSSTransition)) a.cancel();
+        });
+      }
     });
   } else {
     spBars.innerHTML = next.bars.map((b, i) =>
-      `<span class="${cls(b)}" data-col="${i}" data-type="${b.kind}" style="left:${b.x}%;height:${b.h}%;--i:${staggerIndex(i, n)}"></span>`).join('');
+      `<span class="${base(b)}${b.fresh ? ' fresh' : ''}" data-col="${i}" data-type="${b.kind}" style="left:${b.x}%;height:${b.h}%;--i:${staggerIndex(i, n)}"></span>`).join('');
+    spMirror.innerHTML = spBars.innerHTML;
     // 悬停的光柱已被替换，提示条不再对应
     spTip.classList.remove('show');
   }
+  // 点阵每次重绘都画：窗外的新记录、删除、时间流逝都不改列
+  if (spWin) paintMiniDots(recs);
   sp = next;
   // className 重写会去掉 .on，两条路径都由 paintSpectrumSel 重新标记
   spOn = null;
-  const ticks: [number, string][] = [[3, '更早'], ...[18, 12, 6].map((h): [number, string] => [6 + 94 * (1 - h / 24), hf.format(spNow - h * 3600e3)]), [100, '现在']];
-  $('#spAxis').innerHTML = ticks.map(([x, l]) => `<span style="left:${x}%">${l}</span>`).join('');
-  paintSpectrumSel(false);
+  spTrack.classList.toggle('has-early', !spWin);
+  spTrack.querySelector<HTMLElement>('.sp-now')!.hidden = !!spWin && !spWin.pinned;
+  let tk: { x: number; l: string; c?: string }[];
+  if (!spWin) {
+    tk = [{ x: 3, l: '更早', c: 'early' }, ...[18, 12, 6].map((h) => ({ x: 6 + 94 * (1 - h / 24), l: hf.format(spNow - h * HOUR) })), { x: 100, l: '现在', c: 'now' }];
+  } else {
+    const all = winTicks(spWin, spNow), hasNow = all.some((t) => t.now);
+    // 离“现在”不到 6% 的主刻度只留刻度线，文字不叠
+    tk = all.map((t) => t.now ? { x: 100, l: '现在', c: 'now' }
+      : t.major && !(hasNow && 100 - t.x < 6) ? { x: t.x, l: hf.format(t.t) } : { x: t.x, l: '', c: 'minor' });
+  }
+  $('#spAxis').innerHTML = tk.map(({ x, l, c }) => `<span${c ? ` class="${c}"` : ''} style="left:${x}%">${l}</span>`).join('');
+  spMini.classList.toggle('show', !!spWin);
+  // 24 小时视图下窗框铺满：下次放大时从全貌收拢过去
+  const m = spWin ? miniWin(spWin, spNow) : { left: 0, width: 100 }, mw = spMini.querySelector<HTMLElement>('.win')!;
+  mw.style.left = m.left + '%';
+  mw.style.width = m.width + '%';
+  // 程序触发的换窗（.smooth）光束滑过去，其余直接落位
+  paintSpectrumSel(spectrum.classList.contains('smooth'));
+}
+// 概览条：24 小时内每条记录一根 1 px 竖线（--fg 40%）
+function paintMiniDots(recs: RecordSummary[]) {
+  const c = spMini.querySelector('canvas')!, dpr = devicePixelRatio || 1, w = c.clientWidth * dpr;
+  c.width = Math.round(w);
+  c.height = Math.round(8 * dpr);
+  const g = c.getContext('2d');
+  if (!g) return;
+  g.fillStyle = getComputedStyle(spMini).getPropertyValue('--fg').trim();
+  g.globalAlpha = 0.4;
+  const lw = Math.max(1, Math.round(dpr));
+  for (const r of recs) {
+    const age = spNow - r.copiedAt;
+    if (age <= DAY) g.fillRect(Math.round((1 - age / DAY) * (w - lw)), 0, lw, c.height);
+  }
 }
 // 只换上一根和这一根的 .on；变暗由布局决定，筛选变化时重绘
 function paintSpectrumSel(animate = true) {
@@ -615,34 +671,124 @@ function paintSpectrumSel(animate = true) {
     b?.classList.add('on');
     spOn = b;
   }
-  // 超过 7 天的记录没有光柱，游标不指向空处
-  if (!r || !b) {
-    spCursor.style.opacity = '0';
+  // 用选中记录自己的位置，不用所在列代表记录的；7 天外、放大态的窗外没有位置，光束不指向空处
+  const x = r ? xOf(spWin, r.copiedAt, spNow) : null;
+  if (!r || x === null) {
+    spBeam.classList.remove('show');
     return;
   }
-  spCursor.style.transitionDuration = animate && !reduced.matches ? '' : '0ms';
-  // 用选中记录自己的位置，不用所在列代表记录的
-  spCursor.style.transform = `translateX(${(spTrack.clientWidth * (xPct(spNow - r.copiedAt) ?? 1)) / 100}px)`;
-  spCursor.style.opacity = '1';
+  spBeam.dataset.type = r.kind;
+  spBeam.style.transitionDuration = animate && !reduced.matches ? '' : '0ms';
+  spBeam.style.transform = `translateX(${(spTrack.clientWidth * x) / 100}px)`;
+  spBeam.classList.add('show');
+}
+// smooth：预设、复位、概览条点击、选中出窗平移，光束与概览条窗框 360 ms 滑过去；手势为 false，即时跟手
+function setWin(w: Win | null, smooth: boolean) {
+  spWin = w;
+  spectrum.classList.toggle('smooth', smooth);
+  renderSpectrum(undefined, false);
+  if (smooth) setTimeout(() => spectrum.classList.remove('smooth'), 380);
 }
 const barOf = (e: Event) => {
   const b = (e.target as Element).closest<HTMLElement>('.bar');
   const bar = b ? sp.bars[Number(b.dataset.col)] : undefined;
   const r = bar && S.records.get(bar.id);
-  return b && r ? { b, r } : null;
+  return b && r ? { b, r, n: bar.ids.length } : null;
 };
 spTrack.addEventListener('pointerover', (e) => {
   const hit = barOf(e);
   if (!hit) return;
   spTip.dataset.type = hit.r.kind;
-  spTip.innerHTML = `<i></i>${esc(hit.r.title)}<span>${rel(hit.r.copiedAt)}</span>`;
+  spTip.innerHTML = `<i></i>${esc(hit.r.title)}<span>${rel(hit.r.copiedAt)}</span>${hit.n > 1 ? `<span>等 ${hit.n} 条 · 放大可分开</span>` : ''}`;
   spTip.style.left = Math.max(0, Math.min(spTrack.clientWidth - spTip.offsetWidth, hit.b.offsetLeft - spTip.offsetWidth / 2)) + 'px';
   spTip.classList.add('show');
 });
 spTrack.addEventListener('pointerout', (e) => {
   if (!(e.relatedTarget as Element | null)?.closest?.('.bar')) spTip.classList.remove('show');
 });
+// 滚轮 / 捏合按帧合并（设计 §4.8）：累计缩放系数与平移量，一帧只换一次窗；先缩放后平移
+let spRafGesture = 0, spFactor = 1, spDt = 0, spFracX = 0.5;
+// WKWebView 的捏合可能同时派发 GestureEvent 与 ctrlKey 滚轮：手势期间丢掉后者，免得缩放两次
+let spGesturing = false;
+function queueGesture() {
+  if (spRafGesture) return;
+  spRafGesture = requestAnimationFrame(() => {
+    spRafGesture = 0;
+    const f = spFactor, dt = spDt;
+    spFactor = 1;
+    spDt = 0;
+    // 这一帧之前面板被隐藏了：不把窗口带到下次唤起
+    if (!S.shown) return;
+    // 用上次布局的 spNow：指针下的时间按屏幕上那一版计算
+    let w = f === 1 ? spWin : zoomWin(spWin, spFracX, f, spNow);
+    if (dt && w) w = panWin(w, dt, spNow);
+    // 24 小时视图里继续缩小：窗口不变，不重绘也不去掉 .smooth
+    if (!w && !spWin) return;
+    setWin(w, false);
+  });
+}
+const fracOf = (clientX: number) => {
+  const rect = spTrack.getBoundingClientRect();
+  return Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+};
+spTrack.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  if (e.ctrlKey && spGesturing) return;
+  spFracX = fracOf(e.clientX);
+  // ctrlKey：Chromium 把触控板捏合转成带 ctrlKey 的滚轮；指数夹到 ±0.3，鼠标一格（deltaY≈100）不至于一下放大 2.7 倍
+  if (e.ctrlKey || e.metaKey || Math.abs(e.deltaY) >= Math.abs(e.deltaX)) spFactor *= Math.exp(Math.max(-0.3, Math.min(0.3, e.deltaY * (e.ctrlKey ? 0.01 : 0.0025))));
+  else if (spWin) spDt += (e.deltaX / spTrack.clientWidth) * spanOf(spWin);
+  else return;
+  queueGesture();
+}, { passive: false });
+// WebKit 的触控板捏合不走 ctrlKey 滚轮，走 GestureEvent；WebView2 没有它，靠上面的滚轮兜底
+if ('GestureEvent' in window) {
+  let prevScale = 1;
+  type Gesture = Event & { scale: number; clientX: number };
+  spTrack.addEventListener('gesturestart', (e) => {
+    e.preventDefault();
+    prevScale = 1;
+    spGesturing = true;
+  });
+  spTrack.addEventListener('gestureend', () => (spGesturing = false));
+  spTrack.addEventListener('gesturechange', (e) => {
+    e.preventDefault();
+    const g = e as Gesture;
+    spFactor *= prevScale / g.scale;
+    prevScale = g.scale;
+    spFracX = fracOf(g.clientX);
+    queueGesture();
+  });
+}
+spTrack.addEventListener('dblclick', () => setWin(null, true));
+// 放大后按住拖动平移；移动超过 2 px 才算拖动（此时才捕获指针，不拖时点击仍落在光柱上），松开后不触发点击
+let spDrag: { x: number; w: Win } | null = null, spDragged = false;
+spTrack.addEventListener('pointerdown', (e) => {
+  spDragged = false;
+  spDrag = e.button === 0 && spWin ? { x: e.clientX, w: spWin } : null;
+});
+spTrack.addEventListener('pointermove', (e) => {
+  if (!spDrag || !(e.buttons & 1)) return;
+  const dx = e.clientX - spDrag.x;
+  if (!spDragged) {
+    if (Math.abs(dx) <= 2) return;
+    spDragged = true;
+    spTrack.setPointerCapture(e.pointerId);
+    spTrack.classList.add('panning');
+  }
+  setWin(panWin(spDrag.w, (-dx / spTrack.clientWidth) * spanOf(spDrag.w), spNow), false);
+});
+const endDrag = () => {
+  spDrag = null;
+  spTrack.classList.remove('panning');
+};
+spTrack.addEventListener('pointerup', endDrag);
+spTrack.addEventListener('pointercancel', endDrag);
 spTrack.addEventListener('click', (e) => {
+  if (spDragged) {
+    spDragged = false;
+    return;
+  }
   const hit = barOf(e);
   if (!hit || S.removing.has(hit.r.id)) return;
   if (!matches(hit.r)) {
@@ -652,7 +798,25 @@ spTrack.addEventListener('click', (e) => {
     renderTabs(false);
     runSearch('', { stagger: true });
   }
-  select(hit.r.id, { scroll: true, indDur: 260 });
+  select(hit.r.id, { scroll: true, indDur: 260, pan: 'smooth' });
+});
+// 预设：有 24 小时内的选中记录时以它为中心，否则贴着“现在”；不冒泡到标题行的收起
+spPresets.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const span = Number((e.target as Element).closest<HTMLElement>('[data-span]')?.dataset.span);
+  if (Number.isNaN(span)) return;
+  if (!span) return setWin(null, true);
+  const r = S.sel === null ? undefined : S.records.get(S.sel);
+  setWin(centerWin(r && r.copiedAt >= spNow - DAY ? r.copiedAt : spNow - span / 2, span, spNow), true);
+});
+// 预设按钮不抢焦点：WebView2 点击 <button> 即便 tabindex="-1" 也会聚焦，之后 Enter 不再粘贴、输入不进搜索框
+spPresets.addEventListener('pointerdown', (e) => e.preventDefault());
+spPresets.addEventListener('mousedown', (e) => e.preventDefault());
+// 概览条：把窗口中心挪到点击处；24 小时视图下它是透明的，不响应
+spMini.addEventListener('click', (e) => {
+  if (!spWin) return;
+  const rect = spMini.getBoundingClientRect();
+  setWin(centerWin(spNow - DAY + ((e.clientX - rect.left) / rect.width) * DAY, spanOf(spWin), spNow), true);
 });
 
 // —— 分类标签 ——
@@ -705,7 +869,7 @@ function setFilter(k: Filter, instant: boolean) {
   // M06 规则 6：切换分类后回到顶部并选中第一条
   list.scrollTop = 0;
   S.sel = null;
-  // 先重绘频谱（变暗随分类变），再由 renderList 的选中移动游标
+  // 先重绘频谱（变暗随分类变），再由 renderList 的选中移动光束
   renderSpectrum();
   renderList({ stagger: !instant });
   paintSpectrumSel(!instant);
@@ -894,8 +1058,10 @@ function remove(id: number) {
   paintRows({ glide: `transform 240ms ${EASE_MOVE} 100ms`, glideBusy: `transform 240ms ${EASE_MOVE}` });
   // 光柱只代表这一条时才收起；同列还有别的记录就等删除后的重绘
   const col = sp.colOf.get(id);
-  const bar = col !== undefined && sp.bars[col].ids.length === 1 ? spBars.children[col] ?? null : null;
-  fx(bar, [{ transform: 'scaleY(1)', opacity: 1 }, { transform: 'scaleY(0)', opacity: 0 }], { duration: 260, easing: EASE_MOVE, fill: 'forwards' });
+  const one = col !== undefined && sp.bars[col].ids.length === 1;
+  // 倒影随正像一起收起
+  for (const layer of [spBars, spMirror])
+    fx(one ? layer.children[col] ?? null : null, [{ transform: 'scaleY(1)', opacity: 1 }, { transform: 'scaleY(0)', opacity: 0 }], { duration: 260, easing: EASE_MOVE, fill: 'forwards' });
   // 光标目标是下一条补位后的位置：同组时就是被删行的位置，光标停住、下一条滑进来（原型 1384–1393）
   select(next, { scroll: true, indDur: 340 });
   deleteRecord(id).then(
@@ -918,7 +1084,7 @@ function remove(id: number) {
       // 重绘把光柱补回来：没重建过时原地路径取消收起动画，删除途中重建过时按新布局补上
       renderSpectrum();
       paintRows({ glide: ENTER_GLIDE });
-      select(id, { scroll: true });
+      select(id, { scroll: true, pan: 'smooth' });
       toast(err.message);
     },
   );
@@ -1649,7 +1815,7 @@ const shown = (t0: number | null, trigger?: PanelShown['trigger']) => {
   q.value = '';
   q.focus();
   // 隐藏期间不刷新相对时间与分组，唤起时补一次；首次唤起逐行浮现（启动时窗口还不可见，不在那时播）
-  // 空查询同步完成，runSearch 里已按当前宽度与时刻重绘频谱；这里只让游标直接落位、不滑
+  // 空查询同步完成，runSearch 里已按当前宽度与时刻重绘频谱；这里只让光束直接落位、不滑
   runSearch('', first ? { stagger: true, base: 260 } : {});
   paintSpectrumSel(false);
   // 引导没结束就被隐藏过：从当前步继续
@@ -1662,6 +1828,11 @@ const shown = (t0: number | null, trigger?: PanelShown['trigger']) => {
 // 一次隐藏可能收到两次 panel-hidden，这里只写状态，重复调用无副作用
 const hidden = () => {
   S.shown = false;
+  // 每次唤起回到 24 小时（设计 §2 非目标）；shown() 的 runSearch('') 会重绘
+  spWin = null;
+  spectrum.classList.remove('smooth');
+  // 概览条直接消失，不带 200ms 淡出，下次唤起不残影
+  instantly(spMini, true, () => spMini.classList.remove('show'));
   win.dataset.shown = 'false';
   // 跨隐藏不复用详情（例如文件是否还在）
   bodyFor = null;
@@ -1725,7 +1896,7 @@ document.addEventListener('keydown', (e) => {
     case 'copyIndex': {
       const r = vis()[a.i];
       if (r && !S.removing.has(r.id)) {
-        select(r.id);
+        select(r.id, { pan: 'instant' });
         copyRecord(r.id);
       }
       return;
@@ -1817,12 +1988,12 @@ $('.sp-head').addEventListener('click', () => {
   paintSpCollapsed(c);
   persistUi({ spectrumCollapsed: c });
   // 收起期间没画光柱：展开后立即按当前宽度画（读 clientWidth 会同步排版，轨道已有真实宽度，不闪一帧旧光柱）；
-  // renderSpectrum 末尾会重新标记选中光柱与游标
+  // renderSpectrum 末尾会重新标记选中光柱与光束
   // 先清空光柱走整组重建：原地改 .dim / .on 会在显示时播 200ms 过渡，违背即时切换
-  if (!c) {
-    spBars.replaceChildren();
-    renderSpectrum();
-  }
+  // 收起清空时间窗；收起时重绘只更新标题行（说明文字、预设、统计）
+  spWin = null;
+  if (!c) spBars.replaceChildren();
+  renderSpectrum();
 });
 q.addEventListener('input', (e) => {
   if ((e as InputEvent).isComposing) return;
@@ -1865,7 +2036,7 @@ list.addEventListener('click', (e) => {
   const id = itemOf(e);
   if (id === null) return;
   const qa = t.closest<HTMLElement>('[data-qa]')?.dataset.qa;
-  select(id, { indDur: 180 });
+  select(id, { indDur: 180, pan: 'smooth' });
   if (qa === 'copy') copyRecord(id);
   if (qa === 'pin') togglePin(id, true);
 });
@@ -1877,7 +2048,7 @@ list.addEventListener('contextmenu', (e) => {
   const id = itemOf(e);
   if (id === null) return;
   e.preventDefault();
-  select(id, { indDur: 180 });
+  select(id, { indDur: 180, pan: 'smooth' });
   openMenu(id, e.clientX, e.clientY, false);
 });
 

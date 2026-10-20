@@ -70,9 +70,9 @@ test('M20-4 预览切换 180ms enter，下方 4px + 轻微模糊浮入；按住�
   assert.match(ts, /renderPreview\(changed && fade && !instant\);/);
 });
 
-test('M20-5 频谱游标 360ms move', () => {
-  assert.match(rule('.sp-cursor'), /transition: transform 360ms var\(--ease-move\)/);
-  assert.match(ts, /spCursor\.style\.transitionDuration = animate && !reduced\.matches \? '' : '0ms';/);
+test('M20-5 频谱光束 360ms move', () => {
+  assert.match(rule('.sp-beam'), /transition: transform 360ms var\(--ease-move\), opacity 300ms ease/);
+  assert.match(ts, /spBeam\.style\.transitionDuration = animate && !reduced\.matches \? '' : '0ms';/);
 });
 
 test('M20-6 切换分类 380ms enter，指示条换色，列表逐行浮现；键盘 0ms', () => {
@@ -209,6 +209,8 @@ test('原则 3 减少动态效果：CSS 全局规则 + fx() 与直接 WAAPI 调�
 test('原则 4 只动 transform / opacity / filter 与颜色类属性（白名单），不过渡布局尺寸（行高 grid-template-rows 只限 .item / .item.is-removing）', () => {
   const OK = new Set(['none', 'opacity', 'transform', 'filter', 'clip-path', 'color', 'background-color', 'border-color', 'box-shadow', 'visibility', 'stroke-dashoffset']);
   const ROW_H = new Set(['.item', '.item.is-removing']);
+  // 概览条窗框：8 px 高、只在预设 / 复位 / 概览条点击时过渡，left / width 的重排代价可忽略
+  const MINI_WIN = new Set(['left', 'width']);
   // 逗号分段时跳过括号里的逗号（cubic-bezier(.22, 1, …)），每段第一个词是属性
   const props = (t: string) => t.split(/,(?![^(]*\))/).map((x) => x.trim().split(/\s+/)[0]);
   const bad: string[] = [];
@@ -217,7 +219,7 @@ test('原则 4 只动 transform / opacity / filter 与颜色类属性（白名�
     const sel = raw.replace(/\/\*[\s\S]*?\*\//g, '');
     for (const [, t] of body.matchAll(/(?:^|[;\s])transition(?:-property)?:\s*([^;}]+)/g)) {
       n++;
-      for (const p of props(t)) if (!OK.has(p) && !(p === 'grid-template-rows' && ROW_H.has(sel.trim()))) bad.push(`${sel.trim()} → ${p}`);
+      for (const p of props(t)) if (!OK.has(p) && !(p === 'grid-template-rows' && ROW_H.has(sel.trim())) && !(MINI_WIN.has(p) && sel.trim() === '.sp-mini .win')) bad.push(`${sel.trim()} → ${p}`);
     }
   }
   assert.ok(n > 40, `只解析到 ${n} 条 transition`);
