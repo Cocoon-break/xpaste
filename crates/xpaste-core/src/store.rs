@@ -439,6 +439,22 @@ impl Store {
         Ok(n > 0)
     }
 
+    /// 把 `ids` 里仍待识别的未删除记录一条语句改成 `state`；返回真正改了的 id（顺序不定）。
+    pub fn set_ocr_many(&self, ids: &[i64], state: u8) -> Result<Vec<i64>, CoreError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // u8 直接拼进 SQL，id 走占位符；队列上限约 5000，低于 SQLite 变量上限 32766
+        let marks = vec!["?"; ids.len()].join(",");
+        let sql = format!(
+            "UPDATE records SET ocr_state = {state}
+             WHERE ocr_state = {} AND deleted_at IS NULL AND id IN ({marks}) RETURNING id",
+            ocr_state::PENDING
+        );
+        let args: Vec<&dyn ToSql> = ids.iter().map(|id| id as &dyn ToSql).collect();
+        ids_in(&self.conn, &sql, &args)
+    }
+
     /// 未删除记录的识别状态；已删除或不存在为 None。
     pub fn ocr_state(&self, id: i64) -> Result<Option<u8>, CoreError> {
         Ok(self
@@ -472,10 +488,10 @@ impl Store {
         )
     }
 
-    /// (已识别：有文字或无文字, 未删除图片总数)
+    /// (已处理：待识别以外的状态 1–5, 未删除图片总数)
     pub fn ocr_progress(&self) -> Result<(u32, u32), CoreError> {
         Ok(self.conn.query_row(
-            "SELECT COALESCE(SUM(ocr_state IN (1, 2)), 0), COUNT(*) FROM records
+            "SELECT COALESCE(SUM(ocr_state BETWEEN 1 AND 5), 0), COUNT(*) FROM records
              WHERE kind = 'image' AND deleted_at IS NULL",
             [],
             |r| Ok((r.get(0)?, r.get(1)?)),
@@ -1450,7 +1466,26 @@ pub(crate) mod tests {
         s.soft_delete(c, 5).unwrap();
         assert!(s.ocr_pending_ids(&[p], 10).unwrap().is_empty());
         assert_eq!(s.ocr_pending_ids(&[p, ocr_state::FAILED], 10).unwrap(), [a]);
-        assert_eq!(s.ocr_progress().unwrap(), (1, 2));
+        // a 失败、b 有文字：都算已处理
+        assert_eq!(s.ocr_progress().unwrap(), (2, 2));
+    }
+
+    #[test]
+    fn set_ocr_many_changes_only_live_pending_rows() {
+        let mut s = mem();
+        let a = added(&mut s, &rec_image(1), 1);
+        let b = added(&mut s, &rec_image(2), 2);
+        let c = added(&mut s, &rec_image(3), 3);
+        let d = added(&mut s, &rec_image(4), 4);
+        s.set_ocr(b, ocr_state::TEXT, Some("x")).unwrap();
+        s.soft_delete(c, 5).unwrap();
+        assert!(s.set_ocr_many(&[], ocr_state::SKIPPED).unwrap().is_empty());
+        let mut changed = s.set_ocr_many(&[a, b, c, d], ocr_state::SKIPPED).unwrap();
+        changed.sort_unstable();
+        assert_eq!(changed, [a, d]);
+        assert_eq!(s.ocr_state(a).unwrap(), Some(ocr_state::SKIPPED));
+        assert_eq!(s.ocr_state(b).unwrap(), Some(ocr_state::TEXT));
+        assert_eq!(s.ocr_progress().unwrap(), (3, 3));
     }
 
     #[test]

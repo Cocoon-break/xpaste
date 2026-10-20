@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ocrLabel, snippetHTML } from './ocr-label.ts';
+import { ocrLabel, ocrProgressLabel, snippetHTML } from './ocr-label.ts';
 
 test('ocrLabel 六个状态的文案', () => {
-  assert.equal(ocrLabel(0), '识别中…');
+  assert.equal(ocrLabel(0), '待识别');
   assert.equal(ocrLabel(1, '季度预算'), '4 字');
   assert.equal(ocrLabel(2), '无文字');
   assert.equal(ocrLabel(3), '识别失败');
@@ -14,6 +14,11 @@ test('ocrLabel 六个状态的文案', () => {
 test('ocrLabel 字数按字符数（不按 UTF-16 码元）', () => {
   assert.equal(ocrLabel(1, '𠀀a😀'), '3 字');
   assert.equal(ocrLabel(1, null), '0 字');
+});
+
+test('ocrProgressLabel 已处理 a / b，千分位', () => {
+  assert.equal(ocrProgressLabel(3, 5), '已处理 3 / 5');
+  assert.equal(ocrProgressLabel(1200, 4800), '已处理 1,200 / 4,800');
 });
 
 test('snippetHTML 高亮第一处（忽略大小写），其余转义', () => {

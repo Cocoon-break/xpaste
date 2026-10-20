@@ -131,7 +131,7 @@ pub fn reocr(app: AppHandle, state: State<'_, AppState>, id: i64) -> Result<(), 
     };
     if reset {
         emit_summary(&app, RECORD_UPDATED, id);
-        state.ocr.push_forced(id);
+        state.ocr.push_front(id);
     }
     Ok(())
 }

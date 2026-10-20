@@ -1,11 +1,15 @@
 // 图中文字：信息栏字段与列表命中片段。纯函数。
 import { esc, fmtInt } from './format.ts';
 
-const LABELS = ['识别中…', '', '无文字', '识别失败', '已跳过', '本机不支持'];
+const LABELS = ['待识别', '', '无文字', '识别失败', '已跳过', '本机不支持'];
 
 /** 状态见 `RecordSummary.ocrState`；1（有文字）给字数，按字符计。4 不写原因：后端对“图片过大”与“关闭识别”都记跳过 */
 export const ocrLabel = (state: number, text?: string | null): string =>
   state === 1 ? `${fmtInt([...(text ?? '')].length)} 字` : (LABELS[state] ?? '');
+
+/** 设置里的进度：`done` 为待识别以外的图片数（含失败、跳过、本机不支持），`total` 为未删除图片数 */
+export const ocrProgressLabel = (done: number, total: number): string =>
+  `已处理 ${fmtInt(done)} / ${fmtInt(total)}`;
 
 /** 命中前保留的字符数：列表元信息一行放不下整段片段，关键词要落在省略号之前 */
 const LEAD = 4;

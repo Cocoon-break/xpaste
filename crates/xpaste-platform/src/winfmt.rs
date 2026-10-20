@@ -1,4 +1,4 @@
-//! Windows 平台层的纯函数：格式名映射、读取筛选、CF_HTML / CF_HDROP / DIB 解码、版本资源查询路径、托盘窗口类名。
+//! Windows 平台层的纯函数：格式名映射、读取筛选、CF_HTML / CF_HDROP / DIB 解码、版本资源查询路径、托盘窗口类名、识别结果按词拼行。
 //! 与 `decode.rs` 一样全平台编译，`windows.rs` 只负责 Win32 调用。
 
 use std::borrow::Cow;
@@ -291,9 +291,48 @@ fn encode_png(img: RgbaImage) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// 中日韩文字与标点：汉字、假名、谚文、CJK 标点与全角符号。
+fn is_cjk(c: char) -> bool {
+    matches!(c,
+        '\u{1100}'..='\u{11FF}'   // 谚文字母
+        | '\u{2E80}'..='\u{9FFF}' // 部首、CJK 标点、假名、注音、汉字
+        | '\u{AC00}'..='\u{D7AF}' // 谚文音节
+        | '\u{F900}'..='\u{FAFF}' // 兼容汉字
+        | '\u{FF00}'..='\u{FFEF}' // 全角与半角形式
+        | '\u{20000}'..='\u{3FFFF}') // 扩展汉字
+}
+
+/// 把 `OcrLine.Words()` 拼成一行：相邻两字都是中日韩字符时直接相连，否则隔一个空格。
+/// （`OcrLine.Text()` 在中文词之间也插空格。）
+pub fn join_ocr_words(words: &[String]) -> String {
+    let mut out = String::new();
+    for w in words.iter().filter(|w| !w.is_empty()) {
+        let cjk_pair =
+            out.chars().next_back().is_some_and(is_cjk) && w.chars().next().is_some_and(is_cjk);
+        if !out.is_empty() && !cjk_pair {
+            out.push(' ');
+        }
+        out.push_str(w);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ocr_words_join_without_spaces_between_cjk() {
+        let j = |ws: &[&str]| join_ocr_words(&ws.iter().map(|w| w.to_string()).collect::<Vec<_>>());
+        assert_eq!(j(&["季", "度", "预", "算"]), "季度预算");
+        assert_eq!(j(&["Budget", "2026"]), "Budget 2026");
+        assert_eq!(j(&["预算", "Budget", "2026"]), "预算 Budget 2026");
+        assert_eq!(
+            j(&["こんにちは", "世界", "，", "안녕"]),
+            "こんにちは世界，안녕"
+        );
+        assert_eq!(j(&[]), "");
+    }
 
     /// 40 字节 BITMAPINFOHEADER（BI_RGB）+ 像素
     fn dib(w: i32, h: i32, bpp: u16, px: &[u8]) -> Vec<u8> {

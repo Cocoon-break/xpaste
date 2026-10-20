@@ -73,8 +73,8 @@ use xpaste_core::{AppInfo, Flavor, Snapshot};
 use crate::decode::normalize_newlines;
 use crate::winfmt::{
     VideoProps, bgra_to_png, bgra_to_png_within, bitmap_from_flavors, cf_html_fragment,
-    file_description_query, formats_to_read, is_shell_tray_class, parse_hdrop, standard_format_id,
-    standard_format_name, video_meta_from_props, write_bytes,
+    file_description_query, formats_to_read, is_shell_tray_class, join_ocr_words, parse_hdrop,
+    standard_format_id, standard_format_name, video_meta_from_props, write_bytes,
 };
 use crate::{OcrError, OcrText, PasteBlock, PlatformError};
 
@@ -806,7 +806,7 @@ pub fn ocr_available() -> bool {
 }
 
 /// `Windows.Media.Ocr`。阻塞（`RecognizeAsync` 在本线程 `join`），只在工作线程调用。
-/// WinRT 不给行置信度，固定 1.0。
+/// WinRT 不给行置信度，固定 1.0。行由 `Words()` 按 `join_ocr_words` 拼接：`Text()` 在中文词之间也插空格。
 pub fn ocr_png(path: &Path, max_side_px: u32) -> Result<Option<OcrText>, OcrError> {
     // COM 失败时后续 WinRT 调用自会报错，这里不单独处理
     let _com = ComGuard::init();
@@ -838,8 +838,15 @@ pub fn ocr_png(path: &Path, max_side_px: u32) -> Result<Option<OcrText>, OcrErro
         .Lines()
         .map_err(err)?
         .into_iter()
-        .map(|l| l.Text().map(|t| (t.to_string(), 1.0)))
-        .collect::<Result<Vec<_>, _>>()
+        .map(|l| {
+            let words = l
+                .Words()?
+                .into_iter()
+                .map(|w| w.Text().map(|t| t.to_string()))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok((join_ocr_words(&words), 1.0))
+        })
+        .collect::<Result<Vec<_>, Error>>()
         .map_err(err)?;
     Ok(Some(crate::ocr_text(lines)))
 }

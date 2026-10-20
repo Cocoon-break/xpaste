@@ -346,7 +346,7 @@ kbd {
 .row[aria-selected="true"] .title { color: var(--fg); }
 .meta { font-size: 11.5px; color: var(--faint); margin-top: 1px; }
 .meta .uses { color: var(--c-fav); }
-/* 命中来自图中文字：片段接在元信息末尾，同一行省略号截断，不改行高 */
+/* 命中来自图中文字：片段放在元信息行首，同一行省略号截断，不改行高 */
 .meta .snip { color: var(--muted); }
 /* 已识别出文字：缩略图右下角 10px 角标，内缩 3px 避开圆角裁切 */
 .thumb .ocr-badge {

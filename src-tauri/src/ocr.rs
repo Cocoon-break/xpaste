@@ -1,5 +1,6 @@
-//! 图片文字识别线程：新复制的图片插队，历史图片回填排队尾；面板可见期间不开始新的识别。
-//! 日志只记 id、状态与耗时，不记文字与路径。
+//! 图片文字识别线程（低优先级）：新复制的图片与“重新识别”插队并立即识别，历史图片回填排队尾；
+//! 面板可见期间只暂停回填，正在识别的那张不打断。
+//! 日志只记 id、状态、耗时与计数，不记文字与路径。
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -29,9 +30,8 @@ const SLOW: Duration = Duration::from_secs(10);
 
 struct Item {
     id: i64,
+    /// 回填项：面板可见时等待；其余（新复制、重新识别）照常取出
     backfill: bool,
-    /// 用户点了“重新识别”：面板可见也照做
-    force: bool,
 }
 
 /// 待识别的 id。纯逻辑，不碰库与线程。
@@ -42,33 +42,19 @@ pub struct Queue {
 }
 
 impl Queue {
-    fn insert_front(&mut self, id: i64, force: bool) {
+    /// 插队；已在队中的移到队首并改为非回填项。
+    pub fn push_front(&mut self, id: i64) {
         self.items.retain(|it| it.id != id);
         self.items.push_front(Item {
             id,
             backfill: false,
-            force,
         });
-    }
-
-    /// 插队；已在队中的移到队首。
-    pub fn push_front(&mut self, id: i64) {
-        self.insert_front(id, false);
-    }
-
-    /// 插队且面板可见时也取出（重新识别）。
-    pub fn push_forced(&mut self, id: i64) {
-        self.insert_front(id, true);
     }
 
     /// 回填排队尾；已在队中的不动。
     pub fn push_back(&mut self, id: i64) {
         if !self.items.iter().any(|it| it.id == id) {
-            self.items.push_back(Item {
-                id,
-                backfill: true,
-                force: false,
-            });
+            self.items.push_back(Item { id, backfill: true });
         }
     }
 
@@ -76,10 +62,10 @@ impl Queue {
         self.paused = on;
     }
 
-    /// `(id, 是否回填项)`。暂停时只取强制项，其余保留。
+    /// `(id, 是否回填项)`。暂停时只取非回填项，回填项保留。
     pub fn next(&mut self) -> Option<(i64, bool)> {
         let i = if self.paused {
-            self.items.iter().position(|it| it.force)?
+            self.items.iter().position(|it| !it.backfill)?
         } else {
             0
         };
@@ -110,14 +96,9 @@ impl Handle {
         self.inner.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// 新复制的图片与重新识别：插队，面板可见也立即开始。
     pub fn push_front(&self, id: i64) {
         self.queue().push_front(id);
-        self.inner.1.notify_one();
-    }
-
-    /// 重新识别：有意例外于“面板可见期间不开始新的识别”，用户明确要求，立即开始。
-    pub fn push_forced(&self, id: i64) {
-        self.queue().push_forced(id);
         self.inner.1.notify_one();
     }
 
@@ -128,7 +109,7 @@ impl Handle {
         self.inner.1.notify_one();
     }
 
-    /// 面板显示时暂停、隐藏时继续；正在识别的那张不打断。
+    /// 面板显示时暂停回填、隐藏时继续；正在识别的那张不打断。
     pub fn set_paused(&self, on: bool) {
         self.queue().set_paused(on);
         self.inner.1.notify_one();
@@ -148,18 +129,12 @@ impl Handle {
     pub fn disable(&self, app: &AppHandle) {
         let ids = self.queue().drain();
         let state = app.state::<AppState>();
-        let skipped: Vec<i64> = {
-            let store = state.store();
-            ids.into_iter()
-                .filter(|&id| {
-                    matches!(store.ocr_state(id), Ok(Some(PENDING)))
-                        && store.set_ocr(id, SKIPPED, None).unwrap_or_else(|e| {
-                            log::warn!("ocr id={id} 置为跳过失败：{e}");
-                            false
-                        })
-                })
-                .collect()
-        };
+        // 一条 UPDATE；先绑定结果，store 锁在本语句末释放，emit 不在锁内
+        let skipped = state.store().set_ocr_many(&ids, SKIPPED);
+        let skipped = skipped.unwrap_or_else(|e| {
+            log::warn!("ocr 置为跳过失败：{e}");
+            Vec::new()
+        });
         log::info!("ocr 已关闭，跳过 {} 张", skipped.len());
         skipped
             .into_iter()
@@ -228,7 +203,7 @@ pub fn start(app: AppHandle) -> Handle {
     h
 }
 
-/// 处理一张；返回是否真的调用了识别引擎（回填据此决定要不要歇 500 ms）。
+/// 处理一张；返回是否调用了识别引擎或改了状态（回填据此歇 500 ms，引擎不可用时成批改“不支持”也不刷屏）。
 fn process(app: &AppHandle, supported: bool, id: i64) -> bool {
     let state = app.state::<AppState>();
     // 只处理待识别、已跳过、本机不支持的：重复入队或已被处理、已删除的直接丢弃
@@ -263,7 +238,7 @@ fn process(app: &AppHandle, supported: bool, id: i64) -> bool {
         Ok(false) => {}
         Err(e) => log::warn!("ocr id={id} 写入失败：{e}"),
     }
-    ran
+    true
 }
 
 /// 按内容识别格式读尺寸（只读文件头），不信扩展名。
@@ -351,13 +326,19 @@ mod tests {
     }
 
     #[test]
-    fn forced_item_runs_while_paused() {
+    fn paused_holds_backfill_but_runs_front_items() {
         let mut q = Queue::default();
         q.set_paused(true);
         q.push_back(1);
-        q.push_forced(2);
+        q.push_back(2);
+        q.push_front(3);
+        // 已在队中的回填项被插队后改为非回填
+        q.push_front(2);
         assert_eq!(q.next(), Some((2, false)));
+        assert_eq!(q.next(), Some((3, false)));
         assert_eq!(q.next(), None);
+        q.set_paused(false);
+        assert_eq!(q.next(), Some((1, true)));
     }
 
     #[test]

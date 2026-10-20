@@ -26,7 +26,7 @@ import {
 import { hotkeyFromEvent, hotkeyLabel } from './hotkey';
 import { keyAction } from './keymap';
 import { copyVerb, escHint, openLabel } from './labels';
-import { ocrLabel, snippetHTML } from './ocr-label';
+import { ocrLabel, ocrProgressLabel, snippetHTML } from './ocr-label';
 import { nextStep, onboardSteps, type Step } from './onboarding';
 import { applyAdded, applyRemoved, applyUpdated } from './records';
 import { layoutBars, sameColumns, spectrumStat, staggerIndex, xPct, type Layout } from './spectrum';
@@ -996,6 +996,27 @@ function paintPause() {
 }
 
 // —— 后端事件 ——
+// 成批的 record-updated（关闭识别、回填）一帧只重绘一次分类、列表与频谱；合并与预览刷新逐条立即做。
+// 搜索中有图片识别出文字时，这一帧先重取命中集合（不重置选中）再重绘
+let updRaf = 0, updMoved: number | undefined, updSearch = false;
+function scheduleUpdatedPaint(moved: number | undefined, research: boolean) {
+  if (moved !== undefined) updMoved = moved;
+  updSearch ||= research;
+  if (updRaf) return;
+  updRaf = requestAnimationFrame(() => {
+    updRaf = 0;
+    const m = updMoved, again = updSearch && !!S.q.trim();
+    updMoved = undefined;
+    updSearch = false;
+    const paint = () => {
+      renderTabs(true);
+      renderList();
+      renderSpectrum(m);
+    };
+    if (again) fetchMatches(S.q, paint);
+    else paint();
+  });
+}
 // 外部新记录（设计 §2 回写项 2）：不改搜索、分类、选中项，不弹提示；只有撤销恢复的那条会被选中
 const handlers = {
   added: (s: RecordSummary) => {
@@ -1021,15 +1042,16 @@ const handlers = {
     const prev = S.records.get(s.id);
     details.delete(s.id);
     applyUpdated(S.records, s);
-    renderTabs(true);
     // 选中视频的补全到了（时长或封面变了）：正文重取以显示封面与标签；正在播放（已有 <video>）时不打断。
     // 置顶、复制计数、图标等其他更新不重取，免得预览滚动位置与焦点丢失
     if (s.id === bodyFor && s.kind === 'video' && !pbody.querySelector('video')
       && (prev?.durationSec !== s.durationSec || prev?.thumb !== s.thumb)) bodyFor = null;
     if (s.id === bodyFor && s.kind === 'image' && prev?.ocrState !== s.ocrState) refreshOcr(s.id);
     // 去重命中会改 copiedAt，需要重新排序；选中项的头部与信息栏随 select 刷新，不重取详情
-    renderList();
-    renderSpectrum(prev && prev.copiedAt !== s.copiedAt ? s.id : undefined);
+    scheduleUpdatedPaint(
+      prev && prev.copiedAt !== s.copiedAt ? s.id : undefined,
+      s.ocrState === 1 && prev?.ocrState !== 1,
+    );
   },
   removed: (ids: number[]) => {
     // 别处的删除（保留时长清理、清空历史）清掉了待撤销的记录：撤销已无意义
@@ -1324,7 +1346,7 @@ function pollOcr() {
   ocrProgress().then(
     (p) => {
       ocrProgressEl.hidden = p.total === 0;
-      ocrProgressEl.textContent = `已识别 ${fmtInt(p.done)} / ${fmtInt(p.total)}`;
+      ocrProgressEl.textContent = ocrProgressLabel(p.done, p.total);
       ocrUnsupportedEl.hidden = p.supported;
       // 支持时清空：#ocrOn 通过 aria-describedby 指向这里，隐藏元素的文字仍会被读屏念出
       ocrUnsupportedEl.textContent = p.supported ? ''
@@ -1894,7 +1916,7 @@ pbody.addEventListener('click', (e) => {
     }
     // 先改成“识别中…”并收起操作；之后的 record-updated 按真实状态重绘，失败时重取一次还原
     const block = oc.closest('.ocr-block')!;
-    block.querySelector('.muted')!.textContent = ocrLabel(0);
+    block.querySelector('.muted')!.textContent = '识别中…';
     block.querySelector<HTMLElement>('.ocr-actions')!.hidden = true;
     block.querySelector<HTMLElement>('summary')!.focus({ preventScroll: true });
     const cur = S.records.get(d.id);
