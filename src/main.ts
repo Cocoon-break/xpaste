@@ -25,7 +25,7 @@ import {
 } from './format';
 import { hotkeyFromEvent, hotkeyLabel } from './hotkey';
 import { keyAction } from './keymap';
-import { copyVerb, escHint } from './labels';
+import { copyVerb, escHint, openLabel } from './labels';
 import { nextStep, onboardSteps, type Step } from './onboarding';
 import { applyAdded, applyRemoved, applyUpdated } from './records';
 import { layoutBars, sameColumns, spectrumStat, staggerIndex, xPct, type Layout } from './spectrum';
@@ -91,7 +91,7 @@ const tabs = $('#tabs'), tabsBase = $('#tabsBase'), tabsOver = $('#tabsOver');
 const ptype = $('#ptype'), pbody = $('#pbody'), pmeta = $('#pmeta'), countEl = $('#count');
 const pinBtn = $<HTMLButtonElement>('#pinBtn'), copyBtn = $<HTMLButtonElement>('#copyBtn');
 const delBtn = $<HTMLButtonElement>('#delBtn');
-const menu = $('#menu'), toastEl = $('#toast'), toastMsg = $('#toastMsg'), undoBtn = $<HTMLButtonElement>('#undoBtn'), toastAct = $<HTMLButtonElement>('#toastAct'), pauseBtn = $('#pauseBtn');
+const menu = $('#menu'), mOpen = $<HTMLButtonElement>('[data-m="open"]'), toastEl = $('#toast'), toastMsg = $('#toastMsg'), undoBtn = $<HTMLButtonElement>('#undoBtn'), toastAct = $<HTMLButtonElement>('#toastAct'), pauseBtn = $('#pauseBtn');
 const spBars = $('#spBars'), spTrack = $('#spTrack'), spCursor = $('#spCursor'), spTip = $('#spTip');
 
 // —— 状态 ——
@@ -410,7 +410,7 @@ function bodyHTML(d: RecordDetail): string {
     }
     case 'video':
     case 'file': {
-      const reveal = S.platform.os === 'macos' ? '在访达中显示' : '在资源管理器中显示';
+      const reveal = openLabel('file', true, S.platform.os)!;
       const row = (f: FileEntry, i: number) => `<div class="p-file"><span class="big">${svg(d.kind)}</span><div><div class="fname">${esc(f.name)}</div><code class="fpath">${esc(f.path)}</code>
           <div class="chips">${f.ext ? `<span class="chip">${esc(f.ext.toUpperCase())}</span>` : ''}${d.kind === 'video' && d.durationSec !== null ? `<span class="chip">${fmtDur(d.durationSec)}</span>` : ''}<span class="chip">${fmtBytes(f.size)}</span></div>
           ${d.kind === 'file' ? `<div><button class="btn sm" type="button" data-reveal="${i}"${f.exists ? '' : ' disabled'}>${reveal}</button></div>` : ''}
@@ -864,11 +864,21 @@ function undo() {
 
 // —— 右键菜单 ——
 let menuReturn: HTMLElement | null = null;
-function openMenu(id: number, x: number, y: number, viaKb: boolean) {
+function openMenu(id: number, x: number, y: number, viaKb: boolean, detail = details.get(id)) {
   const r = S.records.get(id);
   if (!r) return;
+  // 图片是否来自文件只有详情知道：没缓存时先取（本地调用，几毫秒），回来时已隐藏、换了选中或菜单已开就作罢
+  if (r.kind === 'image' && !detail) {
+    getRecord(id).then((d) => d && S.shown && S.sel === id && !menuOpen() && openMenu(id, x, y, viaKb, d), (err: AppError) => toast(err.message));
+    return;
+  }
   S.menuFor = id;
   $('#mPin').textContent = r.pinned ? '取消置顶' : '置顶';
+  const open = openLabel(r.kind, !!detail?.files.length, S.platform.os);
+  mOpen.hidden = !open;
+  mOpen.lastElementChild!.textContent = open ?? '';
+  // stagger 序号按可见项重排，隐藏的项不留空拍
+  menu.querySelectorAll<HTMLElement>('button:not([hidden])').forEach((b, i) => b.style.setProperty('--i', String(i)));
   menuReturn = document.activeElement as HTMLElement | null;
   const wr = win.getBoundingClientRect(), mw = menu.offsetWidth, mh = menu.offsetHeight;
   let left = x - wr.left, top = y - wr.top, ox = 'left', oy = 'top';
@@ -897,9 +907,19 @@ function closeMenu(restore: boolean) {
   else if (menu.contains(document.activeElement)) q.focus({ preventScroll: true });
 }
 function moveMenuFocus(d: 1 | -1) {
-  const bs = [...menu.querySelectorAll('button')];
-  const i = bs.indexOf(document.activeElement as HTMLButtonElement);
+  const bs = [...menu.querySelectorAll<HTMLElement>('button:not([hidden])')];
+  const i = bs.indexOf(document.activeElement as HTMLElement);
   bs[(i + d + bs.length) % bs.length].focus();
+}
+// 菜单的打开动作：链接交给浏览器；文件、视频、文件来源的图片在访达 / 资源管理器中显示第一个文件
+function openFromMenu(id: number) {
+  const hit = details.get(id);
+  (hit ? Promise.resolve(hit) : getRecord(id))
+    .then((d) => {
+      if (d?.kind === 'link') return openUrl(d.text ?? '');
+      if (d?.files[0]) return revealFile(d.files[0].path);
+    })
+    .catch((err: AppError) => toast(err.kind === 'fileMissing' ? MISSING : err.message));
 }
 
 function paintPause() {
@@ -1688,6 +1708,7 @@ menu.addEventListener('click', (e) => {
   closeMenu(true);
   if (m === 'copy') copyRecord(id);
   if (m === 'pin') togglePin(id, mouse);
+  if (m === 'open') openFromMenu(id);
   if (m === 'del') remove(id);
 });
 document.addEventListener('pointerdown', (e) => {
