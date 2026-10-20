@@ -1,5 +1,5 @@
 // 设置表单 ⇄ Settings：校验与解析。纯函数。
-import type { Appearance, Settings } from './api/types';
+import type { Settings } from './api/types';
 
 /** 原型 submit 的校验：非空、50–5000、50 的整数倍。 */
 export function parseLimit(s: string): number | null {
@@ -41,7 +41,6 @@ export type SettingsForm = {
   skipSensitive: boolean;
   moveToTop: boolean;
   launchAtLogin: boolean;
-  appearance: Appearance;
 };
 
 export const formToSettings = (base: Settings, f: SettingsForm): Settings => ({
@@ -53,5 +52,4 @@ export const formToSettings = (base: Settings, f: SettingsForm): Settings => ({
   skipSensitive: f.skipSensitive,
   moveToTop: f.moveToTop,
   launchAtLogin: f.launchAtLogin,
-  appearance: f.appearance,
 });

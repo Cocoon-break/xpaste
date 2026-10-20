@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { Appearance, Bootstrap, CopyResult, RecordDetail, Settings } from './types';
+import type { Bootstrap, CopyResult, RecordDetail, Settings } from './types';
 
 export const bootstrap = () => invoke<Bootstrap>('bootstrap');
 /** `animate`：没有开减少动态效果；macOS 系统材质下后端据此原生淡出整个窗口。 */
@@ -24,7 +24,6 @@ export const countUnpinned = () => invoke<number>('count_unpinned');
 export const prunePreview = (retentionDays: number | null, maxRecords: number) =>
   invoke<number>('prune_preview', { retentionDays, maxRecords });
 export const saveSettings = (settings: Settings) => invoke<void>('save_settings', { settings });
-export const previewAppearance = (appearance: Appearance) => invoke<void>('preview_appearance', { appearance });
 export const setPaused = (on: boolean) => invoke<void>('set_paused', { on });
 export const finishOnboarding = () => invoke<void>('finish_onboarding');
 export const installedApps = () => invoke<string[]>('installed_apps');

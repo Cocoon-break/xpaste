@@ -2,7 +2,7 @@ use std::sync::atomic::Ordering;
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
-use xpaste_core::{Appearance, RecordSummary, Settings};
+use xpaste_core::{RecordSummary, Settings};
 
 use crate::clock::now_ms;
 use crate::error::AppError;
@@ -209,14 +209,6 @@ pub fn save_settings(
     Ok(())
 }
 
-/// 设置页预览外观：窗口主题随预览切换（WKWebView 的 prefers-color-scheme 跟随窗口主题），不持久化。
-/// 同步命令（例外）：在主线程按 IPC 顺序执行，前端 await 返回后窗口主题的切换已排在前面，连点时也不乱序。
-#[tauri::command]
-pub fn preview_appearance(app: AppHandle, appearance: Appearance) -> Result<(), AppError> {
-    crate::panel::apply_theme(&app, appearance);
-    Ok(())
-}
-
 /// 按给定规则会清理掉的非置顶记录数（设置页确认用）。
 #[tauri::command(async)]
 pub fn prune_preview(
@@ -403,7 +395,7 @@ mod tests {
         tauri::test::mock_builder()
             .manage(AppState::for_test())
             .invoke_handler(tauri::generate_handler![
-                // 带 AppHandle 参数的命令（含 get_record、finish_onboarding、preview_appearance、set_dialog_open）只能用于 Wry 运行时，由 lib.rs 的 generate_handler! 编译覆盖
+                // 带 AppHandle 参数的命令（含 get_record、finish_onboarding、set_dialog_open）只能用于 Wry 运行时，由 lib.rs 的 generate_handler! 编译覆盖
                 bootstrap,
                 prune_preview,
                 crate::commands::panel::accessibility_granted,

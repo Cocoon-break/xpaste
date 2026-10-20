@@ -100,7 +100,6 @@
 
 /* 主题切换期间关闭所有过渡，避免每个属性各自渐变 */
 [data-theme-switching] *, [data-theme-switching] *::before, [data-theme-switching] *::after { transition: none !important; }
-::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }

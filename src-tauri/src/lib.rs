@@ -157,7 +157,6 @@ pub fn run() {
             commands::settings::prune_preview,
             commands::settings::set_paused,
             commands::settings::finish_onboarding,
-            commands::settings::preview_appearance,
             commands::settings::installed_apps,
             commands::panel::hide_panel,
             commands::panel::set_dialog_open,
