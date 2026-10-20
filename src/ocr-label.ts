@@ -1,9 +1,9 @@
 // 图中文字：信息栏字段与列表命中片段。纯函数。
 import { esc, fmtInt } from './format.ts';
 
-const LABELS = ['识别中…', '', '无文字', '识别失败', '已跳过（图片过大）', '本机不支持'];
+const LABELS = ['识别中…', '', '无文字', '识别失败', '已跳过', '本机不支持'];
 
-/** 状态见 `RecordSummary.ocrState`；1（有文字）给字数，按字符计。 */
+/** 状态见 `RecordSummary.ocrState`；1（有文字）给字数，按字符计。4 不写原因：后端对“图片过大”与“关闭识别”都记跳过 */
 export const ocrLabel = (state: number, text?: string | null): string =>
   state === 1 ? `${fmtInt([...(text ?? '')].length)} 字` : (LABELS[state] ?? '');
 

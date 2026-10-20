@@ -237,8 +237,10 @@ test('原则 4 只动 transform / opacity / filter 与颜色类属性（白名�
 });
 
 test('阶段 10 图中文字：区块、角标、片段、识别设置不加过渡或动画；details 开合无动效', () => {
-  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(([, sel]) => /ocr-|\.snip\b/.test(sel));
+  // 去掉注释再按规则读：选择器含 .ocr- / .snip 的块里不能有 transition / animation 声明
+  const rules = [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(([, sel]) => /\.ocr-[a-z-]*|\.snip\b/.test(sel));
   assert.ok(rules.length >= 8, `只找到 ${rules.length} 条图中文字规则`);
-  assert.deepEqual(rules.filter(([, , body]) => /\b(transition|animation)\b/.test(body)).map(([, sel]) => sel.trim()), []);
-  assert.doesNotMatch(css, /details|summary::|::-webkit-details/);
+  assert.deepEqual(rules.filter(([, , body]) => /(?:^|[;\s])(transition|animation)(?:-[a-z-]+)?\s*:/.test(body)).map(([, sel]) => sel.trim()), []);
+  // details 开合：没有 ::details-content / summary 标记的过渡或动画规则
+  assert.doesNotMatch(css, /(?:::details-content|summary::[a-z-]+)\s*\{[^}]*(?:transition|animation)/);
 });

@@ -510,6 +510,8 @@ function renderPreview(fade = false) {
         if (details.size > 20) details.delete(details.keys().next().value!);
       }
       showBody(d, fade);
+      // 请求途中识别状态变了（那次 record-updated 因详情未到没能刷新）：补取一次
+      if (d && S.records.get(d.id)?.ocrState !== d.ocrState) refreshOcr(d.id);
     },
     (e: AppError) => {
       if (isStale(seq, detailSeq)) return;
@@ -522,7 +524,7 @@ function renderPreview(fade = false) {
 }
 
 // 正在预览的图片识别状态变了：只重取详情，换掉信息栏与图中文字区块，图片元素不动。
-// 区块展开状态保留；焦点在区块里时交给新区块的标题，区块没了交还搜索框
+// 区块展开状态保留；焦点在区块里时交给新区块的标题，区块没了交还搜索框；待识别（0）时不动已有区块
 let ocrSeq = 0;
 function refreshOcr(id: number) {
   const seq = ++ocrSeq;
@@ -531,7 +533,8 @@ function refreshOcr(id: number) {
       if (seq !== ocrSeq || !d || bodyFor !== id || S.detail?.id !== id) return;
       S.detail = d;
       const slot = pbody.querySelector('.ocr-slot');
-      if (slot) {
+      // 重新识别中（0）：区块已显示“识别中…”并收起了操作，保持原样，展开状态与焦点留到最终结果
+      if (slot && !(d.ocrState === 0 && slot.querySelector('.ocr-block'))) {
         const had = slot.contains(document.activeElement), open = !!slot.querySelector('details')?.open;
         slot.innerHTML = ocrBlockHTML(d);
         const det = slot.querySelector('details');

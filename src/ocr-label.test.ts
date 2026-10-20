@@ -7,7 +7,7 @@ test('ocrLabel 六个状态的文案', () => {
   assert.equal(ocrLabel(1, '季度预算'), '4 字');
   assert.equal(ocrLabel(2), '无文字');
   assert.equal(ocrLabel(3), '识别失败');
-  assert.equal(ocrLabel(4), '已跳过（图片过大）');
+  assert.equal(ocrLabel(4), '已跳过');
   assert.equal(ocrLabel(5), '本机不支持');
 });
 
