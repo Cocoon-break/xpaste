@@ -362,20 +362,6 @@ pub fn installed_apps() -> Vec<String> {
     })
 }
 
-/// 清空剪切板后写入纯文本，返回写入后的 `changeCount`。
-pub fn write_text(text: &str) -> Result<u64, PlatformError> {
-    autoreleasepool(|_| {
-        let pb = NSPasteboard::generalPasteboard();
-        pb.clearContents();
-        // SAFETY: AppKit 导出的常量，进程内一直有效
-        let ok = pb.setString_forType(&NSString::from_str(text), unsafe { NSPasteboardTypeString });
-        if !ok {
-            return Err(PlatformError::Clipboard("写入文本失败".into()));
-        }
-        Ok(change_count())
-    })
-}
-
 /// macOS 只看辅助功能权限，忽略 `target`。
 pub fn can_paste(_target: Option<isize>) -> PasteBlock {
     // SAFETY: 无参数的只读查询

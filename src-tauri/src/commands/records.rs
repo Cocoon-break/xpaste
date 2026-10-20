@@ -175,14 +175,6 @@ pub async fn copy(
     }
 }
 
-/// 只写一段文本（颜色格式按钮用）：不隐藏面板、不改记录；监听线程视为自身写入，不产生新记录。
-#[tauri::command(async)]
-pub fn copy_text(state: State<'_, AppState>, text: String) -> Result<(), AppError> {
-    write_marked(&state, || xpaste_platform::write_text(&text)).inspect_err(|_| {
-        log::warn!("写入剪切板失败 bytes={}", text.len());
-    })
-}
-
 /// 设计 8.5 第 1–2 步：记录存在、文件都在、有可写回的 flavor。任何一步不满足都不碰剪切板。
 fn precheck(state: &AppState, id: i64) -> Result<Vec<Flavor>, AppError> {
     let store = state.store();

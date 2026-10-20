@@ -8,10 +8,10 @@ const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 const css = readFileSync(new URL('./styles.css', import.meta.url), 'utf8');
 
 test('every_button_in_index_html_has_a_name', () => {
-  const DYNAMIC = new Set(['cfOk', 'obSkip', 'obNext', 'toastAct']); // main.ts 运行时写文字
+  const DYNAMIC = new Set(['cfOk', 'obSkip', 'obNext', 'toastAct', 'mOpen']); // main.ts 运行时写文字（按钮或其内文字 span 的 id）
   const unnamed = [...html.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/g)]
     .filter(([, attrs, inner]) => !/aria-label="[^"]+"/.test(attrs) && !inner.replace(/<[^>]*>/g, '').trim()
-      && !DYNAMIC.has(/id="([^"]+)"/.exec(attrs)?.[1] ?? ''))
+      && !DYNAMIC.has(/id="([^"]+)"/.exec(attrs + inner)?.[1] ?? ''))
     .map(([m]) => m.slice(0, 80));
   assert.deepEqual(unnamed, []);
 });

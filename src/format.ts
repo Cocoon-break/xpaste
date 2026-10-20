@@ -56,7 +56,7 @@ export const fmtBytes = (n: number): string =>
   n < 1024 ? `${n} B` : n < 1048576 ? `${nf1.format(n / 1024)} KB` : `${nf1.format(n / 1048576)} MB`;
 
 export const LABEL: Record<Kind, string> = {
-  text: '文本', link: '链接', code: '代码', color: '颜色', image: '图片', video: '视频', file: '文件',
+  text: '文本', link: '链接', code: '代码', image: '图片', video: '视频', file: '文件',
 };
 export type Filter = 'all' | 'fav' | Kind;
 export const FILTERS: [Filter, string][] = [['all', '全部'], ['fav', '常用'], ...(Object.entries(LABEL) as [Kind, string][])];

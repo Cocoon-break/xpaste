@@ -1,7 +1,10 @@
-use tauri::AppHandle;
+use std::sync::atomic::Ordering;
+
+use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::error::AppError;
+use crate::state::AppState;
 
 /// `animate`：前端没有开减少动态效果；macOS 系统材质下据此决定是否原生淡出整个窗口。
 #[tauri::command(async)]
@@ -10,11 +13,19 @@ pub fn hide_panel(app: AppHandle, animate: bool) -> Result<(), AppError> {
     Ok(())
 }
 
-/// 系统设置中的辅助功能页（非 macOS 无操作）。AppKit 调用切到主线程。
-#[tauri::command(async)]
-pub fn open_accessibility_settings(app: AppHandle) -> Result<(), AppError> {
-    app.run_on_main_thread(xpaste_platform::open_accessibility_settings)?;
-    Ok(())
+/// 前端在对话框打开 / 全部关闭时同步；只写原子变量，同步命令即可。
+///
+/// 只在 true→false 的转变时补一次 `hide_if_unfocused`：对话框在用户切走之后才关（Esc 收起计时、异步保存），
+/// 当时的失焦已被忽略，这里补隐藏，免得面板浮在别的应用上。原本就是 false 时（前端启动时的 `syncDialogOpen()`）
+/// 不隐藏，否则首次运行时可见但未取得焦点的引导面板会被藏起来。
+#[tauri::command]
+pub fn set_dialog_open(app: AppHandle, open: bool) {
+    let state = app.state::<AppState>();
+    if open {
+        state.dialog_open.store(true, Ordering::SeqCst);
+    } else if state.dialog_open.swap(false, Ordering::SeqCst) {
+        crate::panel::hide_if_unfocused(&app);
+    }
 }
 
 /// 请求系统辅助功能授权对话框并打开系统设置的辅助功能页（已授权或非 macOS 无操作）。AppKit 调用切到主线程。

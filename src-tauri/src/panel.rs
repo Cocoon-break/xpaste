@@ -235,22 +235,7 @@ fn try_show(
     if let Err(e) = animate_alpha(w, start, 0.0) {
         log::warn!("复位面板透明度失败：{e}");
     }
-    #[cfg(target_os = "macos")]
-    {
-        use tauri_nspanel::ManagerExt;
-        match app.get_webview_panel(LABEL) {
-            // orderFrontRegardless + makeKeyWindow，不激活应用，前台应用保持不变
-            Ok(p) => p.show(),
-            Err(_) => w.show()?,
-        }
-        // 键盘交给 WKWebView（只设 first responder，不激活应用）
-        w.as_ref().set_focus()?;
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        w.show()?;
-        w.set_focus()?;
-    }
+    front_and_focus(app, w)?;
     if let Some(ms) = fade_in
         && let Err(e) = animate_alpha(w, 1.0, ms as f64 / 1000.0)
     {
@@ -305,6 +290,28 @@ fn reduce_motion() -> bool {
 #[cfg(not(target_os = "macos"))]
 fn reduce_motion() -> bool {
     false
+}
+
+/// 上屏并取得键盘焦点；macOS 上不激活应用，前台应用保持不变。主线程调用。
+fn front_and_focus(app: &AppHandle, w: &WebviewWindow) -> tauri::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        use tauri_nspanel::ManagerExt;
+        match app.get_webview_panel(LABEL) {
+            // orderFrontRegardless + makeKeyWindow
+            Ok(p) => p.show(),
+            Err(_) => w.show()?,
+        }
+        // 键盘交给 WKWebView（只设 first responder，不激活应用）
+        w.as_ref().set_focus()?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        w.show()?;
+        w.set_focus()?;
+    }
+    Ok(())
 }
 
 /// AppKit 只能在主线程调用；已在主线程时同步执行（hide_panel 命令跑在异步线程上）。
@@ -397,6 +404,10 @@ pub fn hide_animated(app: &AppHandle, animate: bool) {
 
 /// 直接隐藏（失焦、粘贴前、兜底线程、淡出播完）。打断进行中的淡出，隐藏后把 alpha 复位为 1 供下次显示。
 pub fn hide(app: &AppHandle) {
+    // 隐藏时前端会关掉所有对话框；这里先复位，前端漏发（例如开发时重载页面）也不会卡住失焦隐藏
+    app.state::<AppState>()
+        .dialog_open
+        .store(false, Ordering::SeqCst);
     HIDE_REQ.store(0, Ordering::Relaxed);
     FADING.store(0, Ordering::Relaxed);
     on_main(app, |app| {
@@ -413,6 +424,14 @@ pub fn hide(app: &AppHandle) {
             Err(e) => log::warn!("隐藏面板失败：{e}"),
         }
     });
+}
+
+/// 可见但已失焦时直接隐藏（对话框全部关闭时由 `set_dialog_open` 调用）。
+pub fn hide_if_unfocused(app: &AppHandle) {
+    let Some(w) = window(app) else { return };
+    if w.is_visible().unwrap_or(false) && !w.is_focused().unwrap_or(true) {
+        hide(app);
+    }
 }
 
 /// 待处理的隐藏请求编号，0 表示没有；`show_panel` / `hide` 时清零。
@@ -447,23 +466,23 @@ pub enum ToggleAction {
     /// 淡出途中重新唤起，不重记目标窗口（此时前台是面板自己）
     Reshow,
     RequestHide,
-    /// 引导中面板不隐藏，通知前端“快捷键已按下”
+    /// 引导中或设置 / 确认框打开时面板不隐藏：有焦点（或引导中）时通知前端“快捷键已按下”，失焦时只把面板取回焦点
     HotkeyPressed,
     Ignore,
 }
 
-/// 淡出途中再按一次视为重新唤起；引导中可见时快捷键不隐藏，托盘与再次启动不算试按；
+/// 淡出途中再按一次视为重新唤起；引导中或对话框打开时（`keep_visible`）可见时快捷键不隐藏，托盘与再次启动不算试按；
 /// 托盘单击刚让面板失焦隐藏时不再唤起。
 pub fn toggle_action(
     visible: bool,
     hide_pending: bool,
-    onboarding: bool,
+    keep_visible: bool,
     trigger: Trigger,
     ms_since_hide: u64,
 ) -> ToggleAction {
     if visible && hide_pending {
         ToggleAction::Reshow
-    } else if visible && onboarding && trigger == Trigger::Hotkey {
+    } else if visible && keep_visible && trigger == Trigger::Hotkey {
         ToggleAction::HotkeyPressed
     } else if visible {
         ToggleAction::RequestHide
@@ -471,7 +490,7 @@ pub fn toggle_action(
         ToggleAction::Ignore
     } else {
         ToggleAction::Show {
-            then_hotkey: onboarding && trigger == Trigger::Hotkey,
+            then_hotkey: keep_visible && trigger == Trigger::Hotkey,
         }
     }
 }
@@ -489,7 +508,9 @@ pub fn toggle(app: &AppHandle, t0: Option<u64>, trigger: Trigger) {
         Ok(v) => v,
         Err(e) => return log::warn!("读取面板可见性失败：{e}"),
     };
-    let onboarding = app.state::<AppState>().onboarding.load(Ordering::SeqCst);
+    let state = app.state::<AppState>();
+    let keep_visible =
+        state.onboarding.load(Ordering::SeqCst) || state.dialog_open.load(Ordering::SeqCst);
     // 时钟回拨（差为负）当作很久以前隐藏，宁可漏挡一次也不让托盘失灵
     let since = crate::clock::now_ms().saturating_sub(LAST_HIDE_MS.load(Ordering::Relaxed));
     let since = u64::try_from(since).unwrap_or(u64::MAX);
@@ -497,7 +518,7 @@ pub fn toggle(app: &AppHandle, t0: Option<u64>, trigger: Trigger) {
         HIDE_REQ.load(Ordering::Relaxed),
         FADING.load(Ordering::Relaxed),
     );
-    match toggle_action(visible, hide_pending, onboarding, trigger, since) {
+    match toggle_action(visible, hide_pending, keep_visible, trigger, since) {
         ToggleAction::Show { then_hotkey } => {
             show(app, t0, trigger);
             // 引导中先切到别的应用（面板失焦隐藏）再按快捷键，也算试按成功。
@@ -510,7 +531,23 @@ pub fn toggle(app: &AppHandle, t0: Option<u64>, trigger: Trigger) {
         }
         ToggleAction::Reshow => show_panel(app, t0, trigger),
         ToggleAction::RequestHide => request_hide(app),
-        ToggleAction::HotkeyPressed => crate::events::emit(app, crate::events::HOTKEY_PRESSED, ()),
+        ToggleAction::HotkeyPressed => {
+            // 对话框开着、面板却已失焦（用户点去了别的应用）：这次按键只把面板拉回焦点，不发 hotkey-pressed，
+            // 免得录制框把它当成按下了当前快捷键。引导中照发：首次运行面板可见但未取得焦点时试按也算成功
+            let focused = w.is_focused().unwrap_or(true);
+            if !focused {
+                on_main(app, |app| {
+                    if let Some(w) = window(app)
+                        && let Err(e) = front_and_focus(app, &w)
+                    {
+                        log::warn!("面板取得焦点失败：{e}");
+                    }
+                });
+            }
+            if focused || state.onboarding.load(Ordering::SeqCst) {
+                crate::events::emit(app, crate::events::HOTKEY_PRESSED, ())
+            }
+        }
         ToggleAction::Ignore => {}
     }
 }
@@ -616,6 +653,19 @@ mod tests {
         assert_eq!(size_to_remember((1400, 1000), 2.0, true), None); // 700 × 500 < 720 × 520
         assert!(same_size(SIZE, (960.5, 639.5)));
         assert!(!same_size(SIZE, (962.0, 640.0)));
+    }
+
+    #[test]
+    fn toggle_action_keeps_panel_while_dialog_open() {
+        use Trigger::*;
+        assert_eq!(
+            toggle_action(true, false, true, Hotkey, 9999),
+            ToggleAction::HotkeyPressed
+        );
+        assert_eq!(
+            toggle_action(true, false, false, Hotkey, 9999),
+            ToggleAction::RequestHide
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 // 与 crates/xpaste-core/src/model.rs、src-tauri/src/commands/*.rs 对应，改字段时同步两边
 
-export type Kind = 'text' | 'link' | 'code' | 'color' | 'image' | 'video' | 'file';
+export type Kind = 'text' | 'link' | 'code' | 'image' | 'video' | 'file';
 
 export type Appearance = 'system' | 'light' | 'dark';
 
@@ -15,6 +15,7 @@ export interface Settings {
   appearance: Appearance;
   panelSize: [number, number];
   lastFilter: string;
+  spectrumCollapsed: boolean;
 }
 
 export interface PlatformInfo {

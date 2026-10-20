@@ -154,14 +154,19 @@ test('M20-14 提示条 420ms spring 弹入 / 160ms ease-out 退出；连续触�
   assert.match(ts, /if \(toastEl\.dataset\.open === 'true'\) fx\(toastMsg, /);
 });
 
-test('M20-15 切换主题 560ms enter，从点击按钮处圆形扩散；切换期间关闭其他过渡（有意偏差：入口在设置“外观”分段控件，先经 preview_appearance 切窗口主题再扩散，阶段 5）', () => {
-  assert.match(ts, /clipPath: \[`circle\(0px at \$\{x\}px \$\{y\}px\)`, `circle\(\$\{R\}px at \$\{x\}px \$\{y\}px\)`\]/);
-  assert.match(ts, /\{ duration: 560, easing: EASE_ENTER, pseudoElement: '::view-transition-new\(root\)' \}/);
-  assert.match(ts, /const r = fromEl\.getBoundingClientRect\(\);\s*const x = r\.left \+ r\.width \/ 2, y = r\.top \+ r\.height \/ 2;/);
+test('M20-15 切换主题：点选即时切换并立即保存；data-theme-switching 两帧内关闭全部过渡，各元素不各自渐变；圆形扩散已删除（阶段 9 F01）', () => {
   assert.match(css, /\[data-theme-switching\] \*, \[data-theme-switching\] \*::before, \[data-theme-switching\] \*::after \{ transition: none !important; \}/);
-  assert.match(ts, /async function applyAppearance[\s\S]*?root\.setAttribute\('data-theme-switching', ''\);[\s\S]*?await previewWindowTheme\(mode\);/);
-  // 键盘选择（detail 0）不扩散，直接切
-  assert.match(ts, /applyAppearance\(b\.dataset\.themeOpt as Appearance, e\.detail === 0 \? null : b\)/);
+  assert.match(ts, /function setTheme\(mode: Appearance\) \{\s*root\.setAttribute\('data-theme-switching', ''\);[\s\S]*?requestAnimationFrame\(\(\) => requestAnimationFrame\(\(\) => root\.removeAttribute\('data-theme-switching'\)\)\);/);
+  // 不防抖、不预览：先改本地设置再保存；串行保存，每次发当时最新的设置；失败回到最近已确认落盘的外观
+  assert.match(ts, /async function applyAppearance\(mode: Appearance\) \{[\s\S]*?S\.settings = \{ \.\.\.S\.settings, appearance: mode \};\s*setTheme\(mode\);\s*const save = \(themeSave = themeSave\.catch\(\(\) => \{\}\)\.then\(\(\) => \{\s*const s = S\.settings;\s*return saveSettings\(s\)\.then\(\(\) => void \(savedAppearance = s\.appearance\)\);[\s\S]*?await save;[\s\S]*?S\.settings = \{ \.\.\.S\.settings, appearance: savedAppearance \};\s*setTheme\(S\.settings\.appearance\);/);
+  assert.match(ts, /S\.settings = b\.settings;\nsavedAppearance = b\.settings\.appearance;/);
+  // 按住方向键只切一次
+  assert.match(ts, /themeSeg\.addEventListener\('keydown', [\s\S]*?e\.stopPropagation\(\);\s*\/\/ [^\n]*\n\s*if \(e\.repeat\) return;/);
+  assert.match(ts, /if \(b\) void applyAppearance\(b\.dataset\.themeOpt as Appearance\);/);
+  assert.match(html, /<span><b id="themeLabel">外观<\/b><small>点选即生效<\/small><\/span>/);
+  // 圆形扩散、预览与关闭还原都已删除
+  assert.doesNotMatch(ts, /startViewTransition|view-transition|circle\(|themePending|previewWindowTheme|previewAppearance/);
+  assert.doesNotMatch(css, /view-transition/);
 });
 
 test('M20-16 描边跟随指针：.glow 读指针坐标变量，悬停时显现', () => {
@@ -169,6 +174,15 @@ test('M20-16 描边跟随指针：.glow 读指针坐标变量，悬停时显现'
   assert.match(rule('.glow'), /radial-gradient\(260px circle at var\(--mx, 50%\) var\(--my, -200px\)/);
   assert.match(rule('.window:hover .glow'), /opacity: 1/);
   assert.match(ts, /win\.addEventListener\('pointermove'[\s\S]*?requestAnimationFrame\([\s\S]*?glow\.style\.setProperty\('--mx', [\s\S]*?glow\.style\.setProperty\('--my', /);
+});
+
+test('M20-频谱开关 chevron 140ms enter：收起时旋转 180°，减少动态效果下即时；收起 / 展开本身不过渡高度', () => {
+  assert.match(html, /<button class="btn icon ghost" type="button" id="spToggle" aria-expanded="true" aria-controls="spTrack" aria-label="收起复制频谱"><span data-icon="chevron"><\/span><\/button>/);
+  assert.match(rule('#spToggle .ic'), /transition: transform 140ms var\(--ease-enter\)/);
+  assert.match(rule('.spectrum[data-collapsed="true"] #spToggle .ic'), /transform: rotate\(180deg\)/);
+  assert.match(rule('.spectrum[data-collapsed="true"] .sp-track, .spectrum[data-collapsed="true"] .sp-axis'), /display: none/);
+  // 减少动态效果：由全局规则把 transition-duration 归零（原则 3），这里确认没有用 !important 绕开
+  assert.doesNotMatch(rule('#spToggle .ic'), /!important/);
 });
 
 test('原则 2 键盘触发走 instant：方向键按住、分类、置顶、菜单、主题', () => {
@@ -183,10 +197,9 @@ test('原则 3 减少动态效果：CSS 全局规则 + fx() 与直接 WAAPI 调�
   assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{\s*\*, \*::before, \*::after, ::backdrop \{ transition-duration: 0s !important; transition-delay: 0s !important; animation: none !important; \}/);
   assert.match(ts, /const reduced = matchMedia\('\(prefers-reduced-motion: reduce\)'\);/);
   assert.match(ts, /const fx = \(el: Element \| null, kf: Keyframe\[\], opts: KeyframeAnimationOptions\) => \{\s*if \(el && !reduced\.matches\) el\.animate\(kf, opts\);/);
-  // 绕过 fx 的 .animate() 只有这几处：fx 自身、倒计时圈、置顶 FLIP（r0 已排除 reduced）、主题扩散（reduced 时走直接切换）
+  // 绕过 fx 的 .animate() 只有这几处：fx 自身、倒计时圈、置顶 FLIP（r0 已排除 reduced）
   const direct = [...ts.matchAll(/(\w+)\.animate\(/g)].map((m) => m[1]);
-  assert.deepEqual(direct, ['el', 'ring', 'el', 'root']);
-  assert.match(ts, /if \(!\('startViewTransition' in document\) \|\| reduced\.matches \|\| !fromEl\) \{/);
+  assert.deepEqual(direct, ['el', 'ring', 'el']);
   // 计时器驱动的收尾在 reduced 下也即时
   for (const ms of [150, 360]) assert.match(ts, new RegExp(`reduced\\.matches \\? 0 : ${ms}\\)`));
   // 隐藏的 160ms：reduced 时 animate 为 false，计时为 0，后端也不做原生淡出

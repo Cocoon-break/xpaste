@@ -1,8 +1,8 @@
 import './styles.css';
 import { attachConsole, info } from './api/log';
 import {
-  accessibilityGranted, bootstrap, clearHistory, copy, copyText, countUnpinned, deleteRecord, finishOnboarding, getRecord, hidePanel, installedApps, openUrl, previewAppearance, prunePreview,
-  requestAccessibility, revealFile, saveSettings, search, setPaused, setPinned, undoDelete,
+  accessibilityGranted, bootstrap, clearHistory, copy, countUnpinned, deleteRecord, finishOnboarding, getRecord, hidePanel, installedApps, openUrl, prunePreview,
+  requestAccessibility, revealFile, saveSettings, search, setDialogOpen, setPaused, setPinned, undoDelete,
 } from './api/commands';
 import {
   onConfirmClear,
@@ -18,7 +18,6 @@ import {
   onRecordUpdated,
 } from './api/events';
 import type { AppError, Appearance, FileEntry, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
-import { grade, hexInfo, isHex } from './color';
 import { copyToast, needsAccessibility } from './copy-status';
 import {
   canInlinePlay, esc, FAV_MIN, FILTERS, FL, fmtBytes, fmtDateTime, fmtDur, fmtInt, hl, hlCode, host, isFav, isHttpUrl, LABEL, rel, truncate, videoChips,
@@ -26,6 +25,7 @@ import {
 } from './format';
 import { hotkeyFromEvent, hotkeyLabel } from './hotkey';
 import { keyAction } from './keymap';
+import { copyVerb, escHint, openLabel } from './labels';
 import { nextStep, onboardSteps, type Step } from './onboarding';
 import { applyAdded, applyRemoved, applyUpdated } from './records';
 import { layoutBars, sameColumns, spectrumStat, staggerIndex, xPct, type Layout } from './spectrum';
@@ -39,7 +39,6 @@ const I = {
   text: '<path d="M4 5.5h12M4 10h12M4 14.5h7"/>',
   link: '<path d="M8.5 11.5a3 3 0 0 0 4.2 0l2.6-2.6a3 3 0 0 0-4.2-4.2l-.9.9"/><path d="M11.5 8.5a3 3 0 0 0-4.2 0l-2.6 2.6a3 3 0 0 0 4.2 4.2l.9-.9"/>',
   code: '<path d="M7 6 3 10l4 4M13 6l4 4-4 4"/>',
-  color: '<path d="M10 3.5c3 3.4 5 6 5 8.3a5 5 0 0 1-10 0c0-2.3 2-4.9 5-8.3z"/>',
   image: '<rect x="3" y="4" width="14" height="12" rx="2"/><circle cx="7.5" cy="8.5" r="1.5"/><path d="m4 15 4.5-4.5L12 14l2-2 3 3"/>',
   video: '<rect x="2.5" y="5" width="11" height="10" rx="2"/><path d="m13.5 9 4-2.5v7l-4-2.5"/>',
   file: '<path d="M5 3h6.5L15 6.5V17H5z"/><path d="M11 3v4h4"/>',
@@ -52,8 +51,6 @@ const I = {
   copy: '<rect x="7" y="7" width="9.5" height="9.5" rx="2"/><path d="M13 7V5a1.5 1.5 0 0 0-1.5-1.5h-6A1.5 1.5 0 0 0 4 5v6.5A1.5 1.5 0 0 0 5.5 13H7"/>',
   check: '<path d="m4.5 10.5 3.5 3.5 7.5-8"/>',
   trash: '<path d="M4 6h12M8 6V4h4v2M6 6l.7 10h6.6L14 6"/>',
-  more: '<circle cx="5" cy="10" r="1.3" fill="currentColor" stroke="none"/><circle cx="10" cy="10" r="1.3" fill="currentColor" stroke="none"/><circle cx="15" cy="10" r="1.3" fill="currentColor" stroke="none"/>',
-  min: '<path d="M5 10h10"/>',
   x: '<path d="m5.5 5.5 9 9M14.5 5.5l-9 9"/>',
   open: '<path d="M11 4h5v5M16 4l-7 7M14 11.5V16H4V6h4.5"/>',
   plus: '<path d="M10 4v12M4 10h12"/>',
@@ -61,6 +58,7 @@ const I = {
   inbox: '<path d="M3 11h4l1 2h4l1-2h4"/><path d="M5 5h10l2 6v4H3v-4z"/>',
   sun: '<circle cx="10" cy="10" r="3.2"/><path d="M10 2.5v1.8M10 15.7v1.8M2.5 10h1.8M15.7 10h1.8M4.7 4.7 6 6M14 14l1.3 1.3M15.3 4.7 14 6M6 14l-1.3 1.3"/>',
   moon: '<path d="M15.5 12.2A6 6 0 0 1 7.8 4.5a6 6 0 1 0 7.7 7.7z"/>',
+  chevron: '<path d="m6 12 4-4 4 4"/>',
   monitor: '<rect x="3" y="4" width="14" height="9.5" rx="1.5"/><path d="M7.5 16.5h5M10 13.5v3"/>',
 };
 const svg = (n: keyof typeof I, cls = '') =>
@@ -86,7 +84,6 @@ const instantly = (el: HTMLElement, on: boolean, fn: () => void) => {
     el.removeAttribute('data-instant');
   }
 };
-const nf2 = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const hf = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
 
 // —— 元素 ——
@@ -94,8 +91,8 @@ const win = $('#win'), list = $('#list'), rowsEl = $('#rows'), ind = $('#ind'), 
 const tabs = $('#tabs'), tabsBase = $('#tabsBase'), tabsOver = $('#tabsOver');
 const ptype = $('#ptype'), pbody = $('#pbody'), pmeta = $('#pmeta'), countEl = $('#count');
 const pinBtn = $<HTMLButtonElement>('#pinBtn'), copyBtn = $<HTMLButtonElement>('#copyBtn');
-const moreBtn = $<HTMLButtonElement>('#moreBtn'), delBtn = $<HTMLButtonElement>('#delBtn');
-const menu = $('#menu'), toastEl = $('#toast'), toastMsg = $('#toastMsg'), undoBtn = $<HTMLButtonElement>('#undoBtn'), toastAct = $<HTMLButtonElement>('#toastAct'), pauseBtn = $('#pauseBtn');
+const delBtn = $<HTMLButtonElement>('#delBtn');
+const menu = $('#menu'), mOpen = $<HTMLButtonElement>('[data-m="open"]'), toastEl = $('#toast'), toastMsg = $('#toastMsg'), undoBtn = $<HTMLButtonElement>('#undoBtn'), toastAct = $<HTMLButtonElement>('#toastAct'), pauseBtn = $('#pauseBtn');
 const spBars = $('#spBars'), spTrack = $('#spTrack'), spCursor = $('#spCursor'), spTip = $('#spTip');
 
 // —— 状态 ——
@@ -114,12 +111,25 @@ const S = {
   settings: {} as Settings,
   platform: {} as PlatformInfo,
   paused: false,
+  /** macOS 已授权辅助功能 / Windows：Enter 直接粘贴 */
+  canPaste: false,
   cells: [] as Cell[],
   total: 0,
   /** 当前可见条数，供 aria-setsize */
   count: 0,
 };
 const menuOpen = () => menu.dataset.open === 'true';
+
+// —— 随状态变化的文案 ——
+const undoHint = $('#undoHint'), escHintEl = $('#escHint');
+const paintUndoHint = () => (undoHint.hidden = !canUndo(S.undo, Date.now()));
+// macOS 看辅助功能权限（bootstrap 后取一次，每次唤起刷新），Windows 恒能粘贴
+async function paintVerb() {
+  S.canPaste = S.platform.os !== 'macos' || (await accessibilityGranted().catch(() => false));
+  const v = copyVerb(S.canPaste);
+  document.querySelectorAll<HTMLElement>('[data-verb]').forEach((e) => (e.textContent = (e.dataset.verb ?? '') + v));
+  rowsEl.querySelectorAll<HTMLElement>('[data-qa="copy"]').forEach((b) => (b.title = v));
+}
 
 // —— 数据视图 ——
 const vis = () => visible(S.records, S.filter, S.matchIds);
@@ -128,8 +138,7 @@ const rowEl = (id: number | null) => (id === null ? null : document.getElementBy
 const source = (r: RecordSummary) => r.app?.name || '未知来源';
 
 const thumb = (r: RecordSummary) =>
-  r.kind === 'color' && isHex(r.title) ? `<span class="thumb swatch-thumb" style="background:${esc(r.title)}"></span>`
-  : r.kind === 'image' && r.thumb ? `<span class="thumb"><img src="${esc(r.thumb)}" alt="" width="36" height="36"></span>`
+  r.kind === 'image' && r.thumb ? `<span class="thumb"><img src="${esc(r.thumb)}" alt="" width="36" height="36"></span>`
   : r.kind === 'video' && r.thumb ? `<span class="thumb"><img src="${esc(r.thumb)}" alt="" width="36" height="36"><span class="play">${svg('play')}</span></span>`
   : `<span class="thumb">${svg(r.kind)}</span>`;
 
@@ -145,14 +154,14 @@ const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id ===
         <div class="row-in">
           ${thumb(r)}
           <div class="main">
-            <div class="title${r.kind === 'code' || r.kind === 'color' ? ' mono' : ''}">${hl(r.title, S.q)}</div>
+            <div class="title${r.kind === 'code' ? ' mono' : ''}">${hl(r.title, S.q)}</div>
             <div class="meta">${metaLine(r)}</div>
           </div>
           <div class="tail">
             ${r.pinned ? `<span class="pin-mark">${svg('pinFill')}</span>` : ''}${i < 9 ? `<kbd class="idx">${i + 1}</kbd>` : ''}
             <span class="qa" aria-hidden="true">
               <button type="button" tabindex="-1" data-qa="pin" title="${r.pinned ? '取消置顶' : '置顶'}">${svg(r.pinned ? 'pinFill' : 'pin')}</button>
-              <button type="button" tabindex="-1" data-qa="copy" title="复制">${svg('copy')}</button>
+              <button type="button" tabindex="-1" data-qa="copy" title="${copyVerb(S.canPaste)}">${svg('copy')}</button>
             </span>
           </div>
         </div>
@@ -359,10 +368,6 @@ function setPin(on: boolean, instant: boolean) {
 }
 
 // —— 预览 ——
-const gradeHTML = (c: number) => {
-  const g = grade(c);
-  return `<em class="${g === '不达标' ? 'fail' : 'pass'}">${g}</em>`;
-};
 const MISSING = '原文件已移动或删除';
 const UNPLAYABLE = '无法在预览中播放这个格式';
 
@@ -391,22 +396,15 @@ function bodyHTML(d: RecordDetail): string {
       return `<div class="p-text">${esc(text)}</div>${trunc}`;
     case 'link': {
       const h = host(text);
-      const href = isHttpUrl(text) ? ` href="${esc(text)}" target="_blank" rel="noopener noreferrer"` : '';
+      // 链接判定按去掉首尾空白的文字，库里存的是原文
+      const u = text.trim();
+      const href = isHttpUrl(u) ? ` href="${esc(u)}" target="_blank" rel="noopener noreferrer"` : '';
       return `<div class="p-link"><div class="lk-card"><span class="lk-fav">${esc((h.replace(/^www\./, '')[0] || '?').toUpperCase())}</span><div><div class="lk-title">${esc(d.linkTitle || h)}</div><div class="lk-host">${esc(h)}</div></div></div>
           <a${href}>${esc(text)} ${svg('open')}</a>
-          <div class="chips">${text.startsWith('https:') ? '<span class="chip ok">HTTPS</span>' : '<span class="chip">HTTP</span>'}<span class="chip">${esc(h)}</span></div></div>`;
+          <div class="chips">${u.startsWith('https:') ? '<span class="chip ok">HTTPS</span>' : '<span class="chip">HTTP</span>'}<span class="chip">${esc(h)}</span></div></div>`;
     }
     case 'code':
       return `<pre class="p-code" translate="no"><code>${text.split('\n').map((l) => `<span class="ln">${hlCode(l) || ' '}</span>`).join('')}</code></pre>${trunc}`;
-    case 'color': {
-      if (!isHex(text)) return `<div class="p-text">${esc(text)}</div>`;
-      const c = hexInfo(text);
-      const ink = c.onBlack > c.onWhite ? '#06080F' : '#FFFFFF';
-      return `<div class="p-color"><div class="swatch" style="background:${c.hex};--sw:${c.hex};color:${ink}"><b>${c.hex}</b></div>
-          <ul class="cvals">${[['HEX', c.hex], ['RGB', c.rgb], ['HSL', c.hsl]].map(([k, v]) =>
-            `<li><span class="k">${k}</span><code>${esc(v)}</code><button class="btn sm" type="button" data-copy="${esc(v)}">复制</button></li>`).join('')}</ul>
-          <div class="contrast"><div>放在白色背景上<b>${nf2.format(c.onWhite)} : 1${gradeHTML(c.onWhite)}</b></div><div>放在黑色背景上<b>${nf2.format(c.onBlack)} : 1${gradeHTML(c.onBlack)}</b></div></div></div>`;
-    }
     case 'image': {
       const im = d.image;
       if (!im) return `<div class="p-empty">${MISSING}</div>`;
@@ -415,7 +413,7 @@ function bodyHTML(d: RecordDetail): string {
     }
     case 'video':
     case 'file': {
-      const reveal = S.platform.os === 'macos' ? '在访达中显示' : '在资源管理器中显示';
+      const reveal = openLabel('file', true, S.platform.os)!;
       const row = (f: FileEntry, i: number) => `<div class="p-file"><span class="big">${svg(d.kind)}</span><div><div class="fname">${esc(f.name)}</div><code class="fpath">${esc(f.path)}</code>
           <div class="chips">${f.ext ? `<span class="chip">${esc(f.ext.toUpperCase())}</span>` : ''}${d.kind === 'video' && d.durationSec !== null ? `<span class="chip">${fmtDur(d.durationSec)}</span>` : ''}<span class="chip">${fmtBytes(f.size)}</span></div>
           ${d.kind === 'file' ? `<div><button class="btn sm" type="button" data-reveal="${i}"${f.exists ? '' : ' disabled'}>${reveal}</button></div>` : ''}
@@ -455,7 +453,7 @@ function showBody(d: RecordDetail | null, fade: boolean) {
 }
 function renderPreview(fade = false) {
   const r = S.sel === null ? undefined : S.records.get(S.sel);
-  [pinBtn, copyBtn, moreBtn, delBtn].forEach((b) => (b.disabled = !r));
+  [pinBtn, copyBtn, delBtn].forEach((b) => (b.disabled = !r));
   $('#selHint').textContent = r ? `已选中：${truncate(r.title, 18)}` : '没有选中的记录';
   if (!r) {
     ++detailSeq;
@@ -507,8 +505,20 @@ function renderPreview(fade = false) {
 let sp: Layout = { bars: [], colOf: new Map() };
 let spNow = Date.now();
 let spOn: Element | null = null;
+// 收起状态以 data-collapsed 为准：S.settings 要等保存成功才更新，读它会落后 300ms 防抖
+const spectrum = $('#spectrum'), spToggle = $('#spToggle');
+const spCollapsed = () => spectrum.dataset.collapsed === 'true';
+function paintSpCollapsed(c: boolean) {
+  spectrum.dataset.collapsed = String(c);
+  spToggle.setAttribute('aria-expanded', String(!c));
+  spToggle.setAttribute('aria-label', c ? '展开复制频谱' : '收起复制频谱');
+}
 function renderSpectrum(freshId?: number) {
   spNow = Date.now();
+  // 统计不依赖轨道宽度，收起时照常更新
+  const { count, peak } = spectrumStat(S.records.values(), spNow);
+  $('#spStat').textContent = `24 小时内复制 ${fmtInt(count)} 次${peak ? ` · 最忙 ${peak.hour} 点（${peak.n} 次）` : ''}`;
+  if (spCollapsed()) return;
   // 删除中的记录不参与布局，否则重绘会把正在收起的光柱拉回来
   const recs = [...S.records.values()].filter((r) => !S.removing.has(r.id));
   const next = layoutBars(recs, spNow, spTrack.clientWidth, matches, freshId);
@@ -538,12 +548,11 @@ function renderSpectrum(freshId?: number) {
   spOn = null;
   const ticks: [number, string][] = [[3, '更早'], ...[18, 12, 6].map((h): [number, string] => [6 + 94 * (1 - h / 24), hf.format(spNow - h * 3600e3)]), [100, '现在']];
   $('#spAxis').innerHTML = ticks.map(([x, l]) => `<span style="left:${x}%">${l}</span>`).join('');
-  const { count, peak } = spectrumStat(S.records.values(), spNow);
-  $('#spStat').textContent = `24 小时内复制 ${fmtInt(count)} 次${peak ? ` · 最忙 ${peak.hour} 点（${peak.n} 次）` : ''}`;
   paintSpectrumSel(false);
 }
 // 只换上一根和这一根的 .on；变暗由布局决定，筛选变化时重绘
 function paintSpectrumSel(animate = true) {
+  if (spCollapsed()) return;
   const r = S.sel === null ? undefined : S.records.get(S.sel);
   const col = r && sp.colOf.get(r.id);
   const b = col === undefined ? null : spBars.children[col] ?? null;
@@ -584,6 +593,7 @@ spTrack.addEventListener('click', (e) => {
   if (!hit || S.removing.has(hit.r.id)) return;
   if (!matches(hit.r)) {
     S.filter = 'all';
+    persistFilter();
     q.value = '';
     renderTabs(false);
     runSearch('', { stagger: true });
@@ -615,20 +625,24 @@ function renderTabs(instant: boolean) {
   });
   if (instant) b.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
-// 分类记忆（M06）：写进 settings.lastFilter，失败不提示。
-// 防抖 300ms：按住 Mod+←/→ 连续切换时只写最后落定的分类；成功后只合并 lastFilter，不回滚同时进行的设置保存
-let filterTimer = 0;
-function persistFilter() {
-  clearTimeout(filterTimer);
-  filterTimer = window.setTimeout(() => {
-    const f = S.filter;
-    if (S.settings.lastFilter === f) return;
-    saveSettings({ ...S.settings, lastFilter: f }).then(
-      () => void (S.settings = { ...S.settings, lastFilter: f }),
-      (e: AppError) => void info(`保存分类失败 kind=${e.kind}`),
+// 界面记忆（分类 M06 等）：合并写进 settings，失败不提示。
+// 防抖 300ms：按住 Mod+←/→ 连续切换时只写最后落定的值；成功后只合并本次 patch，不回滚同时进行的设置保存
+let uiTimer = 0;
+let uiPending: Partial<Settings> = {};
+function persistUi(patch: Partial<Settings>) {
+  uiPending = { ...uiPending, ...patch };
+  clearTimeout(uiTimer);
+  uiTimer = window.setTimeout(() => {
+    const p = uiPending;
+    uiPending = {};
+    if ((Object.keys(p) as (keyof Settings)[]).every((k) => S.settings[k] === p[k])) return;
+    saveSettings({ ...S.settings, ...p }).then(
+      () => void (S.settings = { ...S.settings, ...p }),
+      (e: AppError) => void info(`保存界面状态失败 kind=${e.kind}`),
     );
   }, 300);
 }
+function persistFilter() { persistUi({ lastFilter: S.filter }); }
 function setFilter(k: Filter, instant: boolean) {
   if (S.filter === k) return;
   S.filter = k;
@@ -670,6 +684,7 @@ function runSearch(v: string, opts: { stagger?: boolean; base?: number; timed?: 
   const t = performance.now();
   S.q = v;
   clearQ.hidden = !v;
+  escHintEl.textContent = escHint(!!v);
   fetchMatches(v, () => {
     list.scrollTop = 0;
     S.sel = null;
@@ -685,12 +700,12 @@ function runSearch(v: string, opts: { stagger?: boolean; base?: number; timed?: 
 }
 
 // —— 提示条 ——
-// 连续触发时只换文字、不重播弹入；非撤销提示会顶掉未完成的撤销。undo 与 action 不同时出现
+// 连续触发时只换文字、不重播弹入；非撤销提示只顶掉撤销按钮，Mod + Z 在撤销期限内仍有效（canUndo 按时间判断）。undo 与 action 不同时出现
 type ToastAction = { label: string; run: () => void };
 let toastTimer = 0;
 let toastRun: (() => void) | null = null;
 function toast(msg: string, { undo = false, icon = 'check' as keyof typeof I, action = undefined as ToastAction | undefined } = {}) {
-  if (!undo) S.undo = null;
+  paintUndoHint();
   $('#toastIc').innerHTML = svg(icon);
   if (toastEl.dataset.open === 'true') fx(toastMsg, [{ opacity: 0, transform: 'translateY(4px)', filter: 'blur(2px)' }, { opacity: 1, transform: 'none', filter: 'blur(0)' }], { duration: 180, easing: EASE_ENTER });
   toastMsg.textContent = msg;
@@ -707,7 +722,6 @@ function toast(msg: string, { undo = false, icon = 'check' as keyof typeof I, ac
   clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => {
     toastEl.dataset.open = 'false';
-    if (undo) S.undo = null;
   }, undo || action ? UNDO_MS : 2400);
 }
 
@@ -827,6 +841,8 @@ function remove(id: number) {
       }, reduced.matches ? 0 : 360);
       toast(`已删除“${truncate(r.title, 14)}”`, { undo: true, icon: 'trash' });
       S.undo = armUndo(S.undo, id, r.title, Date.now());
+      paintUndoHint();
+      setTimeout(paintUndoHint, UNDO_MS);
     },
     (err: AppError) => {
       S.removing.delete(id);
@@ -849,6 +865,7 @@ function undo() {
   const u = S.undo;
   if (!u || !canUndo(u, Date.now())) return;
   S.undo = null;
+  paintUndoHint();
   restoring = u.id;
   undoDelete(u.id).then(
     (ok) => {
@@ -864,11 +881,21 @@ function undo() {
 
 // —— 右键菜单 ——
 let menuReturn: HTMLElement | null = null;
-function openMenu(id: number, x: number, y: number, viaKb: boolean) {
+function openMenu(id: number, x: number, y: number, viaKb: boolean, detail = details.get(id)) {
   const r = S.records.get(id);
   if (!r) return;
+  // 图片是否来自文件只有详情知道：没缓存时先取（本地调用，几毫秒），回来时已隐藏、换了选中或菜单已开就作罢
+  if (r.kind === 'image' && !detail) {
+    getRecord(id).then((d) => d && S.shown && S.sel === id && !menuOpen() && openMenu(id, x, y, viaKb, d), (err: AppError) => toast(err.message));
+    return;
+  }
   S.menuFor = id;
   $('#mPin').textContent = r.pinned ? '取消置顶' : '置顶';
+  const open = openLabel(r.kind, !!detail?.files.length, S.platform.os);
+  mOpen.hidden = !open;
+  $('#mOpen').textContent = open ?? '';
+  // stagger 序号按可见项重排，隐藏的项不留空拍
+  menu.querySelectorAll<HTMLElement>('button:not([hidden])').forEach((b, i) => b.style.setProperty('--i', String(i)));
   menuReturn = document.activeElement as HTMLElement | null;
   const wr = win.getBoundingClientRect(), mw = menu.offsetWidth, mh = menu.offsetHeight;
   let left = x - wr.left, top = y - wr.top, ox = 'left', oy = 'top';
@@ -897,9 +924,19 @@ function closeMenu(restore: boolean) {
   else if (menu.contains(document.activeElement)) q.focus({ preventScroll: true });
 }
 function moveMenuFocus(d: 1 | -1) {
-  const bs = [...menu.querySelectorAll('button')];
-  const i = bs.indexOf(document.activeElement as HTMLButtonElement);
+  const bs = [...menu.querySelectorAll<HTMLElement>('button:not([hidden])')];
+  const i = bs.indexOf(document.activeElement as HTMLElement);
   bs[(i + d + bs.length) % bs.length].focus();
+}
+// 菜单的打开动作：链接交给浏览器；文件、视频、文件来源的图片在访达 / 资源管理器中显示第一个文件
+function openFromMenu(id: number) {
+  const hit = details.get(id);
+  (hit ? Promise.resolve(hit) : getRecord(id))
+    .then((d) => {
+      if (d?.kind === 'link') return openUrl((d.text ?? '').trim());
+      if (d?.files[0]) return revealFile(d.files[0].path);
+    })
+    .catch((err: AppError) => toast(err.kind === 'fileMissing' ? MISSING : err.message));
 }
 
 function paintPause() {
@@ -949,10 +986,14 @@ const handlers = {
     ids.forEach((id) => details.delete(id));
     if (S.undo && foreign.includes(S.undo.id)) {
       S.undo = null;
-      clearTimeout(toastTimer);
-      undoBtn.hidden = true;
-      toastEl.dataset.open = 'false';
-      $('#ring').getAnimations().forEach((a) => a.cancel());
+      paintUndoHint();
+      // 提示条已换成别的提示时不收起它
+      if (!undoBtn.hidden) {
+        clearTimeout(toastTimer);
+        undoBtn.hidden = true;
+        toastEl.dataset.open = 'false';
+        $('#ring').getAnimations().forEach((a) => a.cancel());
+      }
     }
     if (S.menuFor !== null && foreign.includes(S.menuFor)) closeMenu(false);
     // 自己发起的删除由 remove() 的计时器移除，这里跳过
@@ -977,6 +1018,12 @@ const handlers = {
 // 结果在点击时就交出去（调用方不必等收起动画），面板隐藏时直接 close 也按 false 结算。
 // 同一时间只有一个确认框：已有一个在等待时，新的请求直接得到 false
 const cfDlg = $<HTMLDialogElement>('#confirm'), cfOk = $<HTMLButtonElement>('#cfOk');
+// 设置或确认框打开时后端不因失焦或快捷键隐藏面板：每次 showModal 之后与每个 close 事件里按 DOM 实际状态同步。
+// 引导不算：其中“授权”要切去系统设置，面板浮在最上层会盖住它，照旧失焦隐藏
+const keepDlgs = [...document.querySelectorAll<HTMLDialogElement>('#settings, #confirm')];
+const syncDialogOpen = () =>
+  void setDialogOpen(keepDlgs.some((d) => d.open)).catch((e: AppError) => void info(`同步对话框状态失败 kind=${e.kind}`));
+keepDlgs.forEach((d) => d.addEventListener('close', syncDialogOpen));
 let cfResolve: ((ok: boolean) => void) | null = null, cfReturn: HTMLElement | null = null, cfTimer = 0;
 function confirm({ title, body, ok, danger = false }: { title: string; body: string; ok: string; danger?: boolean }) {
   if (cfResolve) return Promise.resolve(false);
@@ -988,6 +1035,7 @@ function confirm({ title, body, ok, danger = false }: { title: string; body: str
   cfOk.textContent = ok;
   cfOk.className = `btn ${danger ? 'danger' : 'primary'}`;
   if (!cfDlg.open) cfDlg.showModal();
+  syncDialogOpen();
   void cfDlg.offsetWidth;
   cfDlg.classList.add('is-shown');
   $('#cfCancel').focus();
@@ -1022,19 +1070,24 @@ cfDlg.addEventListener('click', (e) => {
   if (t.closest('#cfOk')) closeConfirm(true);
   else if (t.closest('#cfCancel') || (t === cfDlg && cfDownOnBackdrop)) closeConfirm(false);
 });
-// 托盘“清空历史…”：后端已先唤起面板。置顶记录保留；列表由 records-removed 更新，toast 顺带清掉待撤销状态
-async function confirmClear() {
+// 托盘“清空历史…”：后端已先唤起面板。置顶记录保留；列表由 records-removed 更新，待撤销状态由 removed 处理清掉
+// 返回提示文案（取消时为 null），设置对话框里的入口把它写进行内（提示条在对话框下面看不见）
+async function confirmClear(): Promise<string | null> {
+  let msg: string, icon: keyof typeof I = 'check';
   try {
     const n = await countUnpinned();
-    if (n === 0) return toast('没有可删除的记录');
-    if (!(await confirm({ title: '清空历史', body: `将删除 ${n} 条未置顶的记录，置顶记录会保留`, ok: `删除 ${n} 条记录`, danger: true }))) return;
-    toast(`已删除 ${await clearHistory()} 条记录`, { icon: 'trash' });
+    if (n === 0) msg = '没有可删除的记录';
+    else if (!(await confirm({ title: '清空历史', body: `将删除 ${n} 条未置顶的记录，置顶记录会保留`, ok: `删除 ${n} 条记录`, danger: true }))) return null;
+    else [msg, icon] = [`已删除 ${await clearHistory()} 条记录`, 'trash'];
   } catch (e) {
-    toast((e as AppError).message);
+    msg = (e as AppError).message;
   }
+  toast(msg, { icon });
+  return msg;
 }
 
 // —— 设置 ——
+const clearNote = $('#clearNote');
 const dlg = $<HTMLDialogElement>('#settings'), form = $<HTMLFormElement>('#settingsForm'), hotkeyIn = $<HTMLInputElement>('#hotkey');
 const hotkeyHelp = $('#hotkeyHelp'), retainIn = $<HTMLSelectElement>('#retain'), limitIn = $<HTMLInputElement>('#limit'), limitErr = $('#limitErr');
 const ignoreIn = $<HTMLInputElement>('#ignore'), sensitiveIn = $<HTMLInputElement>('#sensitive');
@@ -1134,10 +1187,9 @@ ignoreBox.addEventListener('click', (e) => {
   if (b || e.target === ignoreBox) ignoreIn.focus();
 });
 
-// 外观：点选即预览（原型 setTheme，新主题从被点按钮处圆形扩散），保存才持久化，关闭不保存时还原
-// 圆形扩散要先等窗口主题生效（见 applyAppearance），等待期间以待切的模式为准
-let themePending: Appearance | null = null;
-const themeMode = () => themePending ?? ((root.dataset.theme || 'system') as Appearance);
+// 外观：点选即生效并立即保存（不防抖、不预览，关闭对话框不还原）。窗口主题由 save_settings 切换；
+// 切到“跟随系统”时 prefers-color-scheme 随窗口主题翻转，由下方 matchMedia 监听整体切换
+const themeMode = () => (root.dataset.theme || 'system') as Appearance;
 function paintTheme(instant: boolean) {
   const mode = themeMode();
   themeOpts.forEach((b, i) => {
@@ -1147,60 +1199,50 @@ function paintTheme(instant: boolean) {
     if (on) instantly(themePill, instant, () => (themePill.style.transform = `translateX(${i * 32}px)`));
   });
 }
-// 窗口主题一并切：WKWebView 的 prefers-color-scheme 跟随窗口主题，系统材质也随之变化。
-// 命令同步执行，返回后再等两帧，让 WebKit 重新求值 prefers-color-scheme
-const previewWindowTheme = (mode: Appearance) =>
-  previewAppearance(mode)
-    .catch((e: AppError) => void info(`预览外观失败 kind=${e.kind}`))
-    .then(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
-async function applyAppearance(mode: Appearance, fromEl: HTMLElement | null) {
-  if (mode === themeMode()) return;
-  const apply = () => {
-    if (mode === 'system') delete root.dataset.theme;
-    else root.dataset.theme = mode;
-    paintTheme(false);
-  };
+// 整体一次切换：两帧内关掉所有过渡，不让各元素按各自的过渡渐变（M16 规则 5）
+function setTheme(mode: Appearance) {
   root.setAttribute('data-theme-switching', '');
-  const done = () => requestAnimationFrame(() => root.removeAttribute('data-theme-switching'));
-  // WKWebView 旧版本没有 View Transitions：直接切。键盘与关闭还原也走这里；
-  // 等窗口主题生效后再放开过渡，跟随系统的配色翻转才不会按各元素的过渡渐变
-  if (!('startViewTransition' in document) || reduced.matches || !fromEl) {
-    themePending = null;
-    const win = previewWindowTheme(mode);
-    apply();
-    // 先让“关过渡”生效（原型靠 paintTheme 里读 getComputedStyle 顺带刷新）
-    void root.offsetWidth;
-    void win.then(done);
-    return;
+  if (mode === 'system') delete root.dataset.theme;
+  else root.dataset.theme = mode;
+  paintTheme(true);
+  requestAnimationFrame(() => requestAnimationFrame(() => root.removeAttribute('data-theme-switching')));
+}
+// save_settings 是异步命令，连点时并发保存可能乱序落盘：串行，上一次结束后再发当时最新的设置。
+// savedAppearance 是最近一次确认落盘的外观，保存失败时回到它
+let themeSave: Promise<unknown> = Promise.resolve(), savedAppearance: Appearance = 'system';
+async function applyAppearance(mode: Appearance) {
+  if (mode === themeMode()) return;
+  // 先改本地设置：保存途中 persistUi 落盘或点“保存设置”带上的都是新外观，不会把主题改回去
+  S.settings = { ...S.settings, appearance: mode };
+  setTheme(mode);
+  const save = (themeSave = themeSave.catch(() => {}).then(() => {
+    const s = S.settings;
+    return saveSettings(s).then(() => void (savedAppearance = s.appearance));
+  }));
+  try {
+    await save;
+  } catch (e) {
+    void info(`保存外观失败 kind=${(e as AppError).kind}`);
+    // 等待期间又点了别的：交给后一次
+    if (S.settings.appearance !== mode) return;
+    S.settings = { ...S.settings, appearance: savedAppearance };
+    setTheme(S.settings.appearance);
+    toast('外观未能保存');
   }
-  // 先切窗口主题再拍旧画面：当前为跟随系统时，把解析出的配色钉在 data-theme 上，旧画面不随窗口主题变
-  if (!root.dataset.theme) root.dataset.theme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-  themePending = mode;
-  await previewWindowTheme(mode);
-  // 等待期间又点了别的模式：交给后一次
-  if (themePending !== mode) return;
-  themePending = null;
-  const r = fromEl.getBoundingClientRect();
-  const x = r.left + r.width / 2, y = r.top + r.height / 2;
-  const R = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y));
-  const vt = document.startViewTransition(apply);
-  vt.ready.then(() => root.animate(
-    { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${R}px at ${x}px ${y}px)`] },
-    { duration: 560, easing: EASE_ENTER, pseudoElement: '::view-transition-new(root)' },
-  ), () => {});
-  void vt.finished.finally(done);
 }
 themeSeg.addEventListener('click', (e) => {
   const b = (e.target as Element).closest<HTMLElement>('[data-theme-opt]');
-  if (b) void applyAppearance(b.dataset.themeOpt as Appearance, e.detail === 0 ? null : b);
+  if (b) void applyAppearance(b.dataset.themeOpt as Appearance);
 });
 themeSeg.addEventListener('keydown', (e) => {
   if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
   e.preventDefault();
   e.stopPropagation();
+  // 按住不放：只切一次，不每次重复都保存
+  if (e.repeat) return;
   const i = themeOpts.findIndex((b) => b.dataset.themeOpt === themeMode());
   const n = themeOpts[(i + (e.key === 'ArrowRight' ? 1 : -1) + themeOpts.length) % themeOpts.length];
-  void applyAppearance(n.dataset.themeOpt as Appearance, null);
+  void applyAppearance(n.dataset.themeOpt as Appearance);
   n.focus();
 });
 
@@ -1221,6 +1263,7 @@ function openSettings() {
   if (!S.settings.hotkey || dlg.classList.contains('is-shown')) return;
   clearTimeout(closeTimer);
   if (!dlg.open) dlgReturn = document.activeElement as HTMLElement | null;
+  clearNote.textContent = '置顶记录会保留';
   const st = S.settings;
   pendingHotkey = st.hotkey;
   hotkeyIn.value = hotkeyLabel(st.hotkey, S.platform.os);
@@ -1247,6 +1290,7 @@ function openSettings() {
   paintTheme(true);
   void paintPerm();
   if (!dlg.open) dlg.showModal();
+  syncDialogOpen();
   // 关闭时 display:none 不会清掉滚动位置，打开后再回到顶部
   dlg.querySelector('.dlg-body')!.scrollTop = 0;
   void dlg.offsetWidth;
@@ -1258,11 +1302,9 @@ function closeSettings() {
   clearTimeout(closeTimer);
   closeTimer = window.setTimeout(() => dlg.close(), reduced.matches ? 0 : 150);
 }
-// 所有关闭路径（含面板隐藏时直接 close）都到这里：清掉弹入状态、还原预览、焦点回到打开前的元素。
-// 预览在收起动画之后才还原：换主题时 data-theme-switching 会关掉所有过渡，收起动画也会被吞掉
+// 所有关闭路径（含面板隐藏时直接 close）都到这里：清掉弹入状态、焦点回到打开前的元素
 dlg.addEventListener('close', () => {
   dlg.classList.remove('is-shown');
-  void applyAppearance(S.settings.appearance, null);
   if (S.shown && dlgReturn?.isConnected) dlgReturn.focus({ preventScroll: true });
   dlgReturn = null;
 });
@@ -1285,12 +1327,16 @@ hotkeyIn.addEventListener('keydown', (e) => {
   if (e.repeat || ['Control', 'Meta', 'Shift', 'Alt'].includes(e.key)) return;
   const h = hotkeyFromEvent({ key: e.key, code: e.code, mod: e.ctrlKey || e.metaKey, alt: e.altKey, shift: e.shiftKey, repeat: e.repeat });
   if (!h) return setHotkeyHelp(`至少需要包含 ${MOD} 或 Alt`);
+  recordHotkey(h);
+});
+function recordHotkey(h: string) {
   pendingHotkey = h;
   hotkeyIn.value = hotkeyLabel(h, S.platform.os);
   setHotkeyHelp('已记录，保存后生效');
   fx(hotkeyIn, [{ transform: 'scale(.98)' }, { transform: 'scale(1)' }], { duration: 300, easing: EASE_SPRING });
-});
-permBtn.addEventListener('click', () => void requestAccessibility().catch((err: AppError) => toast(err.message)));
+}
+// 授权要切去系统设置：设置框开着时失焦不隐藏，这里主动收起，免得面板盖住系统设置
+permBtn.addEventListener('click', () => void requestAccessibility().then(hide, (err: AppError) => toast(err.message)));
 form.addEventListener('submit', (e) => {
   e.preventDefault();
   void submitSettings();
@@ -1303,7 +1349,7 @@ async function submitSettings() {
   if (limit === null) return limitIn.focus();
   const s = formToSettings(S.settings, {
     hotkey: pendingHotkey, retain: retainIn.value, limit, ignored: addIgnored(draftIgnored, ignoreIn.value), skipSensitive: sensitiveIn.checked,
-    moveToTop: moveTopIn.checked, launchAtLogin: autostartIn.checked, appearance: themeMode(),
+    moveToTop: moveTopIn.checked, launchAtLogin: autostartIn.checked,
   });
   saving = true;
   try {
@@ -1351,6 +1397,7 @@ function obSucceed() {
   if (obOk) return;
   obOk = true;
   clearInterval(obPoll);
+  void paintVerb();
   paintObOk(true);
   obNext.disabled = false;
   obNext.focus();
@@ -1446,6 +1493,8 @@ obDlg.addEventListener('click', (e) => {
 let booted = false;
 const shown = (t0: number | null, trigger?: PanelShown['trigger']) => {
   S.shown = true;
+  // 授权可能在隐藏期间变化；bootstrap 之前平台未知，由 bootstrap 后那一次负责
+  if (S.platform.os) void paintVerb();
   // 淡出途中又被唤起：取消待发的隐藏
   clearTimeout(hideTimer);
   // 键盘唤起几乎即时（90 / 120ms）；托盘单击是鼠标唤起，按原型 240 / 320ms 弹性回位
@@ -1481,12 +1530,12 @@ const hidden = () => {
   pbody.querySelectorAll('video').forEach((v) => v.pause());
   pbody.innerHTML = '';
   closeMenu(false);
-  // 对话框不播收起动画，直接关（close 事件里还原外观预览）
+  // 对话框不播收起动画，直接关（各自的 close 事件里交还焦点、结算确认框并同步后端的对话框标志）
   document.querySelectorAll<HTMLDialogElement>('dialog[open]').forEach((d) => d.close());
   (document.activeElement as HTMLElement | null)?.blur();
 };
 
-// 键盘与隐藏按钮在 bootstrap 之前接线：读取失败的错误页也能 Esc / 关闭
+// 键盘在 bootstrap 之前接线：读取失败的错误页也能按 Esc 收起
 // 前端发起的隐藏先播 160ms 淡出；失焦隐藏由后端直接做，没有淡出。
 // macOS 系统材质的底板不归网页画：内容只位移（data-native-fade），立即调 hide_panel，后端在 160ms 内把整个窗口 alpha 淡到 0；
 // 唤起时后端同样把 alpha 从 0 淡入（90ms，托盘 240ms）
@@ -1503,7 +1552,6 @@ const hide = () => {
     toast(err.message);
   }), animate && !nativeFade() ? 160 : 0);
 };
-document.querySelectorAll('[data-hide]').forEach((b) => b.addEventListener('click', hide));
 
 // —— 键盘 ——
 document.addEventListener('keydown', (e) => {
@@ -1570,12 +1618,18 @@ await onRecordsRemoved((ids) => handlers.removed(ids));
 await onPausedChanged((p) => handlers.paused(p));
 // 托盘“设置…”：后端已先唤起面板
 await onOpenSettings(openSettings);
-await onConfirmClear(() => void confirmClear());
+// 设置对话框开着时提示条被它盖住，结果同样写进“历史记录”行内
+await onConfirmClear(() => void confirmClear().then((m) => m && dlg.open && (clearNote.textContent = m)));
 // 引导中按唤起快捷键：可见时面板不隐藏，隐藏时先 panel-shown 再到这里；只在“试按快捷键”这一步算成功
+// 设置对话框打开时按唤起快捷键：面板同样不隐藏；录制框有焦点就当作按下了当前快捷键（网页收不到被全局注册拦下的按键）
 await onHotkeyPressed(() => {
+  // 只认面板有焦点时的按键：失焦时后端只把面板拉回焦点，这里再防一道
+  if (document.activeElement === hotkeyIn && document.hasFocus()) return recordHotkey(S.settings.hotkey);
   if (obStep === 'hotkey' && obDlg.open) obSucceed();
 });
 
+// 页面重载时对话框都已关闭：先复位后端标志（重载前若有对话框开着，它会停在 true；读取失败也照样复位）
+syncDialogOpen();
 const b = await bootstrap().catch((e: AppError) => {
   // 之后的每次 renderList 都显示这条，不被空列表文案覆盖
   bootError = e?.message || String(e);
@@ -1583,6 +1637,8 @@ const b = await bootstrap().catch((e: AppError) => {
   throw e;
 });
 S.settings = b.settings;
+savedAppearance = b.settings.appearance;
+paintSpCollapsed(b.settings.spectrumCollapsed);
 S.platform = b.platform;
 S.paused = b.paused;
 paintPause();
@@ -1598,6 +1654,7 @@ root.toggleAttribute('data-native-fade', nativeFade());
 const MOD = b.platform.os === 'macos' ? '⌘' : 'Ctrl';
 document.querySelectorAll('.mod').forEach((k) => (k.textContent = MOD));
 $('.modp').textContent = `${MOD} P`;
+void paintVerb();
 await info(`bootstrap 完成，平台 ${b.platform.os}，材质 ${b.platform.material}`);
 // 首次启动后端在 setup 里就显示了面板，那时页面还没订阅，panel-shown 已丢失，这里补上
 if (b.firstRun) {
@@ -1608,6 +1665,19 @@ if (b.firstRun) {
 }
 
 // —— 事件 ——
+// 按钮在标题行里，点击冒泡到这一个监听，不会切两次
+$('.sp-head').addEventListener('click', () => {
+  const c = !spCollapsed();
+  paintSpCollapsed(c);
+  persistUi({ spectrumCollapsed: c });
+  // 收起期间没画光柱：展开后立即按当前宽度画（读 clientWidth 会同步排版，轨道已有真实宽度，不闪一帧旧光柱）；
+  // renderSpectrum 末尾会重新标记选中光柱与游标
+  // 先清空光柱走整组重建：原地改 .dim / .on 会在显示时播 200ms 过渡，违背即时切换
+  if (!c) {
+    spBars.replaceChildren();
+    renderSpectrum();
+  }
+});
 q.addEventListener('input', (e) => {
   if ((e as InputEvent).isComposing) return;
   runSearch(q.value, { timed: true });
@@ -1667,12 +1737,9 @@ list.addEventListener('contextmenu', (e) => {
 
 pinBtn.addEventListener('click', (e) => S.sel !== null && togglePin(S.sel, e.detail !== 0));
 copyBtn.addEventListener('click', () => S.sel !== null && copyRecord(S.sel));
+// 设置对话框留在确认框下面；列表与频谱由 records-removed 刷新
+$('#clearBtn').addEventListener('click', () => void confirmClear().then((m) => m && (clearNote.textContent = m)));
 delBtn.addEventListener('click', () => S.sel !== null && remove(S.sel));
-moreBtn.addEventListener('click', (e) => {
-  if (menuOpen()) return closeMenu(true);
-  const r = moreBtn.getBoundingClientRect();
-  if (S.sel !== null) openMenu(S.sel, r.right, r.bottom + 6, e.detail === 0);
-});
 menu.addEventListener('click', (e) => {
   if (!menuOpen()) return;
   const m = (e.target as Element).closest<HTMLElement>('[data-m]')?.dataset.m;
@@ -1681,11 +1748,12 @@ menu.addEventListener('click', (e) => {
   closeMenu(true);
   if (m === 'copy') copyRecord(id);
   if (m === 'pin') togglePin(id, mouse);
+  if (m === 'open') openFromMenu(id);
   if (m === 'del') remove(id);
 });
 document.addEventListener('pointerdown', (e) => {
   const t = e.target as Node;
-  if (menuOpen() && !menu.contains(t) && !moreBtn.contains(t)) closeMenu(false);
+  if (menuOpen() && !menu.contains(t)) closeMenu(false);
 }, true);
 undoBtn.addEventListener('click', undo);
 toastAct.addEventListener('click', () => {
@@ -1744,18 +1812,6 @@ pbody.addEventListener('click', (e) => {
     vid.focus();
     return;
   }
-  const btn = t.closest<HTMLElement>('[data-copy]');
-  if (!btn) return;
-  const v = btn.dataset.copy!;
-  copyText(v).then(
-    () => {
-      btn.textContent = '已复制';
-      fx(btn, [{ transform: 'scale(.9)' }, { transform: 'scale(1)' }], { duration: 320, easing: EASE_SPRING });
-      setTimeout(() => (btn.textContent = '复制'), 1200);
-      toast(`已复制 ${v}`);
-    },
-    (err: AppError) => toast(err.message),
-  );
 });
 
 // 非行区域不弹 WebView 原生菜单（含“重新加载”）；输入框保留系统的编辑菜单

@@ -65,7 +65,7 @@ pub fn is_code_app(id: &str) -> bool {
             .is_some_and(|stem| JETBRAINS_EXES.iter().any(|j| stem.starts_with(j)))
 }
 
-/// 严格按 M02 顺序 1–8 判定。
+/// 严格按 M02 顺序判定（阶段 9 删去了颜色规则）。
 pub fn kind(snapshot: &Snapshot) -> Kind {
     let files = &snapshot.file_paths;
     if !files.is_empty() {
@@ -83,9 +83,7 @@ pub fn kind(snapshot: &Snapshot) -> Kind {
     if snapshot.bitmap.is_some() && text.is_empty() {
         return Kind::Image;
     }
-    if is_color(text) {
-        Kind::Color
-    } else if is_link(text) {
+    if is_link(text) {
         Kind::Link
     } else if is_code(text, snapshot) {
         Kind::Code
@@ -156,12 +154,6 @@ fn starts_with_word_ci(text: &str, word: &str) -> bool {
             .is_none_or(char::is_whitespace)
 }
 
-/// `^#([0-9a-f]{3}|[0-9a-f]{6})$`，不区分大小写。
-fn is_color(t: &str) -> bool {
-    t.strip_prefix('#')
-        .is_some_and(|hex| matches!(hex.len(), 3 | 6) && hex.bytes().all(|b| b.is_ascii_hexdigit()))
-}
-
 /// `^https?://\S+$`
 fn is_link(t: &str) -> bool {
     t.strip_prefix("https://")
@@ -202,7 +194,13 @@ mod tests {
     #[test]
     fn ac_m02_01_hex_colors() {
         for c in ["#6F8BFF", "#fff", "  #ABC  "] {
-            assert_eq!(kind(&snap(c)), Kind::Color, "{c}");
+            assert_eq!(kind(&snap(c)), Kind::Text, "{c}");
+            let mut s = snap(c);
+            s.source = Some(AppInfo {
+                id: "com.microsoft.VSCode".into(),
+                name: "Code".into(),
+            });
+            assert_eq!(kind(&s), Kind::Code, "{c}");
         }
     }
     #[test]
