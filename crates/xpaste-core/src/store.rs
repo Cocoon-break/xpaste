@@ -432,7 +432,7 @@ impl Store {
         // 单条 UPDATE 即一个事务
         let n = self.conn.execute(
             "UPDATE records SET ocr_state = ?1, ocr_text = ?2,
-               search_text = CASE WHEN ?3 IS NULL THEN search_text ELSE search_text || char(10) || ?3 END
+               search_text = CASE WHEN ?3 IS NULL OR ocr_text IS NOT NULL THEN search_text ELSE search_text || char(10) || ?3 END
              WHERE id = ?4 AND deleted_at IS NULL",
             params![state, text, text.map(str::to_lowercase), id],
         )?;
@@ -1368,6 +1368,22 @@ pub(crate) mod tests {
 
         s.soft_delete(other, 3).unwrap();
         assert!(!s.set_ocr(other, ocr_state::TEXT, Some("x")).unwrap());
+    }
+
+    #[test]
+    fn set_ocr_twice_appends_search_text_once() {
+        let mut s = mem();
+        let id = added(&mut s, &rec_image(1), 1);
+        for _ in 0..2 {
+            assert!(s.set_ocr(id, ocr_state::TEXT, Some("xyzocr")).unwrap());
+        }
+        let st: String = s
+            .conn
+            .query_row("SELECT search_text FROM records WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(st.matches("xyzocr").count(), 1);
     }
 
     #[test]
