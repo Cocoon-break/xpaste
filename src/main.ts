@@ -978,10 +978,12 @@ const handlers = {
 // 结果在点击时就交出去（调用方不必等收起动画），面板隐藏时直接 close 也按 false 结算。
 // 同一时间只有一个确认框：已有一个在等待时，新的请求直接得到 false
 const cfDlg = $<HTMLDialogElement>('#confirm'), cfOk = $<HTMLButtonElement>('#cfOk');
-// 有对话框打开时后端不因失焦或快捷键隐藏面板：每次 showModal 之后与每个 close 事件里按 DOM 实际状态同步
+// 设置或确认框打开时后端不因失焦或快捷键隐藏面板：每次 showModal 之后与每个 close 事件里按 DOM 实际状态同步。
+// 引导不算：其中“授权”要切去系统设置，面板浮在最上层会盖住它，照旧失焦隐藏
+const keepDlgs = [...document.querySelectorAll<HTMLDialogElement>('#settings, #confirm')];
 const syncDialogOpen = () =>
-  void setDialogOpen(document.querySelector('dialog[open]') !== null).catch((e: AppError) => void info(`同步对话框状态失败 kind=${e.kind}`));
-document.querySelectorAll('dialog').forEach((d) => d.addEventListener('close', syncDialogOpen));
+  void setDialogOpen(keepDlgs.some((d) => d.open)).catch((e: AppError) => void info(`同步对话框状态失败 kind=${e.kind}`));
+keepDlgs.forEach((d) => d.addEventListener('close', syncDialogOpen));
 let cfResolve: ((ok: boolean) => void) | null = null, cfReturn: HTMLElement | null = null, cfTimer = 0;
 function confirm({ title, body, ok, danger = false }: { title: string; body: string; ok: string; danger?: boolean }) {
   if (cfResolve) return Promise.resolve(false);
@@ -1300,7 +1302,8 @@ function recordHotkey(h: string) {
   setHotkeyHelp('已记录，保存后生效');
   fx(hotkeyIn, [{ transform: 'scale(.98)' }, { transform: 'scale(1)' }], { duration: 300, easing: EASE_SPRING });
 }
-permBtn.addEventListener('click', () => void requestAccessibility().catch((err: AppError) => toast(err.message)));
+// 授权要切去系统设置：设置框开着时失焦不隐藏，这里主动收起，免得面板盖住系统设置
+permBtn.addEventListener('click', () => void requestAccessibility().then(hide, (err: AppError) => toast(err.message)));
 form.addEventListener('submit', (e) => {
   e.preventDefault();
   void submitSettings();
@@ -1403,7 +1406,6 @@ function openOnboard() {
     obReturn = document.activeElement as HTMLElement | null;
     obDlg.showModal();
   }
-  syncDialogOpen();
   void obDlg.offsetWidth;
   obDlg.classList.add('is-shown');
   paintOb();
