@@ -101,8 +101,9 @@ export function miniWin(w: Win, now: number): { left: number; width: number } {
 
 /** 放大态标题行文字：`HH:mm – HH:mm（N 小时 | N 分钟）`，整小时不带小数，非整小时一位小数 */
 export function winLabel(w: Win, fmt: (t: number) => string): string {
-  const span = spanOf(w);
-  const dur = span % HOUR === 0 ? `${span / HOUR} 小时` : span >= HOUR ? `${(span / HOUR).toFixed(1)} 小时` : `${Math.round(span / 60e3)} 分钟`;
+  // 先取整到分钟：手势缩放出的跨度是浮点，直接取模会出现“1.0 小时”“60 分钟”
+  const m = Math.round(spanOf(w) / 60e3);
+  const dur = m % 60 === 0 ? `${m / 60} 小时` : m >= 60 ? `${(m / 60).toFixed(1)} 小时` : `${m} 分钟`;
   return `${fmt(w.start)} – ${fmt(w.end)}（${dur}）`;
 }
 

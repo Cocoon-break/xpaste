@@ -342,7 +342,7 @@ function moveInd({ instant = false, dur = 130, ease = EASE_MOVE }: { instant?: b
   indShown = true;
 }
 
-// pan：用户直接的选中动作（方向键、数字键、点行、点光柱、撤销恢复）才给，放大态下把窗外的记录移到窗口中间（设计 §4.4）
+// pan：用户直接的选中动作（方向键、数字键、点行、点光柱、删除失败回滚）才给，放大态下把窗外的记录移到窗口中间（设计 §4.4）
 type SelectOpts = { scroll?: boolean; glide?: boolean; instant?: boolean; fade?: boolean; indDur?: number; indEase?: string; pan?: 'instant' | 'smooth' };
 function select(id: number | null, { scroll = false, glide = true, instant = false, fade = true, indDur, indEase, pan }: SelectOpts = {}) {
   const changed = S.sel !== id;
@@ -613,16 +613,15 @@ function renderSpectrum(freshId?: number, stat = true) {
         });
       }
     });
-    // 固定窗口下的新记录落在窗外、列不变，点阵也要补上这一根
-    if (spWin && freshId !== undefined) paintMiniDots(recs);
   } else {
     spBars.innerHTML = next.bars.map((b, i) =>
       `<span class="${base(b)}${b.fresh ? ' fresh' : ''}" data-col="${i}" data-type="${b.kind}" style="left:${b.x}%;height:${b.h}%;--i:${staggerIndex(i, n)}"></span>`).join('');
     spMirror.innerHTML = spBars.innerHTML;
     // 悬停的光柱已被替换，提示条不再对应
     spTip.classList.remove('show');
-    if (spWin) paintMiniDots(recs);
   }
+  // 点阵每次重绘都画：窗外的新记录、删除、时间流逝都不改列
+  if (spWin) paintMiniDots(recs);
   sp = next;
   // className 重写会去掉 .on，两条路径都由 paintSpectrumSel 重新标记
   spOn = null;
@@ -709,6 +708,8 @@ spTrack.addEventListener('pointerout', (e) => {
 });
 // 滚轮 / 捏合按帧合并（设计 §4.8）：累计缩放系数与平移量，一帧只换一次窗；先缩放后平移
 let spRafGesture = 0, spFactor = 1, spDt = 0, spFracX = 0.5;
+// WKWebView 的捏合可能同时派发 GestureEvent 与 ctrlKey 滚轮：手势期间丢掉后者，免得缩放两次
+let spGesturing = false;
 function queueGesture() {
   if (spRafGesture) return;
   spRafGesture = requestAnimationFrame(() => {
@@ -721,6 +722,8 @@ function queueGesture() {
     // 用上次布局的 spNow：指针下的时间按屏幕上那一版计算
     let w = f === 1 ? spWin : zoomWin(spWin, spFracX, f, spNow);
     if (dt && w) w = panWin(w, dt, spNow);
+    // 24 小时视图里继续缩小：窗口不变，不重绘也不去掉 .smooth
+    if (!w && !spWin) return;
     setWin(w, false);
   });
 }
@@ -730,9 +733,10 @@ const fracOf = (clientX: number) => {
 };
 spTrack.addEventListener('wheel', (e) => {
   e.preventDefault();
+  if (e.ctrlKey && spGesturing) return;
   spFracX = fracOf(e.clientX);
-  // ctrlKey：Chromium 把触控板捏合转成带 ctrlKey 的滚轮
-  if (e.ctrlKey || e.metaKey || Math.abs(e.deltaY) >= Math.abs(e.deltaX)) spFactor *= Math.exp(e.deltaY * (e.ctrlKey ? 0.01 : 0.0025));
+  // ctrlKey：Chromium 把触控板捏合转成带 ctrlKey 的滚轮；指数夹到 ±0.3，鼠标一格（deltaY≈100）不至于一下放大 2.7 倍
+  if (e.ctrlKey || e.metaKey || Math.abs(e.deltaY) >= Math.abs(e.deltaX)) spFactor *= Math.exp(Math.max(-0.3, Math.min(0.3, e.deltaY * (e.ctrlKey ? 0.01 : 0.0025))));
   else if (spWin) spDt += (e.deltaX / spTrack.clientWidth) * spanOf(spWin);
   else return;
   queueGesture();
@@ -744,7 +748,9 @@ if ('GestureEvent' in window) {
   spTrack.addEventListener('gesturestart', (e) => {
     e.preventDefault();
     prevScale = 1;
+    spGesturing = true;
   });
+  spTrack.addEventListener('gestureend', () => (spGesturing = false));
   spTrack.addEventListener('gesturechange', (e) => {
     e.preventDefault();
     const g = e as Gesture;
@@ -803,6 +809,9 @@ spPresets.addEventListener('click', (e) => {
   const r = S.sel === null ? undefined : S.records.get(S.sel);
   setWin(centerWin(r && r.copiedAt >= spNow - DAY ? r.copiedAt : spNow - span / 2, span, spNow), true);
 });
+// 预设按钮不抢焦点：WebView2 点击 <button> 即便 tabindex="-1" 也会聚焦，之后 Enter 不再粘贴、输入不进搜索框
+spPresets.addEventListener('pointerdown', (e) => e.preventDefault());
+spPresets.addEventListener('mousedown', (e) => e.preventDefault());
 // 概览条：把窗口中心挪到点击处；24 小时视图下它是透明的，不响应
 spMini.addEventListener('click', (e) => {
   if (!spWin) return;
@@ -1822,6 +1831,8 @@ const hidden = () => {
   // 每次唤起回到 24 小时（设计 §2 非目标）；shown() 的 runSearch('') 会重绘
   spWin = null;
   spectrum.classList.remove('smooth');
+  // 概览条直接消失，不带 200ms 淡出，下次唤起不残影
+  instantly(spMini, true, () => spMini.classList.remove('show'));
   win.dataset.shown = 'false';
   // 跨隐藏不复用详情（例如文件是否还在）
   bodyFor = null;

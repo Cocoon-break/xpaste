@@ -138,6 +138,11 @@ test('miniWin 与 winLabel', () => {
   assert.equal(winLabel({ start: now2 - 90 * 60e3, end: now2, pinned: true }, f), '12:34 – 14:04（1.5 小时）');
   assert.equal(winLabel({ start: now2 - 10 * 60e3, end: now2, pinned: true }, f), '13:54 – 14:04（10 分钟）');
 });
+test('winLabel 浮点跨度先取整到分钟', () => {
+  const f = (t: number) => new Date(t).toTimeString().slice(0, 5);
+  assert.ok(winLabel({ start: now2 - HOUR - 400, end: now2, pinned: true }, f).endsWith('（1 小时）'));
+  assert.ok(winLabel({ start: now2 - 59.7 * 60e3, end: now2, pinned: true }, f).endsWith('（1 小时）'));
+});
 test('layoutBars 带时间窗时只排窗内记录', () => {
   const recs = [R(1, now2 - 10 * 60e3), R(2, now2 - 3 * HOUR), R(3, now2 - 11 * 60e3)];
   const { bars, colOf } = layoutBars(recs, now2, 900, () => true, undefined, { start: now2 - HOUR, end: now2, pinned: true });

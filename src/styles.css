@@ -296,6 +296,9 @@ kbd {
 /* 概览条：放大态出现，标出当前时间窗；默认视图淡出但仍占位 */
 .sp-mini { position: relative; height: 8px; margin-top: 2px; border-radius: 4px; background: var(--line); overflow: hidden; opacity: 0; transition: opacity 200ms ease; cursor: pointer; }
 .sp-mini.show { opacity: 1; }
+/* 透明时不接点击（点击处理里的 !spWin 留作兜底）；隐藏面板时 data-instant 去掉淡出 */
+.sp-mini:not(.show) { pointer-events: none; }
+.sp-mini[data-instant] { transition: none; }
 .sp-mini .band { position: absolute; inset: 0; background: var(--spectrum); opacity: .35; }
 .sp-mini .dots { position: absolute; inset: 0; width: 100%; height: 100%; }
 .sp-mini .win {
