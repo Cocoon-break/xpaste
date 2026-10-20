@@ -17,10 +17,12 @@ pub fn register(app: &AppHandle, shortcut: &str) -> Result<(), AppError> {
 /// 快捷键字符串 → 显示标签（如 `⌘ + Shift + V`）；规则与前端 `hotkeyLabel` 一致。
 pub fn label(shortcut: &str) -> String {
     let mac = cfg!(target_os = "macos");
-    let (mut m, mut a, mut s, mut key) = (false, false, false, String::new());
+    let (mut m, mut c, mut a, mut s, mut key) = (false, false, false, false, String::new());
     for t in shortcut.split('+').map(|t| t.trim().to_ascii_lowercase()) {
         match t.as_str() {
-            "commandorcontrol" | "command" | "control" | "ctrl" | "super" => m = true,
+            "commandorcontrol" | "cmdorctrl" | "command" | "cmd" | "super" => m = true,
+            // 字面的 Control 键：macOS 上是 ⌃，和 ⌘ 不同；Windows 上就是 Ctrl，与 CommandOrControl 合并显示
+            "control" | "ctrl" => c = true,
             "alt" => a = true,
             "shift" => s = true,
             "" => {}
@@ -29,6 +31,7 @@ pub fn label(shortcut: &str) -> String {
     }
     let parts = [
         (m, if mac { "⌘" } else { "Ctrl" }),
+        (c && (mac || !m), if mac { "⌃" } else { "Ctrl" }),
         (a, if mac { "⌥" } else { "Alt" }),
         (s, "Shift"),
         (!key.is_empty(), key.as_str()),
@@ -57,5 +60,10 @@ mod tests {
             }
         );
         assert_eq!(label("Alt+F2"), if mac { "⌥ + F2" } else { "Alt + F2" });
+        assert_eq!(label("Control+Z"), if mac { "⌃ + Z" } else { "Ctrl + Z" });
+        assert_eq!(
+            label("CommandOrControl+Control+Z"),
+            if mac { "⌘ + ⌃ + Z" } else { "Ctrl + Z" }
+        );
     }
 }

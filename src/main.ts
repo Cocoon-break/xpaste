@@ -1619,8 +1619,8 @@ hotkeyIn.addEventListener('keydown', (e) => {
   e.preventDefault();
   // 按住不放的重复事件不重播弹跳与提示
   if (e.repeat || ['Control', 'Meta', 'Shift', 'Alt'].includes(e.key)) return;
-  const h = hotkeyFromEvent({ key: e.key, code: e.code, mod: e.ctrlKey || e.metaKey, alt: e.altKey, shift: e.shiftKey, repeat: e.repeat });
-  if (!h) return setHotkeyHelp(`至少需要包含 ${MOD} 或 Alt`);
+  const h = hotkeyFromEvent({ key: e.key, code: e.code, ctrl: e.ctrlKey, meta: e.metaKey, alt: e.altKey, shift: e.shiftKey }, S.platform.os);
+  if (!h) return setHotkeyHelp(S.platform.os === 'macos' ? '至少需要包含 ⌘、⌃ 或 ⌥' : '至少需要包含 Ctrl 或 Alt');
   recordHotkey(h);
 });
 function recordHotkey(h: string) {
