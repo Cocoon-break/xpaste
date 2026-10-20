@@ -294,10 +294,13 @@ fn encode_png(img: RgbaImage) -> Option<Vec<u8>> {
 /// 中日韩文字与标点：汉字、假名、谚文、CJK 标点与全角符号。
 fn is_cjk(c: char) -> bool {
     matches!(c,
-        '\u{1100}'..='\u{11FF}'   // 谚文字母
+        '\u{00B7}'                   // 间隔号
+        | '\u{1100}'..='\u{11FF}' // 谚文字母
+        | '\u{2010}'..='\u{206F}' // 中文常用的引号、省略号、破折号等通用标点
         | '\u{2E80}'..='\u{9FFF}' // 部首、CJK 标点、假名、注音、汉字
         | '\u{AC00}'..='\u{D7AF}' // 谚文音节
         | '\u{F900}'..='\u{FAFF}' // 兼容汉字
+        | '\u{FE10}'..='\u{FE6F}' // 竖排、兼容与小写变体标点
         | '\u{FF00}'..='\u{FFEF}' // 全角与半角形式
         | '\u{20000}'..='\u{3FFFF}') // 扩展汉字
 }
@@ -321,6 +324,14 @@ pub fn join_ocr_words(words: &[String]) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn join_ocr_words_keeps_chinese_punctuation_tight() {
+        let w: Vec<String> = ["说", "“", "你好", "”", "…", "再见"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(join_ocr_words(&w), "说“你好”…再见");
+    }
     #[test]
     fn ocr_words_join_without_spaces_between_cjk() {
         let j = |ws: &[&str]| join_ocr_words(&ws.iter().map(|w| w.to_string()).collect::<Vec<_>>());

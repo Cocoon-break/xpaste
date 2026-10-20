@@ -455,7 +455,9 @@ function metaHTML(r: RecordSummary, d: RecordDetail | null) {
     if (r.kind === 'link') meta.push(['域名', host(t)]);
   }
   // 有文字时字数来自详情：摘要已变成 1 而详情还没重取到时先不显示
-  if (r.kind === 'image' && (r.ocrState !== 1 || d?.ocrText)) meta.push(['文字', ocrLabel(r.ocrState, d?.ocrText)]);
+  // 重新识别进行中（状态 0 且预览里还留着区块）信息栏与区块标题一致写“识别中…”
+  const reocrNow = r.ocrState === 0 && bodyFor === r.id && !!pbody.querySelector('.ocr-block');
+  if (r.kind === 'image' && (r.ocrState !== 1 || d?.ocrText)) meta.push(['文字', reocrNow ? '识别中…' : ocrLabel(r.ocrState, d?.ocrText)]);
   return meta.map(([k, v]) => `<div><dt>${k}</dt><dd title="${esc(v)}">${esc(v)}</dd></div>`).join('');
 }
 
