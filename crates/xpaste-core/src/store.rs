@@ -51,11 +51,12 @@ CREATE TRIGGER records_fts_au AFTER UPDATE OF search_text ON records BEGIN
 END;
 INSERT INTO fts(fts) VALUES ('rebuild');
 ",
-    // 拼音搜索：py_text 存 search_text 的拼音索引行（NULL 还没算，'' 没有汉字），fts_py 是它的 trigram 索引，
-    // 触发器同步；先 rebuild 把已有行按 NULL 登记，之后补建更新时触发器的 'delete' 才对得上索引条目
+    // 拼音搜索：py_text 存 search_text 的拼音索引行（'' 没有汉字），fts_py 是它区分大小写的 trigram 索引
+    // （首字母行大写、全拼音节前带 '，见 pinyin::index_text），触发器同步；先 rebuild 把已有行按 NULL 登记，
+    // 之后补建（migrate 在同一个事务里调用 backfill_pinyin）更新时触发器的 'delete' 才对得上索引条目
     r"
 ALTER TABLE records ADD COLUMN py_text TEXT;
-CREATE VIRTUAL TABLE fts_py USING fts5(py_text, content='records', content_rowid='id', tokenize='trigram');
+CREATE VIRTUAL TABLE fts_py USING fts5(py_text, content='records', content_rowid='id', tokenize='trigram case_sensitive 1');
 CREATE TRIGGER records_fts_py_ai AFTER INSERT ON records BEGIN
   INSERT INTO fts_py(rowid, py_text) VALUES (new.id, new.py_text);
 END;
@@ -113,7 +114,6 @@ impl Store {
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         migrate(&mut conn)?;
-        backfill_pinyin(&mut conn)?;
         Ok(Store {
             conn,
             dir: dir.to_path_buf(),
@@ -423,46 +423,41 @@ impl Store {
             .collect()
     }
 
-    /// 与 `search_hits` 同匹配同顺序的 id；空查询返回全部未删除记录。
-    pub fn search_ids(&self, q: &str) -> Result<Vec<i64>, CoreError> {
-        if q.trim().is_empty() {
-            let sql =
-                "SELECT id FROM records WHERE deleted_at IS NULL ORDER BY copied_at DESC, id DESC";
-            return ids_in(&self.conn, sql, &[]);
-        }
-        Ok(self.search_hits(q)?.into_iter().map(|h| h.id).collect())
-    }
-
     /// 不区分大小写的子串匹配，纯字母查询另按拼音匹配汉字：≥ 3 个字母按全拼 / 首字母搜全文（见 `search_sql`），
-    /// 正好 2 个字母只按标题的首字母（`pinyin::find_initials`），在 Rust 里逐行判断。
-    /// 命中来自识别文字（标题不含关键词）时附带片段；靠拼音命中（字面不含查询）时，`mark` 是标题
-    /// （没有则识别文字）里被匹配的原汉字，来自识别文字时片段围绕它取。
+    /// 正好 2 个字母只按标题的首字母（`pinyin::find_initials`），在 Rust 里逐行判断。空查询返回全部未删除记录。
+    /// 命中来自识别文字（标题不含关键词）时附带片段；靠拼音命中（字面不含查询）时，标题的拼音索引满足同一查询才用
+    /// 标题里被匹配的原汉字作 `mark`，否则识别文字满足时用识别文字的（片段围绕它取），都不满足时没有 `mark`。
     pub fn search_hits(&self, q: &str) -> Result<Vec<SearchHit>, CoreError> {
         let q = q.to_lowercase();
-        let (clause, params) = search_sql(&q);
-        // 2 个字母的拼音查询：取全部未删除行，字面命中或标题首字母命中的留下
+        let (clause, extra) = search_sql(&q);
         let initials = pinyin::is_pinyin_query(&q) && q.len() == 2;
-        let clause = if initials { "1".into() } else { clause };
-        // 占位符统一：?1 字面、?2 拼音（非拼音查询不引用，补空串凑数）、?3 用于 lit
-        let py = params.get(1).map_or("", String::as_str);
+        // 第 3 列：字面命中时为识别文字（没有则空串），否则 NULL，instr 只算一次；
+        // 第 4 列：非字面行的识别文字，只有 ≥ 3 个字母的拼音查询用来定位高亮，其余路径不取（2 个字母时不读全表的识别全文）
+        let py_ocr = if extra.iter().any(|(k, _)| *k == ":py") {
+            "ocr_text"
+        } else {
+            "NULL"
+        };
         let mut stmt = self.conn.prepare_cached(&format!(
-            "SELECT id, title, ocr_text, instr(search_text, ?3) > 0 AS lit FROM records
-             WHERE deleted_at IS NULL AND {clause} ORDER BY copied_at DESC, id DESC"
+            "SELECT id, title, CASE WHEN instr(search_text, :q) > 0 THEN coalesce(ocr_text, '') END, {py_ocr}
+             FROM records WHERE deleted_at IS NULL AND {clause} ORDER BY copied_at DESC, id DESC"
         ))?;
-        let rows = stmt.query_map([params[0].as_str(), py, q.as_str()], |r| {
+        let mut args: Vec<(&str, &dyn ToSql)> = vec![(":q", &q)];
+        args.extend(extra.iter().map(|(k, v)| (*k, v as &dyn ToSql)));
+        let rows = stmt.query_map(args.as_slice(), |r| {
             Ok((
                 r.get::<_, i64>(0)?,
                 r.get::<_, String>(1)?,
                 r.get::<_, Option<String>>(2)?,
-                r.get::<_, bool>(3)?,
+                r.get::<_, Option<String>>(3)?,
             ))
         })?;
         let mut hits = vec![];
         for row in rows {
-            let (id, title, ocr, lit) = row?;
+            let (id, title, lit_ocr, ocr) = row?;
             let (mut snip, mut mark) = (None, None);
-            if lit {
-                if let Some(t) = ocr.filter(|_| !title.to_lowercase().contains(&q)) {
+            if let Some(t) = lit_ocr {
+                if !title.to_lowercase().contains(&q) {
                     snip = snippet(&t, &q);
                 }
             } else if initials {
@@ -470,11 +465,13 @@ impl Store {
                     Some(m) => mark = Some(m),
                     None => continue,
                 }
-            } else if let Some(m) = pinyin::find(&title, &q) {
-                mark = Some(m);
-            } else if let Some(m) = ocr.as_deref().and_then(|t| pinyin::find(t, &q)) {
-                snip = snippet(ocr.as_deref().unwrap_or_default(), &m);
-                mark = Some(m);
+            } else if pinyin::index_matches(&pinyin::index_text(&title), &q) {
+                mark = pinyin::find(&title, &q);
+            } else if let Some(t) =
+                ocr.filter(|t| pinyin::index_matches(&pinyin::index_text(t), &q))
+            {
+                mark = pinyin::find(&t, &q);
+                snip = mark.as_deref().and_then(|m| snippet(&t, m));
             }
             hits.push(SearchHit {
                 id,
@@ -488,19 +485,15 @@ impl Store {
     /// 写识别结果；只有 `TEXT` 保存原文并把小写文本追加进 `search_text`。返回是否更新了未删除的记录。
     pub fn set_ocr(&self, id: i64, state: u8, text: Option<&str>) -> Result<bool, CoreError> {
         let text = text.filter(|_| state == ocr_state::TEXT);
+        // 识别文字没有汉字（拼音索引为空）时 py_text 不变
+        let py = text.map(pinyin::index_text).filter(|p| !p.is_empty());
         // 单条 UPDATE 即一个事务
         let n = self.conn.execute(
             "UPDATE records SET ocr_state = ?1, ocr_text = ?2,
                search_text = CASE WHEN ?3 IS NULL OR ocr_text IS NOT NULL THEN search_text ELSE search_text || char(10) || ?3 END,
-               py_text = CASE WHEN ?3 IS NULL OR ocr_text IS NOT NULL THEN py_text ELSE coalesce(py_text, '') || char(10) || ?5 END
+               py_text = CASE WHEN ?5 IS NULL OR ocr_text IS NOT NULL THEN py_text ELSE coalesce(py_text, '') || char(10) || ?5 END
              WHERE id = ?4 AND deleted_at IS NULL",
-            params![
-                state,
-                text,
-                text.map(str::to_lowercase),
-                id,
-                text.map(pinyin::index_text)
-            ],
+            params![state, text, text.map(str::to_lowercase), id, py],
         )?;
         Ok(n > 0)
     }
@@ -758,27 +751,31 @@ impl Store {
     }
 }
 
-/// 子串匹配的 WHERE 片段与参数（`q` 已小写）。≥ 3 个字符走 trigram 索引（`MATCH` 的短语查询，双引号加倍转义），
-/// 子串语义与 instr 相同；1–2 个字符 trigram 无法索引，仍顺序扫描 `search_text`（短词命中多，instr 遇首个命中即停，并不慢）。
-/// 查询是纯 ASCII 字母且 ≥ 3 个时再并上 `fts_py` 的拼音匹配（`?2`），此时参数为 `[?1, ?2]`，否则只有 `[?1]`；
-/// 2 个字母的拼音查询只按标题首字母，由 `search_hits` 在 Rust 里判断，这里只给字面子句。
-fn search_sql(q: &str) -> (String, Vec<String>) {
-    let long = q.chars().count() >= 3;
-    let (lit, lit_param) = if long {
-        (
-            "id IN (SELECT rowid FROM fts WHERE search_text MATCH ?1)",
-            format!("\"{}\"", q.replace('"', "\"\"")),
-        )
-    } else {
-        ("instr(search_text, ?1) > 0", q.to_string())
-    };
-    if !(long && pinyin::is_pinyin_query(q)) {
-        return (lit.to_string(), vec![lit_param]);
+/// 搜索的 WHERE 片段与它另用的命名参数（`q` 已小写；`:q` 即 `q` 本身，由 `search_hits` 统一绑定）。
+/// ≥ 3 个字符走 trigram 索引（`:lit` 是 `MATCH` 的短语查询，双引号加倍转义），子串语义与 instr 相同；
+/// 1–2 个字符 trigram 无法索引，仍顺序扫描 `search_text`（短词命中多，instr 遇首个命中即停，并不慢）。
+/// ≥ 3 个字母时再并上 `fts_py` 的拼音匹配（`:py`，见 `pinyin::match_expr`）；
+/// 正好 2 个字母的拼音查询只按标题首字母，取全部未删除行（`1`），由 `search_hits` 在 Rust 里判断。
+fn search_sql(q: &str) -> (&'static str, Vec<(&'static str, String)>) {
+    if q.chars().count() < 3 {
+        let clause = if pinyin::is_pinyin_query(q) {
+            "1"
+        } else {
+            "instr(search_text, :q) > 0"
+        };
+        return (clause, vec![]);
     }
-    (
-        format!("({lit} OR id IN (SELECT rowid FROM fts_py WHERE py_text MATCH ?2))"),
-        vec![lit_param.clone(), lit_param],
-    )
+    let lit = (":lit", format!("\"{}\"", q.replace('"', "\"\"")));
+    match pinyin::match_expr(q) {
+        None => (
+            "id IN (SELECT rowid FROM fts WHERE search_text MATCH :lit)",
+            vec![lit],
+        ),
+        Some(py) => (
+            "(id IN (SELECT rowid FROM fts WHERE search_text MATCH :lit) OR id IN (SELECT rowid FROM fts_py WHERE py_text MATCH :py))",
+            vec![lit, (":py", py)],
+        ),
+    }
 }
 
 /// 可识别文字的记录：图片记录，或文件列表里有图片文件的文件记录。
@@ -862,40 +859,49 @@ fn make_dirs(dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn migrate(conn: &mut Connection) -> Result<(), CoreError> {
+/// 依次执行没跑过的迁移，每个版本一个事务；返回升到版本 6 时补建拼音索引的行数（没跑迁移 6 时为 0）。
+fn migrate(conn: &mut Connection) -> Result<usize, CoreError> {
     let current: u32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
+    let mut filled = 0;
     for (v, sql) in (1u32..).zip(MIGRATIONS).skip(current as usize) {
         let tx = conn.transaction()?;
         tx.execute_batch(sql)?;
+        // 迁移 6 新增 py_text：旧行在同一个事务里补建，中途退出整体回滚，下次启动从版本 5 重来，不会留下 NULL 行
+        if v == 6 {
+            filled = backfill_pinyin(&tx)?;
+        }
         tx.pragma_update(None, "user_version", v)?;
         tx.commit()?;
     }
-    Ok(())
+    Ok(filled)
 }
 
-/// 给还没算过拼音索引的行（升级前的旧记录）补 `py_text`，全部 UPDATE 在一个事务里；返回补了多少行。
-/// 补完没有 NULL 行，之后每次启动都是一次空查询。
-fn backfill_pinyin(conn: &mut Connection) -> Result<usize, CoreError> {
-    let tx = conn.transaction()?;
-    let rows: Vec<(i64, String)> = {
-        let mut st =
-            tx.prepare("SELECT id, substr(search_text, 1, ?1) FROM records WHERE py_text IS NULL")?;
-        st.query_map([pinyin::PY_MAX_CHARS as i64], |r| {
-            Ok((r.get(0)?, r.get(1)?))
-        })?
-        .collect::<Result<_, _>>()?
-    };
-    for (id, text) in &rows {
-        tx.execute(
-            "UPDATE records SET py_text = ?1 WHERE id = ?2",
-            params![pinyin::index_text(text), id],
-        )?;
+/// 给升级前的旧记录补 `py_text`：正文前 `PY_MAX_CHARS` 个字符的索引，识别文字有汉字时再另起一行接上它的索引
+/// （与新记录 `set_ocr` 的结果一致，识别文字常在长正文之后，超出上限也能搜到）。逐行读写，不把整表收进内存；返回补了多少行。
+fn backfill_pinyin(conn: &Connection) -> Result<usize, CoreError> {
+    let mut read = conn.prepare(
+        "SELECT id, substr(search_text, 1, ?1), ocr_text FROM records WHERE py_text IS NULL",
+    )?;
+    let mut write = conn.prepare("UPDATE records SET py_text = ?1 WHERE id = ?2")?;
+    let mut rows = read.query([pinyin::PY_MAX_CHARS as i64])?;
+    let mut n = 0;
+    while let Some(r) = rows.next()? {
+        let (id, text, ocr): (i64, String, Option<String>) = (r.get(0)?, r.get(1)?, r.get(2)?);
+        let mut py = pinyin::index_text(&text);
+        if let Some(o) = ocr
+            .map(|o| pinyin::index_text(&o))
+            .filter(|o| !o.is_empty())
+        {
+            py.push('\n');
+            py.push_str(&o);
+        }
+        write.execute(params![py, id])?;
+        n += 1;
     }
-    tx.commit()?;
-    if !rows.is_empty() {
-        log::info!("拼音索引补建 {} 条", rows.len());
+    if n > 0 {
+        log::info!("拼音索引补建 {n} 条");
     }
-    Ok(rows.len())
+    Ok(n)
 }
 
 #[cfg(test)]
@@ -1019,9 +1025,9 @@ pub(crate) mod tests {
         drop(old);
         let s = Store::open(&dir).unwrap();
         // ≥ 3 字走索引，必须在重建后能命中
-        assert_eq!(s.search_ids("budget").unwrap().len(), 1);
-        assert_eq!(s.search_ids("季度预算").unwrap().len(), 1);
-        assert_eq!(s.search_ids("预算").unwrap().len(), 1);
+        assert_eq!(ids(&s, "budget").len(), 1);
+        assert_eq!(ids(&s, "季度预算").len(), 1);
+        assert_eq!(ids(&s, "预算").len(), 1);
     }
 
     #[test]
@@ -1029,17 +1035,17 @@ pub(crate) mod tests {
         let mut s = mem();
         let a = added(&mut s, &rec("Quarterly Budget 报告"), 1);
         let img = added(&mut s, &rec_image(7), 2);
-        assert_eq!(s.search_ids("budget 报").unwrap(), [a]);
-        assert_eq!(s.search_ids("rly bud").unwrap(), [a]);
-        assert!(s.search_ids("预算").unwrap().is_empty());
+        assert_eq!(ids(&s, "budget 报"), [a]);
+        assert_eq!(ids(&s, "rly bud"), [a]);
+        assert!(ids(&s, "预算").is_empty());
         // 识别文字追加进 search_text：触发器同步索引
         s.set_ocr(img, ocr_state::TEXT, Some("季度预算 2026"))
             .unwrap();
-        assert_eq!(s.search_ids("季度预算").unwrap(), [img]);
-        assert_eq!(s.search_ids("2026").unwrap(), [img]);
+        assert_eq!(ids(&s, "季度预算"), [img]);
+        assert_eq!(ids(&s, "2026"), [img]);
         // 软删除不改索引但被 deleted_at 过滤；硬删除后索引条目消失
         s.soft_delete(img, 3).unwrap();
-        assert!(s.search_ids("季度预算").unwrap().is_empty());
+        assert!(ids(&s, "季度预算").is_empty());
         assert!(s.purge_if_deleted_at(img, 3).unwrap());
         let n: i64 = s
             .conn
@@ -1056,44 +1062,37 @@ pub(crate) mod tests {
     fn insert_writes_py_text() {
         let mut s = mem();
         let id = added(&mut s, &rec("周四会议纪要"), 1);
-        let py: String = s
-            .conn
-            .query_row("SELECT py_text FROM records WHERE id = ?1", [id], |r| {
-                r.get(0)
-            })
-            .unwrap();
-        assert!(py.contains("huiyi"), "{py:?}");
-        let n: i64 = s
-            .conn
-            .query_row(
-                "SELECT count(*) FROM fts_py WHERE py_text MATCH '\"huiyi\"'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(n, 1);
+        let py = py_text(&s, id).unwrap();
+        assert!(py.contains("'hui'yi") && py.contains("HYJY"), "{py:?}");
+        assert_eq!(fts_py_count(&s.conn, "\"'hui'yi\""), 1);
+        assert_eq!(fts_py_count(&s.conn, "\"HYJY\""), 1);
+        // 区分大小写：小写的首字母不命中大写的首字母行
+        assert_eq!(fts_py_count(&s.conn, "\"hyjy\""), 0);
     }
 
     #[test]
     fn set_ocr_appends_pinyin() {
         let mut s = mem();
         let img = added(&mut s, &rec_image(7), 1);
-        let py = |s: &Store| -> String {
-            s.conn
-                .query_row("SELECT py_text FROM records WHERE id = ?1", [img], |r| {
-                    r.get(0)
-                })
-                .unwrap()
-        };
         s.set_ocr(img, ocr_state::TEXT, Some("季度预算")).unwrap();
-        let once = py(&s);
-        assert!(once.contains("jidu") && once.contains("jdys"), "{once:?}");
+        let once = py_text(&s, img).unwrap();
+        assert!(once.contains("'ji'du") && once.contains("JDYS"), "{once:?}");
         // 第二次识别与 search_text 同规则：不再追加
         s.set_ocr(img, ocr_state::TEXT, Some("季度预算")).unwrap();
-        assert_eq!(py(&s), once);
+        assert_eq!(py_text(&s, img).unwrap(), once);
     }
 
-    /// 版本 5 的旧库，含一条还没有 py_text 的记录。
+    #[test]
+    fn set_ocr_without_han_keeps_py_text() {
+        let mut s = mem();
+        let img = added(&mut s, &rec_image(7), 1);
+        let before = py_text(&s, img);
+        s.set_ocr(img, ocr_state::TEXT, Some("Hello World 2026"))
+            .unwrap();
+        assert_eq!(py_text(&s, img), before);
+    }
+
+    /// 版本 5 的旧库，含两条还没有 py_text 的记录。
     fn v5_db_with_old_record() -> PathBuf {
         let dir = tmp();
         make_dirs(&dir).unwrap();
@@ -1103,7 +1102,8 @@ pub(crate) mod tests {
         }
         old.pragma_update(None, "user_version", 5).unwrap();
         old.execute(
-            "INSERT INTO records (hash, kind, title, text, copied_at, size, search_text) VALUES (x'06', 'text', '旧记录', 'x', 1, 1, '季度预算 budget')",
+            "INSERT INTO records (hash, kind, title, text, copied_at, size, search_text) VALUES
+               (x'06', 'text', '旧记录', 'x', 1, 1, '季度预算 budget'), (x'08', 'text', '会议', 'y', 2, 1, '会议')",
             [],
         )
         .unwrap();
@@ -1111,67 +1111,104 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn backfill_after_upgrade() {
-        let s = Store::open(&v5_db_with_old_record()).unwrap();
-        let py: String = s
-            .conn
-            .query_row("SELECT py_text FROM records", [], |r| r.get(0))
-            .unwrap();
-        assert!(py.contains("jiduyusuan"), "{py:?}");
+    fn backfill_is_part_of_migration() {
+        let dir = v5_db_with_old_record();
+        let s = Store::open(&dir).unwrap();
         assert_eq!(s.schema_version().unwrap(), 6);
-        let n: i64 = s
+        let nulls: i64 = s
             .conn
             .query_row(
-                "SELECT count(*) FROM fts_py WHERE py_text MATCH '\"jiduyusuan\"'",
+                "SELECT count(*) FROM records WHERE py_text IS NULL",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(n, 1);
+        assert_eq!(nulls, 0);
+        assert_eq!(fts_py_count(&s.conn, "\"'ji'du\""), 1);
+        assert_eq!(fts_py_count(&s.conn, "\"JDYS\""), 1);
+        assert_eq!(fts_py_count(&s.conn, "\"'hui'yi\""), 1);
+        drop(s);
+        // 已是版本 6：即使人为清空 py_text，再次迁移也不会补建（补建只在升到版本 6 的那个事务里执行）
+        let mut conn = Connection::open(dir.join("xpaste.db")).unwrap();
+        conn.execute("UPDATE records SET py_text = NULL", [])
+            .unwrap();
+        assert_eq!(migrate(&mut conn).unwrap(), 0);
+        let nulls: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM records WHERE py_text IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(nulls, 2);
     }
 
     #[test]
-    fn backfill_runs_once() {
+    fn upgrade_to_6_reports_backfilled_rows() {
         let dir = v5_db_with_old_record();
-        drop(Store::open(&dir).unwrap());
-        // 第二次打开：升级时已补齐，没有 py_text 为 NULL 的行
-        let mut s = Store::open(&dir).unwrap();
-        assert_eq!(backfill_pinyin(&mut s.conn).unwrap(), 0);
+        let mut conn = Connection::open(dir.join("xpaste.db")).unwrap();
+        assert_eq!(migrate(&mut conn).unwrap(), 2);
+    }
+
+    #[test]
+    fn backfill_indexes_ocr_text_separately() {
+        let dir = tmp();
+        make_dirs(&dir).unwrap();
+        let old = Connection::open(dir.join("xpaste.db")).unwrap();
+        for m in &MIGRATIONS[..5] {
+            old.execute_batch(m).unwrap();
+        }
+        old.pragma_update(None, "user_version", 5).unwrap();
+        // 识别文字接在 6000 字正文之后，超出 PY_MAX_CHARS：要单独从 ocr_text 补建
+        let st = format!("{}\n季度预算", "一".repeat(6000));
+        old.execute(
+            "INSERT INTO records (hash, kind, title, paths, copied_at, size, search_text, ocr_text, ocr_state)
+             VALUES (x'07', 'file', 'a.png', '[\"/a.png\"]', 1, 1, ?1, '季度预算', 2)",
+            [&st],
+        )
+        .unwrap();
+        drop(old);
+        let s = Store::open(&dir).unwrap();
+        assert_eq!(ids(&s, "jidu").len(), 1);
     }
 
     #[test]
     fn fts_py_follows_delete() {
         let mut s = mem();
         let id = added(&mut s, &rec("周四会议纪要"), 1);
+        assert_eq!(fts_py_count(&s.conn, "\"'hui'yi\""), 1);
         s.soft_delete(id, 2).unwrap();
         assert!(s.purge_if_deleted_at(id, 2).unwrap());
-        let n: i64 = s
-            .conn
-            .query_row(
-                "SELECT count(*) FROM fts_py WHERE py_text MATCH '\"huiyi\"'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(n, 0);
+        assert_eq!(fts_py_count(&s.conn, "\"'hui'yi\""), 0);
     }
 
     #[test]
     fn search_quotes_and_short_queries() {
         let mut s = mem();
         let a = added(&mut s, &rec("say \"hi\" now"), 1);
-        assert_eq!(s.search_ids("\"hi\"").unwrap(), [a]);
-        assert_eq!(s.search_ids("y \"h").unwrap(), [a]);
-        assert_eq!(s.search_ids("hi").unwrap(), [a]);
-        assert_eq!(s.search_ids("H").unwrap(), [a]);
-        // 两个字母的拼音查询不拼 SQL 拼音子句，标题首字母在 search_hits 里用 Rust 判断
-        assert_eq!(search_sql("ab").0, "instr(search_text, ?1) > 0");
+        assert_eq!(ids(&s, "\"hi\""), [a]);
+        assert_eq!(ids(&s, "y \"h"), [a]);
+        assert_eq!(ids(&s, "hi"), [a]);
+        assert_eq!(ids(&s, "H"), [a]);
+        // 两个字母的拼音查询不拼 SQL 拼音子句，取全部行，标题首字母在 search_hits 里用 Rust 判断
+        assert_eq!(search_sql("ab"), ("1", vec![]));
+        assert_eq!(search_sql("a1"), ("instr(search_text, :q) > 0", vec![]));
         assert_eq!(
-            search_sql("预算书").0,
-            "id IN (SELECT rowid FROM fts WHERE search_text MATCH ?1)"
+            search_sql("预算书"),
+            (
+                "id IN (SELECT rowid FROM fts WHERE search_text MATCH :lit)",
+                vec![(":lit", "\"预算书\"".to_string())]
+            )
         );
-        assert_eq!(search_sql("预算书").1, ["\"预算书\""]);
-        assert_eq!(search_sql("ab").1, ["ab"]);
+        let (clause, args) = search_sql("huiyi");
+        assert!(clause.contains("MATCH :lit") && clause.contains("MATCH :py"));
+        assert_eq!(
+            args,
+            [
+                (":lit", "\"huiyi\"".to_string()),
+                (":py", pinyin::match_expr("huiyi").unwrap())
+            ]
+        );
     }
 
     #[test]
@@ -1188,8 +1225,8 @@ pub(crate) mod tests {
         .unwrap();
         drop(old);
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.search_ids("03.20").unwrap().len(), 1);
-        assert_eq!(s.search_ids("iShot").unwrap().len(), 1);
+        assert_eq!(ids(&s, "03.20").len(), 1);
+        assert_eq!(ids(&s, "iShot").len(), 1);
     }
 
     #[test]
@@ -1240,6 +1277,30 @@ pub(crate) mod tests {
 
     fn mem() -> Store {
         Store::open_in_memory(&tmp()).unwrap()
+    }
+    /// `fts_py` 里匹配 FTS 查询 `m` 的行数。
+    fn fts_py_count(conn: &Connection, m: &str) -> i64 {
+        conn.query_row(
+            "SELECT count(*) FROM fts_py WHERE py_text MATCH ?1",
+            [m],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+    fn py_text(s: &Store, id: i64) -> Option<String> {
+        s.conn
+            .query_row("SELECT py_text FROM records WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .unwrap()
+    }
+    /// `search_hits` 命中的 id，顺序不变。
+    fn ids(s: &Store, q: &str) -> Vec<i64> {
+        s.search_hits(q)
+            .unwrap()
+            .into_iter()
+            .map(|h| h.id)
+            .collect()
     }
     fn rec_of(snap: Snapshot) -> NewRecord {
         let kind = detect::kind(&snap);
@@ -1564,9 +1625,9 @@ pub(crate) mod tests {
         let mut s = mem();
         s.insert_or_merge(&rec("Hello 会议"), 1, 500).unwrap();
         s.insert_or_merge(&rec("other"), 2, 500).unwrap();
-        assert_eq!(s.search_ids("HELLO").unwrap().len(), 1);
-        assert_eq!(s.search_ids("会议").unwrap().len(), 1);
-        assert_eq!(s.search_ids("").unwrap().len(), 2);
+        assert_eq!(ids(&s, "HELLO").len(), 1);
+        assert_eq!(ids(&s, "会议").len(), 1);
+        assert_eq!(ids(&s, "").len(), 2);
     }
     #[test]
     fn detail_truncates_long_text_and_checks_files() {
@@ -1678,8 +1739,8 @@ pub(crate) mod tests {
         let mut s = mem();
         let id = added(&mut s, &rec_image(1), 1);
         assert!(s.set_ocr(id, ocr_state::TEXT, Some("Q3 季度预算")).unwrap());
-        assert_eq!(s.search_ids("季度预算").unwrap(), [id]);
-        assert_eq!(s.search_ids("q3").unwrap(), [id]);
+        assert_eq!(ids(&s, "季度预算"), [id]);
+        assert_eq!(ids(&s, "q3"), [id]);
         let d = s.detail(id).unwrap().unwrap();
         assert_eq!(
             (d.summary.ocr_state, d.ocr_text.as_deref()),
@@ -1734,17 +1795,17 @@ pub(crate) mod tests {
         let meeting = added(&mut s, &rec("周四下午会议纪要"), 1);
         let bank = added(&mut s, &rec("招商银行 6225"), 2);
         let en = added(&mut s, &rec("budget"), 3);
-        assert_eq!(s.search_ids("huiyi").unwrap(), [meeting]);
-        assert_eq!(s.search_ids("hy").unwrap(), [meeting]);
-        assert_eq!(s.search_ids("yinhang").unwrap(), [bank]);
-        assert_eq!(s.search_ids("budget").unwrap(), [en]);
+        assert_eq!(ids(&s, "huiyi"), [meeting]);
+        assert_eq!(ids(&s, "hy"), [meeting]);
+        assert_eq!(ids(&s, "yinhang"), [bank]);
+        assert_eq!(ids(&s, "budget"), [en]);
     }
 
     #[test]
     fn search_pinyin_is_case_insensitive() {
         let mut s = mem();
         let meeting = added(&mut s, &rec("周四下午会议纪要"), 1);
-        assert_eq!(s.search_ids("HuiYi").unwrap(), [meeting]);
+        assert_eq!(ids(&s, "HuiYi"), [meeting]);
     }
 
     #[test]
@@ -1753,7 +1814,7 @@ pub(crate) mod tests {
         let literal = added(&mut s, &rec("js 工具函数"), 1);
         let py = added(&mut s, &rec("技术方案"), 2);
         added(&mut s, &rec("周报\n本周进展\n技术债清理"), 3);
-        assert_eq!(s.search_ids("js").unwrap(), [py, literal]);
+        assert_eq!(ids(&s, "js"), [py, literal]);
     }
 
     #[test]
@@ -1761,7 +1822,7 @@ pub(crate) mod tests {
         let mut s = mem();
         let title = added(&mut s, &rec("周四会议纪要\n地点：三楼"), 1);
         added(&mut s, &rec("周报\n本周进展\n下周会议安排"), 2);
-        assert_eq!(s.search_ids("hy").unwrap(), [title]);
+        assert_eq!(ids(&s, "hy"), [title]);
         let h = s.search_hits("hy").unwrap();
         assert_eq!(h.len(), 1);
         assert_eq!(h[0].mark.as_deref(), Some("会议"));
@@ -1772,7 +1833,28 @@ pub(crate) mod tests {
     fn search_full_pinyin_across_polyphones() {
         let mut s = mem();
         let bank = added(&mut s, &rec("招商银行 6225 8888"), 1);
-        assert_eq!(s.search_ids("zhaoshangyinhang").unwrap(), [bank]);
+        assert_eq!(ids(&s, "zhaoshangyinhang"), [bank]);
+    }
+
+    #[test]
+    fn search_rejects_mid_syllable() {
+        let mut s = mem();
+        let sh = added(&mut s, &rec("上海"), 1);
+        added(&mut s, &rec("北京"), 2);
+        assert!(ids(&s, "hang").is_empty());
+        assert!(ids(&s, "ing").is_empty());
+        assert_eq!(ids(&s, "shanghai"), [sh]);
+    }
+
+    #[test]
+    fn mark_only_when_title_matches() {
+        let mut s = mem();
+        let trip = added(&mut s, &rec("行程\n下午去银行办卡"), 1);
+        let bank = added(&mut s, &rec("招商银行 6225"), 2);
+        let h = s.search_hits("yinhang").unwrap();
+        let get = |id| h.iter().find(|x| x.id == id).unwrap();
+        assert_eq!(get(trip).mark, None);
+        assert_eq!(get(bank).mark.as_deref(), Some("银行"));
     }
 
     #[test]
