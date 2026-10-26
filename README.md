@@ -21,6 +21,8 @@
 
 ## 安装
 
+安装包在 [Releases](https://github.com/Cocoon-break/xpaste/releases/latest) 下载，固定链接始终指向最新版：[Apple 芯片](https://github.com/Cocoon-break/xpaste/releases/latest/download/xPaste_aarch64.dmg) · [Intel](https://github.com/Cocoon-break/xpaste/releases/latest/download/xPaste_x64.dmg) · [Windows](https://github.com/Cocoon-break/xpaste/releases/latest/download/xPaste_x64-setup.exe)。
+
 **macOS 13 及以上**：Apple 芯片打开 `xPaste_<版本>_aarch64.dmg`，Intel 打开 `xPaste_<版本>_x64.dmg`，把 xPaste 拖进“应用程序”。安装包未签名（只有链接器自带的临时签名），从浏览器下载的安装包带隔离属性，第一次打开会被系统拦下，可能提示“xPaste”已损坏，无法打开，而且没有“仍要打开”。这不是文件坏了，按下面的顺序放行：
 
 1. 在终端运行 `xattr -dr com.apple.quarantine /Applications/xPaste.app`（去掉隔离属性），再正常打开。这一步在各版本 macOS 上都有效。
@@ -60,7 +62,7 @@
 - 安装包未签名、未公证，首次打开要手动放行（见“安装”；拿到证书后的步骤见“签名与公证”）。
 - 没有自动更新，托盘菜单里也没有“检查更新…”，新版本要手动下载安装。
 - 数据库没有加密（本机明文 SQLite，靠系统账户权限保护）。
-- CI 产出的 macOS 安装包只有 Apple 芯片（aarch64）版本；Intel 版（`xPaste_<版本>_x64.dmg`）要在 Apple 芯片 Mac 上用 `make release-x64` 本地打，没有通用（universal）版本。
+- macOS 分 Apple 芯片（aarch64）与 Intel（x64）两个安装包，没有通用（universal）版本。
 - dmg 打开后没有窗口图标摆位（无界面打包跳过了 Finder 布局），“应用程序”快捷方式还在，拖进去即可。
 - Windows 安装界面只有简体中文。
 - 崩溃后不会自动重启。已写入的记录不丢，开机启动项保留，下次登录或手动打开即可恢复。
@@ -126,6 +128,14 @@ make release       # 打发布包（未签名）：当前系统的安装包；ma
 make release-win   # 在 macOS 上交叉打 Windows NSIS 安装程序（见下）
 make release-x64   # 在 Apple 芯片 Mac 上打 Intel 版 .dmg（rustup target add x86_64-apple-darwin 后，make release 也会顺带打）
 ```
+
+### 发版
+
+`.github/workflows/release.yml` 在推送 `v*` 标签时打 Apple 芯片、Intel、Windows 三个安装包，发布 GitHub Release。每个安装包另存一份不带版本号的文件名（`xPaste_aarch64.dmg`、`xPaste_x64.dmg`、`xPaste_x64-setup.exe`），官网用 `releases/latest/download/<文件名>` 固定链接到最新版。
+
+1. 同步改 `package.json` 与 `src-tauri/Cargo.toml` 的版本号（`pnpm check:version` 检查两者一致），合并到 `main`。
+2. 在 `main` 上打标签并推送：`git tag v0.1.1 && git push origin v0.1.1`。标签必须等于 `v` + 版本号，不一致时流程直接失败。
+3. 给已有标签补发或重发：Actions → Release → Run workflow，填标签名。
 
 ### 在 macOS 上打 Windows 安装包
 

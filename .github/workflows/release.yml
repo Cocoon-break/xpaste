@@ -1,0 +1,86 @@
+name: Release
+# 推送 v* 标签（如 v0.1.1）时打三个安装包并发布 GitHub Release。
+# 给已有标签补发：Actions → Release → Run workflow，填标签名（用的是默认分支上的这份流程）。
+on:
+  push: { tags: ["v*"] }
+  workflow_dispatch:
+    inputs:
+      tag: { description: "要发布的标签，如 v0.1.0", required: true }
+permissions: { contents: write }
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+jobs:
+  build:
+    strategy:
+      matrix: { os: [macos-latest, windows-latest] }
+    runs-on: ${{ matrix.os }}
+    defaults: { run: { shell: bash } }
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ env.TAG }}" }
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 25, cache: pnpm }
+      # macOS 跑在 Apple 芯片上，装上 x86_64 target 后 make release 顺带打 Intel 包
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: "${{ runner.os == 'macOS' && 'x86_64-apple-darwin' || '' }}" }
+      - uses: swatinem/rust-cache@v2
+      - if: runner.os == 'Windows'
+        run: command -v make || choco install make -y
+      - run: make install
+      - name: 标签与版本号一致
+        run: |
+          pnpm check:version
+          ver=$(node -p "require('./package.json').version")
+          test "v$ver" = "$TAG" || { echo "标签 $TAG 与 package.json 版本 $ver 不一致" >&2; exit 1; }
+      - run: make release
+      # 再存一份不带版本号的文件名，官网用 releases/latest/download/<文件名> 固定链接到最新版
+      - name: 不带版本号的副本
+        run: |
+          cd target/installers
+          for f in xPaste_*; do cp "$f" "${f/_${TAG#v}_/_}"; done
+          ls -l
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.os }}
+          path: target/installers/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: dist, pattern: installers-*, merge-multiple: true }
+      - name: 安装包齐全
+        run: |
+          ls -l dist
+          for f in xPaste_aarch64.dmg xPaste_x64.dmg xPaste_x64-setup.exe; do
+            test -f "dist/$f" || { echo "缺少 $f" >&2; exit 1; }
+          done
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: xPaste ${{ env.TAG }}
+          files: dist/*
+          generate_release_notes: true
+          body: |
+            ## 下载
+
+            | 电脑 | 安装包 |
+            |---|---|
+            | Mac · Apple 芯片（macOS 13 及以上） | `xPaste_aarch64.dmg` |
+            | Mac · Intel（macOS 13 及以上） | `xPaste_x64.dmg` |
+            | Windows 10 21H2 / 11（x64） | `xPaste_x64-setup.exe` |
+
+            带版本号的文件与上面内容相同。
+
+            ## 第一次打开
+
+            安装包未签名。macOS 提示“xPaste 已损坏，无法打开”时，把 xPaste 拖进“应用程序”后在终端运行：
+
+            ```sh
+            xattr -dr com.apple.quarantine /Applications/xPaste.app
+            ```
+
+            Windows 提示“Windows 已保护你的电脑”时，点“更多信息 → 仍要运行”。
