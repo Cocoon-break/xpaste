@@ -48,6 +48,7 @@ pub fn detail_dto(mut d: RecordDetail) -> RecordDetail {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(windows))]
     use xpaste_core::{Kind, VideoInfo};
 
     #[cfg(not(windows))]
