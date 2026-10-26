@@ -1,5 +1,5 @@
 name: CI
-on: { push: { branches: [main, dev] }, pull_request: {}, workflow_dispatch: {} }
+on: { push: { branches: [main] }, pull_request: {}, workflow_dispatch: {} }
 jobs:
   build:
     strategy:
@@ -20,7 +20,7 @@ jobs:
       - run: make install
       - run: make check
       - run: make build-check
-      # 推送到 dev 与 PR 只跑上面的检查；main 推送或手动触发才打安装包并上传
+      # PR 只跑上面的检查；合并进 main 或手动触发才打安装包并上传
       - if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
         run: make release
       - if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
