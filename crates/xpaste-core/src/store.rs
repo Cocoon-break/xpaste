@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::{
     AppSummary, CoreError, FileEntry, Flavor, ImageInfo, Kind, NewRecord, RecordDetail,
-    RecordSummary, SearchHit, Settings, VideoInfo, ocr_state,
+    RecordSummary, SearchHit, Settings, VideoInfo, ocr_state, pinyin,
 };
 
 /// 按版本排列的迁移脚本；第 i 项把 `user_version` 从 i 升到 i+1。
@@ -50,6 +50,23 @@ CREATE TRIGGER records_fts_au AFTER UPDATE OF search_text ON records BEGIN
   INSERT INTO fts(rowid, search_text) VALUES (new.id, new.search_text);
 END;
 INSERT INTO fts(fts) VALUES ('rebuild');
+",
+    // 拼音搜索：py_text 存 search_text 的拼音索引行（NULL 还没算，'' 没有汉字），fts_py 是它的 trigram 索引，
+    // 触发器同步；先 rebuild 把已有行按 NULL 登记，之后补建更新时触发器的 'delete' 才对得上索引条目
+    r"
+ALTER TABLE records ADD COLUMN py_text TEXT;
+CREATE VIRTUAL TABLE fts_py USING fts5(py_text, content='records', content_rowid='id', tokenize='trigram');
+CREATE TRIGGER records_fts_py_ai AFTER INSERT ON records BEGIN
+  INSERT INTO fts_py(rowid, py_text) VALUES (new.id, new.py_text);
+END;
+CREATE TRIGGER records_fts_py_ad AFTER DELETE ON records BEGIN
+  INSERT INTO fts_py(fts_py, rowid, py_text) VALUES ('delete', old.id, old.py_text);
+END;
+CREATE TRIGGER records_fts_py_au AFTER UPDATE OF py_text ON records BEGIN
+  INSERT INTO fts_py(fts_py, rowid, py_text) VALUES ('delete', old.id, old.py_text);
+  INSERT INTO fts_py(rowid, py_text) VALUES (new.id, new.py_text);
+END;
+INSERT INTO fts_py(fts_py) VALUES ('rebuild');
 ",
 ];
 
@@ -96,6 +113,7 @@ impl Store {
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         migrate(&mut conn)?;
+        backfill_pinyin(&mut conn)?;
         Ok(Store {
             conn,
             dir: dir.to_path_buf(),
@@ -191,7 +209,7 @@ impl Store {
         let meta = r.meta.as_ref().map(serde_json::to_string).transpose()?;
         tx.execute(
             "INSERT INTO records(hash, kind, title, text, paths, link_title, lang, size, meta,
-               search_text, app_id, copied_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+               search_text, app_id, copied_at, py_text) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
             params![
                 &r.hash[..],
                 r.kind.as_str(),
@@ -204,7 +222,8 @@ impl Store {
                 meta,
                 r.search_text,
                 r.app.as_ref().map(|a| &a.id),
-                now_ms
+                now_ms,
+                pinyin::index_text(&r.search_text)
             ],
         )?;
         let id = tx.last_insert_rowid();
@@ -448,9 +467,16 @@ impl Store {
         // 单条 UPDATE 即一个事务
         let n = self.conn.execute(
             "UPDATE records SET ocr_state = ?1, ocr_text = ?2,
-               search_text = CASE WHEN ?3 IS NULL OR ocr_text IS NOT NULL THEN search_text ELSE search_text || char(10) || ?3 END
+               search_text = CASE WHEN ?3 IS NULL OR ocr_text IS NOT NULL THEN search_text ELSE search_text || char(10) || ?3 END,
+               py_text = CASE WHEN ?3 IS NULL OR ocr_text IS NOT NULL THEN py_text ELSE coalesce(py_text, '') || char(10) || ?5 END
              WHERE id = ?4 AND deleted_at IS NULL",
-            params![state, text, text.map(str::to_lowercase), id],
+            params![
+                state,
+                text,
+                text.map(str::to_lowercase),
+                id,
+                text.map(pinyin::index_text)
+            ],
         )?;
         Ok(n > 0)
     }
@@ -813,6 +839,31 @@ fn migrate(conn: &mut Connection) -> Result<(), CoreError> {
     Ok(())
 }
 
+/// 给还没算过拼音索引的行（升级前的旧记录）补 `py_text`，全部 UPDATE 在一个事务里；返回补了多少行。
+/// 补完没有 NULL 行，之后每次启动都是一次空查询。
+fn backfill_pinyin(conn: &mut Connection) -> Result<usize, CoreError> {
+    let tx = conn.transaction()?;
+    let rows: Vec<(i64, String)> = {
+        let mut st =
+            tx.prepare("SELECT id, substr(search_text, 1, ?1) FROM records WHERE py_text IS NULL")?;
+        st.query_map([pinyin::PY_MAX_CHARS as i64], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?
+        .collect::<Result<_, _>>()?
+    };
+    for (id, text) in &rows {
+        tx.execute(
+            "UPDATE records SET py_text = ?1 WHERE id = ?2",
+            params![pinyin::index_text(text), id],
+        )?;
+    }
+    tx.commit()?;
+    if !rows.is_empty() {
+        log::info!("拼音索引补建 {} 条", rows.len());
+    }
+    Ok(rows.len())
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -833,7 +884,7 @@ pub(crate) mod tests {
     fn open_creates_schema_and_dirs() {
         let dir = tmp();
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 5);
+        assert_eq!(s.schema_version().unwrap(), 6);
         for sub in ["blobs", "images", "thumbs", "icons"] {
             assert!(dir.join(sub).is_dir());
         }
@@ -875,7 +926,7 @@ pub(crate) mod tests {
         .unwrap();
         drop(old);
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 5);
+        assert_eq!(s.schema_version().unwrap(), 6);
         let row: (String, String) = s
             .conn
             .query_row("SELECT kind, title FROM records", [], |r| {
@@ -900,7 +951,7 @@ pub(crate) mod tests {
         .unwrap();
         drop(old);
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 5);
+        assert_eq!(s.schema_version().unwrap(), 6);
         let l = s.list_summaries().unwrap();
         assert_eq!(
             (l[0].kind, l[0].ocr_state),
@@ -914,7 +965,7 @@ pub(crate) mod tests {
         let dir = tmp();
         drop(Store::open(&dir).unwrap());
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 5);
+        assert_eq!(s.schema_version().unwrap(), 6);
     }
 
     #[test]
@@ -960,6 +1011,94 @@ pub(crate) mod tests {
             .conn
             .query_row(
                 "SELECT count(*) FROM fts WHERE search_text MATCH '\"季度预算\"'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn insert_writes_py_text() {
+        let mut s = mem();
+        let id = added(&mut s, &rec("周四会议纪要"), 1);
+        let py: String = s
+            .conn
+            .query_row("SELECT py_text FROM records WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(py.contains("huiyi"), "{py:?}");
+        let n: i64 = s
+            .conn
+            .query_row(
+                "SELECT count(*) FROM fts_py WHERE py_text MATCH '\"huiyi\"'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn set_ocr_appends_pinyin() {
+        let mut s = mem();
+        let img = added(&mut s, &rec_image(7), 1);
+        let py = |s: &Store| -> String {
+            s.conn
+                .query_row("SELECT py_text FROM records WHERE id = ?1", [img], |r| {
+                    r.get(0)
+                })
+                .unwrap()
+        };
+        s.set_ocr(img, ocr_state::TEXT, Some("季度预算")).unwrap();
+        let once = py(&s);
+        assert!(once.contains("jidu") && once.contains("jdys"), "{once:?}");
+        // 第二次识别与 search_text 同规则：不再追加
+        s.set_ocr(img, ocr_state::TEXT, Some("季度预算")).unwrap();
+        assert_eq!(py(&s), once);
+    }
+
+    #[test]
+    fn backfill_after_upgrade() {
+        let dir = tmp();
+        make_dirs(&dir).unwrap();
+        let old = Connection::open(dir.join("xpaste.db")).unwrap();
+        for m in &MIGRATIONS[..5] {
+            old.execute_batch(m).unwrap();
+        }
+        old.pragma_update(None, "user_version", 5).unwrap();
+        old.execute(
+            "INSERT INTO records (hash, kind, title, text, copied_at, size, search_text) VALUES (x'06', 'text', '旧记录', 'x', 1, 1, '季度预算 budget')",
+            [],
+        )
+        .unwrap();
+        drop(old);
+        let s = Store::open(&dir).unwrap();
+        let py: String = s
+            .conn
+            .query_row("SELECT py_text FROM records", [], |r| r.get(0))
+            .unwrap();
+        assert!(py.contains("jiduyusuan"), "{py:?}");
+        assert_eq!(s.schema_version().unwrap(), 6);
+    }
+
+    #[test]
+    fn backfill_runs_once() {
+        let mut s = Store::open(&tmp()).unwrap();
+        assert_eq!(backfill_pinyin(&mut s.conn).unwrap(), 0);
+    }
+
+    #[test]
+    fn fts_py_follows_delete() {
+        let mut s = mem();
+        let id = added(&mut s, &rec("周四会议纪要"), 1);
+        s.soft_delete(id, 2).unwrap();
+        assert!(s.purge_if_deleted_at(id, 2).unwrap());
+        let n: i64 = s
+            .conn
+            .query_row(
+                "SELECT count(*) FROM fts_py WHERE py_text MATCH '\"huiyi\"'",
                 [],
                 |r| r.get(0),
             )
