@@ -40,3 +40,7 @@ test('snippetHTML 命中前只留 4 个字符，列表一行里看得到关键�
   assert.equal(snippetHTML('…𠀀𠀀𠀀𠀀𠀀预算', '预算'), '…𠀀𠀀𠀀𠀀<mark>预算</mark>');
   assert.equal(snippetHTML('<<<<<预算', '预算'), '…&lt;&lt;&lt;&lt;<mark>预算</mark>');
 });
+
+test('snippetHTML 用命中的汉字高亮', () => {
+  assert.equal(snippetHTML('…会议号：482 913 776…', '会议号'), '…<mark>会议号</mark>：482 913 776…');
+});
