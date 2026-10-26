@@ -4,6 +4,7 @@ pub mod capture;
 pub mod detect;
 pub mod error;
 pub mod model;
+pub mod pinyin;
 #[cfg(feature = "store")]
 pub mod store;
 
