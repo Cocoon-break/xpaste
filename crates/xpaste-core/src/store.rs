@@ -1851,6 +1851,10 @@ pub(crate) mod tests {
         let mut s = mem();
         let trip = added(&mut s, &rec("行程\n下午去银行办卡"), 1);
         let bank = added(&mut s, &rec("招商银行 6225"), 2);
+        // 标题“乐行”按 find 能找到 yuehang，但标题自身的索引不满足，命中来自正文“越航”，不该高亮
+        let body = added(&mut s, &rec("乐行\n越航"), 3);
+        let h = s.search_hits("yuehang").unwrap();
+        assert_eq!(h.iter().find(|x| x.id == body).unwrap().mark, None);
         let h = s.search_hits("yinhang").unwrap();
         let get = |id| h.iter().find(|x| x.id == id).unwrap();
         assert_eq!(get(trip).mark, None);

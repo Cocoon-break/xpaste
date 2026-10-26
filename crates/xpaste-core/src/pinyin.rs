@@ -137,7 +137,8 @@ fn phrases(q: &str) -> Vec<String> {
     // ok[i]：q[i..] 能切完。先倒着算好，深度优先只走切得完的分支，长查询（如粘贴的长英文串）不会在死路上指数级空转
     let mut ok = vec![false; q.len()];
     for i in (0..q.len()).rev() {
-        ok[i] = pre.contains(&q[i..])
+        // 前缀集里最长 6 个字母，剩余更长就不必对整段后缀求哈希（粘贴超长查询时避免 O(L²)）
+        ok[i] = (q.len() - i <= 6 && pre.contains(&q[i..]))
             || (1..(q.len() - i).min(7)).any(|n| syl.contains(&q[i..i + n]) && ok[i + n]);
     }
     let mut out = vec![];
@@ -150,7 +151,7 @@ fn phrases(q: &str) -> Vec<String> {
 fn split(q: &str, i: usize, ok: &[bool], acc: &mut String, out: &mut Vec<String>) {
     let (syl, pre) = syllables();
     let rest = &q[i..];
-    if out.len() < MAX_SPLITS && pre.contains(rest) {
+    if out.len() < MAX_SPLITS && rest.len() <= 6 && pre.contains(rest) {
         out.push(format!("{acc}'{rest}"));
     }
     // 中间段必须是完整音节（最长 6 个字母），且后面还要剩下能切完的字母
