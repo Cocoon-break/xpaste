@@ -1,6 +1,7 @@
 //! 拼音与首字母搜索的核心：生成给 FTS 用的拼音索引文本，并在原文里定位被拼音命中的汉字。
 
 use std::collections::HashSet;
+use std::sync::OnceLock;
 
 use pinyin::ToPinyinMulti;
 
@@ -15,28 +16,34 @@ pub fn is_pinyin_query(q: &str) -> bool {
 /// 一个汉字：`reads[0]` 是默认读音，其后为去重后的其他读音。
 type Han = (char, Vec<&'static str>);
 
+/// `c` 的可用读音，首个为默认读音；不是汉字或没有可用读音时为空。
+fn reads_of(c: char) -> Vec<&'static str> {
+    // 读音带声调变体会重复，按出现顺序去重（首个即默认读音）；
+    // ü 与 ê 先换成输入法的写法（ü 打 v），其余非纯 ASCII 小写的读音会让按字节切片越界，直接丢掉
+    let mut reads: Vec<&'static str> = vec![];
+    for r in c.to_pinyin_multi().into_iter().flatten() {
+        let p = match r.plain() {
+            "nü" => "nv",
+            "lü" => "lv",
+            "nüe" => "nve",
+            "lüe" => "lve",
+            "ê" => "e",
+            p => p,
+        };
+        let ascii = !p.is_empty() && p.bytes().all(|b| b.is_ascii_lowercase());
+        if ascii && !reads.contains(&p) {
+            reads.push(p);
+        }
+    }
+    reads
+}
+
 /// 把 `chars` 切成连续汉字段。
 fn han_runs(chars: impl Iterator<Item = char>) -> Vec<Vec<Han>> {
     let mut runs: Vec<Vec<Han>> = vec![];
     let mut cur: Vec<Han> = vec![];
     for c in chars {
-        // 读音带声调变体会重复，按出现顺序去重（首个即默认读音）；
-        // ü 与 ê 先换成输入法的写法（ü 打 v），其余非纯 ASCII 小写的读音会让按字节切片越界，直接丢掉
-        let mut reads: Vec<&'static str> = vec![];
-        for r in c.to_pinyin_multi().into_iter().flatten() {
-            let p = match r.plain() {
-                "nü" => "nv",
-                "lü" => "lv",
-                "nüe" => "nve",
-                "lüe" => "lve",
-                "ê" => "e",
-                p => p,
-            };
-            let ascii = !p.is_empty() && p.bytes().all(|b| b.is_ascii_lowercase());
-            if ascii && !reads.contains(&p) {
-                reads.push(p);
-            }
-        }
+        let reads = reads_of(c);
         // 没有可用读音的字当作非汉字，截断汉字段
         if reads.is_empty() {
             if !cur.is_empty() {
@@ -52,7 +59,35 @@ fn han_runs(chars: impl Iterator<Item = char>) -> Vec<Vec<Han>> {
     runs
 }
 
-/// `s` 前 `PY_MAX_CHARS` 个字符的小写拼音索引（全拼、首字母、多音字变体，按行），无汉字时为空。
+/// 全部音节与全部音节的非空前缀（含音节本身），从 `pinyin` 数据推出，每个进程只算一次。
+fn syllables() -> &'static (HashSet<&'static str>, HashSet<&'static str>) {
+    static SETS: OnceLock<(HashSet<&'static str>, HashSet<&'static str>)> = OnceLock::new();
+    SETS.get_or_init(|| {
+        let mut syl = HashSet::new();
+        for c in ('\u{3400}'..='\u{9fff}').chain('\u{20000}'..='\u{2a6df}') {
+            syl.extend(reads_of(c));
+        }
+        let pre = syl
+            .iter()
+            .flat_map(|s| (1..=s.len()).map(move |i| &s[..i]))
+            .collect();
+        (syl, pre)
+    })
+}
+
+/// 全拼行：每个音节前加 `'`，如 `'hui'yi`，让查询只能从音节开头命中。
+fn full_line(rs: &[&str]) -> String {
+    rs.iter().map(|r| format!("'{r}")).collect()
+}
+
+/// 首字母行：大写，如 `HY`，在区分大小写的 trigram 里与全拼行互不串扰。
+fn initials_line(rs: &[&str]) -> String {
+    rs.iter()
+        .map(|r| r.as_bytes()[0].to_ascii_uppercase() as char)
+        .collect()
+}
+
+/// `s` 前 `PY_MAX_CHARS` 个字符的拼音索引（全拼行、首字母行、多音字窗口行，按行），无汉字时为空。
 pub fn index_text(s: &str) -> String {
     let mut seen = HashSet::new();
     let mut lines: Vec<String> = vec![];
@@ -62,24 +97,23 @@ pub fn index_text(s: &str) -> String {
         }
     };
     for run in han_runs(s.chars().take(PY_MAX_CHARS)) {
-        fn join(rs: &[&str]) -> String {
-            rs.concat()
-        }
-        fn ini(rs: &[&str]) -> String {
-            rs.iter().map(|r| &r[..1]).collect()
-        }
         let def: Vec<&str> = run.iter().map(|h| h.1[0]).collect();
-        push(join(&def));
-        push(ini(&def));
-        // 多音字：只在 i 前后的窗口里换读音，避免长段落的行数爆炸；全拼窗口 ±4，够覆盖四字词（如 zhaoshangyinhang）；
-        // 首字母一个字才一字节，窗口放宽到 ±8，让整句首字母（如 cqhg）也能带上多音字读音
+        push(full_line(&def));
+        push(initials_line(&def));
+        // 多音字：只在 i 前后的窗口里换读音，避免长段落的行数爆炸；全拼窗口 ±4，够覆盖四字词（如 'zhao'shang'yin'hang）；
+        // 首字母一个字才一字节，窗口放宽到 ±8，让整句首字母（如 CQHG）也能带上多音字读音；
+        // 其他读音的首字母与默认读音相同时（的 de / di），首字母窗口行与默认行重复，不输出
         for (i, (_, reads)) in run.iter().enumerate() {
             for alt in &reads[1..] {
-                for (radius, f) in [(4, join as fn(&[&str]) -> String), (8, ini)] {
+                let win = |radius: usize| {
                     let (lo, hi) = (i.saturating_sub(radius), (i + radius + 1).min(run.len()));
                     let mut w = def[lo..hi].to_vec();
                     w[i - lo] = alt;
-                    push(f(&w));
+                    w
+                };
+                push(full_line(&win(4)));
+                if alt.as_bytes()[0] != def[i].as_bytes()[0] {
+                    push(initials_line(&win(8)));
                 }
             }
         }
@@ -87,21 +121,83 @@ pub fn index_text(s: &str) -> String {
     lines.join("\n")
 }
 
-/// 从 `run[0]` 起以全拼匹配 `q`，返回覆盖的字数；首字可从音节中间起，末字可在音节中间止。
-fn full_len(run: &[Han], q: &str, first: bool) -> Option<usize> {
+// ponytail: 音节切分最多取 32 种，长查询多出的切法直接丢弃（先试长音节，自然切法排在前面）；漏召回时再按段数排序或放宽上限
+const MAX_SPLITS: usize = 32;
+
+/// `q` 的全部查询短语：每种音节切分一个 `'s1's2…'sk`（末段可为音节前缀），最后是大写的首字母短语。
+/// `q` 不是 ≥ 3 个 ASCII 字母时为空。
+fn phrases(q: &str) -> Vec<String> {
+    if q.len() < 3 || !q.bytes().all(|b| b.is_ascii_alphabetic()) {
+        return vec![];
+    }
+    let q = q.to_ascii_lowercase();
+    let (syl, pre) = syllables();
+    // ok[i]：q[i..] 能切完。先倒着算好，深度优先只走切得完的分支，长查询（如粘贴的长英文串）不会在死路上指数级空转
+    let mut ok = vec![false; q.len()];
+    for i in (0..q.len()).rev() {
+        ok[i] = pre.contains(&q[i..])
+            || (1..(q.len() - i).min(7)).any(|n| syl.contains(&q[i..i + n]) && ok[i + n]);
+    }
+    let mut out = vec![];
+    split(&q, 0, &ok, &mut String::new(), &mut out);
+    out.push(q.to_ascii_uppercase());
+    out
+}
+
+/// 深度优先枚举 `q[i..]` 的音节切分，`acc` 是已切出的短语前缀。
+fn split(q: &str, i: usize, ok: &[bool], acc: &mut String, out: &mut Vec<String>) {
+    let (syl, pre) = syllables();
+    let rest = &q[i..];
+    if out.len() < MAX_SPLITS && pre.contains(rest) {
+        out.push(format!("{acc}'{rest}"));
+    }
+    // 中间段必须是完整音节（最长 6 个字母），且后面还要剩下能切完的字母
+    for n in (1..rest.len().min(7)).rev() {
+        if out.len() >= MAX_SPLITS {
+            return;
+        }
+        if ok[i + n] && syl.contains(&rest[..n]) {
+            let len = acc.len();
+            acc.push('\'');
+            acc.push_str(&rest[..n]);
+            split(q, i + n, ok, acc, out);
+            acc.truncate(len);
+        }
+    }
+}
+
+/// `q`（≥ 3 个 ASCII 字母）对 `fts_py` 的 MATCH 表达式：各短语加双引号以 ` OR ` 连接；否则为 None。
+pub fn match_expr(q: &str) -> Option<String> {
+    let ps = phrases(q);
+    // 短语只含 ASCII 字母与 `'`，不会出现需要转义的双引号
+    debug_assert!(
+        ps.iter()
+            .all(|p| p.bytes().all(|b| b.is_ascii_alphabetic() || b == b'\''))
+    );
+    (!ps.is_empty()).then(|| {
+        ps.iter()
+            .map(|p| format!("\"{p}\""))
+            .collect::<Vec<_>>()
+            .join(" OR ")
+    })
+}
+
+/// `index`（`index_text` 的输出）是否包含 `match_expr(q)` 的任一短语，与区分大小写的 trigram MATCH 结果一致。
+pub fn index_matches(index: &str, q: &str) -> bool {
+    phrases(q).iter().any(|p| index.contains(p.as_str()))
+}
+
+/// 从 `run[0]` 的读音开头起以全拼匹配 `q`，返回覆盖的字数；中间各字的读音要用完，末字可在音节中间止。
+fn full_len(run: &[Han], q: &str) -> Option<usize> {
     let (_, reads) = run.first()?;
     for r in reads {
-        let starts = if first { 0..r.len() } else { 0..1 };
-        for st in starts {
-            let p = &r[st..];
-            if p.starts_with(q) {
-                return Some(1);
-            }
-            if let Some(rest) = q.strip_prefix(p)
-                && let Some(n) = full_len(&run[1..], rest, false)
-            {
-                return Some(n + 1);
-            }
+        if r.starts_with(q) {
+            return Some(1);
+        }
+        if let Some(rest) = q.strip_prefix(r)
+            && let Some(n) = full_len(&run[1..], rest)
+        {
+            return Some(n + 1);
         }
     }
     None
@@ -135,7 +231,7 @@ fn find_by(s: &str, q: &str, full: bool) -> Option<String> {
     for run in han_runs(s.chars().take(PY_MAX_CHARS)) {
         for i in 0..run.len() {
             let tail = &run[i..];
-            let n = full.then(|| full_len(tail, q, true)).flatten();
+            let n = full.then(|| full_len(tail, q)).flatten();
             if let Some(n) = n.or_else(|| initials_len(tail, q)) {
                 return Some(tail[..n].iter().map(|h| h.0).collect());
             }
@@ -161,19 +257,19 @@ mod tests {
 
     #[test]
     fn index_text_has_full_and_initials_per_run() {
-        assert_eq!(index_text("xPaste 发布"), "fabu\nfb");
+        assert_eq!(index_text("xPaste 发布"), "'fa'bu\nFB");
         assert_eq!(index_text("hello 123"), "");
         let t = index_text("周四会议纪要");
-        assert!(t.contains("zhousihuiyijiyao"), "{t}");
-        assert!(t.contains("zshyjy"), "{t}");
+        assert!(t.contains("'zhou'si'hui'yi'ji'yao"), "{t}");
+        assert!(t.contains("ZSHYJY"), "{t}");
     }
 
     #[test]
     fn index_text_covers_common_polyphones() {
         for (s, full, ini) in [
-            ("招商银行", "yinhang", "zsyh"),
-            ("重庆火锅", "chongqing", "cqhg"),
-            ("音乐", "yinyue", "yy"),
+            ("招商银行", "'yin'hang", "ZSYH"),
+            ("重庆火锅", "'chong'qing", "CQHG"),
+            ("音乐", "'yin'yue", "YY"),
         ] {
             let t = index_text(s);
             assert!(t.contains(full) && t.contains(ini), "{s}: {t}");
@@ -183,14 +279,14 @@ mod tests {
     #[test]
     fn index_text_caps_source_chars() {
         let t = index_text(&"会".repeat(PY_MAX_CHARS + 1000));
-        assert_eq!(t.lines().next().unwrap(), "hui".repeat(PY_MAX_CHARS));
+        assert_eq!(t.lines().next().unwrap(), "'hui".repeat(PY_MAX_CHARS));
     }
 
     #[test]
     fn non_ascii_readings_do_not_panic() {
         // 欸 / 誒 的读音含 ê（非 ASCII），按输入法写成 e，不能让按字节切片越界
         let t = index_text("欸，会议");
-        assert!(t.contains("huiyi") && t.contains("hy"), "{t}");
+        assert!(t.contains("'hui'yi") && t.contains("HY"), "{t}");
         assert_eq!(find("欸会议", "huiyi").as_deref(), Some("会议"));
         assert_eq!(find("欸会议", "hy").as_deref(), Some("会议"));
         let _ = index_text("誒欸");
@@ -201,10 +297,10 @@ mod tests {
     #[test]
     fn u_umlaut_is_typed_as_v() {
         let t = index_text("旅游");
-        assert!(t.contains("lvyou") && t.contains("ly"), "{t}");
-        assert!(index_text("律师").contains("lvshi"));
+        assert!(t.contains("'lv'you") && t.contains("LY"), "{t}");
+        assert!(index_text("律师").contains("'lv'shi"));
         assert!(
-            index_text("女人").starts_with("nvren"),
+            index_text("女人").starts_with("'nv'ren"),
             "{}",
             index_text("女人")
         );
@@ -215,9 +311,9 @@ mod tests {
     #[test]
     fn full_pinyin_window_spans_four_chars() {
         for (s, full) in [
-            ("招商银行", "zhaoshangyinhang"),
-            ("重庆火锅", "chongqinghuoguo"),
-            ("中国银行", "zhongguoyinhang"),
+            ("招商银行", "'zhao'shang'yin'hang"),
+            ("重庆火锅", "'chong'qing'huo'guo"),
+            ("中国银行", "'zhong'guo'yin'hang"),
         ] {
             let t = index_text(s);
             assert!(t.contains(full), "{s}: {t}");
@@ -246,10 +342,58 @@ mod tests {
         assert_eq!(find("周四会议纪要", "huiyi").as_deref(), Some("会议"));
         assert_eq!(find("会议纪要", "hyjy").as_deref(), Some("会议纪要"));
         assert_eq!(find("会议", "huiy").as_deref(), Some("会议"));
-        assert_eq!(find("会议纪要", "uiyij").as_deref(), Some("会议纪"));
         assert_eq!(find("招商银行卡", "yinhang").as_deref(), Some("银行"));
         assert_eq!(find("重庆火锅", "cq").as_deref(), Some("重庆"));
         assert_eq!(find("abc 会议", "abc"), None);
         assert_eq!(find("会议", "xyz"), None);
+    }
+
+    #[test]
+    fn index_lines_mark_syllables_and_upper_initials() {
+        assert_eq!(index_text("会议"), "'hui'yi\nHY\n'kuai'yi\nKY"); // 会 kuai 首字母不同，保留窗口首字母行
+        let t = index_text("的"); // de / di 首字母相同：不输出重复的首字母窗口行
+        assert!(
+            t.contains("'de") && t.contains("'di") && t.matches('D').count() == 1,
+            "{t}"
+        );
+    }
+
+    #[test]
+    fn match_expr_segments_syllables() {
+        assert_eq!(match_expr("hy"), None);
+        let e = match_expr("xian").unwrap();
+        assert!(
+            e.contains("\"'xian\"") && e.contains("\"'xi'an\"") && e.contains("\"XIAN\""),
+            "{e}"
+        );
+        assert_eq!(match_expr("ing").unwrap(), "\"ING\""); // 没有音节以 ing 开头
+    }
+
+    #[test]
+    fn long_unsplittable_query_is_fast() {
+        // an 可切成 an / a'n…，结尾 ii 又切不完：不能在死路上指数级枚举
+        let t = std::time::Instant::now();
+        let q = format!("{}ii", "an".repeat(20));
+        assert_eq!(match_expr(&q).unwrap(), format!("\"{}\"", q.to_uppercase()));
+        assert!(t.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    #[test]
+    fn no_mid_syllable_matches() {
+        for (text, q, hit) in [
+            ("上海", "hang", false),
+            ("北京", "ing", false),
+            ("上海", "ang", false),
+            ("安定", "and", true),
+            ("会议", "huiy", true),
+            ("会议", "uiyi", false),
+            ("西安", "xian", true),
+            ("先生", "xian", true),
+            ("会议纪要", "hyjy", true),
+        ] {
+            assert_eq!(index_matches(&index_text(text), q), hit, "{text} / {q}");
+        }
+        assert_eq!(find("会议纪要", "uiyij"), None);
+        assert_eq!(find("会议纪要", "huiy").as_deref(), Some("会议"));
     }
 }
