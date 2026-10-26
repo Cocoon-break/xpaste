@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use pinyin::{ToPinyin, ToPinyinMulti};
+use pinyin::ToPinyinMulti;
 
 /// 参与拼音索引的原文字符数上限。
 pub const PY_MAX_CHARS: usize = 4096;
@@ -20,18 +20,22 @@ fn han_runs(chars: impl Iterator<Item = char>) -> Vec<Vec<Han>> {
     let mut runs: Vec<Vec<Han>> = vec![];
     let mut cur: Vec<Han> = vec![];
     for c in chars {
-        let Some(multi) = c.to_pinyin_multi() else {
+        // 读音带声调变体会重复，按出现顺序去重（首个即默认读音）；
+        // 非纯 ASCII 小写的读音（如 ê）会让按字节切片越界，直接丢掉
+        let mut reads: Vec<&'static str> = vec![];
+        for r in c.to_pinyin_multi().into_iter().flatten() {
+            let p = r.plain();
+            let ascii = !p.is_empty() && p.bytes().all(|b| b.is_ascii_lowercase());
+            if ascii && !reads.contains(&p) {
+                reads.push(p);
+            }
+        }
+        // 没有可用读音的字当作非汉字，截断汉字段
+        if reads.is_empty() {
             if !cur.is_empty() {
                 runs.push(std::mem::take(&mut cur));
             }
             continue;
-        };
-        // 读音带声调变体会重复，按出现顺序去重；默认读音放最前
-        let mut reads: Vec<&'static str> = vec![];
-        for r in std::iter::once(c.to_pinyin().unwrap()).chain(multi) {
-            if !reads.contains(&r.plain()) {
-                reads.push(r.plain());
-            }
         }
         cur.push((c, reads));
     }
@@ -163,6 +167,16 @@ mod tests {
     fn index_text_caps_source_chars() {
         let t = index_text(&"会".repeat(PY_MAX_CHARS + 1000));
         assert_eq!(t.lines().next().unwrap(), "hui".repeat(PY_MAX_CHARS));
+    }
+
+    #[test]
+    fn non_ascii_readings_do_not_panic() {
+        // 欸 / 誒 的读音含 ê（非 ASCII），不能让按字节切片越界
+        let t = index_text("欸，会议");
+        assert!(t.contains("huiyi") && t.contains("hy"), "{t}");
+        assert_eq!(find("欸会议", "huiyi").as_deref(), Some("会议"));
+        assert_eq!(find("欸会议", "hy").as_deref(), Some("会议"));
+        let _ = index_text("誒欸");
     }
 
     #[test]
