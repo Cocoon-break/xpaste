@@ -59,7 +59,8 @@ fn han_runs(chars: impl Iterator<Item = char>) -> Vec<Vec<Han>> {
     runs
 }
 
-/// 全部音节与全部音节的非空前缀（含音节本身），从 `pinyin` 数据推出，每个进程只算一次。
+/// 查询切分用的音节与其非空前缀（含音节本身），从 `pinyin` 数据推出，每个进程只算一次。
+/// 不含元音的叹词音节（n、m、ng、hm、hng）不参与切分，否则 'ha'ng 之类的冗余切法会挤占切分上限；索引侧照常写入。
 fn syllables() -> &'static (HashSet<&'static str>, HashSet<&'static str>) {
     static SETS: OnceLock<(HashSet<&'static str>, HashSet<&'static str>)> = OnceLock::new();
     SETS.get_or_init(|| {
@@ -67,6 +68,7 @@ fn syllables() -> &'static (HashSet<&'static str>, HashSet<&'static str>) {
         for c in ('\u{3400}'..='\u{9fff}').chain('\u{20000}'..='\u{2a6df}') {
             syl.extend(reads_of(c));
         }
+        syl.retain(|s| s.contains(['a', 'e', 'i', 'o', 'u', 'v']));
         let pre = syl
             .iter()
             .flat_map(|s| (1..=s.len()).map(move |i| &s[..i]))
@@ -367,6 +369,15 @@ mod tests {
             "{e}"
         );
         assert_eq!(match_expr("ing").unwrap(), "\"ING\""); // 没有音节以 ing 开头
+    }
+
+    #[test]
+    fn segmentation_skips_vowelless_syllables() {
+        let e = match_expr("zhaoshangyinhang").unwrap();
+        assert!(e.contains("\"'zhao'shang'yin'hang\""), "{e}");
+        assert!(e.split(" OR ").count() < 32, "{e}");
+        let e = match_expr("ngai").unwrap();
+        assert!(!e.split(" OR ").any(|p| p.starts_with("\"'ng'")), "{e}");
     }
 
     #[test]
