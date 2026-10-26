@@ -423,40 +423,56 @@ impl Store {
             .collect()
     }
 
-    /// 不区分大小写的子串匹配；空查询返回全部未删除记录。
+    /// 不区分大小写的子串匹配，纯字母查询（≥ 2 个）另按全拼 / 首字母匹配汉字（见 `search_sql`）；空查询返回全部未删除记录。
     pub fn search_ids(&self, q: &str) -> Result<Vec<i64>, CoreError> {
         let order = "ORDER BY copied_at DESC, id DESC";
         if q.trim().is_empty() {
             let sql = format!("SELECT id FROM records WHERE deleted_at IS NULL {order}");
             return ids_in(&self.conn, &sql, &[]);
         }
-        let (clause, param) = search_sql(&q.to_lowercase());
+        let (clause, params) = search_sql(&q.to_lowercase());
         let sql = format!("SELECT id FROM records WHERE deleted_at IS NULL AND {clause} {order}");
-        ids_in(&self.conn, &sql, &[&param])
+        let args: Vec<&dyn ToSql> = params.iter().map(|p| p as &dyn ToSql).collect();
+        ids_in(&self.conn, &sql, &args)
     }
 
-    /// 同 `search_ids` 的匹配与顺序；命中来自识别文字（标题不含关键词）时附带片段。
+    /// 同 `search_ids` 的匹配与顺序。命中来自识别文字（标题不含关键词）时附带片段；
+    /// 靠拼音命中（字面不含查询）时，`mark` 是标题（没有则识别文字）里被匹配的原汉字，来自识别文字时片段围绕它取。
     pub fn search_hits(&self, q: &str) -> Result<Vec<SearchHit>, CoreError> {
         let q = q.to_lowercase();
-        let (clause, param) = search_sql(&q);
+        let (clause, params) = search_sql(&q);
+        // 占位符统一：?1 字面、?2 拼音（非拼音查询不引用，补空串凑数）、?3 用于 lit
+        let py = params.get(1).map_or("", String::as_str);
         let mut stmt = self.conn.prepare_cached(&format!(
-            "SELECT id, title, ocr_text FROM records WHERE deleted_at IS NULL
-             AND {clause} ORDER BY copied_at DESC, id DESC"
+            "SELECT id, title, ocr_text, instr(search_text, ?3) > 0 AS lit FROM records
+             WHERE deleted_at IS NULL AND {clause} ORDER BY copied_at DESC, id DESC"
         ))?;
-        let rows = stmt.query_map([&param], |r| {
+        let rows = stmt.query_map([params[0].as_str(), py, q.as_str()], |r| {
             Ok((
                 r.get::<_, i64>(0)?,
                 r.get::<_, String>(1)?,
                 r.get::<_, Option<String>>(2)?,
+                r.get::<_, bool>(3)?,
             ))
         })?;
         rows.map(|row| {
-            let (id, title, ocr) = row?;
-            let snippet = match ocr {
-                Some(t) if !title.to_lowercase().contains(&q) => snippet(&t, &q),
-                _ => None,
-            };
-            Ok(SearchHit { id, snippet })
+            let (id, title, ocr, lit) = row?;
+            let (mut snip, mut mark) = (None, None);
+            if lit {
+                if let Some(t) = ocr.filter(|_| !title.to_lowercase().contains(&q)) {
+                    snip = snippet(&t, &q);
+                }
+            } else if let Some(m) = pinyin::find(&title, &q) {
+                mark = Some(m);
+            } else if let Some(m) = ocr.as_deref().and_then(|t| pinyin::find(t, &q)) {
+                snip = snippet(ocr.as_deref().unwrap_or_default(), &m);
+                mark = Some(m);
+            }
+            Ok(SearchHit {
+                id,
+                snippet: snip,
+                mark,
+            })
         })
         .collect()
     }
@@ -736,14 +752,30 @@ impl Store {
 
 /// 子串匹配的 WHERE 片段与参数（`q` 已小写）。≥ 3 个字符走 trigram 索引（`MATCH` 的短语查询，双引号加倍转义），
 /// 子串语义与 instr 相同；1–2 个字符 trigram 无法索引，仍顺序扫描 `search_text`（短词命中多，instr 遇首个命中即停，并不慢）。
-fn search_sql(q: &str) -> (&'static str, String) {
-    if q.chars().count() >= 3 {
+/// 查询是纯 ASCII 字母且 ≥ 2 个时再并上拼音匹配（`?2`）：≥ 3 个字符走 `fts_py`，2 个字符扫描 `py_text`；此时参数为 `[?1, ?2]`，否则只有 `[?1]`。
+fn search_sql(q: &str) -> (String, Vec<String>) {
+    let long = q.chars().count() >= 3;
+    let (lit, lit_param) = if long {
         (
             "id IN (SELECT rowid FROM fts WHERE search_text MATCH ?1)",
             format!("\"{}\"", q.replace('"', "\"\"")),
         )
     } else {
         ("instr(search_text, ?1) > 0", q.to_string())
+    };
+    if !pinyin::is_pinyin_query(q) {
+        return (lit.to_string(), vec![lit_param]);
+    }
+    if long {
+        (
+            format!("({lit} OR id IN (SELECT rowid FROM fts_py WHERE py_text MATCH ?2))"),
+            vec![lit_param.clone(), lit_param],
+        )
+    } else {
+        (
+            format!("({lit} OR instr(py_text, ?2) > 0)"),
+            vec![lit_param, q.to_string()],
+        )
     }
 }
 
@@ -1114,8 +1146,16 @@ pub(crate) mod tests {
         assert_eq!(s.search_ids("y \"h").unwrap(), [a]);
         assert_eq!(s.search_ids("hi").unwrap(), [a]);
         assert_eq!(s.search_ids("H").unwrap(), [a]);
-        assert_eq!(search_sql("ab").0, "instr(search_text, ?1) > 0");
-        assert_eq!(search_sql("预算书").1, "\"预算书\"");
+        assert_eq!(
+            search_sql("ab").0,
+            "(instr(search_text, ?1) > 0 OR instr(py_text, ?2) > 0)"
+        );
+        assert_eq!(
+            search_sql("预算书").0,
+            "id IN (SELECT rowid FROM fts WHERE search_text MATCH ?1)"
+        );
+        assert_eq!(search_sql("预算书").1, ["\"预算书\""]);
+        assert_eq!(search_sql("ab").1, ["ab", "ab"]);
     }
 
     #[test]
@@ -1670,6 +1710,60 @@ pub(crate) mod tests {
             })
             .unwrap();
         assert_eq!(st.matches("xyzocr").count(), 1);
+    }
+
+    #[test]
+    fn search_by_pinyin_and_initials() {
+        let mut s = mem();
+        let meeting = added(&mut s, &rec("周四下午会议纪要"), 1);
+        let bank = added(&mut s, &rec("招商银行 6225"), 2);
+        let en = added(&mut s, &rec("budget"), 3);
+        assert_eq!(s.search_ids("huiyi").unwrap(), [meeting]);
+        assert_eq!(s.search_ids("hy").unwrap(), [meeting]);
+        assert_eq!(s.search_ids("yinhang").unwrap(), [bank]);
+        assert_eq!(s.search_ids("budget").unwrap(), [en]);
+    }
+
+    #[test]
+    fn search_pinyin_is_case_insensitive() {
+        let mut s = mem();
+        let meeting = added(&mut s, &rec("周四下午会议纪要"), 1);
+        assert_eq!(s.search_ids("HuiYi").unwrap(), [meeting]);
+    }
+
+    #[test]
+    fn pinyin_query_keeps_literal_hits() {
+        let mut s = mem();
+        let literal = added(&mut s, &rec("js 工具函数"), 1);
+        let py = added(&mut s, &rec("技术方案"), 2);
+        let ids = s.search_ids("js").unwrap();
+        assert!(ids.contains(&literal) && ids.contains(&py));
+    }
+
+    #[test]
+    fn search_hits_marks_matched_han() {
+        let mut s = mem();
+        let han = added(&mut s, &rec("周四会议纪要"), 1);
+        let lit = added(&mut s, &rec("huiyi notes"), 2);
+        let img = added(&mut s, &rec_image(1), 3);
+        s.set_ocr(img, ocr_state::TEXT, Some("会议号：482 913 776"))
+            .unwrap();
+        let h = s.search_hits("huiyi").unwrap();
+        let get = |id| h.iter().find(|x| x.id == id).unwrap();
+        assert_eq!(get(han).mark.as_deref(), Some("会议"));
+        assert_eq!(get(han).snippet, None);
+        assert_eq!(get(lit).mark, None);
+        let h = s.search_hits("huiyihao").unwrap();
+        assert_eq!(h.len(), 1);
+        assert_eq!(h[0].mark.as_deref(), Some("会议号"));
+        assert!(h[0].snippet.as_deref().unwrap().contains("会议号"));
+        // 非拼音查询：mark 恒为 None
+        assert!(
+            s.search_hits("会议")
+                .unwrap()
+                .iter()
+                .all(|x| x.mark.is_none())
+        );
     }
 
     #[test]

@@ -258,12 +258,13 @@ pub mod ocr_state {
     pub const UNSUPPORTED: u8 = 5;
 }
 
-/// 搜索命中。`snippet` 只在命中来自识别文字（标题不含关键词）时给出。不派生 `Debug`：片段是内容。
+/// 搜索命中。`snippet` 只在命中来自识别文字（标题不含关键词）时给出；`mark` 是拼音命中时被匹配到的原汉字（字面命中为 None）。不派生 `Debug`：片段是内容。
 #[derive(Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchHit {
     pub id: i64,
     pub snippet: Option<String>,
+    pub mark: Option<String>,
 }
 
 /// 列表项。`thumb`、`app.icon` 为绝对文件路径，应用层再转 asset URL。
