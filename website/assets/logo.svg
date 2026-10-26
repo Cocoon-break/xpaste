@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="-12.14 -12.14 124.28 124.28">
+  <!-- xPaste 应用图标：04 Glass Clip（见 logo-exploration.html）。底板占画布 824/1024，四周留白符合 macOS 图标规格。
+       重新生成：导出 1024px 透明 PNG 后运行 pnpm tauri icon <png> -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#151B38"/><stop offset="1" stop-color="#04060C"/></linearGradient>
+    <radialGradient id="a1" cx=".12" cy=".02" r=".8"><stop offset="0" stop-color="#7C93FF" stop-opacity=".4"/><stop offset="1" stop-color="#7C93FF" stop-opacity="0"/></radialGradient>
+    <radialGradient id="a2" cx="1.02" cy=".42" r=".62"><stop offset="0" stop-color="#FF6FD8" stop-opacity=".24"/><stop offset="1" stop-color="#FF6FD8" stop-opacity="0"/></radialGradient>
+    <radialGradient id="a3" cx=".3" cy="1.08" r=".72"><stop offset="0" stop-color="#4FE3C1" stop-opacity=".22"/><stop offset="1" stop-color="#4FE3C1" stop-opacity="0"/></radialGradient>
+    <linearGradient id="hl" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".14"/><stop offset=".42" stop-color="#fff" stop-opacity="0"/></linearGradient>
+    <linearGradient id="spec" gradientUnits="userSpaceOnUse" x1="34" y1="0" x2="66" y2="0">
+      <stop offset="0" stop-color="#8FE3FF"/><stop offset=".28" stop-color="#6F8BFF"/><stop offset=".44" stop-color="#4FE3C1"/><stop offset=".58" stop-color="#FF6FD8"/><stop offset=".72" stop-color="#FFB84D"/><stop offset=".86" stop-color="#FF6B6B"/><stop offset="1" stop-color="#B48CFF"/>
+    </linearGradient>
+    <linearGradient id="rim" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="100" y2="0">
+      <stop offset="0" stop-color="#8FE3FF"/><stop offset=".28" stop-color="#6F8BFF"/><stop offset=".44" stop-color="#4FE3C1"/><stop offset=".58" stop-color="#FF6FD8"/><stop offset=".72" stop-color="#FFB84D"/><stop offset=".86" stop-color="#FF6B6B"/><stop offset="1" stop-color="#B48CFF"/>
+    </linearGradient>
+    <radialGradient id="blob" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#6F8BFF" stop-opacity=".6"/><stop offset="1" stop-color="#6F8BFF" stop-opacity="0"/></radialGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".2"/><stop offset="1" stop-color="#fff" stop-opacity=".04"/></linearGradient>
+    <clipPath id="clip"><rect width="100" height="100" rx="22.5"/></clipPath>
+    <filter id="shadow" filterUnits="userSpaceOnUse" x="-12" y="-12" width="124" height="124"><feGaussianBlur stdDeviation="2.4"/></filter>
+    <filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="100" height="100" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="4.5" result="wide"/>
+      <feColorMatrix in="wide" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 .7 0" result="wideSoft"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="1.3" result="tight"/>
+      <feMerge><feMergeNode in="wideSoft"/><feMergeNode in="tight"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect y="2" width="100" height="100" rx="22.5" fill="#000" opacity=".35" filter="url(#shadow)"/>
+
+  <g clip-path="url(#clip)">
+    <rect width="100" height="100" fill="url(#bg)"/>
+    <rect width="100" height="100" fill="url(#a1)"/>
+    <rect width="100" height="100" fill="url(#a2)"/>
+    <rect width="100" height="100" fill="url(#a3)"/>
+
+    <circle cx="54" cy="58" r="30" fill="url(#blob)"/>
+    <rect x="26" y="23" width="48" height="58" rx="10" fill="url(#glass)" stroke="#CFDBFF" stroke-opacity=".5"/>
+    <rect x="39" y="18" width="22" height="10" rx="5" fill="#EAF0FF"/>
+    <rect x="34" y="41" width="22" height="4.5" rx="2.25" fill="#EAF0FF" opacity=".35"/>
+    <rect x="34" y="51.5" width="32" height="5.5" rx="2.75" fill="url(#spec)" filter="url(#glow)"/>
+    <rect x="34" y="63" width="15" height="4.5" rx="2.25" fill="#EAF0FF" opacity=".35"/>
+
+    <rect width="100" height="100" fill="url(#hl)"/>
+  </g>
+  <rect x=".5" y=".5" width="99" height="99" rx="22" fill="none" stroke="#AABEFF" stroke-opacity=".2"/>
+  <rect x="24" y="0" width="52" height=".9" fill="url(#rim)" opacity=".75"/>
+</svg>

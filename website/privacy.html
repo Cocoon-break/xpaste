@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>隐私说明 · xPaste</title>
+<meta name="description" content="xPaste 的隐私说明：数据只存在本机，没有账号、云同步和使用统计。">
+<link rel="icon" type="image/svg+xml" href="assets/logo.svg">
+<style>
+:root { color-scheme: dark; --bg: #000000; --s1: #181818; --s3: #272727; --fg: #F2F2F2; --muted: #A3A3A3; --beam: #8FE3FF; --on-beam: #06101C; --base: cubic-bezier(.22, 1, .36, 1); }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 400 16px/24px "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+main { max-width: 680px; margin: 0 auto; padding: 96px 16px; }
+a { color: var(--beam); }
+:focus-visible { outline: 2px solid var(--beam); outline-offset: 2px; border-radius: 8px; }
+.back { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); text-decoration: none; font-size: 14px; line-height: 20px; transition: color .3s var(--base); }
+.back:hover { color: var(--fg); }
+.back img { width: 24px; height: 24px; }
+h1 { margin: 32px 0 0; font-size: 36px; line-height: 40px; font-weight: 600; text-wrap: balance; background: linear-gradient(90deg, #FFFFFF, #9B9B9B); -webkit-background-clip: text; background-clip: text; color: transparent; }
+h2 { margin: 48px 0 0; font-size: 20px; line-height: 28px; font-weight: 600; }
+p, li { color: var(--muted); text-wrap: pretty; }
+p { margin: 16px 0 0; }
+ul { margin: 16px 0 0; padding-left: 24px; }
+li + li { margin-top: 8px; }
+code { font: 14px/20px ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: var(--fg); }
+.btn { display: inline-flex; margin-top: 32px; padding: 8px 12px; border-radius: 9999px; background: var(--beam); color: var(--on-beam); font-weight: 600; text-decoration: none; transition: transform .5s var(--base); }
+.btn:hover { transform: translateY(-1px); }
+.btn:active { transform: scale(.98); }
+</style>
+</head>
+<body>
+<main>
+<a class="back" href="index.html"><img src="assets/logo.svg" alt="" width="24" height="24">返回 xPaste 首页</a>
+<h1>隐私说明</h1>
+<p>更新于 2026 年 10 月 26 日。xPaste 的隐私原则只有一条：你的剪切板历史只存在你的电脑上。</p>
+<h2>应用收集什么</h2>
+<p>什么都不收集。xPaste 没有账号、没有云同步、没有使用统计，也不会把任何内容发到网络上。</p>
+<ul>
+<li>历史记录存在本机：macOS 在 <code>~/Library/Application Support/xPaste/</code>，Windows 在 <code>%APPDATA%\xPaste\</code>。</li>
+<li>图片文字识别用系统自带的离线识别（macOS Vision、Windows.Media.Ocr），不联网、不上传。</li>
+<li>来自密码管理器或被系统标记为敏感的内容默认不记录。</li>
+<li>日志里从不出现剪切板内容、标题、文件路径和搜索词。</li>
+</ul>
+<h2>这个网站收集什么</h2>
+<p>这个页面不使用 Cookie，也没有统计脚本。图标字体从 unpkg.com 加载，下载链接指向 GitHub，这两个服务会按各自的政策记录访问。</p>
+<h2>删除你的数据</h2>
+<p>在 xPaste 设置里选“清空历史…”（置顶记录会保留），或者卸载后删除上面的数据目录。数据库没有加密，靠系统账户权限保护。</p>
+<h2>联系</h2>
+<p>有疑问请到 <a href="https://github.com/Cocoon-break/xpaste/issues">GitHub issues</a> 提出。代码全部公开，你可以自己核对上面每一条。</p>
+</main>
+</body>
+</html>
