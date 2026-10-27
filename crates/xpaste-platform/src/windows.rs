@@ -30,8 +30,8 @@ use windows::Win32::System::Com::StructuredStorage::{
     PropVariantToUInt64,
 };
 use windows::Win32::System::Com::{
-    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree,
-    CoUninitialize, IPersistFile, STGM_READ,
+    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoIncrementMTAUsage,
+    CoInitializeEx, CoTaskMemFree, CoUninitialize, IPersistFile, STGM_READ,
 };
 use windows::Win32::System::DataExchange::{
     AddClipboardFormatListener, CloseClipboard, EmptyClipboard, EnumClipboardFormats,
@@ -688,6 +688,15 @@ struct ComGuard(bool);
 
 impl ComGuard {
     fn init() -> Option<Self> {
+        // 进程级保住 MTA：否则最后一个 MTA 线程 CoUninitialize 时整个 COM 被拆掉，windows crate 缓存的
+        // WinRT 工厂（如 OcrEngine）成了悬垂指针，下一次调用访问违例。cookie 故意不归还，随进程结束
+        static MTA: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+        MTA.get_or_init(|| {
+            // SAFETY: 无参数；失败时退回旧行为（只是不保活）
+            if let Err(e) = unsafe { CoIncrementMTAUsage() } {
+                log::debug!("CoIncrementMTAUsage 失败：{e:?}");
+            }
+        });
         // SAFETY: 保留参数传 None
         let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
         if hr.is_ok() {
