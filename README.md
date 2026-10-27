@@ -160,7 +160,11 @@ cargo install cargo-xwin        # MSVC 运行库与 Windows SDK（首次运行�
   - `APPLE_TEAM_ID`：团队 ID
 - **Windows**：把代码签名证书导入“当前用户 → 个人”证书存储，在 `src-tauri/tauri.windows.conf.json` 的 `bundle.windows` 下加 `certificateThumbprint`（证书指纹）、`digestAlgorithm: "sha256"`、`timestampUrl`（证书颁发机构提供的时间戳服务地址），再运行 `make release`。
 
-## 分支
+## 分支与协作
 
-- `dev`：日常开发分支，所有改动先进这里。
-- `main`：功能验收通过后才从 `dev` 合并。
+采用 GitHub flow：
+
+- `main` 是唯一的长期分支，随时可发布，不直接往上推送。
+- 每个改动从 `main` 拉一个短分支（如 `feat/pinyin-search`、`fix/windows-ci`），推上去后开 Pull Request 到 `main`。外部贡献者先 fork 仓库再开 PR。
+- PR 上的 CI（macOS 与 Windows 的 `make check`）通过、审阅后合并，合并后删掉分支。
+- 发版在 `main` 上打 `v*` 标签，见“发版”。
