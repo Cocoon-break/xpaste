@@ -8,6 +8,7 @@
 
 [![CI](https://github.com/Cocoon-break/xpaste/actions/workflows/ci.yml/badge.svg)](https://github.com/Cocoon-break/xpaste/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Cocoon-break/xpaste)](https://github.com/Cocoon-break/xpaste/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 [官网](https://cocoon-break.github.io/xpaste/) · [下载](#下载安装) · [功能规格说明](docs/xPaste-功能规格说明.md) · [参与开发](CONTRIBUTING.md)
 
@@ -122,3 +123,7 @@ make check         # 提交前全量检查
 - [实现设计](docs/specs/2026-10-18-xPaste-实现设计.md)：设计文档放在 `docs/specs/`，实施计划放在 `docs/plans/`
 - [验收记录](docs/验收记录.md)
 - [交互原型](docs/xpaste-prototype.html)：下载后用浏览器直接打开
+
+## 许可证
+
+[MIT](LICENSE)
