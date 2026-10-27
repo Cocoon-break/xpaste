@@ -18,10 +18,6 @@ jobs:
       - if: runner.os == 'Windows'
         run: command -v make || choco install make -y
       - run: make install
-      # 临时诊断：Windows 上 OCR 集成测试崩溃，逐步打印定位
-      - if: runner.os == 'Windows'
-        run: cargo test -p xpaste-platform --test ocr -- --nocapture --test-threads=1
-        continue-on-error: true
       - run: make check
       - run: make build-check
       # PR 只跑上面的检查；合并进 main 或手动触发才打安装包并上传
