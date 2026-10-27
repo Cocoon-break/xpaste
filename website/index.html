@@ -20,6 +20,7 @@
 {"@type":"Question","name":"xPaste 收费吗？","acceptedAnswer":{"@type":"Answer","text":"免费，代码开源。没有付费版本，也没有内购。"}},
 {"@type":"Question","name":"我复制的内容会上传到哪里吗？","acceptedAnswer":{"@type":"Answer","text":"不会。xPaste 没有账号、没有云同步、没有使用统计，数据只存在本机。日志里也不会出现剪切板内容、标题、文件路径和搜索词。"}},
 {"@type":"Question","name":"识别图片里的文字需要联网或者下载模型吗？","acceptedAnswer":{"@type":"Answer","text":"不需要。xPaste 用系统自带的离线文字识别（macOS Vision、Windows.Media.Ocr），不联网、不上传，也不增加安装体积。"}},
+{"@type":"Question","name":"支持拼音或首字母搜索吗？","acceptedAnswer":{"@type":"Answer","text":"支持。关掉输入法直接打 huiyi 或 hy 就能找到“会议”，多音字也照顾到了（yinhang 能找到“银行”）。"}},
 {"@type":"Question","name":"macOS 提示“xPaste 已损坏，无法打开”怎么办？","acceptedAnswer":{"@type":"Answer","text":"安装包还没有签名，从浏览器下载后带隔离属性。在终端运行 xattr -dr com.apple.quarantine /Applications/xPaste.app，再正常打开即可。"}}
 ]}
 </script>
@@ -139,7 +140,7 @@ section { padding: 64px 0; }
 
 /* ---------- bento ---------- */
 .bento { margin-top: 48px; display: grid; gap: 16px; grid-template-columns: 1fr; }
-@media (min-width: 900px) { .bento { grid-template-columns: repeat(3, 1fr); } .span2 { grid-column: span 2; } }
+@media (min-width: 900px) { .bento { grid-template-columns: repeat(3, 1fr); } .span2 { grid-column: span 2; } .span3 { grid-column: 1 / -1; } .span3 p { max-width: 680px; } }
 .card { position: relative; padding: 24px; border-radius: 24px; background: var(--s1); border: 1px solid var(--s3); display: flex; flex-direction: column; gap: 24px;
   opacity: 0; transform: translateY(24px) scale(.985); filter: blur(6px);
   transition: transform .9s var(--e) var(--cd, 0s), opacity .6s var(--e2) var(--cd, 0s), filter .6s var(--e2) var(--cd, 0s); }
@@ -204,6 +205,27 @@ mark { background: var(--mark-bg); color: var(--mark-fg); border-radius: 2px; pa
 .v-fts .row .ic { width: 24px; height: 24px; font-size: 14px; }
 .v-fts .row .t1 { font-size: 12px; line-height: 16px; }
 .v-fts .row .src { margin-left: auto; flex: none; color: var(--ui-faint); }
+
+/* pinyin */
+.v-py .panel { left: 12px; top: 12px; bottom: 12px; right: 12px; padding: 8px; }
+.v-py .list { position: relative; margin-top: 8px; }
+.v-py .list .sc { position: absolute; left: 0; right: 0; top: 0; display: flex; flex-direction: column; gap: 4px; }
+.v-py .row { height: 32px; }
+.v-py .row .ic { width: 24px; height: 24px; font-size: 14px; }
+.v-py .row .t1 { font-size: 12px; line-height: 16px; }
+.v-py .row .src { margin-left: auto; flex: none; color: var(--ui-faint); }
+.v-py .map { display: none; position: absolute; top: 12px; bottom: 12px; right: 12px; width: calc(42% - 24px); }
+@media (min-width: 560px) { .v-py .panel { right: 42%; } .v-py .map { display: block; } }
+.v-py .map .sc { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; }
+.v-py .chars { display: flex; gap: 16px; }
+.v-py .ch { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.v-py .py { font-size: 14px; line-height: 20px; letter-spacing: .06em; color: var(--ui-faint); }
+.v-py .py b { font-weight: 400; transition: color .2s var(--base), text-shadow .2s var(--base); }
+.v-py .py b.on { color: var(--beam); text-shadow: 0 0 8px rgb(143 227 255 / .8); }
+.v-py .hz { padding: 0 4px; border-radius: 8px; font-size: 40px; line-height: 48px; color: var(--ui-muted); transition: color .35s var(--e2), background-color .35s var(--e2); }
+.v-py .hz.on { color: var(--mark-fg); background: var(--mark-bg); }
+.v-py .note { padding: 2px 8px; border-radius: 9999px; border: 1px solid var(--ui-line); color: var(--ui-muted); white-space: nowrap; opacity: 0; transition: opacity .4s var(--e2); }
+.v-py .note.on { opacity: 1; }
 
 /* spectrum */
 .v-spec .panel { inset: 12px; padding: 12px; }
@@ -539,7 +561,7 @@ footer::before { content: ""; position: absolute; top: 0; left: 0; right: 0; hei
                 <div class="row" data-a="1" data-b="-1" style="opacity:0"><span class="ic" style="color:var(--c-code)"><i class="ph ph-code"></i></span><span class="t1">const debounce = (fn, ms = 200)</span><span class="src">VS Code</span></div>
                 <div class="row" data-a="2" data-b="1" style="transform:translateY(32px)"><span class="ic" style="color:var(--c-link)"><i class="ph ph-link"></i></span><span class="t1">github.com/Cocoon-break/<mark>xpaste</mark></span><span class="src">Safari</span></div>
                 <div class="row" data-a="3" data-b="-1" style="opacity:0"><span class="ic" style="color:var(--c-text)"><i class="ph ph-text-align-left"></i></span><span class="t1">上海市徐汇区漕溪北路 88 号 12 楼</span><span class="src">备忘录</span></div>
-                <div class="row" data-a="4" data-b="2" style="transform:translateY(64px)"><span class="ic" style="color:var(--c-file)"><i class="ph ph-file"></i></span><span class="t1"><mark>xPaste</mark>_0.1.0_aarch64.dmg</span><span class="src">访达</span></div>
+                <div class="row" data-a="4" data-b="2" style="transform:translateY(64px)"><span class="ic" style="color:var(--c-file)"><i class="ph ph-file"></i></span><span class="t1"><mark>xPaste</mark>_0.2.0_aarch64.dmg</span><span class="src">访达</span></div>
               </div>
             </div>
           </div>
@@ -549,8 +571,49 @@ footer::before { content: ""; position: absolute; top: 0; left: 0; right: 0; hei
           </div>
         </article>
 
+        <!-- pinyin -->
+        <article class="card span2" data-story="py">
+          <div class="viz v-py" aria-hidden="true">
+            <div class="panel ld" style="--d:.15s">
+              <div class="field"><i class="ph ph-magnifying-glass"></i><span class="q">hy</span><span class="caret"></span><span class="count">3 条</span></div>
+              <div class="list">
+                <div class="sc">
+                  <div class="row"><span class="ic" style="color:var(--c-text)"><i class="ph ph-text-align-left"></i></span><span class="t1"><mark>会议</mark>纪要：v0.2 发布评审</span><span class="src">飞书</span></div>
+                  <div class="row"><span class="ic" style="color:var(--c-text)"><i class="ph ph-text-align-left"></i></span><span class="t1">腾讯<mark>会议</mark>号 482 913 776</span><span class="src">微信</span></div>
+                  <div class="row"><span class="ic" style="color:var(--c-file)"><i class="ph ph-file"></i></span><span class="t1"><mark>会议</mark>室预订表.xlsx</span><span class="src">访达</span></div>
+                </div>
+                <div class="sc" style="opacity:0">
+                  <div class="row"><span class="ic" style="color:var(--c-text)"><i class="ph ph-text-align-left"></i></span><span class="t1">招商<mark>银行</mark>尾号 6688 转账到账</span><span class="src">短信</span></div>
+                  <div class="row"><span class="ic" style="color:var(--c-file)"><i class="ph ph-file"></i></span><span class="t1">工商<mark>银行</mark>回单_10 月.pdf</span><span class="src">访达</span></div>
+                  <div class="row"><span class="ic" style="color:var(--c-link)"><i class="ph ph-link"></i></span><span class="t1">网上<mark>银行</mark>登录 · ebank.example.com</span><span class="src">Safari</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="map ld" style="--d:.3s">
+              <div class="sc">
+                <div class="chars">
+                  <span class="ch"><span class="py"><b class="on" data-i="0">h</b><b>u</b><b>i</b></span><span class="hz on" data-i="0">会</span></span>
+                  <span class="ch"><span class="py"><b class="on" data-i="1">y</b><b>i</b></span><span class="hz on" data-i="1">议</span></span>
+                </div>
+                <span class="note on" data-i="1">首字母 h y</span>
+              </div>
+              <div class="sc" style="opacity:0">
+                <div class="chars">
+                  <span class="ch"><span class="py"><b data-i="0">y</b><b data-i="1">i</b><b data-i="2">n</b></span><span class="hz" data-i="2">银</span></span>
+                  <span class="ch"><span class="py"><b data-i="3">h</b><b data-i="4">a</b><b data-i="5">n</b><b data-i="6">g</b></span><span class="hz" data-i="6">行</span></span>
+                </div>
+                <span class="note" data-i="6">多音字“行”：hang、xing 都认得</span>
+              </div>
+            </div>
+          </div>
+          <div class="ld" style="--d:.45s">
+            <h3>拼音、首字母都能搜</h3>
+            <p>不用切输入法，打 huiyi 或 hy 就能找到“会议”。多音字也认得，yinhang 能找到“银行”，命中的字直接高亮。</p>
+          </div>
+        </article>
+
         <!-- spectrum -->
-        <article class="card span2" data-story="spec">
+        <article class="card span3" data-story="spec">
           <div class="viz v-spec" aria-hidden="true">
             <div class="panel ld" style="--d:.15s">
               <div class="bar-head"><b>复制频谱</b>过去 24 小时<span class="pills"><span class="on">24h</span><span>6h</span><span>1h</span><span>10m</span></span></div>
@@ -626,7 +689,7 @@ footer::before { content: ""; position: absolute; top: 0; left: 0; right: 0; hei
       </div>
       <div class="steps">
         <div class="step reveal"><span class="n">1</span><h3>照常复制</h3><p>文字、链接、代码、图片、视频、文件，复制和截图都会自动记下，按类型归好。</p></div>
-        <div class="step reveal" style="transition-delay:80ms"><span class="n">2</span><h3>按 <kbd>⌘</kbd> <kbd>Shift</kbd> <kbd>V</kbd></h3><p>面板出现在鼠标所在的显示器。直接打字搜索，图片和文件里的内容一起搜。Windows 上是 Ctrl + Shift + V。</p></div>
+        <div class="step reveal" style="transition-delay:80ms"><span class="n">2</span><h3>按 <kbd>⌘</kbd> <kbd>Shift</kbd> <kbd>V</kbd></h3><p>面板出现在鼠标所在的显示器。直接打字搜索，拼音和首字母也行，图片和文件里的内容一起搜。Windows 上是 Ctrl + Shift + V。</p></div>
         <div class="step reveal" style="transition-delay:160ms"><span class="n">3</span><h3>按 Enter</h3><p>贴回刚才的应用。macOS 需要开启“辅助功能”权限；没授权时会复制好并提示你按 ⌘ V。</p></div>
       </div>
     </div>
@@ -977,6 +1040,24 @@ footer::before { content: ""; position: absolute; top: 0; left: 0; right: 0; hei
       const st = track([[2.0, 0], [2.35, 1]], t, easeOut) * (1 - out);
       s.stamp.style.opacity = st;
       s.stamp.style.transform = `scale(${.85 + .15 * st})`;
+    } },
+
+    py: { P: 9, init(el) {
+      return { q: $('.q', el), caret: $('.caret', el), count: $('.count', el), rows: $$('.list .sc', el), maps: $$('.map .sc', el).map(m => ({ m, lit: $$('[data-i]', m) })) };
+    }, draw(s, t) {
+      // hy at rest → deleted → yinhang typed, held → deleted → hy retyped
+      const b = t >= 1 && t < 5.5 ? 1 : 0;
+      const nA = qlen(t, 2, .8, .1, 6, .3);
+      const nB = t < 1.3 ? 0 : t < 5 ? Math.min(7, steps(t, 1.3, .14)) : Math.max(0, 7 - steps(t, 5, .06));
+      const n = b ? nB : nA, q = b ? 'yinhang' : 'hy';
+      s.q.textContent = q.slice(0, n);
+      caret(s.caret, t, (t > .8 && t < 1) || (t > 1.3 && t < 2.2) || (t > 5 && t < 5.45) || (t > 6 && t < 6.35));
+      s.count.textContent = n === q.length ? '3 条' : n ? '' : '12,418 条';
+      rise(s.rows[0], track([[.8, 1], [1.1, 0], [6.45, 0], [6.95, 1]], t, easeOut));
+      rise(s.rows[1], track([[2.3, 0], [2.8, 1], [5, 1], [5.3, 0]], t, easeOut));
+      const k = track([[1, 1], [1.25, 0], [5.5, 0], [5.75, 1]], t);
+      [k, 1 - k].forEach((v, i) => rise(s.maps[i].m, v, 6));
+      [nA, nB].forEach((c, i) => s.maps[i].lit.forEach(e => e.classList.toggle('on', c > +e.dataset.i)));
     } },
 
     sys: { P: 4.8, init(el) {
