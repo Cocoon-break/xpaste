@@ -801,17 +801,25 @@ fn ocr_engine() -> Option<OcrEngine> {
 }
 
 pub fn ocr_available() -> bool {
+    eprintln!("[ocr-diag] available: com init");
     let _com = ComGuard::init();
-    ocr_engine().is_some()
+    eprintln!("[ocr-diag] available: com={:?}", _com.as_ref().map(|g| g.0));
+    let r = ocr_engine().is_some();
+    eprintln!("[ocr-diag] available: engine={r}");
+    r
 }
 
 /// `Windows.Media.Ocr`。阻塞（`RecognizeAsync` 在本线程 `join`），只在工作线程调用。
 /// WinRT 不给行置信度，固定 1.0。行由 `Words()` 按 `join_ocr_words` 拼接：`Text()` 在中文词之间也插空格。
 pub fn ocr_png(path: &Path, max_side_px: u32) -> Result<Option<OcrText>, OcrError> {
     // COM 失败时后续 WinRT 调用自会报错，这里不单独处理
+    eprintln!("[ocr-diag] png: com init");
     let _com = ComGuard::init();
+    eprintln!("[ocr-diag] png: com={:?}", _com.as_ref().map(|g| g.0));
     let max = OcrEngine::MaxImageDimension().map_or(max_side_px, |m| m.min(max_side_px));
+    eprintln!("[ocr-diag] png: maxdim={max}");
     let mut img = crate::load_rgba(path, max)?;
+    eprintln!("[ocr-diag] png: loaded");
     let Some(engine) = ocr_engine() else {
         return Ok(None);
     };
@@ -829,11 +837,13 @@ pub fn ocr_png(path: &Path, max_side_px: u32) -> Result<Option<OcrText>, OcrErro
         h as i32,
     )
     .map_err(err)?;
+    eprintln!("[ocr-diag] png: bitmap ok, recognize");
     let result = engine
         .RecognizeAsync(&bitmap)
         .map_err(err)?
         .join()
         .map_err(err)?;
+    eprintln!("[ocr-diag] png: recognized");
     let lines = result
         .Lines()
         .map_err(err)?
@@ -848,6 +858,7 @@ pub fn ocr_png(path: &Path, max_side_px: u32) -> Result<Option<OcrText>, OcrErro
         })
         .collect::<Result<Vec<_>, Error>>()
         .map_err(err)?;
+    eprintln!("[ocr-diag] png: done, dropping");
     Ok(Some(crate::ocr_text(lines)))
 }
 
