@@ -65,10 +65,11 @@ export interface OcrProgress {
   supported: boolean;
 }
 
-/** `snippet` 只在命中来自识别文字时出现。 */
+/** `snippet` 只在命中来自识别文字时出现；`mark` 只在按拼音命中时出现（命中的原汉字）。 */
 export interface SearchHit {
   id: number;
   snippet: string | null;
+  mark: string | null;
 }
 
 export interface FileEntry {

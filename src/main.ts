@@ -109,6 +109,8 @@ const S = {
   matchIds: null as Set<number> | null,
   /** 命中来自识别文字时的片段：显示在列表元信息行最前 */
   snippets: new Map<number, string>(),
+  // 拼音命中的原汉字：高亮用它代替查询词
+  marks: new Map<number, string>(),
   sel: null as number | null,
   detail: null as RecordDetail | null,
   undo: null as UndoState,
@@ -157,7 +159,7 @@ const metaLine = (r: RecordSummary) => {
   if (isFav(r, favMin())) parts.push(`<span class="uses">用过 ${fmtInt(r.uses)} 次</span>`);
   // 命中来自图中文字时片段放最前：它是这一行出现在结果里的原因，放末尾在常见宽度下关键词会被省略号截掉
   const snip = S.snippets.get(r.id);
-  if (snip) parts.unshift(`<span class="snip">识别文字中含“${snippetHTML(snip, S.q)}”</span>`);
+  if (snip) parts.unshift(`<span class="snip">识别文字中含“${snippetHTML(snip, S.marks.get(r.id) ?? S.q)}”</span>`);
   return parts.join(' · ');
 };
 
@@ -167,7 +169,7 @@ const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id ===
         <div class="row-in">
           ${thumb(r)}
           <div class="main">
-            <div class="title${r.kind === 'code' ? ' mono' : ''}">${hl(r.title, S.q)}</div>
+            <div class="title${r.kind === 'code' ? ' mono' : ''}">${hl(r.title, S.marks.get(r.id) ?? S.q)}</div>
             <div class="meta">${metaLine(r)}</div>
           </div>
           <div class="tail">
@@ -886,6 +888,7 @@ function fetchMatches(v: string, done: () => void, settled: () => void = () => {
   if (!v.trim()) {
     S.matchIds = null;
     S.snippets.clear();
+    S.marks.clear();
     done();
     settled();
     return;
@@ -895,6 +898,7 @@ function fetchMatches(v: string, done: () => void, settled: () => void = () => {
       if (!isStale(seq, searchSeq)) {
         S.matchIds = new Set(hits.map((h) => h.id));
         S.snippets = new Map(hits.filter((h) => h.snippet).map((h) => [h.id, h.snippet!]));
+        S.marks = new Map(hits.filter((h) => h.mark).map((h) => [h.id, h.mark!]));
         done();
       }
       settled();
