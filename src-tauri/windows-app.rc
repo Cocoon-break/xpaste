@@ -1,0 +1,2 @@
+// 应用清单（与 tauri-build 默认清单相同：依赖 Common Controls v6），由 build.rs 链进所有目标，含 `cargo test` 的测试程序
+1 24 "windows-app.manifest"
