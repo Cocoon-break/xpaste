@@ -14,6 +14,7 @@
 
 有意不做的：跨设备同步（和“数据不离开本机”冲突）、片段库与模板。Windows 端还没有在真机上验证，文字识别依赖系统已安装的 OCR 语言包。
 
+- 官网：<https://cocoon-break.github.io/xpaste/>（源文件在 `website/`，改动合并到 main 后自动发布）
 - 功能规格说明：[docs/xPaste-功能规格说明.md](docs/xPaste-功能规格说明.md)
 - 交互原型：[docs/xpaste-prototype.html](docs/xpaste-prototype.html)（用浏览器直接打开）
 - 技术选型：[docs/ADR-001-技术选型.md](docs/ADR-001-技术选型.md)
