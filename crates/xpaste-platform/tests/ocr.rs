@@ -20,6 +20,16 @@ fn ocr_reads_fixture_text() {
     assert!(small.text.contains("2026"), "{}", small.text);
 }
 
+// Windows：每次调用都初始化又释放 COM；最后一次释放若拆掉整个 COM，windows crate 缓存的 OcrEngine
+// 工厂就成了悬垂指针，下一次调用访问违例（CI 实测）。连续调用要能一直工作
+#[test]
+fn ocr_survives_repeated_calls() {
+    for _ in 0..3 {
+        let _ = ocr_available();
+        let _ = ocr_png(Path::new("/nonexistent.png"), 2000);
+    }
+}
+
 #[test]
 fn ocr_missing_file_is_decode_error() {
     assert!(matches!(
