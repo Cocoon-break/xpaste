@@ -1,171 +1,129 @@
+<div align="center">
+
+<img src="website/assets/logo.svg" width="72" alt="xPaste">
+
 # xPaste
 
-免费、开源、纯本地的 macOS / Windows 剪切板历史工具。按一个快捷键唤起面板，搜索、预览并把任意一条复制过的内容重新粘贴到当前应用。和同类工具相比，它的差异点是**图片和文件里的内容也能搜**。
+免费、开源、纯本地的 macOS / Windows 剪切板历史。<br>截图里的字、文件里的内容、拼音首字母，都能搜到。
 
-## 为什么是 xPaste
+[![CI](https://github.com/Cocoon-break/xpaste/actions/workflows/ci.yml/badge.svg)](https://github.com/Cocoon-break/xpaste/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Cocoon-break/xpaste)](https://github.com/Cocoon-break/xpaste/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-- **截图里的字能搜到。** 截过一张图，只记得图里有某个数字或某句话，照样能搜出来。截图和复制的图片在后台用系统自带的离线文字识别（macOS Vision、Windows.Media.Ocr）识别，不联网、不上传、不下载模型、不增加安装体积；一次复制的多张图片一起识别。命中时列表行写明“识别文字中含……”，预览里可以看全文、一键复制。
-- **文件按内容找。** 打开“搜索文本文件内容”后，复制的 txt、md、csv、json、代码等文件的内容也进入搜索范围，忘了文件名也能找回来。默认关着，由你决定要不要为此多占一点磁盘。
+[官网](https://cocoon-break.github.io/xpaste/) · [下载](#下载安装) · [功能规格说明](docs/xPaste-功能规格说明.md) · [参与开发](CONTRIBUTING.md)
+
+<img src="website/assets/panel.webp" width="760" alt="xPaste 面板：搜索框、复制频谱、内容分类、历史列表和预览">
+
+</div>
+
+按一个快捷键唤起面板，搜索、预览，再把任意一条复制过的内容贴回当前应用。和同类工具相比，xPaste 的不同之处在于**图片和文件里的内容也能搜**。
+
+## 功能
+
+- **截图里的字能搜到。** 截过一张图，只记得图里有某个数字或某句话，照样能搜出来。截图和复制的图片在后台用系统自带的离线文字识别（macOS Vision、Windows.Media.Ocr）读出文字，不联网、不上传、不下载模型，也不增加安装体积；一次复制的多张图片会一起识别。命中时列表行写明“识别文字中含……”，预览里可以看全文、一键复制。
+- **拼音、首字母都能搜。** 不用切输入法，打 `huiyi` 或 `hy` 就能找到“会议”；多音字也认得，`yinhang` 能找到“银行”，命中的字直接高亮。
+- **文件按内容找。** 打开“搜索文本文件内容”后，复制的 txt、md、csv、json、代码等文件的内容也能搜到，忘了文件名也能找回来。这个选项默认关闭，由你决定要不要为此多占一点磁盘。
 - **历史再多也不卡。** 三个字符以上的搜索走本地全文索引，几百 MB 的历史文本也是毫秒级；连续输入会合并查询，不会越打越慢。
 - **隐私是硬约束，不是开关。** 所有数据只在本机，没有账号、没有云同步、没有使用统计。来自密码管理器或被系统标记为敏感的内容默认不记录；日志里从不出现剪切板内容、标题、文件路径和搜索词。
-- **两个系统，一套习惯。** macOS 与 Windows 共用同一份核心代码，交互、快捷键、外观完全一致，换电脑不用换工具。
-- **看得见的复制节奏。** “常用”分类按使用次数自动归类，阈值可调；面板顶部的复制频谱让你一眼看到最近在复制什么、复制了多少。
-- **顺手的细节。** 误删 5 秒内可撤销；数字键直接粘贴前几条；搜索支持拼音和首字母：huiyi、hy 都能找到“会议”；搜索框为空时按退格不会误删记录；Esc 先清搜索再隐藏；面板出现在鼠标所在的显示器；macOS 上授权后按 Enter 直接粘贴到上一个应用，没授权也能复制并提示。
+- **两个系统，一套习惯。** macOS 与 Windows 共用同一份核心代码，交互、快捷键、外观都一样，换电脑不用换工具。
+- **看得见的复制节奏。** 面板顶部的复制频谱让你一眼看到最近复制了什么、复制了多少；“常用”分类按使用次数自动归类，阈值可调。
+- **顺手的细节。**
+  - 误删 5 秒内可撤销；
+  - 数字键直接粘贴前几条；
+  - 搜索框为空时按退格不会误删记录；
+  - Esc 先清空搜索，再隐藏面板；
+  - 面板出现在鼠标所在的显示器。
 
-有意不做的：跨设备同步（和“数据不离开本机”冲突）、片段库与模板。Windows 端还没有在真机上验证，文字识别依赖系统已安装的 OCR 语言包。
+有意不做的：跨设备同步（和“数据不离开本机”冲突）、片段库与模板。
 
-- 官网：<https://cocoon-break.github.io/xpaste/>（源文件在 `website/`，改动合并到 main 后自动发布）
-- 功能规格说明：[docs/xPaste-功能规格说明.md](docs/xPaste-功能规格说明.md)
-- 交互原型：[docs/xpaste-prototype.html](docs/xpaste-prototype.html)（用浏览器直接打开）
-- 技术选型：[docs/ADR-001-技术选型.md](docs/ADR-001-技术选型.md)
-- 实现设计：[docs/specs/2026-10-18-xPaste-实现设计.md](docs/specs/2026-10-18-xPaste-实现设计.md)（设计文档放 `docs/specs/`，实施计划放 `docs/plans/`）
+## 下载安装
 
-## 安装
+| 系统 | 安装包 |
+|---|---|
+| macOS 13+ · Apple 芯片（M 系列） | [xPaste_aarch64.dmg](https://github.com/Cocoon-break/xpaste/releases/latest/download/xPaste_aarch64.dmg) |
+| macOS 13+ · Intel | [xPaste_x64.dmg](https://github.com/Cocoon-break/xpaste/releases/latest/download/xPaste_x64.dmg) |
+| Windows 10 21H2 / 11 · x64 | [xPaste_x64-setup.exe](https://github.com/Cocoon-break/xpaste/releases/latest/download/xPaste_x64-setup.exe) |
 
-安装包在 [Releases](https://github.com/Cocoon-break/xpaste/releases/latest) 下载，固定链接始终指向最新版：[Apple 芯片](https://github.com/Cocoon-break/xpaste/releases/latest/download/xPaste_aarch64.dmg) · [Intel](https://github.com/Cocoon-break/xpaste/releases/latest/download/xPaste_x64.dmg) · [Windows](https://github.com/Cocoon-break/xpaste/releases/latest/download/xPaste_x64-setup.exe)。
+上面的链接始终指向最新版，历史版本在 [Releases](https://github.com/Cocoon-break/xpaste/releases)。
 
-**macOS 13 及以上**：Apple 芯片打开 `xPaste_<版本>_aarch64.dmg`，Intel 打开 `xPaste_<版本>_x64.dmg`，把 xPaste 拖进“应用程序”。安装包未签名（只有链接器自带的临时签名），从浏览器下载的安装包带隔离属性，第一次打开会被系统拦下，可能提示“xPaste”已损坏，无法打开，而且没有“仍要打开”。这不是文件坏了，按下面的顺序放行：
+**macOS**：打开 dmg，把 xPaste 拖进“应用程序”。安装包还没有签名，从浏览器下载后第一次打开会被系统拦下，可能提示“xPaste 已损坏，无法打开”，而且没有“仍要打开”按钮。这不是文件坏了，按下面的顺序放行：
 
 1. 在终端运行 `xattr -dr com.apple.quarantine /Applications/xPaste.app`（去掉隔离属性），再正常打开。这一步在各版本 macOS 上都有效。
-2. 如果弹窗不是“已损坏”而是“无法验证开发者”，也可以先双击打开一次，再到系统设置 → 隐私与安全性，在页面底部点“仍要打开”（出现这个按钮时才行）。
-3. 仅 macOS 13–14：在访达的“应用程序”里按住 Control 点按 xPaste →“打开”，在弹窗里再点“打开”。macOS 15 起这个方法不再能绕过拦截。
+2. 如果弹窗写的是“无法验证开发者”而不是“已损坏”，也可以先双击打开一次，再到系统设置 → 隐私与安全性，在页面底部点“仍要打开”（出现这个按钮时才行）。
+3. 仅限 macOS 13–14：在访达的“应用程序”里按住 Control 点按 xPaste →“打开”，在弹窗里再点“打开”。从 macOS 15 起，这个方法不再能绕过拦截。
 
-**Windows 10 21H2 / Windows 11**（x64）：运行 `xPaste_<版本>_x64-setup.exe`，装到当前用户目录（`%LOCALAPPDATA%\xPaste`），不需要管理员权限。SmartScreen 提示“Windows 已保护你的电脑”时，点“更多信息 → 仍要运行”。系统没有 WebView2 运行时（部分 Windows 10）时，安装程序会在线下载，需要联网。
+**Windows**：运行安装程序，它会装到当前用户目录（`%LOCALAPPDATA%\xPaste`），不需要管理员权限。SmartScreen 提示“Windows 已保护你的电脑”时，点“更多信息 → 仍要运行”。部分 Windows 10 没有 WebView2 运行时，安装程序会在线下载，需要联网。
 
 ## 快速上手
 
-- 按 `⌘ + Shift + V`（macOS）/ `Ctrl + Shift + V`（Windows）唤起面板，可在设置里改。第一次启动有引导。
-- macOS 上按 Enter 自动粘贴到上一个应用，需要“辅助功能”权限（系统设置 → 隐私与安全性 → 辅助功能）。不授权也能用：Enter 只复制并提示，到目标应用里手动按 `⌘ + V`。按钮和状态栏会按能不能自动粘贴写“粘贴”或“复制”。
-- 右键一条记录（或按 `Shift + F10`）：除了粘贴、置顶、删除，链接可以“在浏览器中打开”，文件、视频和来自文件的图片可以“在访达中显示” / “在资源管理器中显示”。
-- 面板上方的复制频谱可以收起：点标题行（或右侧的箭头），收起后只留一行统计，状态会记住。
-- 在频谱上滚轮或双指捏合可以放大到几分钟看清密集的记录，拖动平移，双击回到 24 小时。标题行的 `24h` `6h` `1h` `10m` 直接跳到对应长度。
-- 图片里的文字也能搜（本机离线识别）：截图和复制的图片（包括和别的文件一起复制的图片）在后台用系统自带的文字识别（macOS Vision、Windows.Media.Ocr）识别，不联网、不上传。搜索命中图中文字时，列表行写明“识别文字中含……”；预览里展开“图中文字”可以看全文、点“复制文字”复制。设置里可以关掉识别，或关掉“为已有图片补识别”。
-- 设置里的“外观”点选即生效，不用再点“保存设置”。设置里也能“清空历史…”（置顶记录会保留）。
-- 托盘菜单里的“暂停记录”重启后仍然有效；菜单底部灰色的“xPaste <版本>”是当前版本号。
-- 数据只存在本机，不联网、不同步、不收集使用统计：
-  - macOS：`~/Library/Application Support/xPaste/`
-  - Windows：`%APPDATA%\xPaste\`
-- 卸载：
-  - macOS：从菜单栏图标选“退出 xPaste”，把应用拖进废纸篓。要删数据，手动删除上面的数据目录、`~/Library/LaunchAgents/` 下 xPaste 的 plist（开过“开机时启动”才有），以及 WebView 留下的 `~/Library/WebKit/com.xpaste.app` 和 `~/Library/Caches/com.xpaste.app`。
-  - Windows：在“设置 → 应用”里卸载。要删历史数据，在卸载确认页勾选“删除应用程序数据”。
+- 按 `⌘ + Shift + V`（macOS）/ `Ctrl + Shift + V`（Windows）唤起面板，快捷键可以在设置里改。第一次启动有引导。
+- 直接打字搜索，按 Enter 粘贴到上一个应用：
+  - macOS 上自动粘贴需要“辅助功能”权限（系统设置 → 隐私与安全性 → 辅助功能）。
+  - 不授权也能用：Enter 只复制并提示，到目标应用里手动按 `⌘ + V` 即可。
+- 右键一条记录（或按 `Shift + F10`）：
+  - 可以粘贴、置顶、删除；
+  - 链接可以“在浏览器中打开”；
+  - 文件、视频和来自文件的图片可以“在访达中显示” / “在资源管理器中显示”。
+- 复制频谱：
+  - 点标题行可以收起，收起后只留一行统计；
+  - 滚轮或双指捏合可以放大到几分钟，拖动平移，双击回到 24 小时；
+  - 标题行的 `24h` `6h` `1h` `10m` 直接跳到对应时长。
+- 图片里的文字：
+  - 搜索命中图中文字时，预览里展开“图中文字”可以看全文、点“复制文字”复制；
+  - 设置里可以关掉识别，或关掉“为已有图片补识别”。
+- 设置里的“外观”点选即生效，不用再点“保存设置”。
+- 托盘菜单：
+  - “暂停记录”在重启后仍然有效；
+  - 菜单底部灰色的“xPaste <版本>”是当前版本号。
+
+## 数据与隐私
+
+数据只存在本机，不联网、不同步、不收集使用统计：
+
+- macOS：`~/Library/Application Support/xPaste/`
+- Windows：`%APPDATA%\xPaste\`
+
+设置里可以“清空历史…”，置顶的记录会保留。数据库没有加密，是本机明文 SQLite，靠系统账户权限保护。
+
+## 卸载
+
+- **macOS**：
+  1. 从菜单栏图标选“退出 xPaste”，把应用拖进废纸篓。
+  2. 要连数据一起删，还需手动删除这些位置：
+     - 上面的数据目录；
+     - `~/Library/LaunchAgents/` 下 xPaste 的 plist（开过“开机时启动”才有）；
+     - WebView 留下的 `~/Library/WebKit/com.xpaste.app` 和 `~/Library/Caches/com.xpaste.app`。
+- **Windows**：在“设置 → 应用”里卸载。要删历史数据，在卸载确认页勾选“删除应用程序数据”。
 
 ## 已知限制
 
-**性能**（阶段 8 测量：macOS 27、Apple M1、release 构建、5000 条记录，见[验收记录](docs/验收记录.md)“测量摘要（阶段 8）”）
+- 安装包没有签名，也没有自动更新，新版本要手动下载安装。
+- Windows 端在 CI 上编译并跑通了全部单元测试，但还没有在真机上手动验收；图片文字识别依赖系统已安装的 OCR 语言包。
+- macOS 分 Apple 芯片和 Intel 两个安装包，没有通用版本。
+- 应用启动后第一次识别图片要加载系统模型，大约 8 秒，之后每张通常不到 1 秒。
 
-- 唤起到第一帧 166 ms（中位数，最大 183 ms），目标 100 ms：5000 条时变慢，可能是每次显示同步重渲染列表。记录少（百条左右）时多在 100 ms 以内。
-- 空闲内存与 CPU 待重测（阶段8-空闲测量）：那次采样被打断，内存 footprint（含 3 个 WebKit 子进程）最小样本 265.8 MB，均在操作期间或刚结束时采得，目标 150 MB；CPU 样本同样无效，目标 < 1%。
-- 启动后第一次唤起时，第一个搜索按键约 110 ms（目标 50 ms），之后 20–40 ms。
-- Windows 的性能还没有测。
+完整列表（包括性能测量结果、各平台的细节）见 [docs/已知限制.md](docs/已知限制.md)。
 
-**发布与数据**
+## 参与开发
 
-- 安装包未签名、未公证，首次打开要手动放行（见“安装”；拿到证书后的步骤见“签名与公证”）。
-- 没有自动更新，托盘菜单里也没有“检查更新…”，新版本要手动下载安装。
-- 数据库没有加密（本机明文 SQLite，靠系统账户权限保护）。
-- macOS 分 Apple 芯片（aarch64）与 Intel（x64）两个安装包，没有通用（universal）版本。
-- dmg 打开后没有窗口图标摆位（无界面打包跳过了 Finder 布局），“应用程序”快捷方式还在，拖进去即可。
-- Windows 安装界面只有简体中文。
-- 崩溃后不会自动重启。已写入的记录不丢，开机启动项保留，下次登录或手动打开即可恢复。
-
-**macOS**
-
-- 其他应用占用同一快捷键时检测不到：`global-hotkey` 是非独占注册，两个应用会同时响应，xPaste 不会提示“快捷键被占用”。
-- 卸载时无法询问是否删除数据（拖进废纸篓没有卸载程序），数据要手动删，见“快速上手”。
-- 开机启动用 LaunchAgent（`~/Library/LaunchAgents/` 下的 plist），不是 SMAppService；系统设置的“登录项”里同样显示 xPaste。
-- 开发版（`xpaste`）与正式版（`xPaste`）在“辅助功能”列表里是两个条目，要分别授权。重新构建开发版后签名会变，要删掉旧条目再添加。
-- 未签名包每次升级后，临时签名的身份都会变，“辅助功能”授权多半要删掉旧条目再重新添加。
-- 自动粘贴按物理键位发送 `⌘ + V`（`kVK_ANSI_V`）：Dvorak 等 V 不在这个键位上的键盘布局下，可能粘贴失败。
-- 毛玻璃材质下，隐藏与显示的整窗淡入淡出改过之后还没在实机上目视确认（阶段7-T7-a）。主线程卡顿时，面板可能在淡出完成前就消失。
-
-**Windows**
-
-- Windows 端的代码在 CI 的 Windows 机器上编译并跑通全部单元测试，但还没有在真机上手动验收，以下几条来自实现与审查。
-- 覆盖安装时选了“安装前卸载”，或者卸载时保留数据再重新安装：设置里“开机时启动”仍显示开启，但卸载已经删掉注册表 Run 值，实际不会开机启动。在设置里关掉保存、再打开保存即可恢复（自动重新同步是后续工作）。
-- 从托盘图标或托盘菜单打开面板时没有可粘贴的目标窗口，Enter 只复制并提示。
-- 标题栏没有关闭按钮。从托盘打开面板时，如果系统没把前台焦点交给面板，Esc 和点击面板外部可能都隐藏不了它，这时再按唤起快捷键或单击托盘图标（还没在 Windows 上验证，见验收记录 阶段9-F04）。
-- 目标窗口以管理员身份运行而 xPaste 不是时，系统拦截模拟按键，Enter 只复制并提示（规格说明 M09 规则 3）。
-- 托盘左键单击按松开计：面板隐藏后 300 ms 内的单击不重新显示；按住超过 300 ms 再松开，会把面板重新打开。
-- Windows 10 上面板为不透明背景，不用 Acrylic。
-- 链接标题只取浏览器复制时附带 HTML 里的锚文本，不解析 Firefox 的 `text/x-moz-url`。
-- 没有透明通道的老式应用图标按不透明处理，可能显示为带底色的方块。
-- 图片文字识别要用系统的 OCR 语言包：一个都没有时图片显示“本机不支持”，设置里会提示到“设置 > 时间和语言 > 语言”为中文添加“光学字符识别”。装好后重启 xPaste，开着“为已有图片补识别”时会补上之前的图片。Windows 端的识别在 CI 上通过了测试（含连续多次识别），识别效果还没有在真机上验证。
-
-**两端通用**
-
-- 首次引导中，只有按唤起快捷键算“试按成功”；托盘单击、再次启动应用、从访达重开都不算（阶段 6 起的规则）。
-- 拖动面板只在本次显示有效：下次唤起仍按鼠标所在屏幕定位，不记住拖到的位置。
-- 设置或确认对话框打开时，点面板外部不会隐藏面板（切出去查东西时修改不丢）；要隐藏，先按 Esc 关掉对话框。
-- 视频：`mkv`、`avi`、`wmv`、`flv` 不能在预览里播放，预览显示“无法在预览中播放这个格式”（macOS 上这几种也读不出时长和封面）。视频获得焦点时按 `Space` 切换播放 / 暂停，已实现，还没在实机上验证。
-- 面板打开时外部连续复制多条，新记录只插入列表、不改选中项，选中行可能被推到可视区外（阶段7-T4-a，待确认）。
-- 亮色主题下，几处用类型色的文字对比度低于 4.5 : 1，如标题栏“正在记录”、频谱最后一个刻度、“用过 N 次”、代码高亮、选中行序号（阶段7-T6-c，待定）。
-- 截图记录的标题（`截图 YYYY-MM-DD HH.mm.png`）阶段 10 起按本地时间生成；之前录下的截图标题仍是 UTC 时间，不回改。
-- 图片文字识别：应用启动后第一次识别要加载系统模型，约 8 秒（开发构建实测 13 秒），之后每张通常不到 1 秒，所以刚启动时截的图要稍等才能按文字搜到。面板打开时不开始新的识别（点“重新识别”除外），隐藏后继续。大于 20 MB 或长边超过 8000 px 的图片不识别，显示“已跳过”。一次复制多张图片时最多识别前 10 张。不识别视频和 PDF。
-- 设置里打开“搜索文本文件内容”（默认关）后，复制文件时文本类文件（txt、md、csv、json、代码等）的前 64 KB 内容会进入搜索范围，但不显示；二进制文件不读。内容只在复制时读一次，之后文件改了搜不到新内容；打开前复制的文件不会补读。
-- 搜索 3 个字符以上的词走本地全文索引，历史再多也是毫秒级；1–2 个字（如两字中文词）按顺序扫描，历史里文本总量很大时会慢一些。索引会让数据库文件增大约一半，首次升级时建索引需要几秒。
-- 选中行被鼠标滚轮滚出可视区后，按菜单键或 `Shift + F10` 不弹菜单；用方向键移动会把选中行滚回来。
-- 读屏：列表行的 DOM 顺序不一定等于视觉顺序（行不可聚焦，读屏通过 `aria-activedescendant` 跟随选中项）。
-- 启动瞬间删除的记录，可能被启动快照带回列表，下一次删除事件或重启后消失。
-
-## 目录
-
-- `crates/xpaste-core`：核心逻辑，不依赖 Tauri
-- `crates/xpaste-platform`：macOS / Windows 系统接口
-- `src-tauri`：Tauri 应用层
-- `src`：面板前端，`src/api/` 是唯一调用 Tauri 的目录
-
-## 开发
-
-需要 Node.js、pnpm 和 Rust ≥ 1.90。CI 用 Node 25（与开发机一致），它已于 2026-06 停止维护，下一次升级选 24 LTS 或 26。统一通过 `make` 操作，`make help` 列出全部目标：
+需要 Node.js、pnpm 和 Rust ≥ 1.90：
 
 ```sh
 make install       # 安装依赖
-make dev           # 开发运行
-make dev-isolated  # 开发运行，数据目录隔离在 .xpaste-dev/，开启唤起与搜索计时（自动化验收用这个）
-make measure       # macOS 性能与可靠性测量（先 make release-app；离开电脑时运行，约 15 分钟；终端要有“辅助功能”权限，脚本用 osascript 发按键）
-make check         # 提交前全量检查：格式、clippy、Rust + 前端单元测试、前端构建
-make test          # 只跑单元测试
-make release       # 打发布包（未签名）：当前系统的安装包；macOS 上装了交叉工具时顺带打出 Windows 安装程序；全部收拢到 target/installers/
-make release-win   # 在 macOS 上交叉打 Windows NSIS 安装程序（见下）
-make release-x64   # 在 Apple 芯片 Mac 上打 Intel 版 .dmg（rustup target add x86_64-apple-darwin 后，make release 也会顺带打）
+make dev-isolated  # 开发运行，数据目录隔离在 .xpaste-dev/
+make check         # 提交前全量检查
 ```
 
-### 发版
+目录结构、分支流程、发版与签名见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
-`.github/workflows/release.yml` 在推送 `v*` 标签时打 Apple 芯片、Intel、Windows 三个安装包，发布 GitHub Release。每个安装包另存一份不带版本号的文件名（`xPaste_aarch64.dmg`、`xPaste_x64.dmg`、`xPaste_x64-setup.exe`），官网用 `releases/latest/download/<文件名>` 固定链接到最新版。
+## 文档
 
-1. 同步改 `package.json` 与 `src-tauri/Cargo.toml` 的版本号（`pnpm check:version` 检查两者一致），合并到 `main`。
-2. 在 `main` 上打标签并推送：`git tag v0.1.1 && git push origin v0.1.1`。标签必须等于 `v` + 版本号，不一致时流程直接失败。
-3. 给已有标签补发或重发：Actions → Release → Run workflow，填标签名。
+- [功能规格说明](docs/xPaste-功能规格说明.md)：每个功能的规则与验收标准
+- [技术选型](docs/ADR-001-技术选型.md)
+- [实现设计](docs/specs/2026-10-18-xPaste-实现设计.md)：设计文档放在 `docs/specs/`，实施计划放在 `docs/plans/`
+- [验收记录](docs/验收记录.md)
+- [交互原型](docs/xpaste-prototype.html)：下载后用浏览器直接打开
 
-### 在 macOS 上打 Windows 安装包
+## 许可证
 
-`tauri build` 只给当前系统打包，所以 Mac 上默认只有 `.dmg`。装好下面的工具后，`make release-win`（或 `make release`）会用 Tauri 的交叉编译把 Windows 安装程序也打出来，产物和其他安装包一起收拢到 `target/installers/`（原始位置 `target/x86_64-pc-windows-msvc/release/bundle/nsis/`）：
-
-```sh
-rustup target add x86_64-pc-windows-msvc
-brew install nsis llvm lld     # makensis、clang-cl / llvm-rc、lld-link
-cargo install cargo-xwin        # MSVC 运行库与 Windows SDK（首次运行下载约 1.5 GB 到 ~/.cache/cargo-xwin）
-```
-
-这是 Tauri 标为实验性的路径：产物没有在 Windows 上签名，WebView2 引导下载和安装脚本的行为仍要在真实 Windows 上验证一次；CI 的 Windows 矩阵打出来的包才是正式发布用的。
-
-### 签名与公证（拿到证书后）
-
-现在的安装包未签名，配置不用改，拿到证书后按下面做：
-
-- **macOS**：钥匙串里装好 Developer ID Application 证书，设置环境变量后运行 `make release`，Tauri 会签名 `.app` 并公证 dmg：
-  - `APPLE_SIGNING_IDENTITY`：证书名称，如 `Developer ID Application: <名字> (<TEAM ID>)`
-  - `APPLE_ID`：Apple 账号
-  - `APPLE_PASSWORD`：App 专用密码（在 appleid.apple.com 生成，不是账号密码）
-  - `APPLE_TEAM_ID`：团队 ID
-- **Windows**：把代码签名证书导入“当前用户 → 个人”证书存储，在 `src-tauri/tauri.windows.conf.json` 的 `bundle.windows` 下加 `certificateThumbprint`（证书指纹）、`digestAlgorithm: "sha256"`、`timestampUrl`（证书颁发机构提供的时间戳服务地址），再运行 `make release`。
-
-## 分支与协作
-
-采用 GitHub flow：
-
-- `main` 是唯一的长期分支，随时可发布，不直接往上推送。
-- 每个改动从 `main` 拉一个短分支（如 `feat/pinyin-search`、`fix/windows-ci`），推上去后开 Pull Request 到 `main`。外部贡献者先 fork 仓库再开 PR。
-- PR 上的 CI（macOS 与 Windows 的 `make check`）通过、审阅后合并，合并后删掉分支。
-- 发版在 `main` 上打 `v*` 标签，见“发版”。
+[MIT](LICENSE)
