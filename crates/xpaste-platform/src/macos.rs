@@ -166,9 +166,42 @@ pub fn read_snapshot(skip_sensitive: bool) -> Result<Option<Snapshot>, PlatformE
         }
         if snapshot.file_paths.is_empty() {
             snapshot.bitmap = read_bitmap(&snapshot.flavors);
+        } else {
+            prefer_bitmap_over_unreadable_files(&mut snapshot);
         }
         Ok(Some(snapshot))
     })
+}
+
+/// 微信等沙盒应用复制图片时同时给位图和自己容器里的临时文件路径：路径没有权限读，且很快被删掉，
+/// 按文件记就预览不了。文件都不可用且有位图时，丢掉路径按位图记（M02 规则 4 补充）。
+fn prefer_bitmap_over_unreadable_files(snapshot: &mut Snapshot) {
+    // 没有位图就不碰文件：打开 FIFO 会卡住监听线程，打开桌面等目录里的文件可能弹授权框
+    let has_bitmap = snapshot
+        .flavors
+        .iter()
+        .any(|f| f.format == "public.png" || f.format == "public.tiff");
+    if !has_bitmap || snapshot.file_paths.iter().any(|p| usable_file(p)) {
+        return;
+    }
+    if let Some(bitmap) = read_bitmap(&snapshot.flavors) {
+        snapshot.file_paths.clear();
+        // 粘贴时不写回已失效的文件引用，目标应用只拿到位图
+        snapshot.flavors.retain(|f| f.format != "public.file-url");
+        snapshot.bitmap = Some(bitmap);
+    }
+}
+
+/// 其他应用沙盒容器（`~/Library/Containers/`、`~/Library/Group Containers/`）里的路径不去打开：
+/// 读不了，打开还可能弹出“访问其他应用的数据”授权框；即使有完全磁盘访问权限，那也是对方的临时文件，随时会被删掉。
+fn usable_file(p: &Path) -> bool {
+    let in_container = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .is_some_and(|h| {
+            p.starts_with(h.join("Library/Containers"))
+                || p.starts_with(h.join("Library/Group Containers"))
+        });
+    !in_container && std::fs::File::open(p).is_ok()
 }
 
 /// 已读出的 flavor 中第一个 PNG 原样返回；否则第一个 TIFF 转成 PNG。
@@ -718,6 +751,55 @@ pub fn activate_window(_hwnd: isize) {}
 mod tests {
     use super::*;
     use objc2_core_graphics::kCGColorSpaceLinearSRGB;
+
+    #[test]
+    fn unreadable_file_paths_fall_back_to_bitmap() {
+        let png = Flavor {
+            item: 0,
+            format: "public.png".into(),
+            data: vec![1, 2, 3],
+        };
+        let gone = PathBuf::from("/nonexistent/wechat-temp.jpg");
+        let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+        assert!(!usable_file(
+            &home.join("Library/Containers/com.tencent.xinWeChat/Data/a.jpg")
+        ));
+        assert!(!usable_file(&home.join(
+            "Library/Group Containers/5A4RE8SF68.com.tencent.xinWeChat/a.jpg"
+        )));
+        let file_url = Flavor {
+            item: 0,
+            format: "public.file-url".into(),
+            data: b"file:///nonexistent/wechat-temp.jpg".to_vec(),
+        };
+        let mut s = Snapshot {
+            flavors: vec![png.clone(), file_url],
+            file_paths: vec![gone.clone()],
+            ..Default::default()
+        };
+        prefer_bitmap_over_unreadable_files(&mut s);
+        assert!(s.file_paths.is_empty());
+        assert_eq!(s.bitmap, Some(vec![1, 2, 3]));
+        // 失效的文件引用不随记录写回剪切板
+        assert_eq!(s.flavors, vec![png.clone()]);
+        // 有一个能读就按文件记
+        let readable = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        let mut s = Snapshot {
+            flavors: vec![png],
+            file_paths: vec![gone.clone(), readable],
+            ..Default::default()
+        };
+        prefer_bitmap_over_unreadable_files(&mut s);
+        assert_eq!(s.file_paths.len(), 2);
+        assert!(s.bitmap.is_none());
+        // 没有位图时保留路径
+        let mut s = Snapshot {
+            file_paths: vec![gone],
+            ..Default::default()
+        };
+        prefer_bitmap_over_unreadable_files(&mut s);
+        assert_eq!(s.file_paths.len(), 1);
+    }
 
     #[test]
     fn oriented_size_swaps_on_quarter_turn() {
