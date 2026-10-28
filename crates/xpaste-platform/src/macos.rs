@@ -516,9 +516,10 @@ pub fn ocr_available() -> bool {
     true
 }
 
-/// Vision `VNRecognizeTextRequest`（accurate、语言校正、简繁中英）。阻塞，只在工作线程调用。
-pub fn ocr_png(path: &Path, max_side_px: u32) -> Result<Option<OcrText>, OcrError> {
-    let img = crate::load_rgba(path, max_side_px)?;
+/// Vision `VNRecognizeTextRequest`（accurate、语言校正、简繁中英）。`png` 为图片文件字节（按内容识别格式）。
+/// 阻塞，只在工作线程调用。
+pub fn ocr_png_bytes(png: &[u8], max_side_px: u32) -> Result<Option<OcrText>, OcrError> {
+    let img = crate::load_rgba(png, max_side_px)?;
     let engine = |what: &str| OcrError::Engine(what.into());
     autoreleasepool(|_| {
         let (w, h) = (img.width() as usize, img.height() as usize);

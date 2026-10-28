@@ -75,10 +75,15 @@ pub enum OcrError {
     Engine(String),
 }
 
-/// 读图（按内容识别格式）并把长边缩到 `max_side` 以内（不放大），RGBA8。
-fn load_rgba(path: &Path, max_side: u32) -> Result<image::RgbaImage, OcrError> {
+/// 识别图片文件里的文字：读文件后交给 `ocr_png_bytes`（两端各自实现）。阻塞，只在工作线程调用。
+pub fn ocr_png(path: &Path, max_side_px: u32) -> Result<Option<OcrText>, OcrError> {
     let bytes = std::fs::read(path).map_err(|_| OcrError::Decode)?;
-    let img = image::load_from_memory(&bytes).map_err(|_| OcrError::Decode)?;
+    ocr_png_bytes(&bytes, max_side_px)
+}
+
+/// 解码图片字节（按内容识别格式）并把长边缩到 `max_side` 以内（不放大），RGBA8。
+fn load_rgba(bytes: &[u8], max_side: u32) -> Result<image::RgbaImage, OcrError> {
+    let img = image::load_from_memory(bytes).map_err(|_| OcrError::Decode)?;
     let img = if img.width().max(img.height()) > max_side {
         img.resize(max_side, max_side, image::imageops::FilterType::Triangle)
     } else {

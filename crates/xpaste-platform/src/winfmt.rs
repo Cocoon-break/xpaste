@@ -243,6 +243,28 @@ pub fn is_shell_tray_class(class: &str) -> bool {
     )
 }
 
+/// 前台窗口的归属，`foreground_window` 用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Foreground {
+    None,
+    /// 本进程的窗口（面板、遮罩、贴图）
+    Own,
+    /// 任务栏与通知区域
+    Tray,
+    Other(isize),
+}
+
+/// 粘贴目标与截图前的前台窗口。本进程窗口在前台时（Windows 上点贴图会激活它）取最后一个成为前台的外部窗口
+/// `last`（0 表示没有或已关闭），否则点过贴图后紧接着截图，Esc 交不回键盘，唤起面板后回车也没有粘贴目标
+/// （M23 规则 1）。任务栏在前台时仍不作目标（从托盘打开面板只复制）。
+pub fn foreground_target(fg: Foreground, last: isize) -> Option<isize> {
+    match fg {
+        Foreground::Other(h) => Some(h),
+        Foreground::Own => (last != 0).then_some(last),
+        Foreground::None | Foreground::Tray => None,
+    }
+}
+
 /// 桌面（壁纸与图标层）窗口的类名（区分大小写）：不参与截图的窗口吸附，对应 macOS 的 `ExcludeDesktopElements`。
 pub fn is_desktop_class(class: &str) -> bool {
     matches!(class, "Progman" | "WorkerW")
@@ -599,6 +621,20 @@ mod tests {
             r"\StringFileInfo\040904b0\FileDescription"
         );
     }
+    #[test]
+    fn own_foreground_falls_back_to_last_external() {
+        use Foreground as F;
+        assert_eq!(foreground_target(F::Other(5), 9), Some(5));
+        assert_eq!(
+            foreground_target(F::Own, 9),
+            Some(9),
+            "点过贴图：取之前的外部窗口"
+        );
+        assert_eq!(foreground_target(F::Own, 0), None, "还没有外部窗口或已关闭");
+        assert_eq!(foreground_target(F::Tray, 9), None);
+        assert_eq!(foreground_target(F::None, 9), None);
+    }
+
     #[test]
     fn shell_tray_classes_are_not_paste_targets() {
         for c in [

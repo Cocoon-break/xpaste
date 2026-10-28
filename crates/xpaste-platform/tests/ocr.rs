@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use xpaste_platform::{OcrError, ocr_available, ocr_png};
+use xpaste_platform::{OcrError, ocr_available, ocr_png, ocr_png_bytes};
 
 #[test]
 fn ocr_reads_fixture_text() {
@@ -27,6 +27,8 @@ fn ocr_survives_repeated_calls() {
     for _ in 0..3 {
         let _ = ocr_available();
         let _ = ocr_png(Path::new("/nonexistent.png"), 2000);
+        // 解码失败前已初始化 COM
+        let _ = ocr_png_bytes(b"not a png", 2000);
     }
 }
 
@@ -36,4 +38,24 @@ fn ocr_missing_file_is_decode_error() {
         ocr_png(Path::new("/nonexistent.png"), 2000),
         Err(OcrError::Decode)
     ));
+}
+
+// 截图识别文字直接传 PNG 字节，不落临时文件（M23 规则 7）
+#[test]
+fn ocr_reads_png_bytes() {
+    assert!(matches!(
+        ocr_png_bytes(b"not a png", 2000),
+        Err(OcrError::Decode)
+    ));
+    if !ocr_available() {
+        eprintln!("skip: no OCR engine");
+        return;
+    }
+    let png = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/ocr-zh.png"
+    ))
+    .unwrap();
+    let r = ocr_png_bytes(&png, 8000).unwrap().unwrap();
+    assert!(r.text.contains("2026"), "{}", r.text);
 }

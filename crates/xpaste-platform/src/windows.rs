@@ -1,6 +1,7 @@
 use std::cell::OnceCell;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicIsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -53,6 +54,7 @@ use windows::Win32::System::Threading::{
     SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
 };
 use windows::Win32::System::Variant::VT_EMPTY;
+use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT,
@@ -66,12 +68,13 @@ use windows::Win32::UI::Shell::{
     SIIGBF_THUMBNAILONLY, ShellLink,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyIcon, DispatchMessageW, EnumWindows, GWL_EXSTYLE,
-    GetClassNameW, GetForegroundWindow, GetIconInfo, GetMessageW, GetWindowLongW,
-    GetWindowTextLengthW, GetWindowThreadProcessId, HICON, HWND_MESSAGE, ICONINFO,
-    InternalGetWindowText, IsIconic, IsWindowVisible, MONITORINFOF_PRIMARY, MSG, RegisterClassW,
-    SetForegroundWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLIPBOARDUPDATE, WNDCLASSW,
-    WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
+    CreateWindowExW, DefWindowProcW, DestroyIcon, DispatchMessageW, EVENT_SYSTEM_FOREGROUND,
+    EnumWindows, GWL_EXSTYLE, GetClassNameW, GetForegroundWindow, GetIconInfo, GetMessageW,
+    GetWindowLongW, GetWindowTextLengthW, GetWindowThreadProcessId, HICON, HWND_MESSAGE, ICONINFO,
+    InternalGetWindowText, IsIconic, IsWindow, IsWindowVisible, MONITORINFOF_PRIMARY, MSG,
+    RegisterClassW, SetForegroundWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT,
+    WINEVENT_SKIPOWNPROCESS, WM_CLIPBOARDUPDATE, WNDCLASSW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
+    WS_EX_TRANSPARENT,
 };
 use windows::core::{BOOL, Error, HSTRING, Interface, PCWSTR, PWSTR, w};
 use xpaste_core::capture::MAX_FLAVOR_BYTES;
@@ -79,10 +82,10 @@ use xpaste_core::{AppInfo, Flavor, Snapshot};
 
 use crate::decode::normalize_newlines;
 use crate::winfmt::{
-    VideoProps, bgra_to_opaque_rgba, bgra_to_png, bgra_to_png_within, bitmap_from_flavors,
-    cf_html_fragment, file_description_query, formats_to_read, is_desktop_class,
-    is_shell_tray_class, join_ocr_words, parse_hdrop, png_to_dib, standard_format_id,
-    standard_format_name, video_meta_from_props, write_bytes,
+    Foreground, VideoProps, bgra_to_opaque_rgba, bgra_to_png, bgra_to_png_within,
+    bitmap_from_flavors, cf_html_fragment, file_description_query, foreground_target,
+    formats_to_read, is_desktop_class, is_shell_tray_class, join_ocr_words, parse_hdrop,
+    png_to_dib, standard_format_id, standard_format_name, video_meta_from_props, write_bytes,
 };
 use crate::{Frame, OcrError, OcrText, PIN_TITLE_PREFIX, PasteBlock, PlatformError, WinRect};
 
@@ -144,6 +147,23 @@ fn listen() -> windows::core::Result<()> {
             None,
         )?;
         AddClipboardFormatListener(hwnd)?;
+        // 前台切换钩子借用本线程的消息循环（WINEVENT_OUTOFCONTEXT 的回调由它分发），不另起线程
+        if let Some(h) = foreground_window() {
+            LAST_EXTERNAL.store(h, Ordering::Relaxed);
+        }
+        if SetWinEventHook(
+            EVENT_SYSTEM_FOREGROUND,
+            EVENT_SYSTEM_FOREGROUND,
+            None,
+            Some(on_foreground),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+        )
+        .is_invalid()
+        {
+            log::warn!("前台切换钩子安装失败");
+        }
         let mut msg = MSG::default();
         // GetMessageW 出错返回 -1，只有 > 0 才继续
         while GetMessageW(&mut msg, None, 0, 0).0 > 0 {
@@ -675,27 +695,53 @@ pub fn request_accessibility() {}
 
 pub fn open_accessibility_settings() {}
 
-/// 粘贴目标窗口：前台窗口无效、属于本进程或是任务栏 / 托盘溢出窗口时返回 `None`，
-/// 应用层随之只复制不粘贴（从托盘打开面板就是这种情况）。
-pub fn foreground_window() -> Option<isize> {
+/// 最后一个成为前台的外部窗口（不含本进程与任务栏），0 为还没有。由剪切板监听线程上的前台切换钩子更新。
+static LAST_EXTERNAL: AtomicIsize = AtomicIsize::new(0);
+
+/// `EVENT_SYSTEM_FOREGROUND` 回调（`WINEVENT_SKIPOWNPROCESS`：本进程窗口成为前台时不来）。
+unsafe extern "system" fn on_foreground(
+    _hook: HWINEVENTHOOK,
+    _event: u32,
+    hwnd: HWND,
+    _object: i32,
+    _child: i32,
+    _thread: u32,
+    _time: u32,
+) {
+    if let Foreground::Other(h) = classify_foreground(hwnd) {
+        LAST_EXTERNAL.store(h, Ordering::Relaxed);
+    }
+}
+
+fn classify_foreground(hwnd: HWND) -> Foreground {
+    if hwnd.is_invalid() {
+        return Foreground::None;
+    }
     // SAFETY: 只读查询；pid 与类名缓冲区都是本地变量
     unsafe {
-        let hwnd = GetForegroundWindow();
-        if hwnd.is_invalid() {
-            return None;
-        }
         let mut pid = 0u32;
         GetWindowThreadProcessId(hwnd, Some(&mut pid as *mut u32));
         if pid == GetCurrentProcessId() {
-            return None;
+            return Foreground::Own;
         }
         let mut class = [0u16; 256];
         let len = GetClassNameW(hwnd, &mut class);
         if len > 0 && is_shell_tray_class(&String::from_utf16_lossy(&class[..len as usize])) {
-            return None;
+            return Foreground::Tray;
         }
-        Some(hwnd.0 as isize)
     }
+    Foreground::Other(hwnd.0 as isize)
+}
+
+/// 粘贴目标窗口：前台窗口无效或是任务栏 / 托盘溢出窗口时返回 `None`，应用层随之只复制不粘贴
+/// （从托盘打开面板就是这种情况）；本进程窗口（如刚点过的贴图）在前台时取最后一个外部前台窗口（`foreground_target`）。
+pub fn foreground_window() -> Option<isize> {
+    // SAFETY: 只读查询
+    let fg = classify_foreground(unsafe { GetForegroundWindow() });
+    let last = LAST_EXTERNAL.load(Ordering::Relaxed);
+    // SAFETY: 只读查询；句柄失效时返回 false
+    let alive = last != 0 && unsafe { IsWindow(Some(HWND(last as *mut _))) }.as_bool();
+    foreground_target(fg, if alive { last } else { 0 })
 }
 
 /// 当前线程的 COM 初始化（MTA）。线程已是 STA（`RPC_E_CHANGED_MODE`）时 COM 照样可用，但不归本对象配对；
@@ -833,11 +879,12 @@ pub fn ocr_available() -> bool {
 
 /// `Windows.Media.Ocr`。阻塞（`RecognizeAsync` 在本线程 `join`），只在工作线程调用。
 /// WinRT 不给行置信度，固定 1.0。行由 `Words()` 按 `join_ocr_words` 拼接：`Text()` 在中文词之间也插空格。
-pub fn ocr_png(path: &Path, max_side_px: u32) -> Result<Option<OcrText>, OcrError> {
+/// `png` 为图片文件字节（按内容识别格式）；长边另受引擎上限 `MaxImageDimension` 限制。
+pub fn ocr_png_bytes(png: &[u8], max_side_px: u32) -> Result<Option<OcrText>, OcrError> {
     // COM 失败时后续 WinRT 调用自会报错，这里不单独处理
     let _com = ComGuard::init();
     let max = OcrEngine::MaxImageDimension().map_or(max_side_px, |m| m.min(max_side_px));
-    let mut img = crate::load_rgba(path, max)?;
+    let mut img = crate::load_rgba(png, max)?;
     let Some(engine) = ocr_engine() else {
         return Ok(None);
     };
