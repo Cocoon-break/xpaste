@@ -251,20 +251,24 @@ pub fn begin(app: &AppHandle) {
         events::emit_to(app, "panel", events::SHOT_NEED_PERMISSION, ());
         return;
     }
+    let panel_shown = app
+        .get_webview_window("panel")
+        .is_some_and(|w| w.is_visible().unwrap_or(false));
     let (generation, stale) = {
         let mut s = session(app);
         let was_active = s.is_active();
         if !s.try_begin() {
             return;
         }
-        // 面板开着时前台是面板自己（foreground_window 排除本进程），用面板记下的那个
+        // 面板开着时前台是面板自己（foreground_window 排除本进程），用面板唤起时记下的那个；
+        // 面板没开时那个值可能早已过期，不用
         s.previous_window = xpaste_platform::foreground_window().or_else(|| {
             Some(
                 app.state::<AppState>()
                     .previous_window
                     .load(Ordering::Relaxed),
             )
-            .filter(|&h| h != 0)
+            .filter(|&h| panel_shown && h != 0)
         });
         (s.generation(), was_active)
     };
@@ -274,9 +278,6 @@ pub fn begin(app: &AppHandle) {
         hide_overlays(app);
     }
     // 面板不能被截进去
-    let panel_shown = app
-        .get_webview_window("panel")
-        .is_some_and(|w| w.is_visible().unwrap_or(false));
     if panel_shown {
         crate::panel::hide(app);
     }
@@ -620,7 +621,17 @@ pub fn write_unique(dir: &Path, stamp: &str, png: &[u8]) -> std::io::Result<Stri
             .create_new(true)
             .open(dir.join(&name))
         {
-            Ok(mut f) => return f.write_all(png).map(|()| name),
+            Ok(mut f) => {
+                return match f.write_all(png) {
+                    Ok(()) => Ok(name),
+                    Err(e) => {
+                        // 不留下写了一半的文件
+                        drop(f);
+                        let _ = std::fs::remove_file(dir.join(&name));
+                        Err(e)
+                    }
+                };
+            }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && tries < 10 => tries += 1,
             Err(e) => return Err(e),
         }
@@ -885,7 +896,8 @@ fn open_pin(
         .skip_taskbar(true)
         .always_on_top(true)
         .accept_first_mouse(true)
-        .build()?;
+        .build()
+        .inspect_err(|_| drop(std::fs::remove_file(&path)))?;
     if let Err(e) = place(&w, o, size) {
         let _ = w.destroy();
         let _ = std::fs::remove_file(&path);
@@ -1329,7 +1341,9 @@ mod tests {
     #[test]
     fn relative_shot_dir_falls_back_to_default() {
         let d = Path::new("/d");
-        assert_eq!(resolve_shot_dir("/mine", None, d), PathBuf::from("/mine"));
+        // Windows 上 `/mine` 不是绝对路径
+        let mine = if cfg!(windows) { r"C:\mine" } else { "/mine" };
+        assert_eq!(resolve_shot_dir(mine, None, d), PathBuf::from(mine));
         assert_eq!(resolve_shot_dir("", None, d), PathBuf::from("/d/shots"));
         assert_eq!(
             resolve_shot_dir("shots", Some("/p".into()), d),
