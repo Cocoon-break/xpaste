@@ -326,18 +326,7 @@ pub fn screen_capture_pane(macos_major: Option<u32>) -> &'static str {
 
 /// 快捷键入口。主线程调用。
 pub fn begin(app: &AppHandle) {
-    // 没有屏幕录制权限：不显示遮罩，改由面板提示授权（M23 规则 2）
-    if !xpaste_platform::screen_capture_granted() {
-        log::info!("截图缺少屏幕录制权限，提示授权");
-        crate::panel::show(app, None, crate::panel::Trigger::Hotkey);
-        events::emit_to(
-            app,
-            "panel",
-            events::SHOT_NEED_PERMISSION,
-            screen_capture_pane(xpaste_platform::macos_version()),
-        );
-        return;
-    }
+    let granted = xpaste_platform::screen_capture_granted();
     let panel_shown = app
         .get_webview_window("panel")
         .is_some_and(|w| w.is_visible().unwrap_or(false));
@@ -356,12 +345,31 @@ pub fn begin(app: &AppHandle) {
                 log::info!("shot 上一次截图仍在进行，忽略本次按键");
                 return;
             }
+            // 先于权限检查：截图期间权限被撤销，快捷键也能退出屏上的遮罩
             Press::Exit => {
+                let generation = s.generation();
                 let previous = s.end();
                 drop(s);
                 log::info!("shot 再按快捷键，退出截图");
-                return after_end(app, previous);
+                return after_end(app, generation, previous);
             }
+        }
+        // 没有屏幕录制权限：不显示遮罩，改由面板提示授权（M23 规则 2）。刚开始的会话撤掉，卡住的旧遮罩一并撤下
+        if !granted {
+            s.end();
+            drop(s);
+            if was_active {
+                hide_overlays(app);
+            }
+            log::info!("截图缺少屏幕录制权限，提示授权");
+            crate::panel::show(app, None, crate::panel::Trigger::Hotkey);
+            events::emit_to(
+                app,
+                "panel",
+                events::SHOT_NEED_PERMISSION,
+                screen_capture_pane(xpaste_platform::macos_version()),
+            );
+            return;
         }
         // Windows 上本进程窗口（面板、刚点过的贴图）在前台时，foreground_window 取最后一个外部前台窗口；
         // 取不到时（前台切换钩子没装上）面板开着就用面板唤起时记下的那个，面板没开时那个值可能早已过期，不用
@@ -507,7 +515,7 @@ pub fn end_if_current(app: &AppHandle, generation: u64) {
     let Ok(previous) = session(app).end_if_current(generation) else {
         return;
     };
-    after_end(app, previous);
+    after_end(app, generation, previous);
 }
 
 /// 遮罩铺满整块屏（含菜单栏）。
@@ -660,7 +668,18 @@ fn watch(app: &AppHandle, generation: u64) {
                     s.end()
                 };
                 log::warn!("shot 遮罩页 3 s 无响应，撤下遮罩");
-                return after_end(&app, previous);
+                after_end(&app, generation, previous);
+                // 卡死的页面不会再回应 shot-begin，还拿着冻结帧（M23 规则 11）：重新加载，下次截图照常。
+                // 窗口与标签不变，NSPanel 不重建（同 overlay_crashed）
+                return on_main(&app, |app| {
+                    for (l, w) in app.webview_windows() {
+                        if let Some(i) = overlay_index(&l)
+                            && let Err(e) = w.reload()
+                        {
+                            log::warn!("重新加载遮罩 {i} 失败：{e}");
+                        }
+                    }
+                });
             }
         });
     if let Err(e) = spawned {
@@ -704,8 +723,11 @@ fn show_overlay(app: &AppHandle, i: usize, focus: bool) {
 /// 隐藏全部遮罩并释放冻结图。Windows 上把键盘还给截图前的前台窗口（Esc / 右键 / 工具栏退出），
 /// 不然系统按 z 序交给下一个窗口，可能是贴图；macOS 上 `previous_window` 恒为 `None`。
 pub fn end(app: &AppHandle) {
-    let previous = session(app).end();
-    after_end(app, previous);
+    let (generation, previous) = {
+        let mut s = session(app);
+        (s.generation(), s.end())
+    };
+    after_end(app, generation, previous);
 }
 
 /// 遮罩页面的内容进程崩溃（macOS）：页面不会再上屏或退出，会话会一直进行中、截图快捷键失灵。
@@ -722,11 +744,19 @@ pub fn overlay_crashed(w: &tauri::Webview) {
     }
 }
 
-fn after_end(app: &AppHandle, previous: Option<isize>) {
+/// `generation`：刚结束的那一次截图，在结束它的同一次加锁里取，不会误报给之后开始的新一次。
+fn after_end(app: &AppHandle, generation: u64, previous: Option<isize>) {
     hide_overlays(app);
     if let Some(h) = previous {
         // 排在 hide_overlays 之后：遮罩还拿着前台，本进程此刻是前台进程，系统允许切
         on_main(app, move |_| xpaste_platform::activate_window(h));
+    }
+    // 后端结束的截图（再按快捷键、看门狗、Alt+F4）页面不知道：通知遮罩立即放掉冻结帧，
+    // 不然马上再按快捷键时旧画面可能闪一下（M23 规则 11）。页面自己退出的（Esc）已放掉，收到后忽略
+    for l in app.webview_windows().into_keys() {
+        if overlay_index(&l).is_some() {
+            events::emit_to(app, &l, events::SHOT_END, generation);
+        }
     }
 }
 

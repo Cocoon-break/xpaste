@@ -19,7 +19,7 @@ export type ShotClaim = { generation: number; index: number; state: 'selected' |
 
 /** 开发替身：只在 `pnpm dev` 下、浏览器里（不在 Tauri 里）启用；生产构建里整段被摇掉 */
 const stub = import.meta.env.DEV && !('__TAURI_INTERNALS__' in window);
-const SHOT_BEGIN = 'shot-begin', SHOT_CLAIM = 'shot-claim';
+const SHOT_BEGIN = 'shot-begin', SHOT_CLAIM = 'shot-claim', SHOT_END = 'shot-end';
 
 /** 推送的 `shot-begin` 可能早于监听注册好（刚建的遮罩），注册后再拉一次；两路可能都到，回调需按代数去重。 */
 export async function onShotBegin(cb: (p: BeginPayload) => void): Promise<void> {
@@ -55,6 +55,11 @@ export function shotFinish(png: Uint8Array, action: ShotAction, index: number, r
   const r = [rect.x, rect.y, rect.w, rect.h].map((n) => Math.round(n * 100) / 100).join(',');
   return invoke<ShotOutcome>('shot_finish', png, { headers: { 'x-action': action, 'x-index': String(index), 'x-rect': r } });
 }
+
+/** 后端结束了这次截图（载荷为代数）：再按快捷键、看门狗、Alt+F4 等，页面自己不知道。 */
+export const onShotEnd = async (cb: (generation: number) => void) => {
+  if (!stub) await listen<number>(SHOT_END, (e) => cb(e.payload));
+};
 
 export const shotClaim = (c: ShotClaim) => (stub ? Promise.resolve() : emit(SHOT_CLAIM, c));
 export const onShotClaim = async (cb: (c: ShotClaim) => void) => {

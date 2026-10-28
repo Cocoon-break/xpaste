@@ -2,7 +2,7 @@
 // 状态 S、update / place、指针与键盘处理。坐标为本块屏的逻辑像素，冻结帧与标注 canvas 为物理像素。
 import './shot.css';
 import {
-  onShotBegin, onShotClaim, shotAlive, shotCancel, shotClaim, shotFinish, shotFrame, shotReady,
+  onShotBegin, onShotClaim, onShotEnd, shotAlive, shotCancel, shotClaim, shotFinish, shotFrame, shotReady,
   type BeginPayload, type ShotAction, type ShotOutcome,
 } from '../api/shot';
 import { error as logError, info } from '../api/log';
@@ -602,8 +602,9 @@ void onShotClaim((c) => {
   if (S.phase === 'selected') clearSelection();
   else if (S.phase === 'idle') { S.snap = null; S.drag = null; update(); }
 });
-// 心跳：已上屏期间每秒一次，后端 3 s 收不到就撤下遮罩（M23 规则 1）。后端已结束这次截图
-// （再按截图快捷键、看门狗）时页面不知道，靠心跳的返回值放掉像素、停止心跳
+// 后端结束了这次截图（再按截图快捷键、看门狗等）：窗口已隐藏，立即放掉像素
+void onShotEnd((gen) => { if (gen === S.gen && S.phase !== 'off') release(); });
+// 心跳：已上屏期间每秒一次，后端 3 s 收不到就撤下遮罩（M23 规则 1）。事件丢了时靠心跳的返回值兜底放掉像素
 setInterval(() => {
   const gen = S.gen;
   if (readyGen !== gen || S.phase === 'off') return;

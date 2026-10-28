@@ -23,6 +23,8 @@ pub const CONFIRM_CLEAR: &str = "confirm-clear";
 
 /// 冻结完成，发给每块屏的遮罩 `shot-<i>`（载荷见 `shot::BeginPayload`）。
 pub const SHOT_BEGIN: &str = "shot-begin";
+/// 截图已结束，发给每块屏的遮罩；载荷是结束的那一次的代数，遮罩据此放掉冻结帧（M23 规则 11）。
+pub const SHOT_END: &str = "shot-end";
 /// 截图缺少屏幕录制权限，发给面板（M18）；载荷是系统设置里那一页的名字（`screen_capture_pane`）。
 pub const SHOT_NEED_PERMISSION: &str = "shot-need-permission";
 
