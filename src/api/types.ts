@@ -20,6 +20,9 @@ export interface Settings {
   ocrEnabled: boolean;
   ocrBackfill: boolean;
   searchFileText: boolean;
+  shotHotkey: string;
+  shotDir: string;
+  shotSaveCopy: boolean;
 }
 
 export interface PlatformInfo {

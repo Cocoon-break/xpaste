@@ -112,6 +112,9 @@ pub fn changed_fields(old: &Settings, new: &Settings) -> Vec<&'static str> {
             "searchFileText",
             old.search_file_text != new.search_file_text,
         ),
+        ("shotHotkey", old.shot_hotkey != new.shot_hotkey),
+        ("shotDir", old.shot_dir != new.shot_dir),
+        ("shotSaveCopy", old.shot_save_copy != new.shot_save_copy),
     ]
     .into_iter()
     .filter_map(|(name, changed)| changed.then_some(name))
@@ -376,6 +379,9 @@ mod tests {
             ocr_enabled: false,
             ocr_backfill: false,
             search_file_text: true,
+            shot_hotkey: "Alt+Shift+S".into(),
+            shot_dir: "/x".into(),
+            shot_save_copy: false,
             ..Settings::default()
         };
         assert_eq!(
@@ -388,7 +394,10 @@ mod tests {
                 "frequentMinUses",
                 "ocrEnabled",
                 "ocrBackfill",
-                "searchFileText"
+                "searchFileText",
+                "shotHotkey",
+                "shotDir",
+                "shotSaveCopy"
             ]
         );
     }

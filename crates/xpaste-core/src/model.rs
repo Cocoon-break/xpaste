@@ -72,6 +72,12 @@ pub struct Settings {
     pub ocr_backfill: bool,
     /// 复制文件时把文本类文件的内容读进搜索文本（每条最多 64 KB）；默认关：大库里的大段文本多半来自它
     pub search_file_text: bool,
+    /// 截图全局快捷键；空字符串表示不启用
+    pub shot_hotkey: String,
+    /// 截图保存文件夹；空字符串表示平台默认（图片/xPaste）
+    pub shot_dir: String,
+    /// 保存截图时同时复制到剪切板
+    pub shot_save_copy: bool,
 }
 
 impl Default for Settings {
@@ -99,6 +105,9 @@ impl Default for Settings {
             ocr_enabled: true,
             ocr_backfill: true,
             search_file_text: false,
+            shot_hotkey: "Alt+Shift+A".into(),
+            shot_dir: String::new(),
+            shot_save_copy: true,
         }
     }
 }
@@ -118,17 +127,33 @@ const MODIFIERS: [&str; 12] = [
     "meta",
 ];
 
+fn has_modifier(s: &str) -> bool {
+    s.split('+')
+        .any(|part| MODIFIERS.contains(&part.trim().to_lowercase().as_str()))
+}
+
+/// 按 `+` 切分、trim、小写、排序，用来比较两个快捷键是否是同一组合。
+fn hotkey_key(s: &str) -> Vec<String> {
+    let mut parts: Vec<String> = s.split('+').map(|p| p.trim().to_lowercase()).collect();
+    parts.sort();
+    parts
+}
+
 impl Settings {
     /// 按顺序检查，返回第一条不满足的规则。
     pub fn validate(&self) -> Result<(), CoreError> {
         let fail = |m: &str| Err(CoreError::InvalidSettings(m.into()));
 
-        let has_modifier = self
-            .hotkey
-            .split('+')
-            .any(|part| MODIFIERS.contains(&part.trim().to_lowercase().as_str()));
-        if !has_modifier {
+        if !has_modifier(&self.hotkey) {
             return fail("至少需要包含 Mod 或 Alt");
+        }
+        if !self.shot_hotkey.is_empty() {
+            if !has_modifier(&self.shot_hotkey) {
+                return fail("截图快捷键至少需要包含 Mod 或 Alt");
+            }
+            if hotkey_key(&self.shot_hotkey) == hotkey_key(&self.hotkey) {
+                return fail("截图快捷键不能与唤起快捷键相同");
+            }
         }
         if !matches!(self.retention_days, None | Some(7 | 30 | 90)) {
             return fail("历史保留只能是 7 天、30 天、90 天或永久");
@@ -550,6 +575,45 @@ mod tests {
             }
             .validate()
             .is_err()
+        );
+    }
+
+    #[test]
+    fn default_shot_settings() {
+        let s = Settings::default();
+        assert_eq!(s.shot_hotkey, "Alt+Shift+A");
+        assert_eq!(s.shot_dir, "");
+        assert!(s.shot_save_copy);
+    }
+
+    #[test]
+    fn old_json_gets_shot_defaults() {
+        let s: Settings = serde_json::from_str(r#"{"hotkey":"Alt+Space"}"#).unwrap();
+        let d = Settings::default();
+        assert_eq!(s.shot_hotkey, d.shot_hotkey);
+        assert_eq!(s.shot_dir, d.shot_dir);
+        assert_eq!(s.shot_save_copy, d.shot_save_copy);
+    }
+
+    #[test]
+    fn validate_shot_hotkey() {
+        let with = |hotkey: &str, shot: &str| Settings {
+            hotkey: hotkey.into(),
+            shot_hotkey: shot.into(),
+            ..Default::default()
+        };
+        assert!(with("Alt+Space", "").validate().is_ok());
+        assert_eq!(
+            invalid(&with("Alt+Space", "A")),
+            "截图快捷键至少需要包含 Mod 或 Alt"
+        );
+        assert_eq!(
+            invalid(&with("Alt+Shift+A", "alt+shift+a")),
+            "截图快捷键不能与唤起快捷键相同"
+        );
+        assert_eq!(
+            invalid(&with("Shift+Alt+A", " Alt + shift+A")),
+            "截图快捷键不能与唤起快捷键相同"
         );
     }
 

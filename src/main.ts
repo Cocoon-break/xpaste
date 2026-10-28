@@ -1651,6 +1651,8 @@ async function submitSettings() {
   const s = formToSettings(S.settings, {
     hotkey: pendingHotkey, retain: retainIn.value, limit, frequent, ignored: addIgnored(draftIgnored, ignoreIn.value), skipSensitive: sensitiveIn.checked,
     moveToTop: moveTopIn.checked, launchAtLogin: autostartIn.checked, ocrEnabled: ocrOnIn.checked, ocrBackfill: ocrBackfillIn.checked, searchFileText: fileTextIn.checked,
+    // 截图设置的表单控件在后续任务加入，此前沿用已保存的值
+    shotHotkey: S.settings.shotHotkey, shotDir: S.settings.shotDir, shotSaveCopy: S.settings.shotSaveCopy,
   });
   saving = true;
   try {
