@@ -145,7 +145,10 @@ impl Store {
     /// 缺失或损坏时回落到默认设置。
     pub fn load_settings(&self) -> Settings {
         match self.kv_get("settings") {
-            Ok(Some(raw)) => match serde_json::from_str::<Settings>(&raw) {
+            Ok(Some(raw)) => match serde_json::from_str::<Settings>(&raw).map(|mut s| {
+                s.disable_clashing_shot_hotkey();
+                s
+            }) {
                 Ok(s) if s.validate().is_ok() => s,
                 Ok(_) => {
                     log::warn!("已保存的设置未通过校验，使用默认值");
@@ -1258,6 +1261,17 @@ pub(crate) mod tests {
         let s = Store::open_in_memory(&tmp()).unwrap();
         s.kv_set("settings", r#"{"maxRecords":0}"#).unwrap();
         assert_eq!(s.load_settings(), Settings::default());
+    }
+
+    #[test]
+    fn old_panel_hotkey_on_shot_default_keeps_settings() {
+        let s = Store::open_in_memory(&tmp()).unwrap();
+        s.kv_set("settings", r#"{"hotkey":"Alt+Shift+A","maxRecords":1000}"#)
+            .unwrap();
+        let cfg = s.load_settings();
+        assert_eq!(cfg.hotkey, "Alt+Shift+A");
+        assert_eq!(cfg.shot_hotkey, "", "撞上截图默认值时停用截图快捷键");
+        assert_eq!(cfg.max_records, 1000, "其余设置保留，不回落到默认值");
     }
 
     #[test]

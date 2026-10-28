@@ -1,11 +1,11 @@
-// 无障碍源文件检查（M21）：只读 index.html 与 styles.css 文本，不碰 DOM。
+// 无障碍源文件检查（M21）：只读 index.html、tokens.css 与 styles.css 文本，不碰 DOM。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { contrast } from './color.ts';
 
 const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
-const css = readFileSync(new URL('./styles.css', import.meta.url), 'utf8');
+const css = ['./tokens.css', './styles.css'].map((f) => readFileSync(new URL(f, import.meta.url), 'utf8')).join('\n');
 
 test('every_button_in_index_html_has_a_name', () => {
   const DYNAMIC = new Set(['cfOk', 'obSkip', 'obNext', 'toastAct', 'mOpen']); // main.ts 运行时写文字（按钮或其内文字 span 的 id）

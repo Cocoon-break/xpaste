@@ -271,8 +271,8 @@ fn anchor_text(html: &str, url: &str) -> Option<String> {
     ok.then(|| label.into())
 }
 
-/// 本地时间 `YYYY-MM-DD HH.mm`；夏令时边界取"现在"的偏移。
-fn local_stamp(ms: i64) -> String {
+/// 本地时间 `YYYY-MM-DD HH.mm`；夏令时边界取"现在"的偏移。截图保存的文件名也用它（与自动标题一致）。
+pub fn local_stamp(ms: i64) -> String {
     stamp_at(ms, *chrono::Local::now().offset())
 }
 

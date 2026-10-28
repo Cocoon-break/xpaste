@@ -51,6 +51,9 @@ export type SettingsForm = {
   ocrEnabled: boolean;
   ocrBackfill: boolean;
   searchFileText: boolean;
+  shotHotkey: string;
+  shotDir: string;
+  shotSaveCopy: boolean;
 };
 
 export const formToSettings = (base: Settings, f: SettingsForm): Settings => ({
@@ -66,4 +69,7 @@ export const formToSettings = (base: Settings, f: SettingsForm): Settings => ({
   ocrEnabled: f.ocrEnabled,
   ocrBackfill: f.ocrBackfill,
   searchFileText: f.searchFileText,
+  shotHotkey: f.shotHotkey,
+  shotDir: f.shotDir,
+  shotSaveCopy: f.shotSaveCopy,
 });

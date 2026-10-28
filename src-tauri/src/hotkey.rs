@@ -1,17 +1,93 @@
-use tauri::AppHandle;
-use tauri_plugin_global_shortcut::GlobalShortcutExt;
+use std::sync::atomic::Ordering;
+
+use tauri::{AppHandle, Manager};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
 use crate::error::AppError;
+use crate::state::AppState;
 
-/// 注销旧快捷键后注册新的；任何失败都视为被占用。
-pub fn register(app: &AppHandle, shortcut: &str) -> Result<(), AppError> {
+/// 注销全部后注册唤起与截图两个快捷键（截图为空串表示不启用，跳过）；任何失败都视为被占用。
+/// 两个都会尝试注册，唤起失败返回 `HotkeyTaken`，否则截图失败返回 `ShotHotkeyTaken`。
+pub fn register(app: &AppHandle, panel: &str, shot: &str) -> Result<(), AppError> {
     let gs = app.global_shortcut();
-    gs.unregister_all()
-        .and_then(|()| gs.register(shortcut))
-        .map_err(|e| {
-            log::debug!("全局快捷键插件错误：{e}");
-            AppError::HotkeyTaken
-        })
+    let taken = |e: tauri_plugin_global_shortcut::Error| log::debug!("全局快捷键插件错误：{e}");
+    let panel_ok = gs
+        .unregister_all()
+        .and_then(|()| gs.register(panel))
+        .map_err(taken)
+        .is_ok();
+    let shot_ok = shot.is_empty() || gs.register(shot).map_err(taken).is_ok();
+    match (panel_ok, shot_ok) {
+        (false, _) => Err(AppError::HotkeyTaken),
+        (true, false) => Err(AppError::ShotHotkeyTaken),
+        (true, true) => Ok(()),
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Role {
+    Panel,
+    Shot,
+}
+
+/// 触发的快捷键是哪一个（M23 规则 1）：按解析后的组合比较；截图为空串时只认唤起。
+pub fn role_of(pressed: &Shortcut, panel: &str, shot: &str) -> Option<Role> {
+    let is = |s: &str| !s.is_empty() && s.parse::<Shortcut>().is_ok_and(|k| k == *pressed);
+    if is(panel) {
+        Some(Role::Panel)
+    } else if is(shot) {
+        Some(Role::Shot)
+    } else {
+        None
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ShotRoute {
+    /// 交给录制框（`hotkey-pressed`，载荷 `"shot"`）
+    Recorder,
+    /// 只把面板拉回焦点：开始截图会隐藏面板、关掉对话框，未保存的修改就丢了（M15 规则 4）
+    Refocus,
+    Begin,
+}
+
+/// 设置或确认框开着且面板可见时从不开始截图：有焦点交给录制框（同 M15 规则 3），失焦只取回焦点（同 M15 规则 4）。
+pub fn shot_route(dialog_open: bool, panel_visible: bool, panel_focused: bool) -> ShotRoute {
+    match (dialog_open && panel_visible, panel_focused) {
+        (false, _) => ShotRoute::Begin,
+        (true, true) => ShotRoute::Recorder,
+        (true, false) => ShotRoute::Refocus,
+    }
+}
+
+/// 截图快捷键按下：按 `shot_route` 通知面板、取回面板焦点或开始截图。主线程调用。
+pub fn shot_pressed(app: &AppHandle) {
+    let (visible, focused) = app.get_webview_window("panel").map_or((false, false), |w| {
+        (
+            w.is_visible().unwrap_or(false),
+            w.is_focused().unwrap_or(false),
+        )
+    });
+    let dialog_open = app.state::<AppState>().dialog_open.load(Ordering::SeqCst);
+    let route = shot_route(dialog_open, visible, focused);
+    log::info!("截图快捷键按下 {route:?}");
+    match route {
+        ShotRoute::Recorder => {
+            crate::events::emit_to(app, "panel", crate::events::HOTKEY_PRESSED, "shot")
+        }
+        ShotRoute::Refocus => crate::panel::refocus(app),
+        ShotRoute::Begin => crate::shot::begin(app),
+    }
+}
+
+/// 启动时注册失败的系统通知文案；两个都被占用时一起说。
+pub fn failure_notice(panel_failed: bool, shot_failed: bool) -> Option<&'static str> {
+    match (panel_failed, shot_failed) {
+        (false, false) => None,
+        (true, false) => Some("唤起快捷键被其他应用占用，请在设置中更换"),
+        (false, true) => Some("截图快捷键被其他应用占用，请在设置中更换"),
+        (true, true) => Some("唤起与截图快捷键被其他应用占用，请在设置中更换"),
+    }
 }
 
 /// 快捷键字符串 → 显示标签（如 `⌘ + Shift + V`）；规则与前端 `hotkeyLabel` 一致。
@@ -46,7 +122,49 @@ pub fn label(shortcut: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::label;
+    use super::{Role, ShotRoute, failure_notice, label, role_of, shot_route};
+
+    #[test]
+    fn shot_never_begins_while_dialog_open_and_panel_visible() {
+        use ShotRoute::*;
+        assert_eq!(shot_route(true, true, true), Recorder);
+        assert_eq!(shot_route(true, true, false), Refocus);
+        // 对话框没开或面板不可见：照常截图
+        assert_eq!(shot_route(false, true, true), Begin);
+        assert_eq!(shot_route(false, true, false), Begin);
+        assert_eq!(shot_route(false, false, false), Begin);
+        assert_eq!(shot_route(true, false, false), Begin);
+        assert_eq!(shot_route(true, false, true), Begin);
+    }
+
+    #[test]
+    fn failure_notice_names_every_taken_hotkey() {
+        assert_eq!(failure_notice(false, false), None);
+        assert_eq!(
+            failure_notice(true, false),
+            Some("唤起快捷键被其他应用占用，请在设置中更换")
+        );
+        assert_eq!(
+            failure_notice(false, true),
+            Some("截图快捷键被其他应用占用，请在设置中更换")
+        );
+        assert_eq!(
+            failure_notice(true, true),
+            Some("唤起与截图快捷键被其他应用占用，请在设置中更换")
+        );
+    }
+
+    #[test]
+    fn role_of_dispatches() {
+        let shot = "Alt+Shift+A".parse().unwrap();
+        let panel = "CommandOrControl+Shift+V".parse().unwrap();
+        let (p, s) = ("CommandOrControl+Shift+V", "Alt+Shift+A");
+        assert_eq!(role_of(&shot, p, s), Some(Role::Shot));
+        assert_eq!(role_of(&panel, p, s), Some(Role::Panel));
+        // 截图为空串表示不启用：只认唤起
+        assert_eq!(role_of(&shot, p, ""), None);
+        assert_eq!(role_of(&panel, p, ""), Some(Role::Panel));
+    }
 
     #[test]
     fn label_follows_platform() {

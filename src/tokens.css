@@ -1,0 +1,95 @@
+/* 面板、截图遮罩与贴图共用的字体与设计变量（M16）。styles.css 与 shot/shot.css 各自 @import。 */
+/* 字体随安装包内置（scripts/fetch-fonts.sh 下载 latin 子集，OFL 许可证同目录） */
+@font-face { font-family: "Geist"; font-style: normal; font-weight: 400 600; font-display: block; src: url("./fonts/geist.woff2") format("woff2"); }
+@font-face { font-family: "Unbounded"; font-style: normal; font-weight: 500 700; font-display: block; src: url("./fonts/unbounded.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 400 500; font-display: block; src: url("./fonts/jetbrains-mono.woff2") format("woff2"); }
+
+/* 方向：毛玻璃浮层 + 类型光谱。每种内容类型有自己的颜色，
+   顶部“复制频谱”把 24 小时内的每一次复制画成一根光柱，是整个产品的标志。
+   暗色为默认，亮色在同一套 token 上重新取值。 */
+:root {
+  color-scheme: dark;
+  --ink: #06080F;
+  --glass: rgb(15 19 34 / .68);
+  --glass-2: rgb(255 255 255 / .035);
+  --glass-3: rgb(255 255 255 / .07);
+  --line: rgb(170 190 255 / .09);
+  --line-2: rgb(170 190 255 / .17);
+  --fg: #EAF0FF; --muted: #9AA4CB; --faint: #646E94;
+  --c-text: #8FE3FF; --c-link: #6F8BFF; --c-code: #4FE3C1; --c-accent: #FF6FD8;
+  --c-image: #FFB84D; --c-video: #FF6B6B; --c-file: #B48CFF; --c-fav: #D9F26B;
+  --beam: #8FE3FF; --beam-hover: #B4EEFF; --on-beam: #06101C; --on-pill: #06101C; --danger: #FF6B81; --danger-hover: #FF8A9B; --on-danger: #06101C;
+  --well: rgb(0 0 0 / .22); --well-2: rgb(0 0 0 / .32);
+  --pop: rgb(14 18 32 / .94); --pop-solid: #12162A;
+  --hover: rgb(255 255 255 / .11);
+  --preview-bg: rgb(0 0 0 / .12);
+  --shadow-win: 0 50px 120px -30px rgb(0 0 0 / .85), inset 0 1px 0 rgb(255 255 255 / .07);
+  --shadow-pop: 0 24px 60px -16px rgb(0 0 0 / .9);
+  --scrim: rgb(3 5 12 / .55);
+  --track-off: rgb(255 255 255 / .1); --knob: #EAF0FF;
+  --mark-bg: rgb(255 184 77 / .3); --mark-fg: #FFE2B0; --mark-ring: rgb(255 184 77 / .35);
+  --glow-a: rgb(143 227 255 / .75); --glow-b: rgb(255 111 216 / .25);
+  --img-check: rgb(255 255 255 / .04);
+  /* 霓光镜面：光柱顶端混入类型色的比例（0% = 纯白）、两层光晕半径、倒影遮罩起点、轨道底光浓度 */
+  --sp-top-mix: 0%; --sp-glow-a: 10px; --sp-glow-b: 24px; --sp-mirror-a: .55; --sp-under: 10%;
+
+  --spectrum: linear-gradient(90deg, var(--c-text), var(--c-link) 28%, var(--c-code) 44%, var(--c-accent) 58%, var(--c-image) 72%, var(--c-video) 86%, var(--c-file));
+  --ease-enter: cubic-bezier(.22, 1, .36, 1);
+  --ease-move: cubic-bezier(.25, 1, .5, 1);
+  --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
+  --font-display: "Unbounded", "Geist", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-ui: "Geist", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Consolas, "Microsoft YaHei", monospace;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --ink: #EDF0F8;
+    --glass: rgb(255 255 255 / .62);
+    --glass-2: rgb(20 30 80 / .035);
+    --glass-3: rgb(20 30 80 / .06);
+    --line: rgb(30 45 110 / .09);
+    --line-2: rgb(30 45 110 / .16);
+    --fg: #111632; --muted: #545C7C; --faint: #7A83A1;
+    --c-text: #0891B2; --c-link: #3B5BDB; --c-code: #0D9488; --c-accent: #C026D3;
+    --c-image: #D97706; --c-video: #E03131; --c-file: #7C3AED; --c-fav: #4D7C0F;
+    --beam: #0E7FA3; --beam-hover: #0B6A88; --on-beam: #FFFFFF; --on-pill: #FFFFFF; --danger: #D6334F; --danger-hover: #B82640; --on-danger: #FFFFFF;
+    --well: rgb(20 30 80 / .04); --well-2: rgb(255 255 255 / .85);
+    --pop: rgb(255 255 255 / .94); --pop-solid: #FFFFFF;
+    --hover: rgb(20 30 80 / .07);
+    --preview-bg: rgb(255 255 255 / .32);
+    --shadow-win: 0 40px 100px -30px rgb(40 50 110 / .35), inset 0 1px 0 rgb(255 255 255 / .9);
+    --shadow-pop: 0 20px 50px -18px rgb(40 50 110 / .35);
+    --scrim: rgb(20 28 60 / .22);
+    --track-off: rgb(20 30 80 / .12); --knob: #FFFFFF;
+    --mark-bg: #FFE08A; --mark-fg: #3A2A00; --mark-ring: rgb(217 119 6 / .35);
+    --glow-a: rgb(14 127 163 / .55); --glow-b: rgb(192 38 211 / .25);
+    --img-check: rgb(20 30 80 / .05);
+    --sp-top-mix: 40%; --sp-glow-a: 6px; --sp-glow-b: 14px; --sp-mirror-a: .35; --sp-under: 6%;
+  }
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --ink: #EDF0F8;
+  --glass: rgb(255 255 255 / .62);
+  --glass-2: rgb(20 30 80 / .035);
+  --glass-3: rgb(20 30 80 / .06);
+  --line: rgb(30 45 110 / .09);
+  --line-2: rgb(30 45 110 / .16);
+  --fg: #111632; --muted: #545C7C; --faint: #7A83A1;
+  --c-text: #0891B2; --c-link: #3B5BDB; --c-code: #0D9488; --c-accent: #C026D3;
+  --c-image: #D97706; --c-video: #E03131; --c-file: #7C3AED; --c-fav: #4D7C0F;
+  --beam: #0E7FA3; --beam-hover: #0B6A88; --on-beam: #FFFFFF; --on-pill: #FFFFFF; --danger: #D6334F; --danger-hover: #B82640; --on-danger: #FFFFFF;
+  --well: rgb(20 30 80 / .04); --well-2: rgb(255 255 255 / .85);
+  --pop: rgb(255 255 255 / .94); --pop-solid: #FFFFFF;
+  --hover: rgb(20 30 80 / .07);
+  --preview-bg: rgb(255 255 255 / .32);
+  --shadow-win: 0 40px 100px -30px rgb(40 50 110 / .35), inset 0 1px 0 rgb(255 255 255 / .9);
+  --shadow-pop: 0 20px 50px -18px rgb(40 50 110 / .35);
+  --scrim: rgb(20 28 60 / .22);
+  --track-off: rgb(20 30 80 / .12); --knob: #FFFFFF;
+  --mark-bg: #FFE08A; --mark-fg: #3A2A00; --mark-ring: rgb(217 119 6 / .35);
+  --glow-a: rgb(14 127 163 / .55); --glow-b: rgb(192 38 211 / .25);
+  --img-check: rgb(20 30 80 / .05);
+  --sp-top-mix: 40%; --sp-glow-a: 6px; --sp-glow-b: 14px; --sp-mirror-a: .35; --sp-under: 6%;
+}

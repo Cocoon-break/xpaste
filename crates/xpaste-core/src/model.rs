@@ -72,6 +72,12 @@ pub struct Settings {
     pub ocr_backfill: bool,
     /// 复制文件时把文本类文件的内容读进搜索文本（每条最多 64 KB）；默认关：大库里的大段文本多半来自它
     pub search_file_text: bool,
+    /// 截图全局快捷键；空字符串表示不启用
+    pub shot_hotkey: String,
+    /// 截图保存文件夹；空字符串表示平台默认（图片/xPaste）
+    pub shot_dir: String,
+    /// 保存截图时同时复制到剪切板
+    pub shot_save_copy: bool,
 }
 
 impl Default for Settings {
@@ -99,6 +105,9 @@ impl Default for Settings {
             ocr_enabled: true,
             ocr_backfill: true,
             search_file_text: false,
+            shot_hotkey: "Alt+Shift+A".into(),
+            shot_dir: String::new(),
+            shot_save_copy: true,
         }
     }
 }
@@ -118,17 +127,65 @@ const MODIFIERS: [&str; 12] = [
     "meta",
 ];
 
+fn has_modifier(s: &str) -> bool {
+    s.split('+')
+        .any(|part| MODIFIERS.contains(&part.trim().to_lowercase().as_str()))
+}
+
+/// 按 `+` 切分、trim、小写、修饰键别名归一、排序去重，用来比较两个快捷键是否是同一组合（M15）。
+fn hotkey_key(s: &str) -> Vec<String> {
+    hotkey_key_on(s, cfg!(target_os = "macos"))
+}
+
+/// 别名同全局快捷键插件的解析：`CommandOrControl` 在 macOS 上是 ⌘，在 Windows 上是 Ctrl。
+fn hotkey_key_on(s: &str, mac: bool) -> Vec<String> {
+    let mut parts: Vec<String> = s
+        .split('+')
+        .map(|p| {
+            let p = p.trim().to_lowercase();
+            match p.as_str() {
+                "commandorcontrol" | "cmdorctrl" | "cmdorcontrol" | "commandorctrl" if mac => {
+                    "super".into()
+                }
+                "commandorcontrol" | "cmdorctrl" | "cmdorcontrol" | "commandorctrl" => {
+                    "control".into()
+                }
+                "cmd" | "command" | "super" | "meta" => "super".into(),
+                "ctrl" | "control" => "control".into(),
+                "option" | "alt" => "alt".into(),
+                _ => p,
+            }
+        })
+        .collect();
+    parts.sort();
+    parts.dedup();
+    parts
+}
+
 impl Settings {
+    /// 截图快捷键与唤起快捷键是同一组合时停用截图快捷键（M15）：升级前把唤起设成了 `Alt+Shift+A`
+    /// 的用户读出时会撞上截图的默认值，不处理的话整份设置校验不过、回落到默认值。
+    pub fn disable_clashing_shot_hotkey(&mut self) {
+        if !self.shot_hotkey.is_empty() && hotkey_key(&self.shot_hotkey) == hotkey_key(&self.hotkey)
+        {
+            self.shot_hotkey.clear();
+        }
+    }
+
     /// 按顺序检查，返回第一条不满足的规则。
     pub fn validate(&self) -> Result<(), CoreError> {
         let fail = |m: &str| Err(CoreError::InvalidSettings(m.into()));
 
-        let has_modifier = self
-            .hotkey
-            .split('+')
-            .any(|part| MODIFIERS.contains(&part.trim().to_lowercase().as_str()));
-        if !has_modifier {
+        if !has_modifier(&self.hotkey) {
             return fail("至少需要包含 Mod 或 Alt");
+        }
+        if !self.shot_hotkey.is_empty() {
+            if !has_modifier(&self.shot_hotkey) {
+                return fail("截图快捷键至少需要包含 Mod 或 Alt");
+            }
+            if hotkey_key(&self.shot_hotkey) == hotkey_key(&self.hotkey) {
+                return fail("截图快捷键不能与唤起快捷键相同");
+            }
         }
         if !matches!(self.retention_days, None | Some(7 | 30 | 90)) {
             return fail("历史保留只能是 7 天、30 天、90 天或永久");
@@ -551,6 +608,85 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn default_shot_settings() {
+        let s = Settings::default();
+        assert_eq!(s.shot_hotkey, "Alt+Shift+A");
+        assert_eq!(s.shot_dir, "");
+        assert!(s.shot_save_copy);
+    }
+
+    #[test]
+    fn old_json_gets_shot_defaults() {
+        let s: Settings = serde_json::from_str(r#"{"hotkey":"Alt+Space"}"#).unwrap();
+        let d = Settings::default();
+        assert_eq!(s.shot_hotkey, d.shot_hotkey);
+        assert_eq!(s.shot_dir, d.shot_dir);
+        assert_eq!(s.shot_save_copy, d.shot_save_copy);
+    }
+
+    #[test]
+    fn old_json_with_default_shot_combo_disables_shot_hotkey() {
+        let mut s: Settings = serde_json::from_str(r#"{"hotkey":"Alt+Shift+A"}"#).unwrap();
+        s.disable_clashing_shot_hotkey();
+        assert_eq!(s.shot_hotkey, "");
+        assert_eq!(s.hotkey, "Alt+Shift+A");
+        assert!(s.validate().is_ok());
+        // 不撞时不动
+        let mut s = Settings::default();
+        s.disable_clashing_shot_hotkey();
+        assert_eq!(s.shot_hotkey, "Alt+Shift+A");
+    }
+
+    #[test]
+    fn validate_shot_hotkey() {
+        let with = |hotkey: &str, shot: &str| Settings {
+            hotkey: hotkey.into(),
+            shot_hotkey: shot.into(),
+            ..Default::default()
+        };
+        assert!(with("Alt+Space", "").validate().is_ok());
+        assert_eq!(
+            invalid(&with("Alt+Space", "A")),
+            "截图快捷键至少需要包含 Mod 或 Alt"
+        );
+        assert_eq!(
+            invalid(&with("Alt+Shift+A", "alt+shift+a")),
+            "截图快捷键不能与唤起快捷键相同"
+        );
+        assert_eq!(
+            invalid(&with("Shift+Alt+A", " Alt + shift+A")),
+            "截图快捷键不能与唤起快捷键相同"
+        );
+        assert_eq!(
+            invalid(&with("Option+Shift+A", "Alt+Shift+A")),
+            "截图快捷键不能与唤起快捷键相同"
+        );
+    }
+
+    #[test]
+    fn hotkey_key_merges_modifier_aliases_per_platform() {
+        use super::hotkey_key_on as key;
+        // 两端都一样的别名
+        for mac in [true, false] {
+            assert_eq!(key("Option+A", mac), key("Alt+A", mac));
+            assert_eq!(key("Ctrl+A", mac), key("Control+A", mac));
+            assert_eq!(key("Cmd+A", mac), key("Super+A", mac));
+            assert_eq!(key("Command+A", mac), key("Meta+A", mac));
+            assert_eq!(key("CmdOrCtrl+A", mac), key("CommandOrControl+A", mac));
+        }
+        // Windows：CommandOrControl 就是 Ctrl，同一个修饰键写两次也只算一次
+        assert_eq!(key("CommandOrControl+A", false), key("Ctrl+A", false));
+        assert_eq!(
+            key("CommandOrControl+Control+A", false),
+            key("Ctrl+A", false)
+        );
+        assert_ne!(key("CommandOrControl+A", false), key("Super+A", false));
+        // macOS：CommandOrControl 是 ⌘，与 ⌃ 不同
+        assert_eq!(key("CommandOrControl+A", true), key("Cmd+A", true));
+        assert_ne!(key("CommandOrControl+A", true), key("Ctrl+A", true));
     }
 
     #[test]

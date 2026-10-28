@@ -11,8 +11,14 @@ pub fn asset_url(path: &Path) -> String {
     } else {
         "asset://localhost/"
     });
-    // 同 encodeURIComponent：只保留非保留字符
-    for b in path.to_string_lossy().bytes() {
+    out.push_str(&encode_component(&path.to_string_lossy()));
+    out
+}
+
+/// 同 encodeURIComponent：只保留非保留字符。
+pub fn encode_component(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
         if b.is_ascii_alphanumeric() || b"-_.!~*'()".contains(&b) {
             out.push(b as char);
         } else {
