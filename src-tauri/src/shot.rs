@@ -1,12 +1,12 @@
-//! 截图会话与每屏遮罩窗口（设计 §4.1、§4.3）。
+//! 截图会话与每屏遮罩窗口（M23 规则 1、4）。
 //!
 //! 流程：快捷键 → `begin` 在后台线程冻结所有显示器 → 给每块屏的遮罩 `shot-<i>` 发 `shot-begin`
 //! → 遮罩用 `shot_frame` 取冻结图、画好后 `shot_ready` 上屏 → 全部就绪后光标所在屏拿键盘焦点
-//! → 遮罩合成 PNG 交给 `shot_finish` 做复制 / 保存 / 识别文字 / 贴图（§4.5）→ 提示条 → `shot_cancel`。
+//! → 遮罩合成 PNG 交给 `shot_finish` 做复制 / 保存 / 识别文字 / 贴图（M23 规则 7）→ 提示条 → `shot_cancel`。
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, MutexGuard, PoisonError, mpsc};
+use std::sync::{MutexGuard, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -22,6 +22,16 @@ use crate::state::AppState;
 const LABEL_PREFIX: &str = "shot-";
 /// 按下快捷键后这么久还没全部上屏，视为卡住（某块屏的遮罩出错或没收到载荷），下次快捷键重新开始
 const STALE: Duration = Duration::from_secs(3);
+/// 原生单位：macOS 为点，Windows 为物理像素
+const POINTS: bool = cfg!(target_os = "macos");
+/// 截图识别文字交给引擎前缩到的长边。历史图片识别缩到 2000 px（`ocr.rs`），整屏截图（5K 屏 5120 px）
+/// 缩那么多会丢掉界面上的小字；这里取历史识别的跳过阈值。Windows 另受引擎上限 `MaxImageDimension` 限制。
+const SHOT_OCR_SIDE: u32 = 8000;
+
+/// 逻辑像素换成原生单位的倍数：`points`（macOS）为 1，否则（Windows 物理像素）为该屏缩放。
+fn native_per_logical(scale: f64, points: bool) -> f64 {
+    if points { 1.0 } else { scale }
+}
 
 /// 显示器内的逻辑像素矩形（左上为原点）。
 #[derive(Serialize, Clone, Copy, PartialEq, Debug)]
@@ -41,7 +51,7 @@ pub fn to_local(r: &WinRect, f: &Frame, points: bool) -> Option<LRect> {
     if x1 <= x0 || y1 <= y0 {
         return None;
     }
-    let k = if points { 1.0 } else { f.scale };
+    let k = native_per_logical(f.scale, points);
     Some(LRect {
         x: (x0 - f.origin.0) / k,
         y: (y0 - f.origin.1) / k,
@@ -54,30 +64,38 @@ pub fn to_local(r: &WinRect, f: &Frame, points: bool) -> Option<LRect> {
 pub fn cursor_on(frames: &[Frame], c: (f64, f64), points: bool) -> Option<(usize, (f64, f64))> {
     frames.iter().enumerate().find_map(|(i, f)| {
         let (dx, dy) = (c.0 - f.origin.0, c.1 - f.origin.1);
-        let k = if points { 1.0 } else { f.scale };
+        let k = native_per_logical(f.scale, points);
         (dx >= 0.0 && dy >= 0.0 && dx < f.size.0 && dy < f.size.1).then_some((i, (dx / k, dy / k)))
     })
 }
 
-pub enum BeginPlan {
-    /// 没有屏幕录制权限：不显示遮罩，改由面板提示授权（设计 §4.8）
-    NeedPermission,
-    Freeze,
+/// 一块屏的冻结结果：位置与缩放留到动作完成，像素由遮罩取走一次。
+pub struct Screen {
+    origin: (f64, f64),
+    scale: f64,
+    /// `shot_frame` 的响应体：小端 `u32` 宽、高，接着是 RGBA。冻结时就拼好（在锁外），
+    /// 遮罩取走时原样交出、不再拷贝几十 MB；取走后为空
+    bytes: Vec<u8>,
 }
 
-pub fn begin_plan(granted: bool) -> BeginPlan {
-    if granted {
-        BeginPlan::Freeze
-    } else {
-        BeginPlan::NeedPermission
+impl From<Frame> for Screen {
+    fn from(f: Frame) -> Self {
+        let mut bytes = Vec::with_capacity(8 + f.rgba.len());
+        bytes.extend_from_slice(&f.px.0.to_le_bytes());
+        bytes.extend_from_slice(&f.px.1.to_le_bytes());
+        bytes.extend_from_slice(&f.rgba);
+        Self {
+            origin: f.origin,
+            scale: f.scale,
+            bytes,
+        }
     }
 }
 
 /// 一次截图的状态：从按下快捷键到遮罩全部隐藏。
 #[derive(Default)]
 pub struct Session {
-    /// `Arc`：`shot_frame` 在锁外拷贝，不让几十 MB 的拷贝挡住其他屏和主线程
-    frames: Vec<Arc<Frame>>,
+    frames: Vec<Screen>,
     payloads: Vec<BeginPayload>,
     active: bool,
     /// 每次开始加一，后台冻结线程据此认出自己是否已过期
@@ -96,16 +114,19 @@ pub struct Session {
 impl Session {
     /// 开始一次截图；已在进行中返回 false（连按快捷键只认第一次）。
     pub fn try_begin(&mut self) -> bool {
-        self.try_begin_at(Instant::now())
+        self.try_begin_at(Instant::now(), false)
     }
 
-    /// 同 `try_begin`；进行中但超过 `STALE` 仍未全部上屏的会话视为已结束，重置后开始新的。
-    pub fn try_begin_at(&mut self, now: Instant) -> bool {
+    /// 同 `try_begin`；进行中的会话在两种情况下视为已结束，重置后开始新的（M23 规则 1）：
+    /// 超过 `STALE` 仍未全部上屏；已全部上屏但遮罩丢了（`lost`：某块屏的遮罩已不在或已隐藏）。
+    pub fn try_begin_at(&mut self, now: Instant, lost: bool) -> bool {
         if self.active {
-            let stale = !self.all_ready()
-                && self
-                    .started
-                    .is_some_and(|t| now.saturating_duration_since(t) > STALE);
+            let stale = if self.all_ready() {
+                lost
+            } else {
+                self.started
+                    .is_some_and(|t| now.saturating_duration_since(t) > STALE)
+            };
             if !stale {
                 return false;
             }
@@ -126,13 +147,29 @@ impl Session {
         self.active && self.generation == generation
     }
 
-    pub fn set_frames(&mut self, f: Vec<Frame>) {
+    pub fn set_frames(&mut self, f: Vec<Screen>) {
         self.ready = vec![false; f.len()];
-        self.frames = f.into_iter().map(Arc::new).collect();
+        self.frames = f;
     }
 
-    pub fn frame(&self, i: usize) -> Option<Arc<Frame>> {
-        self.frames.get(i).cloned()
+    /// 第 `i` 块屏的位置与缩放；冻结图已释放时为 `None`。
+    pub fn screen(&self, i: usize) -> Option<((f64, f64), f64)> {
+        self.frames.get(i).map(|f| (f.origin, f.scale))
+    }
+
+    /// 取走第 `i` 块屏的 `shot_frame` 响应体（只移动、不拷贝）；已取走或冻结图已释放时为 `None`。
+    pub fn take_frame(&mut self, i: usize) -> Option<Vec<u8>> {
+        let bytes = std::mem::take(&mut self.frames.get_mut(i)?.bytes);
+        (!bytes.is_empty()).then_some(bytes)
+    }
+
+    /// 已全部上屏的遮罩个数；没有全部上屏时为 0（`begin` 据此检查遮罩是否还在）。
+    pub fn shown_overlays(&self) -> usize {
+        if self.all_ready() {
+            self.ready.len()
+        } else {
+            0
+        }
     }
 
     pub fn set_payloads(&mut self, p: Vec<BeginPayload>) {
@@ -155,6 +192,15 @@ impl Session {
             ..Self::default()
         };
         previous
+    }
+
+    /// 只结束 `generation` 这一次截图，返回值同 `end`；不是当前这次（上一次截图迟到的退出）时什么也不做，返回 `Err`。
+    pub fn end_if_current(&mut self, generation: u64) -> Result<Option<isize>, ()> {
+        if self.is_current(generation) {
+            Ok(self.end())
+        } else {
+            Err(())
+        }
     }
 
     pub fn is_active(&self) -> bool {
@@ -236,15 +282,6 @@ pub fn session(app: &AppHandle) -> MutexGuard<'_, Session> {
         .unwrap_or_else(PoisonError::into_inner)
 }
 
-/// `shot_frame` 的响应体：小端 `u32` 宽、高，接着是 RGBA。
-pub fn frame_bytes(f: &Frame) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(8 + f.rgba.len());
-    buf.extend_from_slice(&f.px.0.to_le_bytes());
-    buf.extend_from_slice(&f.px.1.to_le_bytes());
-    buf.extend_from_slice(&f.rgba);
-    buf
-}
-
 fn timing() -> bool {
     crate::timing_enabled(std::env::var_os("XPASTE_TIMING"))
 }
@@ -260,7 +297,8 @@ pub fn screen_capture_pane(macos_major: Option<u32>) -> &'static str {
 
 /// 快捷键入口。主线程调用。
 pub fn begin(app: &AppHandle) {
-    if let BeginPlan::NeedPermission = begin_plan(xpaste_platform::screen_capture_granted()) {
+    // 没有屏幕录制权限：不显示遮罩，改由面板提示授权（M23 规则 2）
+    if !xpaste_platform::screen_capture_granted() {
         log::info!("截图缺少屏幕录制权限，提示授权");
         crate::panel::show(app, None, crate::panel::Trigger::Hotkey);
         events::emit_to(
@@ -274,14 +312,20 @@ pub fn begin(app: &AppHandle) {
     let panel_shown = app
         .get_webview_window("panel")
         .is_some_and(|w| w.is_visible().unwrap_or(false));
+    // 已全部上屏的遮罩被关掉或隐藏了（Windows 上 Alt+F4 已拦下，这里兜底）：会话不会再结束，重新开始
+    let shown = session(app).shown_overlays();
+    let lost = (0..shown).any(|i| {
+        !app.get_webview_window(&label(i))
+            .is_some_and(|w| w.is_visible().unwrap_or(false))
+    });
     let (generation, stale) = {
         let mut s = session(app);
         let was_active = s.is_active();
-        if !s.try_begin() {
+        if !s.try_begin_at(Instant::now(), lost) {
             return;
         }
-        // 面板开着时前台是面板自己（foreground_window 排除本进程），用面板唤起时记下的那个；
-        // 面板没开时那个值可能早已过期，不用
+        // Windows 上本进程窗口（面板、刚点过的贴图）在前台时，foreground_window 取最后一个外部前台窗口；
+        // 取不到时（前台切换钩子没装上）面板开着就用面板唤起时记下的那个，面板没开时那个值可能早已过期，不用
         s.previous_window = xpaste_platform::foreground_window().or_else(|| {
             Some(
                 app.state::<AppState>()
@@ -294,7 +338,10 @@ pub fn begin(app: &AppHandle) {
     };
     // 上一次卡住的会话：已上屏的遮罩还盖在屏上，先撤下，不然会被截进去
     if stale {
-        log::info!("shot 上次截图 {}s 内未全部上屏，重新开始", STALE.as_secs());
+        log::info!(
+            "shot 上次截图卡住（遮罩丢失或 {}s 内未全部上屏），重新开始",
+            STALE.as_secs()
+        );
         hide_overlays(app);
     }
     // 面板不能被截进去
@@ -331,7 +378,7 @@ fn freeze(app: &AppHandle, generation: u64, settle: bool) {
             t.elapsed().as_millis()
         );
     }
-    let points = cfg!(target_os = "macos");
+    let points = POINTS;
     // macOS 上 tao 的光标按主屏缩放成物理像素（见 panel::monitor_contains），除以主屏（frames[0]）缩放换回点
     let k = if points { frames[0].scale } else { 1.0 };
     let cursor = app
@@ -368,6 +415,8 @@ fn freeze(app: &AppHandle, generation: u64, settle: bool) {
             log::warn!("摆放遮罩 {i} 失败：{e}");
         }
     }
+    // 拼响应体要拷贝几十 MB，放在锁外
+    let screens = frames.into_iter().map(Screen::from).collect();
     {
         let mut s = session(app);
         // 冻结期间被取消，或已被新的一次截图取代
@@ -375,7 +424,7 @@ fn freeze(app: &AppHandle, generation: u64, settle: bool) {
             return;
         }
         s.cursor = cursor.map(|(i, _)| i);
-        s.set_frames(frames);
+        s.set_frames(screens);
         s.set_payloads(payloads.clone());
     }
     for p in payloads {
@@ -383,11 +432,13 @@ fn freeze(app: &AppHandle, generation: u64, settle: bool) {
     }
 }
 
-fn end_if_current(app: &AppHandle, generation: u64) {
-    let mut s = session(app);
-    if s.is_current(generation) {
-        s.end();
-    }
+/// 只结束 `generation` 这一次截图（`shot_cancel`、冻结失败）：上一次截图迟到的退出（提示条、淡出计时）
+/// 不能结束新的一次。其余同 `end`。
+pub fn end_if_current(app: &AppHandle, generation: u64) {
+    let Ok(previous) = session(app).end_if_current(generation) else {
+        return;
+    };
+    after_end(app, previous);
 }
 
 /// 遮罩铺满整块屏（含菜单栏）。
@@ -547,6 +598,24 @@ fn show_overlay(app: &AppHandle, i: usize, focus: bool) {
 /// 不然系统按 z 序交给下一个窗口，可能是贴图；macOS 上 `previous_window` 恒为 `None`。
 pub fn end(app: &AppHandle) {
     let previous = session(app).end();
+    after_end(app, previous);
+}
+
+/// 遮罩页面的内容进程崩溃（macOS）：页面不会再上屏或退出，会话会一直进行中、截图快捷键失灵。
+/// 结束本次截图，并重新加载页面供下次使用（M23 规则 1）。
+#[cfg(target_os = "macos")]
+pub fn overlay_crashed(w: &tauri::Webview) {
+    let Some(i) = overlay_index(w.label()) else {
+        return;
+    };
+    log::warn!("遮罩 {i} 页面进程退出，结束截图并重新加载");
+    end(w.app_handle());
+    if let Err(e) = w.reload() {
+        log::warn!("重新加载遮罩 {i} 失败：{e}");
+    }
+}
+
+fn after_end(app: &AppHandle, previous: Option<isize>) {
     hide_overlays(app);
     if let Some(h) = previous {
         // 排在 hide_overlays 之后：遮罩还拿着前台，本进程此刻是前台进程，系统允许切
@@ -571,7 +640,7 @@ fn hide_overlays(app: &AppHandle) {
     });
 }
 
-/// 遮罩的四种输出（设计 §4.5）。
+/// 遮罩的四种输出（M23 规则 7）。
 #[derive(Debug, Clone, Copy)]
 pub enum Action {
     Copy,
@@ -674,21 +743,6 @@ pub struct ShotOutcome {
     pub copied: bool,
 }
 
-/// 启动时删掉识别文字留下的 `shot-ocr-*` 临时图（屏幕像素）：正常流程用完即删，崩溃或写一半时会留下。
-pub fn clear_ocr_tmp(tmp: &Path) -> std::io::Result<()> {
-    let entries = match std::fs::read_dir(tmp) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        r => r?,
-    };
-    for e in entries {
-        let e = e?;
-        if e.file_name().to_string_lossy().starts_with("shot-ocr-") {
-            std::fs::remove_file(e.path())?;
-        }
-    }
-    Ok(())
-}
-
 /// 贴图图片目录；启动时清空（贴图只在本次运行内有效）。
 pub fn clear_pins(dir: &Path) -> std::io::Result<()> {
     match std::fs::remove_dir_all(dir) {
@@ -720,7 +774,7 @@ pub fn pin_bounds(
     r: LRect,
     points: bool,
 ) -> ((f64, f64), (f64, f64)) {
-    let k = if points { 1.0 } else { scale };
+    let k = native_per_logical(scale, points);
     ((origin.0 + r.x * k, origin.1 + r.y * k), (r.w * k, r.h * k))
 }
 
@@ -735,8 +789,8 @@ pub fn finish(
     let (generation, origin, scale) = {
         let mut s = session(app);
         // 取到帧并认领输出要在同一次加锁里：识别文字要几秒，连按 O / 回车不能跑出两个动作
-        match s.frame(i).filter(|_| s.is_active()) {
-            Some(f) if s.claim_finish() => (s.generation(), f.origin, f.scale),
+        match s.screen(i).filter(|_| s.is_active()) {
+            Some((origin, scale)) if s.claim_finish() => (s.generation(), origin, scale),
             _ => return Err(AppError::Invalid("截图已结束".into())),
         }
     };
@@ -790,7 +844,7 @@ fn run_action(
     })
 }
 
-/// 写 PNG 到剪切板，不标记为自身写入：监听器照常把它作为图片记录入库（设计 §4.5）。
+/// 写 PNG 到剪切板，不标记为自身写入：监听器照常把它作为图片记录入库（M23 规则 7、M01 规则 5）。
 fn copy_png(png: Vec<u8>) -> Result<(), AppError> {
     let bytes = png.len();
     xpaste_platform::write(&xpaste_platform::png_flavors(png))
@@ -822,17 +876,11 @@ fn save(app: &AppHandle, png: Vec<u8>) -> Result<ShotOutcome, AppError> {
     })
 }
 
-/// 识别文字：PNG 写进临时文件交给系统识别；有文字就写纯文本（自身写入，不入库）。
+/// 识别文字：PNG 字节直接交给系统识别（不落盘）；有文字就写纯文本（自身写入，不入库，M23 规则 7）。
 fn ocr(app: &AppHandle, generation: u64, png: Vec<u8>) -> Result<ShotOutcome, AppError> {
     let state = app.state::<AppState>();
-    let tmp = state.data_dir.join("tmp");
-    std::fs::create_dir_all(&tmp)?;
-    let path = tmp.join(format!("shot-ocr-{generation}.png"));
-    std::fs::write(&path, &png)?;
     let t = Instant::now();
-    let result = xpaste_platform::ocr_png(&path, 2000);
-    let _ = std::fs::remove_file(&path);
-    let text = match result {
+    let text = match xpaste_platform::ocr_png_bytes(&png, SHOT_OCR_SIDE) {
         Ok(Some(t)) if !t.text.trim().is_empty() => Some(t.text),
         Ok(_) => None,
         Err(e) => {
@@ -893,7 +941,7 @@ fn enter_toast(app: &AppHandle, generation: u64) {
     });
 }
 
-/// 选区原地变成贴图窗口 `pin-<n>`（设计 §4.5），图片存 `pins/<n>.png`。
+/// 选区原地变成贴图窗口 `pin-<n>`（M23 规则 7、9），图片存 `pins/<n>.png`。
 fn open_pin(
     app: &AppHandle,
     origin: (f64, f64),
@@ -914,7 +962,8 @@ fn open_pin(
         r.h,
         crate::assets::encode_component(&crate::assets::asset_url(&path))
     );
-    let (o, size) = pin_bounds(origin, scale, r, cfg!(target_os = "macos"));
+    let (o, size) = pin_bounds(origin, scale, r, POINTS);
+    let k = native_per_logical(scale, POINTS);
     let w = WebviewWindowBuilder::new(app, format!("{PIN_PREFIX}{n}"), WebviewUrl::App(url.into()))
         // 平台层 window_rects 只保留本进程里标题以此开头的窗口：再次截图时贴图可被吸附
         .title("xpaste-pin")
@@ -923,10 +972,7 @@ fn open_pin(
         // 用 SW_SHOWNOACTIVATE，之后的 show() 一律 SW_SHOW 会激活贴图、抢走原应用的键盘；
         // 先按选区的逻辑坐标大致摆好，下面 place 再按物理像素校正
         .visible(cfg!(windows))
-        .position(
-            o.0 / scale_for_builder(scale),
-            o.1 / scale_for_builder(scale),
-        )
+        .position(o.0 / k, o.1 / k)
         .inner_size(r.w, r.h)
         .focused(false)
         .transparent(true)
@@ -978,15 +1024,6 @@ fn show_pin(w: &WebviewWindow) {
 #[cfg(not(target_os = "macos"))]
 fn show_pin(_w: &WebviewWindow) {}
 
-/// builder 的 position 是逻辑坐标；macOS 的原生单位已是点，Windows 的是物理像素，要除以该屏缩放。
-fn scale_for_builder(scale: f64) -> f64 {
-    if cfg!(target_os = "macos") {
-        1.0
-    } else {
-        scale
-    }
-}
-
 fn pin_n(w: &WebviewWindow) -> Result<u64, AppError> {
     pin_index(w.label()).ok_or_else(|| AppError::Invalid("不是贴图窗口".into()))
 }
@@ -1005,29 +1042,35 @@ pub fn pin_close(app: &AppHandle, w: &WebviewWindow) -> Result<(), AppError> {
     Ok(())
 }
 
+/// 贴图窗口每边的上限（物理像素），前端 `src/pin/zoom.ts` 的 `MAX_PX` 与之相同
 const MAX_PIN_PX: f64 = 16384.0;
 
 /// 贴图滚轮缩放、恢复原始大小、拖回屏内：逻辑坐标，位置和尺寸一起改。同步命令跑在主线程，
 /// `place` 的两步在同一轮里改完、中间不重绘，以光标为锚的缩放不会先跳一下。
+/// 返回实际用的缩小系数（≤ 1，没超上限时为 1），前端据此算当前缩放（M23 规则 9）。
 pub fn pin_set_bounds(
     w: &WebviewWindow,
     x: f64,
     y: f64,
     width: f64,
     height: f64,
-) -> Result<(), AppError> {
+) -> Result<f64, AppError> {
     pin_n(w)?;
     if ![x, y, width, height].iter().all(|v| v.is_finite()) || width < 1.0 || height < 1.0 {
         return Err(AppError::Invalid("贴图尺寸无效".into()));
     }
     let s = w.scale_factor()?;
-    // 整屏贴图放大到 400% 会超出 webview 的纹理上限：等比缩到每边不超过 16384 物理像素
-    let f = (MAX_PIN_PX / s / width.max(height)).min(1.0);
-    let (width, height) = (width * f, height * f);
-    // 换成原生单位：macOS 为点，Windows 为物理像素（同 builder 的换算）
-    let k = scale_for_builder(s);
-    place(w, (x * k, y * k), (width * k, height * k))?;
-    Ok(())
+    // 整屏贴图放大到 400% 会超出 webview 的纹理上限：等比缩到每边不超过 16384 物理像素。
+    // 前端已按同一上限夹住缩放，这里兜底（窗口刚换到缩放不同的屏等）
+    let f = pin_shrink(width.max(height), s);
+    let k = native_per_logical(s, POINTS);
+    place(w, (x * k, y * k), (width * f * k, height * f * k))?;
+    Ok(f)
+}
+
+/// 长边 `side`（逻辑像素）在缩放 `scale` 的屏上不超过 `MAX_PIN_PX` 物理像素要乘的系数，≤ 1。
+fn pin_shrink(side: f64, scale: f64) -> f64 {
+    (MAX_PIN_PX / scale / side).min(1.0)
 }
 
 /// 贴图右键“复制”：原图写剪切板，进入历史（同截图的复制）。
@@ -1068,6 +1111,10 @@ mod tests {
             px: (0, 0),
             rgba: Vec::new(),
         }
+    }
+
+    fn screens(f: Vec<Frame>) -> Vec<Screen> {
+        f.into_iter().map(Screen::from).collect()
     }
 
     #[test]
@@ -1147,12 +1194,6 @@ mod tests {
     }
 
     #[test]
-    fn begin_plan_needs_permission() {
-        assert!(matches!(begin_plan(false), BeginPlan::NeedPermission));
-        assert!(matches!(begin_plan(true), BeginPlan::Freeze));
-    }
-
-    #[test]
     fn second_begin_is_ignored_until_end() {
         let mut s = Session::default();
         assert!(s.try_begin());
@@ -1167,23 +1208,23 @@ mod tests {
     fn end_drops_frames() {
         let mut s = Session::default();
         s.try_begin();
-        s.set_frames(vec![
+        s.set_frames(screens(vec![
             frame((0.0, 0.0), (10.0, 10.0), 1.0),
             frame((10.0, 0.0), (10.0, 10.0), 1.0),
-        ]);
-        assert!(s.frame(1).is_some());
+        ]));
+        assert!(s.screen(1).is_some());
         s.end();
-        assert!(s.frame(0).is_none());
+        assert!(s.screen(0).is_none());
     }
 
     #[test]
     fn all_ready_fires_once() {
         let mut s = Session::default();
         s.try_begin();
-        s.set_frames(vec![
+        s.set_frames(screens(vec![
             frame((0.0, 0.0), (10.0, 10.0), 1.0),
             frame((10.0, 0.0), (10.0, 10.0), 1.0),
-        ]);
+        ]));
         let g = s.generation();
         assert_eq!(s.mark_ready(g, 1), Some(false));
         assert_eq!(s.mark_ready(g, 1), Some(false), "重复就绪不算数");
@@ -1196,30 +1237,60 @@ mod tests {
     fn stale_session_is_replaced_after_3s() {
         let t0 = Instant::now();
         let mut s = Session::default();
-        assert!(s.try_begin_at(t0));
+        assert!(s.try_begin_at(t0, false));
         let g1 = s.generation();
-        s.set_frames(vec![
+        s.set_frames(screens(vec![
             frame((0.0, 0.0), (10.0, 10.0), 1.0),
             frame((10.0, 0.0), (10.0, 10.0), 1.0),
-        ]);
+        ]));
         s.mark_ready(g1, 0);
-        assert!(!s.try_begin_at(t0 + Duration::from_secs(2)));
-        assert!(!s.try_begin_at(t0 + STALE), "正好 3 s 还不算卡住");
-        assert!(s.try_begin_at(t0 + Duration::from_millis(3001)));
-        assert!(s.frame(0).is_none(), "旧冻结图已释放");
+        assert!(!s.try_begin_at(t0 + Duration::from_secs(2), false));
+        assert!(!s.try_begin_at(t0 + STALE, false), "正好 3 s 还不算卡住");
+        assert!(s.try_begin_at(t0 + Duration::from_millis(3001), false));
+        assert!(s.screen(0).is_none(), "旧冻结图已释放");
         assert!(s.generation() > g1);
         // 冻结还没回来（尚无帧）也算未就绪
-        assert!(s.try_begin_at(t0 + Duration::from_secs(7)));
+        assert!(s.try_begin_at(t0 + Duration::from_secs(7), false));
     }
 
     #[test]
-    fn all_ready_session_is_never_stale() {
+    fn all_ready_session_restarts_only_when_overlay_lost() {
         let t0 = Instant::now();
         let mut s = Session::default();
-        s.try_begin_at(t0);
-        s.set_frames(vec![frame((0.0, 0.0), (10.0, 10.0), 1.0)]);
-        s.mark_ready(s.generation(), 0);
-        assert!(!s.try_begin_at(t0 + Duration::from_secs(60)));
+        s.try_begin_at(t0, false);
+        s.set_frames(screens(vec![
+            frame((0.0, 0.0), (10.0, 10.0), 1.0),
+            frame((10.0, 0.0), (10.0, 10.0), 1.0),
+        ]));
+        let g = s.generation();
+        assert_eq!(s.shown_overlays(), 0, "还没全部上屏");
+        s.mark_ready(g, 0);
+        s.mark_ready(g, 1);
+        assert_eq!(s.shown_overlays(), 2);
+        // 遮罩都在：正在框选，多久都不算卡住
+        assert!(!s.try_begin_at(t0 + Duration::from_secs(60), false));
+        // 遮罩被关掉或隐藏（Alt+F4 等）：重新开始
+        assert!(s.try_begin_at(t0 + Duration::from_secs(61), true));
+        assert!(s.generation() > g);
+        assert!(s.screen(0).is_none(), "旧冻结图已释放");
+        // 未全部上屏时只看 3 秒超时，lost 不算数
+        assert!(!s.try_begin_at(t0 + Duration::from_secs(62), true));
+    }
+
+    #[test]
+    fn stale_cancel_does_not_end_new_session() {
+        let mut s = Session::default();
+        s.try_begin();
+        let g1 = s.generation();
+        s.previous_window = Some(7);
+        assert_eq!(s.end_if_current(g1), Ok(Some(7)));
+        s.try_begin();
+        s.previous_window = Some(9);
+        // 上一次截图的提示条计时迟到的退出
+        assert_eq!(s.end_if_current(g1), Err(()));
+        assert!(s.is_active(), "新的一次截图不受影响");
+        assert_eq!(s.end_if_current(s.generation()), Ok(Some(9)));
+        assert!(!s.is_active());
     }
 
     #[test]
@@ -1240,10 +1311,10 @@ mod tests {
         let mut s = Session::default();
         s.try_begin();
         assert_eq!(s.payload(0), None, "冻结完成前没有载荷");
-        s.set_frames(vec![
+        s.set_frames(screens(vec![
             frame((0.0, 0.0), (10.0, 10.0), 1.0),
             frame((10.0, 0.0), (10.0, 10.0), 2.0),
-        ]);
+        ]));
         let generation = s.generation();
         let p = |index, scale| BeginPayload {
             index,
@@ -1263,13 +1334,23 @@ mod tests {
     }
 
     #[test]
-    fn frame_bytes_prefixes_le_size() {
-        let mut f = frame((0.0, 0.0), (1.0, 1.0), 1.0);
+    fn frame_bytes_prefix_le_size_and_are_taken_once() {
+        let mut f = frame((5.0, 0.0), (1.0, 1.0), 2.0);
         f.px = (258, 1);
         f.rgba = vec![9; 258 * 4];
-        let b = frame_bytes(&f);
+        let mut s = Session::default();
+        s.try_begin();
+        s.set_frames(vec![f.into()]);
+        let b = s.take_frame(0).unwrap();
         assert_eq!(&b[..8], &[2, 1, 0, 0, 1, 0, 0, 0]);
         assert_eq!(b.len(), 8 + 258 * 4);
+        assert_eq!(s.take_frame(0), None, "每屏只取一次");
+        assert_eq!(s.take_frame(1), None);
+        assert_eq!(
+            s.screen(0),
+            Some(((5.0, 0.0), 2.0)),
+            "取走像素后位置与缩放仍在，供动作使用"
+        );
     }
 
     #[test]
@@ -1333,24 +1414,6 @@ mod tests {
     }
 
     #[test]
-    fn ocr_tmp_cleared_on_start() {
-        let dir = std::env::temp_dir().join(format!("xpaste-ocr-tmp-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("shot-ocr-3.png"), b"a").unwrap();
-        std::fs::write(dir.join("shot-ocr-4.png"), b"").unwrap();
-        std::fs::write(dir.join("other.png"), b"b").unwrap();
-        clear_ocr_tmp(&dir).unwrap();
-        let left: Vec<_> = std::fs::read_dir(&dir)
-            .unwrap()
-            .map(|e| e.unwrap().file_name())
-            .collect();
-        assert_eq!(left, ["other.png"], "只删截图识别的临时图");
-        std::fs::remove_dir_all(&dir).unwrap();
-        // 目录不存在不算错
-        clear_ocr_tmp(&dir).unwrap();
-    }
-
-    #[test]
     fn previous_window_handed_back_once() {
         let mut s = Session::default();
         s.try_begin();
@@ -1386,6 +1449,14 @@ mod tests {
     }
 
     #[test]
+    fn pin_shrinks_to_texture_limit() {
+        assert_eq!(pin_shrink(1000.0, 2.0), 1.0);
+        // 5K 屏整屏贴图（2560 点，2 倍）放大到 400%：长边 10240 点 = 20480 物理像素
+        assert_eq!(pin_shrink(10240.0, 2.0), 0.8);
+        assert_eq!(pin_shrink(8192.0, 2.0), 1.0, "正好 16384 不缩");
+    }
+
+    #[test]
     fn pin_index_from_label() {
         assert_eq!(pin_index("pin-12"), Some(12));
         assert_eq!(pin_index("shot-1"), None);
@@ -1398,7 +1469,7 @@ mod tests {
         let g1 = s.generation();
         s.end();
         s.try_begin();
-        s.set_frames(vec![frame((0.0, 0.0), (10.0, 10.0), 1.0)]);
+        s.set_frames(screens(vec![frame((0.0, 0.0), (10.0, 10.0), 1.0)]));
         assert_eq!(s.mark_ready(g1, 0), None, "上一次截图的遮罩迟到的就绪不算");
         assert_eq!(s.payload(0).map(|p| p.index), None, "还没有载荷");
         assert_eq!(s.mark_ready(s.generation(), 0), Some(true));
@@ -1408,20 +1479,20 @@ mod tests {
     fn finish_drops_frames_and_blocks_begin_until_stale() {
         let t0 = Instant::now();
         let mut s = Session::default();
-        s.try_begin_at(t0);
+        s.try_begin_at(t0, false);
         let g = s.generation();
-        s.set_frames(vec![frame((0.0, 0.0), (10.0, 10.0), 1.0)]);
+        s.set_frames(screens(vec![frame((0.0, 0.0), (10.0, 10.0), 1.0)]));
         s.mark_ready(g, 0);
         let t1 = t0 + Duration::from_secs(10);
         s.finish(t1);
-        assert!(s.frame(0).is_none(), "动作完成即释放冻结图");
+        assert!(s.screen(0).is_none(), "动作完成即释放冻结图");
         assert!(s.is_current(g), "提示条期间会话仍在");
         assert!(
-            !s.try_begin_at(t1 + Duration::from_secs(1)),
+            !s.try_begin_at(t1 + Duration::from_secs(1), false),
             "提示条期间按快捷键忽略"
         );
         // 前端没调 shot_cancel 时，下次快捷键照常开始
-        assert!(s.try_begin_at(t1 + Duration::from_millis(3001)));
+        assert!(s.try_begin_at(t1 + Duration::from_millis(3001), false));
     }
 
     #[test]

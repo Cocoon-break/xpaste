@@ -1665,7 +1665,7 @@ shotIn.addEventListener('keydown', (e) => {
   if (e.key === 'Tab' || e.key === 'Escape') return;
   e.preventDefault();
   if (e.repeat || ['Control', 'Meta', 'Shift', 'Alt'].includes(e.key)) return;
-  // 不带修饰键的 ⌫ / Delete：清空，表示不启用（设计 §4.7）
+  // 不带修饰键的 ⌫ / Delete：清空，表示不启用（M15 截图快捷键）
   if ((e.key === 'Backspace' || e.key === 'Delete') && !(e.ctrlKey || e.metaKey || e.altKey || e.shiftKey)) {
     pendingShot = '';
     shotIn.value = '';
@@ -1991,7 +1991,7 @@ await onPausedChanged((p) => handlers.paused(p));
 await onOpenSettings(openSettings);
 // 设置对话框开着时提示条被它盖住，结果同样写进“历史记录”行内
 await onConfirmClear(() => void confirmClear().then((m) => m && dlg.open && (clearNote.textContent = m)));
-// 截图缺少屏幕录制权限：后端已唤起面板（设计 §4.8）
+// 截图缺少屏幕录制权限：后端已唤起面板（M18 规则 4、M23 规则 2）
 await onShotNeedPermission((pane) =>
   void confirm({
     title: '截图需要屏幕录制权限',

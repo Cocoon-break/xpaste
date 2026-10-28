@@ -1,11 +1,11 @@
-// 贴图页面（pin.html），每张贴图一个窗口，窗口即图片（设计 §4.5）。交互对照原型 docs/specs/2026-10-28-截图与录屏-原型.html
+// 贴图页面（pin.html），每张贴图一个窗口，窗口即图片（M23 规则 9）。交互对照原型 docs/specs/2026-10-28-截图与录屏-原型.html
 // 的 makePin：拖动移动、滚轮以光标为锚缩放、双击或 Esc 关闭、右键菜单。坐标为屏幕逻辑坐标。
 import './pin.css';
 import {
   onPinMoved, pinButtonDown, pinClose, pinCopy, pinImageSrc, pinMenu, pinPosition, pinSave, pinSetBounds, pinStartDrag, pinWorkArea,
   type MenuEntry,
 } from '../api/shot';
-import { clampPos, wheelSteps, zoomAt, type Wheel } from './zoom';
+import { clampPos, maxZoom, wheelSteps, zoomAt, type Wheel } from './zoom';
 
 const $ = (id: string) => document.getElementById(id)!;
 const pin = $('pin'), img = $('img') as HTMLImageElement, chip = $('zoom');
@@ -89,12 +89,11 @@ async function zoom() {
   pend = 0;
   if (!n) return;
   const p = await pinPosition(), a = { x: p.x + at.x, y: p.y + at.y };
+  // 上限按窗口每边的物理像素算，在这里夹住，锚点才对得上；后端返回实际的缩小系数（正常为 1），k 以它为准
+  const max = maxZoom(W0, H0, devicePixelRatio || 1);
   let z = { k, x: p.x, y: p.y, w: 0, h: 0 };
-  for (let i = 0; i < Math.abs(n); i++) z = zoomAt(z.k, n, a, { x: z.x, y: z.y, w0: W0, h0: H0 });
-  if (z.k !== k) {
-    await pinSetBounds(z);
-    k = z.k;
-  }
+  for (let i = 0; i < Math.abs(n); i++) z = zoomAt(z.k, n, a, { x: z.x, y: z.y, w0: W0, h0: H0 }, max);
+  if (z.k !== k) k = z.k * (await pinSetBounds(z));
   flash(`${Math.round(k * 100)}%`);
 }
 
@@ -103,8 +102,7 @@ function reset() {
   run(async () => {
     if (k === 1) return;
     const p = await pinPosition();
-    await pinSetBounds({ x: p.x, y: p.y, w: W0, h: H0 });
-    k = 1;
+    k = await pinSetBounds({ x: p.x, y: p.y, w: W0, h: H0 });
   });
 }
 

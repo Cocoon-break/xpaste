@@ -36,7 +36,10 @@ pub fn run() {
         }))
     };
     #[cfg(target_os = "macos")]
-    let builder = builder.plugin(tauri_nspanel::init());
+    let builder = builder
+        .plugin(tauri_nspanel::init())
+        // 遮罩页面的内容进程崩溃：会话不会再结束，结束它并重新加载页面（M23 规则 1）
+        .on_web_content_process_terminate(shot::overlay_crashed);
     builder
         .setup(move |app| {
             let isolated = override_.is_some();
@@ -67,12 +70,9 @@ pub fn run() {
             if timing {
                 log::info!("唤起计时已由 XPASTE_TIMING 开启");
             }
-            // 贴图只在本次运行内有效（设计 §4.5）
+            // 贴图只在本次运行内有效（M23 规则 9）
             if let Err(e) = shot::clear_pins(&data_dir.join("pins")) {
                 log::warn!("清空贴图目录失败：{e}");
-            }
-            if let Err(e) = shot::clear_ocr_tmp(&data_dir.join("tmp")) {
-                log::warn!("清理截图识别临时图失败：{e}");
             }
             if isolated {
                 log::info!("数据目录已由 XPASTE_DATA_DIR 覆盖，不启用单实例");
@@ -175,6 +175,13 @@ pub fn run() {
                 .build(),
         )
         .on_window_event(|window, event| {
+            // 遮罩不能被关掉（Windows 上 Alt+F4）：关掉后会话不会再结束、截图快捷键失灵，当作退出截图（M23 规则 8）
+            if shot::overlay_index(window.label()).is_some()
+                && let WindowEvent::CloseRequested { api, .. } = event
+            {
+                api.prevent_close();
+                shot::end(window.app_handle());
+            }
             // 截图遮罩（shot-*）与贴图（pin-*）失焦不处理
             if window.label() != "panel" {
                 return;

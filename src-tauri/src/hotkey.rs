@@ -30,7 +30,7 @@ pub enum Role {
     Shot,
 }
 
-/// 触发的快捷键是哪一个（设计 §4.7）：按解析后的组合比较；截图为空串时只认唤起。
+/// 触发的快捷键是哪一个（M23 规则 1）：按解析后的组合比较；截图为空串时只认唤起。
 pub fn role_of(pressed: &Shortcut, panel: &str, shot: &str) -> Option<Role> {
     let is = |s: &str| !s.is_empty() && s.parse::<Shortcut>().is_ok_and(|k| k == *pressed);
     if is(panel) {

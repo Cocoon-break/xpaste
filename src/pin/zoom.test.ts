@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { clampPos, wheelSteps, zoomAt, type Wheel } from './zoom.ts';
+import { clampPos, maxZoom, wheelSteps, zoomAt, type Wheel } from './zoom.ts';
 
 const WIN = { x: 100, y: 100, w0: 200, h0: 100 };
 
@@ -85,4 +85,21 @@ test('wheelSteps：按行 / 按页的 delta 换算成像素；一个事件最多
   assert.deepEqual(feed([[1, 0, 1], [3, 10, 1], [1, 20, 1]]), [1, 0, 1]);
   // 一页 = 800 px，也只算一格，余数不超过一格
   assert.deepEqual(feed([[1, 0], [1, 10, 2], [1, 20]]), [1, 1, 0]);
+});
+
+test('缩放上限：长边不超过 16384 物理像素，最多 400%', () => {
+  assert.equal(maxZoom(200, 100, 2), 4);
+  // 5K 屏整屏贴图（2560 × 1440 点，2 倍）：16384 / 2 / 2560 = 3.2
+  assert.equal(maxZoom(2560, 1440, 2), 3.2);
+  assert.equal(maxZoom(1440, 2560, 2), 3.2, '按长边算');
+});
+
+test('放大到上限后停住，窗口不再移动（锚点不漂）', () => {
+  const win = { x: 0, y: 0, w0: 2560, h0: 1440 }, a = { x: 1000, y: 500 };
+  let z = { k: 1, x: 0, y: 0, w: 2560, h: 1440 };
+  for (let i = 0; i < 40; i++) z = zoomAt(z.k, -100, a, { ...win, x: z.x, y: z.y }, 3.2);
+  assert.equal(z.k, 3.2);
+  assert.equal(z.w, 8192);
+  const again = zoomAt(z.k, -100, a, { ...win, x: z.x, y: z.y }, 3.2);
+  assert.deepEqual(again, z);
 });

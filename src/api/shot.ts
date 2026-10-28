@@ -43,7 +43,8 @@ export async function shotFrame(): Promise<Frame> {
 
 export const shotReady = (generation: number) => (stub ? Promise.resolve() : invoke<void>('shot_ready', { generation }));
 
-export const shotCancel = () => (stub ? dev.cancel() : invoke<void>('shot_cancel'));
+/** 退出截图；`generation` 不是当前这次时后端忽略（上一次截图迟到的退出不能结束新的一次）。 */
+export const shotCancel = (generation: number) => (stub ? dev.cancel() : invoke<void>('shot_cancel', { generation }));
 
 /** 合成好的 PNG 交给后端；`rect` 为显示器内逻辑像素（贴图用）。 */
 export function shotFinish(png: Uint8Array, action: ShotAction, index: number, rect: LRect): Promise<ShotOutcome> {
@@ -66,8 +67,8 @@ export const pinImageSrc = (q: URLSearchParams) => (stub ? devPin.image(q) : q.g
 export const pinClose = () => (stub ? devPin.close() : invoke<void>('pin_close'));
 export const pinCopy = () => (stub ? devPin.outcome('copy') : invoke<ShotOutcome>('pin_copy'));
 export const pinSave = () => (stub ? devPin.outcome('save') : invoke<ShotOutcome>('pin_save'));
-/** 一次改位置和尺寸（后端在主线程里连着改，缩放时锚点不跳）。 */
-export const pinSetBounds = (b: Box) => (stub ? devPin.setBounds(b) : invoke<void>('pin_set_bounds', b));
+/** 一次改位置和尺寸（后端在主线程里连着改，缩放时锚点不跳）。返回尺寸实际乘上的系数（超过窗口尺寸上限时小于 1）。 */
+export const pinSetBounds = (b: Box) => (stub ? devPin.setBounds(b) : invoke<number>('pin_set_bounds', b));
 export const pinStartDrag = () => (stub ? Promise.resolve() : getCurrentWindow().startDragging());
 
 /** 窗口当前左上角：原生拖动会移动它，每次现取。 */
@@ -173,6 +174,7 @@ const devPin = {
     this.b = { ...b };
     const el = document.getElementById('pin');
     if (el) Object.assign(el.style, { position: 'fixed', left: `${b.x}px`, top: `${b.y}px`, width: `${b.w}px`, height: `${b.h}px` });
+    return 1;
   },
   async close() {
     document.getElementById('pin')?.remove();

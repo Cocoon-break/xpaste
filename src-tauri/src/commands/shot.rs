@@ -8,16 +8,15 @@ fn index_of(window: &WebviewWindow) -> Result<usize, AppError> {
     shot::overlay_index(window.label()).ok_or_else(|| AppError::Invalid("不是截图遮罩".into()))
 }
 
-/// 调用方遮罩那块屏的冻结图：前 8 字节为小端 `u32` 宽、高，其后是 RGBA。
-/// 每屏几十 MB 的拷贝放异步线程，不占主线程。
+/// 调用方遮罩那块屏的冻结图：前 8 字节为小端 `u32` 宽、高，其后是 RGBA。每次截图每块屏只能取一次：
+/// 响应体在冻结时已拼好，这里原样移交，不再拷贝。
 #[tauri::command(async)]
 pub fn shot_frame(app: AppHandle, window: WebviewWindow) -> Result<Response, AppError> {
     let i = index_of(&window)?;
-    // 只在锁里克隆 Arc，拷贝放锁外
-    let f = shot::session(&app)
-        .frame(i)
+    let bytes = shot::session(&app)
+        .take_frame(i)
         .ok_or_else(|| AppError::Invalid("截图已结束".into()))?;
-    Ok(Response::new(shot::frame_bytes(&f)))
+    Ok(Response::new(bytes))
 }
 
 /// 调用方遮罩本次截图的 `shot-begin` 载荷；没有进行中的截图或这块屏已上屏时为 `null`。
@@ -39,9 +38,10 @@ pub fn shot_ready(app: AppHandle, window: WebviewWindow, generation: u64) -> Res
 }
 
 /// 退出截图：Esc / 右键，或提示条显示完后。隐藏全部遮罩、释放冻结图、撤销鼠标穿透。
+/// `generation` 取自 `shot-begin` 载荷；不是当前这次截图时忽略（上一次截图迟到的退出不能结束新的一次）。
 #[tauri::command]
-pub fn shot_cancel(app: AppHandle) {
-    shot::end(&app);
+pub fn shot_cancel(app: AppHandle, generation: u64) {
+    shot::end_if_current(&app, generation);
 }
 
 /// 遮罩合成好的 PNG（请求体原始字节）。请求头：`x-action`（copy / save / ocr / pin）、
@@ -93,6 +93,7 @@ pub fn pin_save(app: AppHandle, window: WebviewWindow) -> Result<shot::ShotOutco
 }
 
 /// 调用方贴图换位置和尺寸（逻辑坐标）：滚轮缩放、恢复原始大小、拖出屏后拉回。
+/// 返回尺寸实际乘上的系数（≤ 1，超过窗口尺寸上限时小于 1）。
 #[tauri::command]
 pub fn pin_set_bounds(
     window: WebviewWindow,
@@ -100,7 +101,7 @@ pub fn pin_set_bounds(
     y: f64,
     w: f64,
     h: f64,
-) -> Result<(), AppError> {
+) -> Result<f64, AppError> {
     shot::pin_set_bounds(&window, x, y, w, h)
 }
 

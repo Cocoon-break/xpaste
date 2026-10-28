@@ -126,8 +126,9 @@ function closeOverlay() {
   S.editing = null;
   ov.classList.add('out');
   // 后端 end 只隐藏窗口：告诉其他屏一起淡出并放掉像素
-  void shotClaim({ generation: S.gen, index: S.index, state: 'done' });
-  endT = window.setTimeout(() => { release(); void shotCancel(); }, reduced.matches ? 0 : 160);
+  const gen = S.gen;
+  void shotClaim({ generation: gen, index: S.index, state: 'done' });
+  endT = window.setTimeout(() => { release(); void shotCancel(gen); }, reduced.matches ? 0 : 160);
 }
 
 /** 遮罩隐藏后留着复用：放掉冻结帧、标注与马赛克底图的像素（5K 屏每张一百多 MB），用户的屏幕画面不留在内存里。 */
@@ -525,7 +526,7 @@ async function act(a: ShotAction) {
   toast(msg, lead);
   const exit = reduced.matches ? 0 : 160;
   toastT = window.setTimeout(() => (toastEl.dataset.open = 'false'), TOAST_MS - exit);
-  endT = window.setTimeout(() => { release(); void shotCancel(); }, TOAST_MS);
+  endT = window.setTimeout(() => { release(); void shotCancel(gen); }, TOAST_MS);
 }
 
 /* —— 提示条 —— */
