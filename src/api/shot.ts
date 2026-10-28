@@ -1,8 +1,10 @@
-// 截图遮罩（shot.html）与 Rust 侧 src-tauri/src/shot.rs、commands/shot.rs 的对接。
-// 不在 Tauri 里（浏览器打开 `pnpm dev` 的 /shot.html）时换成开发替身：生成一张测试帧并立即开始一次截图，
-// 供对照原型调界面；动作返回模拟结果，退出后 0.8 秒再开始一次。
+// 截图遮罩（shot.html）、贴图（pin.html）与 Rust 侧 src-tauri/src/shot.rs、commands/shot.rs 的对接。
+// 不在 Tauri 里（浏览器打开 `pnpm dev` 的 /shot.html、/pin.html）时换成开发替身：遮罩生成一张测试帧并立即开始一次截图，
+// 供对照原型调界面；动作返回模拟结果，退出后 0.8 秒再开始一次。贴图见文末 devPin。
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
+import { Menu } from '@tauri-apps/api/menu';
+import { currentMonitor, getCurrentWindow, primaryMonitor } from '@tauri-apps/api/window';
 
 import type { BeginPayload, LRect, ShotAction, ShotOutcome } from './types';
 
@@ -55,6 +57,52 @@ export const onShotClaim = async (cb: (c: ShotClaim) => void) => {
   if (!stub) await listen<ShotClaim>(SHOT_CLAIM, (e) => cb(e.payload));
 };
 
+/* —— 贴图：每张一个窗口 pin-<n>，命令都作用于调用方窗口；坐标为屏幕逻辑坐标 —— */
+export type Box = { x: number; y: number; w: number; h: number };
+export type MenuEntry = { text: string; accel: string; run: () => void } | 'sep';
+
+/** 图片地址：后端拼好的 asset URL（`src` 参数，数据目录隔离时也对）；替身下是一张测试图。 */
+export const pinImageSrc = (q: URLSearchParams) => (stub ? devPin.image(q) : q.get('src') ?? '');
+export const pinClose = () => (stub ? devPin.close() : invoke<void>('pin_close'));
+export const pinCopy = () => (stub ? devPin.outcome('copy') : invoke<ShotOutcome>('pin_copy'));
+export const pinSave = () => (stub ? devPin.outcome('save') : invoke<ShotOutcome>('pin_save'));
+/** 一次改位置和尺寸（后端在主线程里连着改，缩放时锚点不跳）。 */
+export const pinSetBounds = (b: Box) => (stub ? devPin.setBounds(b) : invoke<void>('pin_set_bounds', b));
+export const pinStartDrag = () => (stub ? Promise.resolve() : getCurrentWindow().startDragging());
+
+/** 窗口当前左上角：原生拖动会移动它，每次现取。 */
+export async function pinPosition(): Promise<{ x: number; y: number }> {
+  if (stub) return { x: devPin.b.x, y: devPin.b.y };
+  const w = getCurrentWindow();
+  const [p, k] = await Promise.all([w.outerPosition(), w.scaleFactor()]);
+  return p.toLogical(k);
+}
+
+/** 窗口所在屏的工作区（不含菜单栏、程序坞、任务栏）；窗口整个拖出所有屏时取主屏。 */
+export async function pinWorkArea(): Promise<Box | null> {
+  if (stub) return { x: 0, y: 0, w: innerWidth, h: innerHeight };
+  const m = (await currentMonitor()) ?? (await primaryMonitor());
+  if (!m) return null;
+  const p = m.workArea.position.toLogical(m.scaleFactor), s = m.workArea.size.toLogical(m.scaleFactor);
+  return { x: p.x, y: p.y, w: s.width, h: s.height };
+}
+
+/** 窗口被移动（含原生拖动）后回调。 */
+export const onPinMoved = async (cb: () => void) => {
+  if (!stub) await getCurrentWindow().onMoved(cb);
+};
+
+let lastMenu: Menu | null = null;
+/** 原生右键菜单，弹在光标处。上一个菜单在这里才释放：popup 返回时点击事件可能还没送到。 */
+export async function pinMenu(items: MenuEntry[]): Promise<void> {
+  if (stub) return devPin.menu(items);
+  void lastMenu?.close();
+  lastMenu = await Menu.new({
+    items: items.map((it) => (it === 'sep' ? { item: 'Separator' as const } : { text: it.text, accelerator: it.accel, action: it.run })),
+  });
+  await lastMenu.popup();
+}
+
 /* —— 开发替身：一块模拟桌面，窗口布局同原型 —— */
 const dev = {
   gen: 0,
@@ -99,5 +147,37 @@ const dev = {
   },
   async cancel() {
     setTimeout(() => this.begin?.(this.payload()), 800);
+  },
+};
+
+/* —— 贴图开发替身：浏览器视口当作屏幕，#pin 当作贴图窗口（真实窗口里它铺满窗口） —— */
+const devPin = {
+  b: { x: 120, y: 90, w: 360, h: 220 },
+  image(q: URLSearchParams): string {
+    const w = Number(q.get('w')) || this.b.w, h = Number(q.get('h')) || this.b.h, r = devicePixelRatio || 1;
+    Object.assign(this.b, { w, h });
+    const cv = Object.assign(document.createElement('canvas'), { width: Math.round(w * r), height: Math.round(h * r) });
+    const c = cv.getContext('2d')!;
+    c.scale(r, r);
+    c.fillStyle = '#FFFFFF'; c.fillRect(0, 0, w, h);
+    c.fillStyle = '#ECEEF3'; c.fillRect(0, 0, w, 32);
+    c.font = '400 13px "Geist", "PingFang SC", sans-serif'; c.fillStyle = '#3A3F4F';
+    for (let i = 0; i < 6; i++) c.fillText(i % 3 ? '本季度预算总额 480 万元，较上季度增加 12%。' : '2026 年第四季度预算', 20, 58 + i * 24, w - 40);
+    queueMicrotask(() => this.setBounds(this.b));
+    return cv.toDataURL('image/png');
+  },
+  async setBounds(b: Box) {
+    this.b = { ...b };
+    const el = document.getElementById('pin');
+    if (el) Object.assign(el.style, { position: 'fixed', left: `${b.x}px`, top: `${b.y}px`, width: `${b.w}px`, height: `${b.h}px` });
+  },
+  async close() {
+    document.getElementById('pin')?.remove();
+  },
+  async outcome(action: 'copy' | 'save'): Promise<ShotOutcome> {
+    return { action, chars: null, file: action === 'save' ? '截图 2026-10-28 10.24.png' : null, copied: true };
+  },
+  async menu(items: MenuEntry[]) {
+    console.log('贴图菜单', items.map((it) => (it === 'sep' ? '—' : `${it.text} ${it.accel}`)).join(' | '));
   },
 };

@@ -971,6 +971,25 @@ pub fn pin_close(app: &AppHandle, w: &WebviewWindow) -> Result<(), AppError> {
     Ok(())
 }
 
+/// 贴图滚轮缩放、恢复原始大小、拖回屏内：逻辑坐标，位置和尺寸一起改。同步命令跑在主线程，
+/// `place` 的两步在同一轮里改完、中间不重绘，以光标为锚的缩放不会先跳一下。
+pub fn pin_set_bounds(
+    w: &WebviewWindow,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), AppError> {
+    pin_n(w)?;
+    if ![x, y, width, height].iter().all(|v| v.is_finite()) || width < 1.0 || height < 1.0 {
+        return Err(AppError::Invalid("贴图尺寸无效".into()));
+    }
+    // 换成原生单位：macOS 为点，Windows 为物理像素（同 builder 的换算）
+    let k = scale_for_builder(w.scale_factor()?);
+    place(w, (x * k, y * k), (width * k, height * k))?;
+    Ok(())
+}
+
 /// 贴图右键“复制”：原图写剪切板，进入历史（同截图的复制）。
 pub fn pin_copy(app: &AppHandle, w: &WebviewWindow) -> Result<ShotOutcome, AppError> {
     copy_png(std::fs::read(pin_path(app, pin_n(w)?))?)?;

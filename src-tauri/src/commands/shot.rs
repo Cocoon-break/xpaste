@@ -91,3 +91,15 @@ pub fn pin_copy(app: AppHandle, window: WebviewWindow) -> Result<shot::ShotOutco
 pub fn pin_save(app: AppHandle, window: WebviewWindow) -> Result<shot::ShotOutcome, AppError> {
     shot::pin_save(&app, &window)
 }
+
+/// 调用方贴图换位置和尺寸（逻辑坐标）：滚轮缩放、恢复原始大小、拖出屏后拉回。
+#[tauri::command]
+pub fn pin_set_bounds(
+    window: WebviewWindow,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+) -> Result<(), AppError> {
+    shot::pin_set_bounds(&window, x, y, w, h)
+}
