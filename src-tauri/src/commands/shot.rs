@@ -45,11 +45,12 @@ pub fn shot_cancel(app: AppHandle) {
 }
 
 /// 遮罩合成好的 PNG（请求体原始字节）。请求头：`x-action`（copy / save / ocr / pin）、
-/// `x-index`（显示器序号）、`x-rect`（`x,y,w,h`，显示器内逻辑像素，贴图用）。
+/// `x-index`（显示器序号，须与调用方遮罩一致）、`x-rect`（`x,y,w,h`，显示器内逻辑像素，贴图用）。
 /// 成功后遮罩进入提示条模式（鼠标穿透、键盘已还给原应用），前端显示提示条后调 `shot_cancel`。
 #[tauri::command]
 pub async fn shot_finish(
     app: AppHandle,
+    window: WebviewWindow,
     request: Request<'_>,
 ) -> Result<shot::ShotOutcome, AppError> {
     let invalid = |m: &str| AppError::Invalid(m.into());
@@ -57,9 +58,11 @@ pub async fn shot_finish(
     let action = header("x-action")
         .and_then(shot::parse_action)
         .ok_or_else(|| invalid("未知的截图动作"))?;
-    let index = header("x-index")
-        .and_then(|v| v.parse().ok())
-        .ok_or_else(|| invalid("缺少显示器序号"))?;
+    // 显示器序号以调用方遮罩为准，请求头只做核对
+    let index = index_of(&window)?;
+    if header("x-index").is_some_and(|v| v.parse() != Ok(index)) {
+        return Err(invalid("显示器序号与遮罩不符"));
+    }
     let rect = header("x-rect").and_then(shot::parse_rect);
     let InvokeBody::Raw(png) = request.body() else {
         return Err(invalid("请求体应为 PNG 字节"));

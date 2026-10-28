@@ -627,12 +627,21 @@ fn key(vk: VIRTUAL_KEY, up: bool) -> INPUT {
     }
 }
 
+/// 把窗口切到前台；本进程须是前台进程（系统的前台锁规则），hwnd 失效时什么也不做。
+pub fn activate_window(hwnd: isize) {
+    // SAFETY: hwnd 失效时调用失败而不会崩溃
+    unsafe {
+        let _ = SetForegroundWindow(HWND(hwnd as *mut _));
+    }
+}
+
 /// 把 `target` 切回前台（最多等 100 ms），再发 Ctrl+V。
 pub fn paste(target: Option<isize>) -> Result<(), PlatformError> {
-    if let Some(hwnd) = target.map(|h| HWND(h as *mut _)) {
-        // SAFETY: 只读查询与前台切换，hwnd 失效时调用失败而不会崩溃
+    if let Some(h) = target {
+        activate_window(h);
+        let hwnd = HWND(h as *mut _);
+        // SAFETY: 只读查询
         unsafe {
-            let _ = SetForegroundWindow(hwnd);
             let mut waited = 0;
             while GetForegroundWindow() != hwnd {
                 if waited >= 100 {

@@ -87,6 +87,10 @@ pub struct Session {
     ready: Vec<bool>,
     /// 光标所在屏，全部就绪后它拿键盘焦点
     pub cursor: Option<usize>,
+    /// 截图前的前台窗口（Windows HWND），动作完成后把键盘还给它；macOS 恒为 `None`
+    pub previous_window: Option<isize>,
+    /// 某个动作正在执行（识别文字可能要几秒），同一次截图里的第二个动作被拒绝
+    finishing: bool,
 }
 
 impl Session {
@@ -174,6 +178,16 @@ impl Session {
         })
     }
 
+    /// 认领本次截图的输出；已有动作在执行或已完成时返回 false。
+    pub fn claim_finish(&mut self) -> bool {
+        !std::mem::replace(&mut self.finishing, true)
+    }
+
+    /// 动作失败：放开认领，用户可以重试。
+    pub fn release_finish(&mut self) {
+        self.finishing = false;
+    }
+
     /// 动作已完成，遮罩进入提示条模式：释放冻结图，会话保持进行中，提示条期间按快捷键不会把提示条截进去。
     /// 计时从现在重新算：前端没调 `shot_cancel` 时，`STALE` 之后的快捷键照常开始新的一次。
     pub fn finish(&mut self, now: Instant) {
@@ -181,6 +195,8 @@ impl Session {
         self.payloads.clear();
         self.ready.clear();
         self.started = Some(now);
+        // 冻结图已释放，之后的 shot_finish 因取不到帧被拒绝
+        self.finishing = false;
     }
 }
 
@@ -241,6 +257,15 @@ pub fn begin(app: &AppHandle) {
         if !s.try_begin() {
             return;
         }
+        // 面板开着时前台是面板自己（foreground_window 排除本进程），用面板记下的那个
+        s.previous_window = xpaste_platform::foreground_window().or_else(|| {
+            Some(
+                app.state::<AppState>()
+                    .previous_window
+                    .load(Ordering::Relaxed),
+            )
+            .filter(|&h| h != 0)
+        });
         (s.generation(), was_active)
     };
     // 上一次卡住的会话：已上屏的遮罩还盖在屏上，先撤下，不然会被截进去
@@ -511,8 +536,11 @@ fn hide_overlays(app: &AppHandle) {
             if overlay_index(&l).is_none() {
                 continue;
             }
-            if let Err(e) = w.hide().and_then(|()| w.set_ignore_cursor_events(false)) {
+            if let Err(e) = w.hide() {
                 log::warn!("隐藏遮罩失败：{e}");
+            }
+            if let Err(e) = w.set_ignore_cursor_events(false) {
+                log::warn!("撤销遮罩鼠标穿透失败：{e}");
             }
         }
     });
@@ -544,7 +572,9 @@ pub fn parse_rect(h: &str) -> Option<LRect> {
         .map(|p| p.trim().parse().ok())
         .collect::<Option<_>>()?;
     match v[..] {
-        [x, y, w, h] if w > 0.0 && h > 0.0 => Some(LRect { x, y, w, h }),
+        [x, y, w, h] if v.iter().all(|n| n.is_finite()) && w > 0.0 && h > 0.0 => {
+            Some(LRect { x, y, w, h })
+        }
         _ => None,
     }
 }
@@ -563,6 +593,38 @@ pub fn shot_file_name(stamp: &str, exists: impl Fn(&str) -> bool) -> String {
 /// 设置里截图文件夹为空时的默认：`<图片>/xPaste`，取不到图片目录时 `<数据目录>/shots`。
 pub fn default_shot_dir(picture: Option<PathBuf>, data_dir: &Path) -> PathBuf {
     picture.map_or_else(|| data_dir.join("shots"), |p| p.join("xPaste"))
+}
+
+/// 设置里的截图文件夹：空或不是绝对路径（会落到进程工作目录）时用默认文件夹。
+pub fn resolve_shot_dir(setting: &str, picture: Option<PathBuf>, data_dir: &Path) -> PathBuf {
+    let p = Path::new(setting);
+    if p.is_absolute() {
+        return p.to_path_buf();
+    }
+    if !setting.is_empty() {
+        log::warn!("截图文件夹不是绝对路径，改用默认文件夹");
+    }
+    default_shot_dir(picture, data_dir)
+}
+
+/// 在 `dir` 里新建不重名的截图文件并写入，返回文件名。用 `create_new`，
+/// 检查与写入之间有别人建了同名文件时换下一个序号，不会覆盖。
+pub fn write_unique(dir: &Path, stamp: &str, png: &[u8]) -> std::io::Result<String> {
+    use std::io::Write;
+    let mut tries = 0;
+    loop {
+        // symlink_metadata：失效的符号链接也算占用，否则 create_new 会一直撞上它
+        let name = shot_file_name(stamp, |n| dir.join(n).symlink_metadata().is_ok());
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dir.join(&name))
+        {
+            Ok(mut f) => return f.write_all(png).map(|()| name),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && tries < 10 => tries += 1,
+            Err(e) => return Err(e),
+        }
+    }
 }
 
 /// 返回给遮罩 / 贴图，用于提示条。
@@ -620,14 +682,40 @@ pub fn finish(
     rect: Option<LRect>,
     png: Vec<u8>,
 ) -> Result<ShotOutcome, AppError> {
-    let (generation, screen) = {
-        let s = session(app);
-        let f = s.frame(i).filter(|_| s.is_active());
-        (s.generation(), f.map(|f| (f.origin, f.scale)))
+    let (generation, origin, scale) = {
+        let mut s = session(app);
+        // 取到帧并认领输出要在同一次加锁里：识别文字要几秒，连按 O / 回车不能跑出两个动作
+        match s.frame(i).filter(|_| s.is_active()) {
+            Some(f) if s.claim_finish() => (s.generation(), f.origin, f.scale),
+            _ => return Err(AppError::Invalid("截图已结束".into())),
+        }
     };
-    let (origin, scale) = screen.ok_or_else(|| AppError::Invalid("截图已结束".into()))?;
     log::info!("shot 输出 {action:?} 屏 {i} {} 字节", png.len());
-    let outcome = match action {
+    match run_action(app, generation, action, origin, scale, rect, png) {
+        Ok(outcome) => {
+            enter_toast(app, generation);
+            Ok(outcome)
+        }
+        Err(e) => {
+            let mut s = session(app);
+            if s.is_current(generation) {
+                s.release_finish();
+            }
+            Err(e)
+        }
+    }
+}
+
+fn run_action(
+    app: &AppHandle,
+    generation: u64,
+    action: Action,
+    origin: (f64, f64),
+    scale: f64,
+    rect: Option<LRect>,
+    png: Vec<u8>,
+) -> Result<ShotOutcome, AppError> {
+    Ok(match action {
         Action::Copy => {
             copy_png(png)?;
             ShotOutcome {
@@ -649,9 +737,7 @@ pub fn finish(
                 copied: false,
             }
         }
-    };
-    enter_toast(app, generation);
-    Ok(outcome)
+    })
 }
 
 /// 写 PNG 到剪切板，不标记为自身写入：监听器照常把它作为图片记录入库（设计 §4.5）。
@@ -672,15 +758,10 @@ fn save(app: &AppHandle, png: Vec<u8>) -> Result<ShotOutcome, AppError> {
         let s = state.settings();
         (s.shot_dir.clone(), s.shot_save_copy)
     };
-    let dir = if dir.is_empty() {
-        default_shot_dir(app.path().picture_dir().ok(), &state.data_dir)
-    } else {
-        PathBuf::from(dir)
-    };
+    let dir = resolve_shot_dir(&dir, app.path().picture_dir().ok(), &state.data_dir);
     std::fs::create_dir_all(&dir)?;
     let stamp = xpaste_core::capture::local_stamp(crate::clock::now_ms());
-    let name = shot_file_name(&stamp, |n| dir.join(n).exists());
-    std::fs::write(dir.join(&name), &png)?;
+    let name = write_unique(&dir, &stamp, &png)?;
     // 文件已存好，复制失败不算整次失败（已记日志），提示条按“已保存”显示
     let copied = also_copy && copy_png(png).is_ok();
     Ok(ShotOutcome {
@@ -728,14 +809,15 @@ fn ocr(app: &AppHandle, generation: u64, png: Vec<u8>) -> Result<ShotOutcome, Ap
 
 /// 提示条模式：遮罩鼠标穿透、交出键盘焦点，提示条照常显示；`shot_cancel` 时撤销。
 fn enter_toast(app: &AppHandle, generation: u64) {
-    {
+    let previous = {
         let mut s = session(app);
         if !s.is_current(generation) {
             return;
         }
         s.finish(Instant::now());
-    }
-    on_main(app, |app| {
+        s.previous_window
+    };
+    on_main(app, move |app| {
         for (l, w) in app.webview_windows() {
             if overlay_index(&l).is_none() {
                 continue;
@@ -753,6 +835,11 @@ fn enter_toast(app: &AppHandle, generation: u64) {
                     p.order_front_regardless();
                 }
             }
+        }
+        // Windows：遮罩拿着前台，直接把前台切回截图前的窗口（本进程此刻是前台进程，系统允许）；
+        // 记不到时等 shot_cancel 隐藏遮罩后由系统按 z 序交还
+        if let Some(h) = previous {
+            xpaste_platform::activate_window(h);
         }
     });
 }
@@ -778,10 +865,19 @@ fn open_pin(
         r.h,
         crate::assets::encode_component(&crate::assets::asset_url(&path))
     );
+    let (o, size) = pin_bounds(origin, scale, r, cfg!(target_os = "macos"));
     let w = WebviewWindowBuilder::new(app, format!("{PIN_PREFIX}{n}"), WebviewUrl::App(url.into()))
         // 平台层 window_rects 只保留本进程里标题以此开头的窗口：再次截图时贴图可被吸附
         .title("xpaste-pin")
-        .visible(false)
+        // macOS 换成 NSPanel 后再上屏。Windows 建窗口时直接可见：tao 只在创建时按 focused(false)
+        // 用 SW_SHOWNOACTIVATE，之后的 show() 一律 SW_SHOW 会激活贴图、抢走原应用的键盘；
+        // 先按选区的逻辑坐标大致摆好，下面 place 再按物理像素校正
+        .visible(cfg!(windows))
+        .position(
+            o.0 / scale_for_builder(scale),
+            o.1 / scale_for_builder(scale),
+        )
+        .inner_size(r.w, r.h)
         .focused(false)
         .transparent(true)
         .decorations(false)
@@ -790,8 +886,11 @@ fn open_pin(
         .always_on_top(true)
         .accept_first_mouse(true)
         .build()?;
-    let (o, size) = pin_bounds(origin, scale, r, cfg!(target_os = "macos"));
-    place(&w, o, size)?;
+    if let Err(e) = place(&w, o, size) {
+        let _ = w.destroy();
+        let _ = std::fs::remove_file(&path);
+        return Err(e.into());
+    }
     on_main(app, move |_| show_pin(&w));
     log::info!("shot 贴图 {n}");
     Ok(n)
@@ -824,10 +923,16 @@ fn show_pin(w: &WebviewWindow) {
     panel.order_front_regardless();
 }
 
+/// Windows 的贴图建窗口时已不激活地上屏，这里不再 show（会激活它）。
 #[cfg(not(target_os = "macos"))]
-fn show_pin(w: &WebviewWindow) {
-    if let Err(e) = w.show() {
-        log::warn!("显示贴图失败：{e}");
+fn show_pin(_w: &WebviewWindow) {}
+
+/// builder 的 position 是逻辑坐标；macOS 的原生单位已是点，Windows 的是物理像素，要除以该屏缩放。
+fn scale_for_builder(scale: f64) -> f64 {
+    if cfg!(target_os = "macos") {
+        1.0
+    } else {
+        scale
     }
 }
 
@@ -1199,6 +1304,49 @@ mod tests {
         );
         // 前端没调 shot_cancel 时，下次快捷键照常开始
         assert!(s.try_begin_at(t1 + Duration::from_millis(3001)));
+    }
+
+    #[test]
+    fn second_finish_is_refused_until_released() {
+        let mut s = Session::default();
+        s.try_begin();
+        assert!(s.claim_finish());
+        assert!(!s.claim_finish(), "识别文字还在跑，第二个动作被拒绝");
+        s.release_finish();
+        assert!(s.claim_finish(), "上一个动作失败后可以重试");
+        s.finish(Instant::now());
+        s.end();
+        s.try_begin();
+        assert!(s.claim_finish(), "新的一次截图重新可认领");
+    }
+
+    #[test]
+    fn parse_rect_rejects_non_finite() {
+        assert_eq!(parse_rect("NaN,0,10,10"), None);
+        assert_eq!(parse_rect("0,0,inf,10"), None);
+    }
+
+    #[test]
+    fn relative_shot_dir_falls_back_to_default() {
+        let d = Path::new("/d");
+        assert_eq!(resolve_shot_dir("/mine", None, d), PathBuf::from("/mine"));
+        assert_eq!(resolve_shot_dir("", None, d), PathBuf::from("/d/shots"));
+        assert_eq!(
+            resolve_shot_dir("shots", Some("/p".into()), d),
+            PathBuf::from("/p/xPaste")
+        );
+    }
+
+    #[test]
+    fn write_unique_never_overwrites() {
+        let dir = std::env::temp_dir().join(format!("xpaste-shot-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("截图 s.png"), b"old").unwrap();
+        assert_eq!(write_unique(&dir, "s", b"new").unwrap(), "截图 s 2.png");
+        assert_eq!(std::fs::read(dir.join("截图 s.png")).unwrap(), b"old");
+        assert_eq!(std::fs::read(dir.join("截图 s 2.png")).unwrap(), b"new");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -688,6 +688,9 @@ pub fn foreground_window() -> Option<isize> {
     None
 }
 
+/// Windows 上把窗口切到前台；macOS 没有窗口句柄的概念（`foreground_window` 恒为 `None`），无操作。
+pub fn activate_window(_hwnd: isize) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
