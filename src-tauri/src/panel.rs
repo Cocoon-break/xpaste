@@ -19,6 +19,10 @@ pub fn material() -> &'static str {
     MATERIAL.get().copied().unwrap_or("opaque")
 }
 
+/// AppKit 常量，cocoa 未导出；截图遮罩也用
+#[cfg(target_os = "macos")]
+pub const NS_WINDOW_STYLE_MASK_NONACTIVATING_PANEL: i32 = 1 << 7;
+
 /// 无 Dock 图标；把面板窗口换成不激活应用的 NSPanel，浮在全屏应用之上；铺系统毛玻璃。
 /// 只有激活策略失败才返回错误，NSPanel / 毛玻璃失败只记日志。
 #[cfg(target_os = "macos")]
@@ -30,8 +34,6 @@ pub fn setup_macos(app: &tauri::App) -> Result<(), crate::error::AppError> {
         base::id,
     };
     use window_vibrancy::{NSVisualEffectMaterial, NSVisualEffectState};
-    // AppKit 常量，cocoa 未导出
-    const NS_WINDOW_STYLE_MASK_NONACTIVATING_PANEL: i32 = 1 << 7;
     const NS_FLOATING_WINDOW_LEVEL: i32 = 3;
 
     app.handle()
@@ -316,7 +318,7 @@ fn front_and_focus(app: &AppHandle, w: &WebviewWindow) -> tauri::Result<()> {
 }
 
 /// AppKit 只能在主线程调用；已在主线程时同步执行（hide_panel 命令跑在异步线程上）。
-fn on_main(app: &AppHandle, f: impl FnOnce(&AppHandle) + Send + 'static) {
+pub fn on_main(app: &AppHandle, f: impl FnOnce(&AppHandle) + Send + 'static) {
     let a = app.clone();
     if let Err(e) = app.run_on_main_thread(move || f(&a)) {
         log::warn!("切换到主线程失败：{e}");

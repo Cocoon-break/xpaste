@@ -9,6 +9,7 @@ mod hotkey;
 mod housekeeping;
 mod ocr;
 mod panel;
+mod shot;
 pub mod state;
 mod tray;
 
@@ -116,6 +117,7 @@ pub fn run() {
                 tray::mark_hotkey_failed();
             }
             clipboard::start(app.handle().clone());
+            shot::prewarm(app.handle());
             // 首次启动直接显示面板与引导（AC-M18-01）
             if first_run {
                 app.state::<AppState>()
@@ -141,6 +143,7 @@ pub fn run() {
                 .build(),
         )
         .on_window_event(|window, event| {
+            // 截图遮罩（shot-*）与贴图（pin-*）失焦不处理
             if window.label() != "panel" {
                 return;
             }
@@ -184,7 +187,10 @@ pub fn run() {
             commands::records::copy,
             commands::records::copy_text_plain,
             commands::records::reocr,
-            commands::records::ocr_progress
+            commands::records::ocr_progress,
+            commands::shot::shot_frame,
+            commands::shot::shot_ready,
+            commands::shot::shot_cancel
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

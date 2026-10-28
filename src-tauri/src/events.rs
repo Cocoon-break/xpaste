@@ -20,9 +20,21 @@ pub const OPEN_SETTINGS: &str = "open-settings";
 /// 托盘“清空历史…”：面板显示后打开清空确认。
 pub const CONFIRM_CLEAR: &str = "confirm-clear";
 
+/// 冻结完成，发给每块屏的遮罩 `shot-<i>`（载荷见 `shot::BeginPayload`）。
+pub const SHOT_BEGIN: &str = "shot-begin";
+/// 截图缺少屏幕录制权限，发给面板（M18）。
+pub const SHOT_NEED_PERMISSION: &str = "shot-need-permission";
+
 pub fn emit<S: Serialize + Clone>(app: &AppHandle, event: &str, payload: S) {
     if let Err(e) = app.emit(event, payload) {
         log::warn!("发送 {event} 失败：{e}");
+    }
+}
+
+/// 只发给指定标签的窗口。
+pub fn emit_to<S: Serialize + Clone>(app: &AppHandle, label: &str, event: &str, payload: S) {
+    if let Err(e) = app.emit_to(label, event, payload) {
+        log::warn!("发送 {event} 给 {label} 失败：{e}");
     }
 }
 
