@@ -157,9 +157,27 @@ pub fn read_snapshot(skip_sensitive: bool) -> Result<Option<Snapshot>, PlatformE
         }
         if snapshot.file_paths.is_empty() {
             snapshot.bitmap = read_bitmap(&snapshot.flavors);
+        } else {
+            prefer_bitmap_over_unreadable_files(&mut snapshot);
         }
         Ok(Some(snapshot))
     })
+}
+
+/// 微信等沙盒应用复制图片时同时给位图和自己容器里的临时文件路径：路径没有权限读（或已被删掉），
+/// 按文件记就预览不了。文件一个都打不开且有位图时，丢掉路径按位图记（M02 规则 2 补充）。
+fn prefer_bitmap_over_unreadable_files(snapshot: &mut Snapshot) {
+    if snapshot
+        .file_paths
+        .iter()
+        .any(|p| std::fs::File::open(p).is_ok())
+    {
+        return;
+    }
+    if let Some(bitmap) = read_bitmap(&snapshot.flavors) {
+        snapshot.file_paths.clear();
+        snapshot.bitmap = Some(bitmap);
+    }
 }
 
 /// 已读出的 flavor 中第一个 PNG 原样返回；否则第一个 TIFF 转成 PNG。
@@ -524,6 +542,41 @@ pub fn foreground_window() -> Option<isize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unreadable_file_paths_fall_back_to_bitmap() {
+        let png = Flavor {
+            item: 0,
+            format: "public.png".into(),
+            data: vec![1, 2, 3],
+        };
+        let gone = PathBuf::from("/nonexistent/wechat-temp.jpg");
+        let mut s = Snapshot {
+            flavors: vec![png.clone()],
+            file_paths: vec![gone.clone()],
+            ..Default::default()
+        };
+        prefer_bitmap_over_unreadable_files(&mut s);
+        assert!(s.file_paths.is_empty());
+        assert_eq!(s.bitmap, Some(vec![1, 2, 3]));
+        // 有一个能读就按文件记
+        let readable = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        let mut s = Snapshot {
+            flavors: vec![png],
+            file_paths: vec![gone.clone(), readable],
+            ..Default::default()
+        };
+        prefer_bitmap_over_unreadable_files(&mut s);
+        assert_eq!(s.file_paths.len(), 2);
+        assert!(s.bitmap.is_none());
+        // 没有位图时保留路径
+        let mut s = Snapshot {
+            file_paths: vec![gone],
+            ..Default::default()
+        };
+        prefer_bitmap_over_unreadable_files(&mut s);
+        assert_eq!(s.file_paths.len(), 1);
+    }
 
     #[test]
     fn oriented_size_swaps_on_quarter_turn() {
