@@ -245,6 +245,15 @@ fn timing() -> bool {
     crate::timing_enabled(std::env::var_os("XPASTE_TIMING"))
 }
 
+/// 系统设置“隐私与安全性”里屏幕录制那一页的名字：macOS 15 起改叫“录屏与系统录音”。
+pub fn screen_capture_pane(macos_major: Option<u32>) -> &'static str {
+    if macos_major.is_some_and(|v| v >= 15) {
+        "录屏与系统录音"
+    } else {
+        "屏幕录制"
+    }
+}
+
 /// 快捷键入口。主线程调用。
 pub fn begin(app: &AppHandle) {
     if let BeginPlan::NeedPermission = begin_plan(xpaste_platform::screen_capture_granted()) {
@@ -254,7 +263,7 @@ pub fn begin(app: &AppHandle) {
             app,
             "panel",
             events::SHOT_NEED_PERMISSION,
-            xpaste_platform::screen_capture_pane(),
+            screen_capture_pane(xpaste_platform::macos_version()),
         );
         return;
     }
@@ -1023,6 +1032,14 @@ mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
     use xpaste_platform::{Frame, WinRect};
+
+    #[test]
+    fn screen_capture_pane_renamed_since_macos_15() {
+        assert_eq!(screen_capture_pane(Some(15)), "录屏与系统录音");
+        assert_eq!(screen_capture_pane(Some(26)), "录屏与系统录音");
+        assert_eq!(screen_capture_pane(Some(14)), "屏幕录制");
+        assert_eq!(screen_capture_pane(None), "屏幕录制");
+    }
 
     fn frame(origin: (f64, f64), size: (f64, f64), scale: f64) -> Frame {
         Frame {

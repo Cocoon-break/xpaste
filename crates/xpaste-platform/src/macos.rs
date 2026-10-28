@@ -384,17 +384,14 @@ pub fn request_screen_capture() {
     }
 }
 
-/// 系统设置“隐私与安全性”里屏幕录制权限那一页的名字：macOS 15 起改叫“录屏与系统录音”。
-pub fn screen_capture_pane() -> &'static str {
-    if NSProcessInfo::processInfo()
-        .operatingSystemVersion()
-        .majorVersion
-        >= 15
-    {
-        "录屏与系统录音"
-    } else {
-        "屏幕录制"
-    }
+/// macOS 主版本号（如 15）。
+pub fn macos_version() -> Option<u32> {
+    u32::try_from(
+        NSProcessInfo::processInfo()
+            .operatingSystemVersion()
+            .majorVersion,
+    )
+    .ok()
 }
 
 /// 鼠标主键此刻是否按着（硬件状态，系统拖动窗口期间也准）。贴图据此判断拖动是否结束。

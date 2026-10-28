@@ -564,7 +564,7 @@ pub fn toggle(app: &AppHandle, t0: Option<u64>, trigger: Trigger) {
             // 排在 show 的主线程任务之后发，前端先收到 panel-shown、重新打开引导，再收到这个
             if then_hotkey {
                 on_main(app, |app| {
-                    crate::events::emit(app, crate::events::HOTKEY_PRESSED, ())
+                    crate::events::emit(app, crate::events::HOTKEY_PRESSED, "panel")
                 });
             }
         }
@@ -584,7 +584,7 @@ pub fn toggle(app: &AppHandle, t0: Option<u64>, trigger: Trigger) {
                 });
             }
             if focused || state.onboarding.load(Ordering::SeqCst) {
-                crate::events::emit(app, crate::events::HOTKEY_PRESSED, ())
+                crate::events::emit(app, crate::events::HOTKEY_PRESSED, "panel")
             }
         }
         ToggleAction::Ignore => {}

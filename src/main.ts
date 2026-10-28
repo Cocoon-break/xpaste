@@ -1535,7 +1535,10 @@ async function paintPerm() {
   $('#shotPermBtn').hidden = shotOk;
 }
 // 截图文件夹：设置里存空字符串表示默认文件夹，输入框只显示默认路径的写法
-const paintShotDir = () => {
+const shotDirErr = $('#shotDirErr');
+const paintShotDir = (err = '') => {
+  shotDirErr.textContent = err;
+  shotDirErr.hidden = !err;
   shotDirIn.value = pendingShotDir;
   shotDirIn.placeholder = S.platform.os === 'macos' ? '~/Pictures/xPaste' : '图片\\xPaste';
 };
@@ -1670,18 +1673,21 @@ shotIn.addEventListener('keydown', (e) => {
   }
   const h = hotkeyFromEvent({ key: e.key, code: e.code, ctrl: e.ctrlKey, meta: e.metaKey, alt: e.altKey, shift: e.shiftKey }, S.platform.os);
   if (!h) return setShotHelp(S.platform.os === 'macos' ? '至少需要包含 ⌘、⌃ 或 ⌥' : '至少需要包含 Ctrl 或 Alt');
+  recordShot(h);
+});
+function recordShot(h: string) {
   pendingShot = h;
   shotIn.value = hotkeyLabel(h, S.platform.os);
   setShotHelp('已记录，保存后生效');
   fx(shotIn, [{ transform: 'scale(.98)' }, { transform: 'scale(1)' }], { duration: 300, easing: EASE_SPRING });
-});
-// 取消选择不改；选好的路径只在保存时写回
+}
+// 取消选择不改；选好的路径只在保存时写回。失败写在这一行下方（提示条会被设置框盖住）
 $('#shotDirBtn').addEventListener('click', () =>
   void pickFolder(pendingShotDir || undefined).then((d) => {
     if (!d) return;
     pendingShotDir = d;
     paintShotDir();
-  }, (err) => toast(String(err))),
+  }, (err) => paintShotDir(`打开选择文件夹窗口失败：${String(err)}`)),
 );
 // 授权要切去系统设置：设置框开着时失焦不隐藏，这里主动收起，免得面板盖住系统设置
 const grantScreenCapture = () => void requestScreenCapture().then(hide, (err: AppError) => toast(err.message));
@@ -1984,6 +1990,7 @@ await onPausedChanged((p) => handlers.paused(p));
 // 托盘“设置…”：后端已先唤起面板
 await onOpenSettings(openSettings);
 // 设置对话框开着时提示条被它盖住，结果同样写进“历史记录”行内
+await onConfirmClear(() => void confirmClear().then((m) => m && dlg.open && (clearNote.textContent = m)));
 // 截图缺少屏幕录制权限：后端已唤起面板（设计 §4.8）
 await onShotNeedPermission((pane) =>
   void confirm({
@@ -1993,13 +2000,19 @@ await onShotNeedPermission((pane) =>
     cancel: '以后再说',
   }).then((ok) => ok && grantScreenCapture()),
 );
-await onConfirmClear(() => void confirmClear().then((m) => m && dlg.open && (clearNote.textContent = m)));
 // 引导中按唤起快捷键：可见时面板不隐藏，隐藏时先 panel-shown 再到这里；只在“试按快捷键”这一步算成功
 // 设置对话框打开时按唤起快捷键：面板同样不隐藏；录制框有焦点就当作按下了当前快捷键（网页收不到被全局注册拦下的按键）
-await onHotkeyPressed(() => {
+// 截图快捷键同理：对话框开着且面板有焦点时后端不截图，只发到这里（role = shot）
+await onHotkeyPressed((role) => {
   // 只认面板有焦点时的按键：失焦时后端只把面板拉回焦点，这里再防一道
-  if (document.activeElement === hotkeyIn && document.hasFocus()) return recordHotkey(S.settings.hotkey);
-  if (document.activeElement === shotIn && document.hasFocus()) return setShotHelp('不能与唤起快捷键相同', true);
+  const on = (el: Element) => document.activeElement === el && document.hasFocus();
+  if (role === 'shot') {
+    if (on(shotIn)) recordShot(S.settings.shotHotkey);
+    else if (on(hotkeyIn)) setHotkeyHelp('不能与截图快捷键相同', true);
+    return;
+  }
+  if (on(hotkeyIn)) return recordHotkey(S.settings.hotkey);
+  if (on(shotIn)) return setShotHelp('截图快捷键不能与唤起快捷键相同', true);
   if (obStep === 'hotkey' && obDlg.open) obSucceed();
 });
 

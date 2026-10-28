@@ -177,7 +177,8 @@
           </div>
           <div class="field" style="--i:11">
             <label for="shotDir">截图文件夹</label>
-            <div class="pick"><input id="shotDir" readonly autocomplete="off" spellcheck="false"><button class="btn" type="button" id="shotDirBtn">更改…</button></div>
+            <div class="pick"><input id="shotDir" readonly autocomplete="off" spellcheck="false"><button class="btn" type="button" id="shotDirBtn" aria-describedby="shotDirErr">更改…</button></div>
+            <p class="err" id="shotDirErr" hidden></p>
           </div>
           <div class="switches" style="--i:12">
             <label class="switch"><span><b>保存截图时同时复制</b><small>按 <span class="mod"></span> S 保存的截图也进入历史</small></span><input type="checkbox" id="shotSaveCopy" checked></label>

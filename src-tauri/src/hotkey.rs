@@ -1,7 +1,10 @@
-use tauri::AppHandle;
+use std::sync::atomic::Ordering;
+
+use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
 use crate::error::AppError;
+use crate::state::AppState;
 
 /// 注销全部后注册唤起与截图两个快捷键（截图为空串表示不启用，跳过）；任何失败都视为被占用。
 /// 两个都会尝试注册，唤起失败返回 `HotkeyTaken`，否则截图失败返回 `ShotHotkeyTaken`。
@@ -39,6 +42,37 @@ pub fn role_of(pressed: &Shortcut, panel: &str, shot: &str) -> Option<Role> {
     }
 }
 
+/// 设置或确认框开着且面板有焦点时，截图快捷键只交给录制框，不开始截图（同 M15 规则 3）。
+pub fn shot_to_panel(dialog_open: bool, panel_visible: bool, panel_focused: bool) -> bool {
+    dialog_open && panel_visible && panel_focused
+}
+
+/// 截图快捷键按下：按 `shot_to_panel` 通知面板（`hotkey-pressed`，载荷 `"shot"`）或开始截图。主线程调用。
+pub fn shot_pressed(app: &AppHandle) {
+    let (visible, focused) = app.get_webview_window("panel").map_or((false, false), |w| {
+        (
+            w.is_visible().unwrap_or(false),
+            w.is_focused().unwrap_or(false),
+        )
+    });
+    let dialog_open = app.state::<AppState>().dialog_open.load(Ordering::SeqCst);
+    if shot_to_panel(dialog_open, visible, focused) {
+        crate::events::emit_to(app, "panel", crate::events::HOTKEY_PRESSED, "shot");
+    } else {
+        crate::shot::begin(app);
+    }
+}
+
+/// 启动时注册失败的系统通知文案；两个都被占用时一起说。
+pub fn failure_notice(panel_failed: bool, shot_failed: bool) -> Option<&'static str> {
+    match (panel_failed, shot_failed) {
+        (false, false) => None,
+        (true, false) => Some("唤起快捷键被其他应用占用，请在设置中更换"),
+        (false, true) => Some("截图快捷键被其他应用占用，请在设置中更换"),
+        (true, true) => Some("唤起与截图快捷键被其他应用占用，请在设置中更换"),
+    }
+}
+
 /// 快捷键字符串 → 显示标签（如 `⌘ + Shift + V`）；规则与前端 `hotkeyLabel` 一致。
 pub fn label(shortcut: &str) -> String {
     let mac = cfg!(target_os = "macos");
@@ -71,7 +105,32 @@ pub fn label(shortcut: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Role, label, role_of};
+    use super::{Role, failure_notice, label, role_of, shot_to_panel};
+
+    #[test]
+    fn shot_goes_to_recorder_only_when_dialog_open_and_panel_focused() {
+        assert!(shot_to_panel(true, true, true));
+        assert!(!shot_to_panel(false, true, true));
+        assert!(!shot_to_panel(true, false, true));
+        assert!(!shot_to_panel(true, true, false));
+    }
+
+    #[test]
+    fn failure_notice_names_every_taken_hotkey() {
+        assert_eq!(failure_notice(false, false), None);
+        assert_eq!(
+            failure_notice(true, false),
+            Some("唤起快捷键被其他应用占用，请在设置中更换")
+        );
+        assert_eq!(
+            failure_notice(false, true),
+            Some("截图快捷键被其他应用占用，请在设置中更换")
+        );
+        assert_eq!(
+            failure_notice(true, true),
+            Some("唤起与截图快捷键被其他应用占用，请在设置中更换")
+        );
+    }
 
     #[test]
     fn role_of_dispatches() {

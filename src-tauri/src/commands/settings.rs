@@ -173,8 +173,11 @@ pub fn commit_settings(
     let hotkey_changed = action == HotkeyAction::Register;
     // register 会先注销全部快捷键，失败时要把旧的一对注册回去
     let restore = |register: &mut dyn FnMut(&str, &str) -> Result<(), AppError>| {
-        if let Err(e) = register(&old.hotkey, &old.shot_hotkey) {
-            log::warn!("恢复原快捷键失败：{e}");
+        // 截图键在被占用时恢复不了很常见（多半正是它被占用），只记 debug
+        match register(&old.hotkey, &old.shot_hotkey) {
+            Err(e @ AppError::HotkeyTaken) => log::warn!("恢复原快捷键失败：{e}"),
+            Err(e) => log::debug!("恢复原截图快捷键失败：{e}"),
+            Ok(()) => {}
         }
     };
     if hotkey_changed && let Err(e) = register(&settings.hotkey, &settings.shot_hotkey) {

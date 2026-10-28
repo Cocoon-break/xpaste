@@ -16,7 +16,7 @@ mod tray;
 use state::AppState;
 use std::path::PathBuf;
 use tauri::{Manager, WindowEvent};
-use tauri_plugin_global_shortcut::ShortcutState;
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_log::{Target, TargetKind};
 use tauri_plugin_notification::NotificationExt;
 use xpaste_core::Store;
@@ -113,22 +113,21 @@ pub fn run() {
             }
             if let Err(e) = hotkey::register(app.handle(), &hotkey, &shot_hotkey) {
                 log::warn!("快捷键注册失败：{e}");
-                // 截图快捷键注册失败只提示，不标记托盘（托盘标记只管唤起快捷键）
-                let shot = matches!(e, error::AppError::ShotHotkeyTaken);
-                if let Err(e) = app
-                    .notification()
-                    .builder()
-                    .title("xPaste")
-                    .body(if shot {
-                        "截图快捷键被其他应用占用，请在设置中更换"
-                    } else {
-                        "唤起快捷键被其他应用占用，请在设置中更换"
-                    })
-                    .show()
+                // 唤起失败时 register 只报唤起，截图是否注册上另查；截图失败只提示，不标记托盘
+                let panel_failed = matches!(e, error::AppError::HotkeyTaken);
+                let shot_failed = !shot_hotkey.is_empty()
+                    && !app.global_shortcut().is_registered(shot_hotkey.as_str());
+                if let Some(body) = hotkey::failure_notice(panel_failed, shot_failed)
+                    && let Err(e) = app
+                        .notification()
+                        .builder()
+                        .title("xPaste")
+                        .body(body)
+                        .show()
                 {
                     log::warn!("发送快捷键注册失败通知失败：{e}");
                 }
-                if !shot {
+                if panel_failed {
                     tray::mark_hotkey_failed();
                 }
             }
@@ -166,7 +165,7 @@ pub fn run() {
                         Some(hotkey::Role::Panel) => {
                             panel::toggle(app, timing.then(now_unix_ms), panel::Trigger::Hotkey)
                         }
-                        Some(hotkey::Role::Shot) => shot::begin(app),
+                        Some(hotkey::Role::Shot) => hotkey::shot_pressed(app),
                         None => {}
                     }
                 })

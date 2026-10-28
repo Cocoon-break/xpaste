@@ -17,10 +17,11 @@ export const PANEL_HIDE_REQUESTED = 'panel-hide-requested';
 
 export const onPanelHideRequested = (cb: () => void): Promise<UnlistenFn> => listen(PANEL_HIDE_REQUESTED, () => cb());
 
-/** 引导中按下唤起快捷键：面板保持显示，引导据此推进。 */
+/** 引导或对话框打开时按下快捷键，面板保持显示：`panel` 唤起（引导据此推进），`shot` 截图（只在对话框开着且面板有焦点时发）。 */
 export const HOTKEY_PRESSED = 'hotkey-pressed';
 
-export const onHotkeyPressed = (cb: () => void): Promise<UnlistenFn> => listen(HOTKEY_PRESSED, () => cb());
+export const onHotkeyPressed = (cb: (role: 'panel' | 'shot') => void): Promise<UnlistenFn> =>
+  listen<'panel' | 'shot'>(HOTKEY_PRESSED, (e) => cb(e.payload));
 
 /** 截图缺少屏幕录制权限（后端已唤起面板）；载荷是系统设置里那一页的名字。 */
 export const SHOT_NEED_PERMISSION = 'shot-need-permission';
