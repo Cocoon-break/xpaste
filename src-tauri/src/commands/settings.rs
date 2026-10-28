@@ -116,6 +116,14 @@ pub fn changed_fields(old: &Settings, new: &Settings) -> Vec<&'static str> {
         ("shotHotkey", old.shot_hotkey != new.shot_hotkey),
         ("shotDir", old.shot_dir != new.shot_dir),
         ("shotSaveCopy", old.shot_save_copy != new.shot_save_copy),
+        ("recHotkey", old.rec_hotkey != new.rec_hotkey),
+        ("recDir", old.rec_dir != new.rec_dir),
+        (
+            "recSystemAudio",
+            old.rec_system_audio != new.rec_system_audio,
+        ),
+        ("recMicrophone", old.rec_microphone != new.rec_microphone),
+        ("recCopy", old.rec_copy != new.rec_copy),
     ]
     .into_iter()
     .filter_map(|(name, changed)| changed.then_some(name))
@@ -404,6 +412,11 @@ mod tests {
             shot_hotkey: "Alt+Shift+S".into(),
             shot_dir: "/x".into(),
             shot_save_copy: false,
+            rec_hotkey: "Alt+Shift+T".into(),
+            rec_dir: "/y".into(),
+            rec_system_audio: true,
+            rec_microphone: true,
+            rec_copy: false,
             ..Settings::default()
         };
         assert_eq!(
@@ -419,7 +432,12 @@ mod tests {
                 "searchFileText",
                 "shotHotkey",
                 "shotDir",
-                "shotSaveCopy"
+                "shotSaveCopy",
+                "recHotkey",
+                "recDir",
+                "recSystemAudio",
+                "recMicrophone",
+                "recCopy"
             ]
         );
     }

@@ -146,7 +146,7 @@ impl Store {
     pub fn load_settings(&self) -> Settings {
         match self.kv_get("settings") {
             Ok(Some(raw)) => match serde_json::from_str::<Settings>(&raw).map(|mut s| {
-                s.disable_clashing_shot_hotkey();
+                s.disable_clashing_hotkeys();
                 s
             }) {
                 Ok(s) if s.validate().is_ok() => s,

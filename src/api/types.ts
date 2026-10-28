@@ -23,6 +23,11 @@ export interface Settings {
   shotHotkey: string;
   shotDir: string;
   shotSaveCopy: boolean;
+  recHotkey: string;
+  recDir: string;
+  recSystemAudio: boolean;
+  recMicrophone: boolean;
+  recCopy: boolean;
 }
 
 export interface PlatformInfo {
