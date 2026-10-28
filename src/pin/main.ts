@@ -67,7 +67,8 @@ async function settle() {
   const w = Math.round(W0 * k), h = Math.round(H0 * k);
   const c = clampPos(p.x - a.x, p.y - a.y, w, h, a);
   const x = a.x + c.x, y = a.y + c.y;
-  if (Math.abs(x - p.x) > 0.5 || Math.abs(y - p.y) > 0.5) await pinSetBounds({ x, y, w, h });
+  // 拖到缩放不同的屏上时后端可能按窗口尺寸上限缩小，k 以返回的系数为准（同缩放、恢复原始大小）
+  if (Math.abs(x - p.x) > 0.5 || Math.abs(y - p.y) > 0.5) k *= await pinSetBounds({ x, y, w, h });
 }
 
 /* —— 滚轮缩放：每格 ×1.1，光标为锚。格数按 wheelSteps 累计；改窗口期间来的格攒着，下一步一起改 —— */

@@ -363,10 +363,21 @@ pub fn show(app: &AppHandle, t0: Option<u64>, trigger: Trigger) {
         return;
     }
     app.state::<AppState>().previous_window.store(
-        xpaste_platform::foreground_window().unwrap_or(0),
+        paste_target(trigger, xpaste_platform::foreground_window()),
         std::sync::atomic::Ordering::Relaxed,
     );
     show_panel(app, t0, trigger);
+}
+
+/// 唤起时记下的粘贴目标（0 为没有）：从托盘图标或托盘菜单打开时没有目标，Enter 只复制（M09 规则 3）。
+/// Windows 上托盘菜单弹出前 tray-icon 会把前台切到本进程的隐藏窗口，`foreground_window` 此时退回
+/// 最后一个外部前台窗口，不能当目标。
+pub fn paste_target(trigger: Trigger, foreground: Option<isize>) -> isize {
+    if trigger == Trigger::Tray {
+        0
+    } else {
+        foreground.unwrap_or(0)
+    }
 }
 
 /// 粘贴失败后重新显示面板给出降级提示；不覆盖 `previous_window`（此时前台可能已是别的窗口）。
@@ -689,6 +700,19 @@ fn same_size(a: (f64, f64), b: (f64, f64)) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tray_open_has_no_paste_target() {
+        use super::{Trigger, paste_target};
+        assert_eq!(
+            paste_target(Trigger::Tray, Some(7)),
+            0,
+            "托盘图标、托盘菜单只复制"
+        );
+        assert_eq!(paste_target(Trigger::Hotkey, Some(7)), 7);
+        assert_eq!(paste_target(Trigger::Relaunch, Some(7)), 7);
+        assert_eq!(paste_target(Trigger::Hotkey, None), 0);
+    }
+
     #[test]
     fn show_waits_for_frontend_ready_and_keeps_last_trigger() {
         use super::{Trigger, gate_show};
