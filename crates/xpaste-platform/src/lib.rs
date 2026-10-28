@@ -17,6 +17,28 @@ pub enum PasteBlock {
     Elevated,
 }
 
+/// 冻结的一块显示器。坐标为原生单位：macOS 全局点（主屏左上为原点），Windows 虚拟桌面物理像素。
+/// `rgba` 非预乘、行紧密排列（`px.0 * px.1 * 4` 字节）。
+pub struct Frame {
+    pub origin: (f64, f64),
+    pub size: (f64, f64),
+    pub scale: f64,
+    pub px: (u32, u32),
+    pub rgba: Vec<u8>,
+}
+
+/// 窗口外框，单位同 `Frame`。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WinRect {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+/// 本进程窗口里只有贴图（标题以此开头）参与窗口吸附；遮罩（`xpaste-shot…`）与面板都不算。
+const PIN_TITLE_PREFIX: &str = "xpaste-pin";
+
 /// 视频编码的显示名：macOS 传 FourCC（`avc1`），Windows 传子类型名（`H264`）。不区分大小写、去首尾空白；
 /// 不认识的大写原样返回。
 pub fn codec_label(fourcc: &str) -> String {
@@ -53,10 +75,15 @@ pub enum OcrError {
     Engine(String),
 }
 
-/// 读图（按内容识别格式）并把长边缩到 `max_side` 以内（不放大），RGBA8。
-fn load_rgba(path: &Path, max_side: u32) -> Result<image::RgbaImage, OcrError> {
+/// 识别图片文件里的文字：读文件后交给 `ocr_png_bytes`（两端各自实现）。阻塞，只在工作线程调用。
+pub fn ocr_png(path: &Path, max_side_px: u32) -> Result<Option<OcrText>, OcrError> {
     let bytes = std::fs::read(path).map_err(|_| OcrError::Decode)?;
-    let img = image::load_from_memory(&bytes).map_err(|_| OcrError::Decode)?;
+    ocr_png_bytes(&bytes, max_side_px)
+}
+
+/// 解码图片字节（按内容识别格式）并把长边缩到 `max_side` 以内（不放大），RGBA8。
+fn load_rgba(bytes: &[u8], max_side: u32) -> Result<image::RgbaImage, OcrError> {
+    let img = image::load_from_memory(bytes).map_err(|_| OcrError::Decode)?;
     let img = if img.width().max(img.height()) > max_side {
         img.resize(max_side, max_side, image::imageops::FilterType::Triangle)
     } else {

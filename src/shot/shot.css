@@ -1,0 +1,180 @@
+@import '../tokens.css';
+
+/* 截图遮罩（每屏一个窗口，铺满整块屏）。样式、时长与曲线取自原型 docs/specs/2026-10-28-截图与录屏-原型.html。
+   选区框与手柄用图片类型色；蒙层与主题无关（压暗的是用户的屏幕，不是 xPaste 的界面），工具栏、标签、提示随主题。
+   主题：遮罩拿不到外观设置，跟随系统深浅色（prefers-color-scheme，见 tokens.css）。 */
+:root { --dim: rgb(0 0 0 / .46); }
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: transparent; }
+body { font: 14px/1.5 var(--font-ui); color: var(--fg); -webkit-font-smoothing: antialiased; }
+button { font: inherit; color: inherit; -webkit-tap-highlight-color: transparent; }
+:focus-visible { outline: 2px solid var(--beam); outline-offset: 2px; }
+.ic { width: 16px; height: 16px; flex: none; display: block; }
+kbd {
+  font: 500 11px/1 var(--font-mono);
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 5px;
+  color: var(--muted); background: var(--glass-2); border: 1px solid var(--line-2);
+}
+@keyframes popIn { from { opacity: 0; transform: translateY(4px); filter: blur(3px); } }
+@keyframes fadeIn { from { opacity: 0; } }
+
+#ov { position: fixed; inset: 0; overflow: hidden; user-select: none; -webkit-user-select: none; touch-action: none; cursor: crosshair; --tc: var(--c-image); }
+#ov > canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+#ov.out { opacity: 0; transition: opacity 160ms ease-out; pointer-events: none; }
+
+/* 选区：自身透明，靠超大外阴影压暗四周；边框画在选区外侧，不压住被截的像素 */
+#cut { position: absolute; pointer-events: none; box-shadow: 0 0 0 200vmax var(--dim); }
+#ov.in #cut { animation: dimIn 90ms var(--ease-enter) both; }
+@keyframes dimIn { from { box-shadow: 0 0 0 200vmax transparent; } }
+#cut::before {
+  content: ""; position: absolute; inset: -1.5px; border: 1.5px solid var(--tc);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / .28), 0 0 22px -4px color-mix(in srgb, var(--tc) 70%, transparent);
+}
+#cut.snap::before { inset: -2px; border-width: 2px; }
+/* 光标不在这块屏：只有蒙层 */
+#cut.none::before { display: none; }
+#cut .h {
+  position: absolute; width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px; border-radius: 50%;
+  background: var(--tc); box-shadow: 0 0 0 2px #fff, 0 1px 4px rgb(0 0 0 / .45);
+  pointer-events: auto; display: none;
+}
+#ov[data-phase="selected"] #cut .h { display: block; }
+#cut .h::after { content: ""; position: absolute; inset: -7px; } /* 放大可点范围 */
+.h[data-h="nw"] { left: 0; top: 0; cursor: nwse-resize; }
+.h[data-h="n"]  { left: 50%; top: 0; cursor: ns-resize; }
+.h[data-h="ne"] { left: 100%; top: 0; cursor: nesw-resize; }
+.h[data-h="e"]  { left: 100%; top: 50%; cursor: ew-resize; }
+.h[data-h="se"] { left: 100%; top: 100%; cursor: nwse-resize; }
+.h[data-h="s"]  { left: 50%; top: 100%; cursor: ns-resize; }
+.h[data-h="sw"] { left: 0; top: 100%; cursor: nesw-resize; }
+.h[data-h="w"]  { left: 0; top: 50%; cursor: ew-resize; }
+/* 复制成功：一道类型色光扫过选区（M20“复制成功”的同一语言，缩短到 320 ms 以便尽快退出） */
+#cut .sweep { position: absolute; inset: 0; overflow: hidden; }
+#cut .sweep::before {
+  content: ""; position: absolute; top: 0; bottom: 0; width: 45%; left: -45%;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--tc) 55%, transparent), transparent);
+  animation: sweep 320ms var(--ease-move) forwards;
+}
+@keyframes sweep { to { left: 100%; } }
+
+/* 尺寸标签：数字用品牌字 Unbounded（M16 规则 4），物理像素 */
+.badge {
+  position: absolute; left: 0; top: 0; pointer-events: none; white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 6px;
+  font: 500 11px/1 var(--font-display); letter-spacing: .02em; font-variant-numeric: tabular-nums;
+  padding: 6px 8px; border-radius: 7px; color: var(--fg);
+  background: var(--pop); border: 1px solid var(--line-2);
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+}
+.badge i { width: 6px; height: 6px; border-radius: 50%; background: var(--tc); box-shadow: 0 0 8px var(--tc); }
+.badge .x { color: var(--faint); }
+
+/* 放大镜与十字参考线 */
+.gx, .gy { position: absolute; left: 0; top: 0; pointer-events: none; background: color-mix(in srgb, var(--tc) 45%, transparent); }
+.gx { width: 100%; height: 1px; }
+.gy { width: 1px; height: 100%; }
+.loupe {
+  position: absolute; left: 0; top: 0; width: 124px; pointer-events: none; border-radius: 12px; overflow: hidden;
+  background: var(--pop); border: 1px solid var(--line-2); box-shadow: var(--shadow-pop);
+}
+.loupe canvas { display: block; width: 122px; height: 122px; }
+.loupe .info { font: 500 11px/1 var(--font-mono); color: var(--muted); padding: 7px 9px 8px; display: flex; justify-content: space-between; font-variant-numeric: tabular-nums; }
+
+/* 工具栏 */
+.bar {
+  position: absolute; left: 0; top: 0; display: flex; align-items: center; gap: 2px; padding: 4px;
+  border-radius: 12px; background: var(--pop); border: 1px solid var(--line-2); box-shadow: var(--shadow-pop);
+  -webkit-backdrop-filter: blur(20px) saturate(150%); backdrop-filter: blur(20px) saturate(150%);
+  cursor: default;
+}
+.bar.pop-in { animation: popIn 180ms var(--ease-enter) both; }
+.bar button {
+  position: relative; width: 32px; height: 32px; border: 0; border-radius: 8px; padding: 0;
+  background: transparent; color: var(--muted); display: grid; place-items: center; cursor: pointer;
+  transition: background-color 130ms ease, color 130ms ease, transform 140ms var(--ease-enter);
+}
+.bar button:active:not([aria-disabled="true"]) { transform: scale(.92); }
+.bar button[aria-pressed="true"] { background: color-mix(in srgb, var(--beam) 16%, transparent); color: var(--beam); }
+.bar button[aria-disabled="true"] { opacity: .35; cursor: default; }
+@media (hover: hover) and (pointer: fine) {
+  .bar button:hover:not([aria-disabled="true"]):not([aria-pressed="true"]) { background: var(--hover); color: var(--fg); }
+}
+.bar .sep { width: 1px; height: 18px; background: var(--line-2); margin: 0 4px; flex: none; }
+.bar .go {
+  width: auto; padding: 0 8px 0 12px; gap: 8px; display: inline-flex; margin-left: 2px;
+  background: var(--beam); color: var(--on-beam); font-weight: 600; font-size: 13px;
+  box-shadow: 0 6px 20px -8px color-mix(in srgb, var(--beam) 70%, transparent);
+}
+.bar .go kbd { background: color-mix(in srgb, var(--on-beam) 14%, transparent); border-color: color-mix(in srgb, var(--on-beam) 30%, transparent); color: var(--on-beam); }
+@media (hover: hover) and (pointer: fine) { .bar .go:hover { background: var(--beam-hover) !important; color: var(--on-beam) !important; } }
+
+/* 悬停提示：名称 + 按键，380 ms 后出现 */
+.bar [data-tip]::after {
+  content: attr(data-tip); position: absolute; left: 50%; bottom: calc(100% + 9px); z-index: 2;
+  transform: translate(-50%, 4px); white-space: nowrap; pointer-events: none;
+  font: 500 12px/1 var(--font-ui); padding: 6px 8px; border-radius: 7px;
+  background: var(--pop-solid); border: 1px solid var(--line-2); color: var(--fg); box-shadow: var(--shadow-pop);
+  opacity: 0; transition: opacity 120ms ease-out, transform 120ms ease-out;
+}
+.bar.below-tips [data-tip]::after { bottom: auto; top: calc(100% + 9px); transform: translate(-50%, -4px); }
+@media (hover: hover) and (pointer: fine) {
+  .bar [data-tip]:hover::after { opacity: 1; transform: translate(-50%, 0); transition-delay: 380ms; }
+}
+
+/* 颜色 / 粗细 */
+.sub { gap: 4px; padding: 4px 6px; }
+.sw { width: 26px !important; height: 26px !important; }
+.sw i { width: 16px; height: 16px; border-radius: 50%; background: var(--c); box-shadow: inset 0 0 0 1px var(--swatch-ring); transition: transform 200ms var(--ease-spring); }
+.sw[aria-pressed="true"] { background: transparent !important; }
+.sw[aria-pressed="true"] i { transform: scale(1.12); box-shadow: 0 0 0 2px var(--pop-solid), 0 0 0 3.5px var(--c); }
+.sz { width: 26px !important; height: 26px !important; }
+.sz i { border-radius: 50%; background: currentColor; }
+.sz b { font: 600 var(--fs, 12px)/1 var(--font-ui); }
+
+/* 进行中提示（识别文字） */
+.busy { padding: 0 14px; height: 42px; gap: 10px; font-size: 13px; color: var(--muted); }
+.spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--beam) 25%, transparent); border-top-color: var(--beam); animation: spin 700ms linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* 左下角操作提示 */
+.hintbar {
+  position: absolute; left: 16px; bottom: 16px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 8px 12px; border-radius: 10px; font-size: 12px; color: var(--muted); pointer-events: none;
+  background: var(--pop); border: 1px solid var(--line-2); box-shadow: var(--shadow-pop);
+  animation: fadeIn 200ms ease-out 120ms both;
+}
+.hintbar b { font-weight: 500; color: var(--fg); }
+.hintbar span { display: inline-flex; align-items: center; gap: 6px; }
+
+/* 文字标注输入框 */
+.txt {
+  position: absolute; margin: 0; padding: 2px 4px; min-width: 24px; min-height: 1em;
+  border: 1px dashed color-mix(in srgb, var(--fg) 60%, transparent); border-radius: 3px;
+  background: rgb(0 0 0 / .08); outline: none; white-space: pre; cursor: text;
+  font-family: var(--font-ui); font-weight: 600; line-height: 1.25; caret-color: currentColor;
+}
+
+/* 提示条（M20：弹性进入、同方向退出）。放在左下角操作提示的位置；动作完成后遮罩其余部分淡出、鼠标穿透 */
+.toast {
+  position: fixed; left: 16px; bottom: 16px;
+  display: flex; align-items: center; gap: 10px; max-width: calc(100% - 32px);
+  padding: 7px 14px 7px 7px; border-radius: 12px; font-size: 13px;
+  background: var(--pop); border: 1px solid var(--line-2); box-shadow: var(--shadow-pop);
+  -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+  opacity: 0; transform: translateY(8px) scale(.96); visibility: hidden; pointer-events: none;
+  transition: opacity 160ms ease-out, transform 160ms ease-out, visibility 0s 160ms;
+}
+.toast[data-open="true"] { opacity: 1; transform: none; visibility: visible; transition: opacity 220ms var(--ease-enter), transform 420ms var(--ease-spring), visibility 0s; }
+.toast[data-instant] { transition: none; }
+.toast .t-th { width: 40px; height: 28px; border-radius: 6px; object-fit: cover; box-shadow: inset 0 0 0 1px var(--line-2); flex: none; display: block; }
+.toast .t-ic { width: 28px; height: 28px; display: grid; place-items: center; color: var(--c-code); flex: none; }
+.toast .t-ic.danger { color: var(--danger); }
+.toast .t-msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+/* 减少动态效果（M20 原则 3） */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0s !important; animation-delay: 0s !important; transition-duration: 0s !important; transition-delay: 0s !important; }
+}

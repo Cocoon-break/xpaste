@@ -47,6 +47,19 @@ pub fn accessibility_granted() -> Result<bool, AppError> {
     Ok(xpaste_platform::can_paste(None) == xpaste_platform::PasteBlock::None)
 }
 
+/// 请求屏幕录制授权并打开系统设置的对应页（已授权或非 macOS 无操作）。理由与线程要求同 `request_accessibility`。
+#[tauri::command(async)]
+pub fn request_screen_capture(app: AppHandle) -> Result<(), AppError> {
+    app.run_on_main_thread(xpaste_platform::request_screen_capture)?;
+    Ok(())
+}
+
+/// 是否已有截图所需的屏幕录制权限（Windows 恒为 true）。
+#[tauri::command(async)]
+pub fn screen_capture_granted() -> Result<bool, AppError> {
+    Ok(xpaste_platform::screen_capture_granted())
+}
+
 /// 只认小写 http/https 前缀（与 detect 的链接判定一致）。
 pub fn url_is_openable(url: &str) -> bool {
     url.starts_with("http://") || url.starts_with("https://")

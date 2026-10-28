@@ -1,4 +1,4 @@
-//! Windows 平台层的纯函数：格式名映射、读取筛选、CF_HTML / CF_HDROP / DIB 解码、版本资源查询路径、托盘窗口类名、识别结果按词拼行。
+//! Windows 平台层的纯函数：格式名映射、读取筛选、CF_HTML / CF_HDROP / DIB 解码、版本资源查询路径、托盘窗口类名、识别结果按词拼行、桌面窗口类名、PNG 转 DIB、BGRA 转不透明 RGBA。
 //! 与 `decode.rs` 一样全平台编译，`windows.rs` 只负责 Win32 调用。
 
 use std::borrow::Cow;
@@ -138,6 +138,43 @@ pub fn dib_to_png(dib: &[u8]) -> Option<Vec<u8>> {
     encode_png(DynamicImage::from_decoder(decoder).ok()?.to_rgba8())
 }
 
+/// PNG 转 `CF_DIB`：40 字节 `BITMAPINFOHEADER`（32 bpp、`BI_RGB`、高度为正即自下而上）+ BGRA 行。
+pub fn png_to_dib(png: &[u8]) -> Option<Vec<u8>> {
+    let img = image::load_from_memory_with_format(png, ImageFormat::Png)
+        .ok()?
+        .to_rgba8();
+    let (w, h) = img.dimensions();
+    let size = (w as usize).checked_mul(h as usize)?.checked_mul(4)?;
+    let mut v = Vec::with_capacity(40 + size);
+    v.extend(40u32.to_le_bytes());
+    v.extend(i32::try_from(w).ok()?.to_le_bytes());
+    v.extend(i32::try_from(h).ok()?.to_le_bytes());
+    v.extend(1u16.to_le_bytes()); // planes
+    v.extend(32u16.to_le_bytes());
+    v.extend(0u32.to_le_bytes()); // BI_RGB
+    v.extend(u32::try_from(size).ok()?.to_le_bytes());
+    v.extend([0; 16]); // 分辨率、调色板计数
+    for row in img.rows().rev() {
+        v.extend(row.flat_map(|p| [p[2], p[1], p[0], p[3]]));
+    }
+    Some(v)
+}
+
+/// 紧密排列的 BGRA 转 RGBA，alpha 一律记 255（GDI `BitBlt` 的 alpha 字节无意义）。
+/// 长度不是 `w * h * 4` 时返回 `None`。
+pub fn bgra_to_opaque_rgba(bgra: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
+    if (w as usize).checked_mul(h as usize)?.checked_mul(4)? != bgra.len() {
+        return None;
+    }
+    Some(
+        bgra.as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|&[b, g, r, _]| [r, g, b, 255])
+            .collect(),
+    )
+}
+
 /// 自上而下的 BGRA 像素转 PNG；长度必须正好是 `w * h * 4`。
 pub fn bgra_to_png(w: u32, h: u32, bgra: &[u8]) -> Option<Vec<u8>> {
     encode_png(bgra_image(w, h, bgra)?)
@@ -204,6 +241,33 @@ pub fn is_shell_tray_class(class: &str) -> bool {
             | "NotifyIconOverflowWindow"
             | "TopLevelWindowForOverflowXamlIsland"
     )
+}
+
+/// 前台窗口的归属，`foreground_window` 用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Foreground {
+    None,
+    /// 本进程的窗口（面板、遮罩、贴图）
+    Own,
+    /// 任务栏与通知区域
+    Tray,
+    Other(isize),
+}
+
+/// 粘贴目标与截图前的前台窗口。本进程窗口在前台时（Windows 上点贴图会激活它）取最后一个成为前台的外部窗口
+/// `last`（0 表示没有或已关闭），否则点过贴图后紧接着截图，Esc 交不回键盘，唤起面板后回车也没有粘贴目标
+/// （M23 规则 1）。任务栏在前台时仍不作目标（从托盘打开面板只复制）。
+pub fn foreground_target(fg: Foreground, last: isize) -> Option<isize> {
+    match fg {
+        Foreground::Other(h) => Some(h),
+        Foreground::Own => (last != 0).then_some(last),
+        Foreground::None | Foreground::Tray => None,
+    }
+}
+
+/// 桌面（壁纸与图标层）窗口的类名（区分大小写）：不参与截图的窗口吸附，对应 macOS 的 `ExcludeDesktopElements`。
+pub fn is_desktop_class(class: &str) -> bool {
+    matches!(class, "Progman" | "WorkerW")
 }
 
 /// 视频文件属性库（`IPropertyStore`）里读到的原始值，读不到的为 `None`。
@@ -464,6 +528,32 @@ mod tests {
         assert_eq!(dib_to_png(&[1, 2, 3]), None);
     }
     #[test]
+    fn png_to_dib_roundtrips() {
+        let px = [
+            [255, 0, 0, 255],
+            [0, 255, 0, 255],
+            [0, 0, 255, 255],
+            [9, 8, 7, 255],
+        ];
+        let img = RgbaImage::from_fn(2, 2, |x, y| image::Rgba(px[(y * 2 + x) as usize]));
+        let png = encode_png(img.clone()).unwrap();
+        let dib = png_to_dib(&png).unwrap();
+        assert_eq!(dib.len(), 40 + 2 * 2 * 4);
+        let back = image::load_from_memory(&dib_to_png(&dib).unwrap())
+            .unwrap()
+            .to_rgba8();
+        assert_eq!(back, img);
+        assert_eq!(png_to_dib(b"not png"), None);
+    }
+    #[test]
+    fn bgra_to_opaque_rgba_swaps_and_forces_alpha() {
+        assert_eq!(
+            bgra_to_opaque_rgba(&[1, 2, 3, 0, 4, 5, 6, 7], 2, 1),
+            Some(vec![3, 2, 1, 255, 6, 5, 4, 255])
+        );
+        assert_eq!(bgra_to_opaque_rgba(&[0; 7], 1, 2), None);
+    }
+    #[test]
     fn write_bytes_terminates_unicode_text() {
         assert_eq!(&*write_bytes(13, &[0x61, 0]), &[0x61, 0, 0, 0]);
         assert_eq!(&*write_bytes(13, &[]), &[0, 0]);
@@ -532,6 +622,20 @@ mod tests {
         );
     }
     #[test]
+    fn own_foreground_falls_back_to_last_external() {
+        use Foreground as F;
+        assert_eq!(foreground_target(F::Other(5), 9), Some(5));
+        assert_eq!(
+            foreground_target(F::Own, 9),
+            Some(9),
+            "点过贴图：取之前的外部窗口"
+        );
+        assert_eq!(foreground_target(F::Own, 0), None, "还没有外部窗口或已关闭");
+        assert_eq!(foreground_target(F::Tray, 9), None);
+        assert_eq!(foreground_target(F::None, 9), None);
+    }
+
+    #[test]
     fn shell_tray_classes_are_not_paste_targets() {
         for c in [
             "Shell_TrayWnd",
@@ -543,6 +647,14 @@ mod tests {
         }
         assert!(!is_shell_tray_class("Notepad"));
         assert!(!is_shell_tray_class("shell_traywnd")); // 类名区分大小写
+    }
+
+    #[test]
+    fn desktop_classes_are_not_snap_targets() {
+        assert!(is_desktop_class("Progman"));
+        assert!(is_desktop_class("WorkerW"));
+        assert!(!is_desktop_class("workerw")); // 类名区分大小写
+        assert!(!is_desktop_class("Notepad"));
     }
 
     #[test]

@@ -19,6 +19,10 @@ pub fn material() -> &'static str {
     MATERIAL.get().copied().unwrap_or("opaque")
 }
 
+/// AppKit 常量，cocoa 未导出；截图遮罩也用
+#[cfg(target_os = "macos")]
+pub const NS_WINDOW_STYLE_MASK_NONACTIVATING_PANEL: i32 = 1 << 7;
+
 /// 无 Dock 图标；把面板窗口换成不激活应用的 NSPanel，浮在全屏应用之上；铺系统毛玻璃。
 /// 只有激活策略失败才返回错误，NSPanel / 毛玻璃失败只记日志。
 #[cfg(target_os = "macos")]
@@ -30,8 +34,6 @@ pub fn setup_macos(app: &tauri::App) -> Result<(), crate::error::AppError> {
         base::id,
     };
     use window_vibrancy::{NSVisualEffectMaterial, NSVisualEffectState};
-    // AppKit 常量，cocoa 未导出
-    const NS_WINDOW_STYLE_MASK_NONACTIVATING_PANEL: i32 = 1 << 7;
     const NS_FLOATING_WINDOW_LEVEL: i32 = 3;
 
     app.handle()
@@ -316,7 +318,7 @@ fn front_and_focus(app: &AppHandle, w: &WebviewWindow) -> tauri::Result<()> {
 }
 
 /// AppKit 只能在主线程调用；已在主线程时同步执行（hide_panel 命令跑在异步线程上）。
-fn on_main(app: &AppHandle, f: impl FnOnce(&AppHandle) + Send + 'static) {
+pub fn on_main(app: &AppHandle, f: impl FnOnce(&AppHandle) + Send + 'static) {
     let a = app.clone();
     if let Err(e) = app.run_on_main_thread(move || f(&a)) {
         log::warn!("切换到主线程失败：{e}");
@@ -361,10 +363,21 @@ pub fn show(app: &AppHandle, t0: Option<u64>, trigger: Trigger) {
         return;
     }
     app.state::<AppState>().previous_window.store(
-        xpaste_platform::foreground_window().unwrap_or(0),
+        paste_target(trigger, xpaste_platform::foreground_window()),
         std::sync::atomic::Ordering::Relaxed,
     );
     show_panel(app, t0, trigger);
+}
+
+/// 唤起时记下的粘贴目标（0 为没有）：从托盘图标或托盘菜单打开时没有目标，Enter 只复制（M09 规则 3）。
+/// Windows 上托盘菜单弹出前 tray-icon 会把前台切到本进程的隐藏窗口，`foreground_window` 此时退回
+/// 最后一个外部前台窗口，不能当目标。
+pub fn paste_target(trigger: Trigger, foreground: Option<isize>) -> isize {
+    if trigger == Trigger::Tray {
+        0
+    } else {
+        foreground.unwrap_or(0)
+    }
 }
 
 /// 粘贴失败后重新显示面板给出降级提示；不覆盖 `previous_window`（此时前台可能已是别的窗口）。
@@ -562,7 +575,7 @@ pub fn toggle(app: &AppHandle, t0: Option<u64>, trigger: Trigger) {
             // 排在 show 的主线程任务之后发，前端先收到 panel-shown、重新打开引导，再收到这个
             if then_hotkey {
                 on_main(app, |app| {
-                    crate::events::emit(app, crate::events::HOTKEY_PRESSED, ())
+                    crate::events::emit(app, crate::events::HOTKEY_PRESSED, "panel")
                 });
             }
         }
@@ -573,20 +586,25 @@ pub fn toggle(app: &AppHandle, t0: Option<u64>, trigger: Trigger) {
             // 免得录制框把它当成按下了当前快捷键。引导中照发：首次运行面板可见但未取得焦点时试按也算成功
             let focused = w.is_focused().unwrap_or(true);
             if !focused {
-                on_main(app, |app| {
-                    if let Some(w) = window(app)
-                        && let Err(e) = front_and_focus(app, &w)
-                    {
-                        log::warn!("面板取得焦点失败：{e}");
-                    }
-                });
+                refocus(app);
             }
             if focused || state.onboarding.load(Ordering::SeqCst) {
-                crate::events::emit(app, crate::events::HOTKEY_PRESSED, ())
+                crate::events::emit(app, crate::events::HOTKEY_PRESSED, "panel")
             }
         }
         ToggleAction::Ignore => {}
     }
+}
+
+/// 把可见的面板拉回前台并取得键盘焦点（对话框开着、面板失焦时按快捷键）。
+pub fn refocus(app: &AppHandle) {
+    on_main(app, |app| {
+        if let Some(w) = window(app)
+            && let Err(e) = front_and_focus(app, &w)
+        {
+            log::warn!("面板取得焦点失败：{e}");
+        }
+    });
 }
 
 fn request_hide(app: &AppHandle) {
@@ -612,15 +630,20 @@ pub fn theme_of(a: Appearance) -> Option<Theme> {
     }
 }
 
-/// 窗口外观跟随设置（毛玻璃明暗随之变化）；失败只记日志。
+/// 窗口外观跟随设置（毛玻璃明暗随之变化）：面板、截图遮罩与贴图一起换；失败只记日志。
 pub fn apply_theme(app: &AppHandle, a: Appearance) {
     on_main(app, move |app| {
-        if let Some(w) = window(app)
-            && let Err(e) = w.set_theme(theme_of(a))
-        {
-            log::warn!("设置面板外观失败：{e}");
+        for (label, w) in app.webview_windows() {
+            if let Err(e) = w.set_theme(theme_of(a)) {
+                log::warn!("设置窗口 {label} 外观失败：{e}");
+            }
         }
     });
+}
+
+/// 新建遮罩 / 贴图窗口时用的外观，与 `apply_theme` 一致。
+pub fn current_theme(app: &AppHandle) -> Option<Theme> {
+    theme_of(app.state::<AppState>().settings().appearance)
 }
 
 /// 物理尺寸换成逻辑像素；不可见或小于 720 × 520 时不记。
@@ -677,6 +700,19 @@ fn same_size(a: (f64, f64), b: (f64, f64)) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tray_open_has_no_paste_target() {
+        use super::{Trigger, paste_target};
+        assert_eq!(
+            paste_target(Trigger::Tray, Some(7)),
+            0,
+            "托盘图标、托盘菜单只复制"
+        );
+        assert_eq!(paste_target(Trigger::Hotkey, Some(7)), 7);
+        assert_eq!(paste_target(Trigger::Relaunch, Some(7)), 7);
+        assert_eq!(paste_target(Trigger::Hotkey, None), 0);
+    }
+
     #[test]
     fn show_waits_for_frontend_ready_and_keeps_last_trigger() {
         use super::{Trigger, gate_show};

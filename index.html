@@ -107,68 +107,105 @@
           <h2 id="st-title">设置</h2>
           <button class="btn icon ghost" type="button" data-close aria-label="关闭设置"><span data-icon="x"></span></button>
         </header>
-        <div class="dlg-body">
-          <div class="field" style="--i:0">
-            <label for="hotkey">唤起快捷键</label>
-            <input id="hotkey" name="hotkey" readonly autocomplete="off" spellcheck="false" aria-describedby="hotkeyHelp">
-            <p class="help" id="hotkeyHelp">点击输入框，然后按下新的组合键</p>
-          </div>
-          <div class="cols" style="--i:1">
-            <div class="field">
-              <label for="retain">历史保留</label>
-              <select id="retain" name="retain">
-                <option value="7">7 天</option><option value="30" selected>30 天</option><option value="90">90 天</option><option value="forever">永久</option>
-              </select>
+        <div class="st-tabs" role="tablist" aria-label="设置分类" id="stTabs">
+          <button type="button" role="tab" id="st-tab-general" aria-controls="st-general" aria-selected="true">通用</button>
+          <button type="button" role="tab" id="st-tab-records" aria-controls="st-records" aria-selected="false" tabindex="-1">记录</button>
+          <button type="button" role="tab" id="st-tab-search" aria-controls="st-search" aria-selected="false" tabindex="-1">搜索</button>
+          <button type="button" role="tab" id="st-tab-shot" aria-controls="st-shot" aria-selected="false" tabindex="-1">截图</button>
+          <span class="st-ind" aria-hidden="true"></span>
+        </div>
+        <div class="st-panes">
+          <section class="dlg-body" role="tabpanel" id="st-general" aria-labelledby="st-tab-general">
+            <div class="field" style="--i:0">
+              <label for="hotkey">唤起快捷键</label>
+              <input id="hotkey" name="hotkey" readonly autocomplete="off" spellcheck="false" aria-describedby="hotkeyHelp">
+              <p class="help" id="hotkeyHelp">点击输入框，然后按下新的组合键</p>
             </div>
-            <div class="field">
-              <label for="limit">最多保存</label>
-              <div class="suffix">
-                <input id="limit" name="limit" type="number" inputmode="numeric" min="50" max="5000" step="50" value="500" autocomplete="off" aria-describedby="limitErr">
-                <span>条</span>
+            <div class="line" style="--i:1">
+              <span><b id="themeLabel">外观</b><small>点选即生效</small></span>
+              <div class="seg" id="themeSeg" role="radiogroup" aria-labelledby="themeLabel">
+                <span class="pill" aria-hidden="true"></span>
+                <button type="button" role="radio" data-theme-opt="system" aria-label="跟随系统" title="跟随系统"><span data-icon="monitor"></span></button>
+                <button type="button" role="radio" data-theme-opt="light" aria-label="亮色主题" title="亮色"><span data-icon="sun"></span></button>
+                <button type="button" role="radio" data-theme-opt="dark" aria-label="暗色主题" title="暗色"><span data-icon="moon"></span></button>
               </div>
-              <p class="err" id="limitErr" hidden>请输入 50 到 5000 之间、50 的整数倍</p>
             </div>
-          </div>
-          <div class="field" style="--i:2">
-            <div class="line"><span><label for="frequentIn"><b>进入“常用”的使用次数</b></label><small id="frequentHelp">同一条内容被复制这么多次后出现在“常用”</small></span><span class="suffix"><input type="number" id="frequentIn" min="2" max="99" step="1" inputmode="numeric" autocomplete="off" aria-describedby="frequentHelp frequentErr"><span>次</span></span></div>
-            <p class="err" id="frequentErr" hidden>请输入 2 到 99 之间的整数</p>
-          </div>
-          <div class="ocr-set" style="--i:3">
-            <div class="switches">
-              <label class="switch"><span><b>识别图片中的文字</b><small>在本机完成，不上传；识别结果只用于搜索和预览</small></span><input type="checkbox" id="ocrOn" name="ocrOn" checked aria-describedby="ocrUnsupported"></label>
-              <label class="switch" id="ocrBackfillRow"><span><b>为已有图片补识别</b><small>后台低速进行，面板打开时暂停</small></span><input type="checkbox" id="ocrBackfill" name="ocrBackfill" checked></label>
+            <div class="switches" style="--i:2">
+              <label class="switch"><span><b>开机时启动</b><small>登录系统后在后台待命</small></span><input type="checkbox" id="autostart" name="autostart" checked></label>
+              <label class="switch"><span><b>复制后移到顶部</b><small>再次使用的条目会排到列表最前</small></span><input type="checkbox" id="moveTop" name="moveTop" checked></label>
             </div>
-            <small class="help" id="ocrProgress" hidden></small>
-            <small class="help" id="ocrUnsupported" hidden></small>
-          </div>
-          <div class="field" style="--i:4">
-            <label for="ignore" id="ignoreLabel">不记录这些应用</label>
-            <div class="apps-box" id="ignoreBox"><span id="ignoreChips"></span><input id="ignore" role="combobox" aria-expanded="false" aria-controls="ignoreList" aria-autocomplete="list" autocomplete="off" spellcheck="false" placeholder="搜索已安装或正在运行的应用，回车添加"></div>
-            <ul class="apps-list" id="ignoreList" role="listbox" aria-labelledby="ignoreLabel" hidden></ul>
-          </div>
-          <div class="switches" style="--i:5">
-            <label class="switch"><span><b>跳过密码管理器与敏感内容</b><small>来自密码管理器或被标记为敏感的内容不会被记录</small></span><input type="checkbox" id="sensitive" name="sensitive" checked></label>
-            <label class="switch"><span><b>复制后移到顶部</b><small>再次使用的条目会排到列表最前</small></span><input type="checkbox" id="moveTop" name="moveTop" checked></label>
-            <label class="switch"><span><b>开机时启动</b><small>登录系统后在后台待命</small></span><input type="checkbox" id="autostart" name="autostart" checked></label>
-            <label class="switch"><span><b>搜索文本文件内容</b><small>复制 txt、md、csv、json、代码等文件时读入前 64 KB 供搜索，不显示；会让数据库变大</small></span><input type="checkbox" id="fileText" name="fileText"></label>
-          </div>
-          <div class="line" style="--i:6">
-            <span><b id="themeLabel">外观</b><small>点选即生效</small></span>
-            <div class="seg" id="themeSeg" role="radiogroup" aria-labelledby="themeLabel">
-              <span class="pill" aria-hidden="true"></span>
-              <button type="button" role="radio" data-theme-opt="system" aria-label="跟随系统" title="跟随系统"><span data-icon="monitor"></span></button>
-              <button type="button" role="radio" data-theme-opt="light" aria-label="亮色主题" title="亮色"><span data-icon="sun"></span></button>
-              <button type="button" role="radio" data-theme-opt="dark" aria-label="暗色主题" title="暗色"><span data-icon="moon"></span></button>
+            <div class="field" style="--i:3">
+              <div class="line"><span><label for="frequentIn"><b>进入“常用”的使用次数</b></label><small id="frequentHelp">同一条内容被复制这么多次后出现在“常用”</small></span><span class="suffix"><input type="number" id="frequentIn" min="2" max="99" step="1" inputmode="numeric" autocomplete="off" aria-describedby="frequentHelp frequentErr"><span>次</span></span></div>
+              <p class="err" id="frequentErr" hidden>请输入 2 到 99 之间的整数</p>
             </div>
-          </div>
-          <div class="line" id="permRow" style="--i:7" hidden>
-            <span><b>自动粘贴权限</b><small id="permState"></small></span>
-            <button class="btn sm" type="button" id="permBtn" hidden>前往授权</button>
-          </div>
-          <div class="line" style="--i:8">
-            <span><b>历史记录</b><small id="clearNote" aria-live="polite">置顶记录会保留</small></span>
-            <button class="btn sm" type="button" id="clearBtn">清空历史…</button>
-          </div>
+            <div class="line" id="permRow" style="--i:4" hidden>
+              <span><b>自动粘贴权限</b><small id="permState"></small></span>
+              <button class="btn sm" type="button" id="permBtn" hidden>前往授权</button>
+            </div>
+          </section>
+          <section class="dlg-body" role="tabpanel" id="st-records" aria-labelledby="st-tab-records" inert>
+            <div class="cols" style="--i:0">
+              <div class="field">
+                <label for="retain">历史保留</label>
+                <select id="retain" name="retain">
+                  <option value="7">7 天</option><option value="30" selected>30 天</option><option value="90">90 天</option><option value="forever">永久</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="limit">最多保存</label>
+                <div class="suffix">
+                  <input id="limit" name="limit" type="number" inputmode="numeric" min="50" max="5000" step="50" value="500" autocomplete="off" aria-describedby="limitErr">
+                  <span>条</span>
+                </div>
+                <p class="err" id="limitErr" hidden>请输入 50 到 5000 之间、50 的整数倍</p>
+              </div>
+            </div>
+            <div class="field" style="--i:1">
+              <label for="ignore" id="ignoreLabel">不记录这些应用</label>
+              <div class="apps-box" id="ignoreBox"><span id="ignoreChips"></span><input id="ignore" role="combobox" aria-expanded="false" aria-controls="ignoreList" aria-autocomplete="list" autocomplete="off" spellcheck="false" placeholder="搜索已安装或正在运行的应用，回车添加"></div>
+              <ul class="apps-list" id="ignoreList" role="listbox" aria-labelledby="ignoreLabel" hidden></ul>
+            </div>
+            <div class="switches" style="--i:2">
+              <label class="switch"><span><b>跳过密码管理器与敏感内容</b><small>来自密码管理器或被标记为敏感的内容不会被记录</small></span><input type="checkbox" id="sensitive" name="sensitive" checked></label>
+            </div>
+            <div class="line" style="--i:3">
+              <span><b>历史记录</b><small id="clearNote" aria-live="polite">置顶记录会保留</small></span>
+              <button class="btn sm" type="button" id="clearBtn">清空历史…</button>
+            </div>
+          </section>
+          <section class="dlg-body" role="tabpanel" id="st-search" aria-labelledby="st-tab-search" inert>
+            <div class="ocr-set" style="--i:0">
+              <div class="switches">
+                <label class="switch"><span><b>识别图片中的文字</b><small>在本机完成，不上传；识别结果只用于搜索和预览</small></span><input type="checkbox" id="ocrOn" name="ocrOn" checked aria-describedby="ocrUnsupported"></label>
+                <label class="switch" id="ocrBackfillRow"><span><b>为已有图片补识别</b><small>后台低速进行，面板打开时暂停</small></span><input type="checkbox" id="ocrBackfill" name="ocrBackfill" checked></label>
+              </div>
+              <small class="help" id="ocrProgress" hidden></small>
+              <small class="help" id="ocrUnsupported" hidden></small>
+            </div>
+            <div class="switches" style="--i:1">
+              <label class="switch"><span><b>搜索文本文件内容</b><small>复制 txt、md、csv、json、代码等文件时读入前 64 KB 供搜索，不显示；会让数据库变大</small></span><input type="checkbox" id="fileText" name="fileText"></label>
+            </div>
+          </section>
+          <section class="dlg-body" role="tabpanel" id="st-shot" aria-labelledby="st-tab-shot" inert>
+            <div class="field" style="--i:0">
+              <label for="shotHotkey">截图快捷键</label>
+              <input id="shotHotkey" readonly autocomplete="off" spellcheck="false" placeholder="未启用" aria-describedby="shotHotkeyHelp">
+              <p class="help" id="shotHotkeyHelp">点击输入框后按下新的组合键；按 ⌫ 清空表示不启用</p>
+            </div>
+            <div class="field" style="--i:1">
+              <label for="shotDir">截图文件夹</label>
+              <div class="pick"><input id="shotDir" readonly autocomplete="off" spellcheck="false"><button class="btn" type="button" id="shotDirBtn" aria-describedby="shotDirErr">更改…</button></div>
+              <p class="err" id="shotDirErr" hidden></p>
+            </div>
+            <div class="switches" style="--i:2">
+              <label class="switch"><span><b>保存截图时同时复制</b><small>按 <span class="mod"></span> S 保存的截图也进入历史</small></span><input type="checkbox" id="shotSaveCopy" checked></label>
+              <div class="line perm" id="shotPermRow" hidden>
+                <span><b>屏幕录制权限</b><small>截图需要</small></span>
+                <span class="ok" id="shotPermOk" hidden><span data-icon="check"></span>已授权</span>
+                <button class="btn sm" type="button" id="shotPermBtn" hidden>前往授权</button>
+              </div>
+            </div>
+          </section>
         </div>
         <footer class="dlg-foot">
           <button class="btn" type="button" data-close>取消</button>

@@ -1,6 +1,7 @@
 use std::cell::OnceCell;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicIsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -9,13 +10,17 @@ use windows::Graphics::Imaging::{BitmapPixelFormat, SoftwareBitmap};
 use windows::Media::Ocr::OcrEngine;
 use windows::Storage::Streams::DataWriter;
 use windows::Win32::Foundation::{
-    CloseHandle, GlobalFree, HANDLE, HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, PROPERTYKEY,
+    CloseHandle, GlobalFree, HANDLE, HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, PROPERTYKEY, RECT,
     RPC_E_CHANGED_MODE, SIZE, WPARAM,
 };
-use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
+use windows::Win32::Graphics::Dwm::{
+    DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute,
+};
 use windows::Win32::Graphics::Gdi::{
-    BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, DeleteObject, GetDC, GetDIBits,
-    GetObjectW, HBITMAP, ReleaseDC,
+    BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CAPTUREBLT, CreateCompatibleDC,
+    CreateDIBSection, DIB_RGB_COLORS, DeleteDC, DeleteObject, EnumDisplayMonitors, GdiFlush, GetDC,
+    GetDIBits, GetMonitorInfoW, GetObjectW, HBITMAP, HDC, HMONITOR, MONITORINFO, ReleaseDC,
+    SRCCOPY, SelectObject,
 };
 use windows::Win32::Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation};
 use windows::Win32::Storage::EnhancedStorage::{
@@ -49,9 +54,11 @@ use windows::Win32::System::Threading::{
     SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
 };
 use windows::Win32::System::Variant::VT_EMPTY;
+use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
+use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
-    VIRTUAL_KEY, VK_CONTROL,
+    GetAsyncKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT,
+    KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CONTROL, VK_LBUTTON, VK_RBUTTON,
 };
 use windows::Win32::UI::Shell::PropertiesSystem::{
     GPS_DEFAULT, IPropertyStore, SHGetPropertyStoreFromParsingName,
@@ -61,10 +68,13 @@ use windows::Win32::UI::Shell::{
     SIIGBF_THUMBNAILONLY, ShellLink,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyIcon, DispatchMessageW, EnumWindows, GetClassNameW,
-    GetForegroundWindow, GetIconInfo, GetMessageW, GetWindowTextLengthW, GetWindowThreadProcessId,
-    HICON, HWND_MESSAGE, ICONINFO, IsWindowVisible, MSG, RegisterClassW, SetForegroundWindow,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLIPBOARDUPDATE, WNDCLASSW,
+    CreateWindowExW, DefWindowProcW, DestroyIcon, DispatchMessageW, EVENT_SYSTEM_FOREGROUND,
+    EnumWindows, GWL_EXSTYLE, GetClassNameW, GetForegroundWindow, GetIconInfo, GetMessageW,
+    GetWindowLongW, GetWindowTextLengthW, GetWindowThreadProcessId, HICON, HWND_MESSAGE, ICONINFO,
+    InternalGetWindowText, IsIconic, IsWindow, IsWindowVisible, MONITORINFOF_PRIMARY, MSG,
+    RegisterClassW, SetForegroundWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT,
+    WINEVENT_SKIPOWNPROCESS, WM_CLIPBOARDUPDATE, WNDCLASSW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
+    WS_EX_TRANSPARENT,
 };
 use windows::core::{BOOL, Error, HSTRING, Interface, PCWSTR, PWSTR, w};
 use xpaste_core::capture::MAX_FLAVOR_BYTES;
@@ -72,11 +82,12 @@ use xpaste_core::{AppInfo, Flavor, Snapshot};
 
 use crate::decode::normalize_newlines;
 use crate::winfmt::{
-    VideoProps, bgra_to_png, bgra_to_png_within, bitmap_from_flavors, cf_html_fragment,
-    file_description_query, formats_to_read, is_shell_tray_class, join_ocr_words, parse_hdrop,
-    standard_format_id, standard_format_name, video_meta_from_props, write_bytes,
+    Foreground, VideoProps, bgra_to_opaque_rgba, bgra_to_png, bgra_to_png_within,
+    bitmap_from_flavors, cf_html_fragment, file_description_query, foreground_target,
+    formats_to_read, is_desktop_class, is_shell_tray_class, join_ocr_words, parse_hdrop,
+    png_to_dib, standard_format_id, standard_format_name, video_meta_from_props, write_bytes,
 };
-use crate::{OcrError, OcrText, PasteBlock, PlatformError};
+use crate::{Frame, OcrError, OcrText, PIN_TITLE_PREFIX, PasteBlock, PlatformError, WinRect};
 
 pub const OS: &str = "windows";
 
@@ -136,6 +147,23 @@ fn listen() -> windows::core::Result<()> {
             None,
         )?;
         AddClipboardFormatListener(hwnd)?;
+        // 前台切换钩子借用本线程的消息循环（WINEVENT_OUTOFCONTEXT 的回调由它分发），不另起线程
+        if let Some(h) = foreground_window() {
+            LAST_EXTERNAL.store(h, Ordering::Relaxed);
+        }
+        if SetWinEventHook(
+            EVENT_SYSTEM_FOREGROUND,
+            EVENT_SYSTEM_FOREGROUND,
+            None,
+            Some(on_foreground),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+        )
+        .is_invalid()
+        {
+            log::warn!("前台切换钩子安装失败");
+        }
         let mut msg = MSG::default();
         // GetMessageW 出错返回 -1，只有 > 0 才继续
         while GetMessageW(&mut msg, None, 0, 0).0 > 0 {
@@ -619,12 +647,21 @@ fn key(vk: VIRTUAL_KEY, up: bool) -> INPUT {
     }
 }
 
+/// 把窗口切到前台；本进程须是前台进程（系统的前台锁规则），hwnd 失效时什么也不做。
+pub fn activate_window(hwnd: isize) {
+    // SAFETY: hwnd 失效时调用失败而不会崩溃
+    unsafe {
+        let _ = SetForegroundWindow(HWND(hwnd as *mut _));
+    }
+}
+
 /// 把 `target` 切回前台（最多等 100 ms），再发 Ctrl+V。
 pub fn paste(target: Option<isize>) -> Result<(), PlatformError> {
-    if let Some(hwnd) = target.map(|h| HWND(h as *mut _)) {
-        // SAFETY: 只读查询与前台切换，hwnd 失效时调用失败而不会崩溃
+    if let Some(h) = target {
+        activate_window(h);
+        let hwnd = HWND(h as *mut _);
+        // SAFETY: 只读查询
         unsafe {
-            let _ = SetForegroundWindow(hwnd);
             let mut waited = 0;
             while GetForegroundWindow() != hwnd {
                 if waited >= 100 {
@@ -658,27 +695,53 @@ pub fn request_accessibility() {}
 
 pub fn open_accessibility_settings() {}
 
-/// 粘贴目标窗口：前台窗口无效、属于本进程或是任务栏 / 托盘溢出窗口时返回 `None`，
-/// 应用层随之只复制不粘贴（从托盘打开面板就是这种情况）。
-pub fn foreground_window() -> Option<isize> {
+/// 最后一个成为前台的外部窗口（不含本进程与任务栏），0 为还没有。由剪切板监听线程上的前台切换钩子更新。
+static LAST_EXTERNAL: AtomicIsize = AtomicIsize::new(0);
+
+/// `EVENT_SYSTEM_FOREGROUND` 回调（`WINEVENT_SKIPOWNPROCESS`：本进程窗口成为前台时不来）。
+unsafe extern "system" fn on_foreground(
+    _hook: HWINEVENTHOOK,
+    _event: u32,
+    hwnd: HWND,
+    _object: i32,
+    _child: i32,
+    _thread: u32,
+    _time: u32,
+) {
+    if let Foreground::Other(h) = classify_foreground(hwnd) {
+        LAST_EXTERNAL.store(h, Ordering::Relaxed);
+    }
+}
+
+fn classify_foreground(hwnd: HWND) -> Foreground {
+    if hwnd.is_invalid() {
+        return Foreground::None;
+    }
     // SAFETY: 只读查询；pid 与类名缓冲区都是本地变量
     unsafe {
-        let hwnd = GetForegroundWindow();
-        if hwnd.is_invalid() {
-            return None;
-        }
         let mut pid = 0u32;
         GetWindowThreadProcessId(hwnd, Some(&mut pid as *mut u32));
         if pid == GetCurrentProcessId() {
-            return None;
+            return Foreground::Own;
         }
         let mut class = [0u16; 256];
         let len = GetClassNameW(hwnd, &mut class);
         if len > 0 && is_shell_tray_class(&String::from_utf16_lossy(&class[..len as usize])) {
-            return None;
+            return Foreground::Tray;
         }
-        Some(hwnd.0 as isize)
     }
+    Foreground::Other(hwnd.0 as isize)
+}
+
+/// 粘贴目标窗口：前台窗口无效或是任务栏 / 托盘溢出窗口时返回 `None`，应用层随之只复制不粘贴
+/// （从托盘打开面板就是这种情况）；本进程窗口（如刚点过的贴图）在前台时取最后一个外部前台窗口（`foreground_target`）。
+pub fn foreground_window() -> Option<isize> {
+    // SAFETY: 只读查询
+    let fg = classify_foreground(unsafe { GetForegroundWindow() });
+    let last = LAST_EXTERNAL.load(Ordering::Relaxed);
+    // SAFETY: 只读查询；句柄失效时返回 false
+    let alive = last != 0 && unsafe { IsWindow(Some(HWND(last as *mut _))) }.as_bool();
+    foreground_target(fg, if alive { last } else { 0 })
 }
 
 /// 当前线程的 COM 初始化（MTA）。线程已是 STA（`RPC_E_CHANGED_MODE`）时 COM 照样可用，但不归本对象配对；
@@ -816,11 +879,12 @@ pub fn ocr_available() -> bool {
 
 /// `Windows.Media.Ocr`。阻塞（`RecognizeAsync` 在本线程 `join`），只在工作线程调用。
 /// WinRT 不给行置信度，固定 1.0。行由 `Words()` 按 `join_ocr_words` 拼接：`Text()` 在中文词之间也插空格。
-pub fn ocr_png(path: &Path, max_side_px: u32) -> Result<Option<OcrText>, OcrError> {
+/// `png` 为图片文件字节（按内容识别格式）；长边另受引擎上限 `MaxImageDimension` 限制。
+pub fn ocr_png_bytes(png: &[u8], max_side_px: u32) -> Result<Option<OcrText>, OcrError> {
     // COM 失败时后续 WinRT 调用自会报错，这里不单独处理
     let _com = ComGuard::init();
     let max = OcrEngine::MaxImageDimension().map_or(max_side_px, |m| m.min(max_side_px));
-    let mut img = crate::load_rgba(path, max)?;
+    let mut img = crate::load_rgba(png, max)?;
     let Some(engine) = ocr_engine() else {
         return Ok(None);
     };
@@ -895,28 +959,262 @@ pub fn installed_apps() -> Vec<String> {
 }
 
 extern "system" fn push_window_pid(hwnd: HWND, lparam: LPARAM) -> BOOL {
-    // SAFETY: lparam 是 installed_apps 传入的 &mut Vec<u32>，EnumWindows 返回前一直有效；cloaked 指向本地变量
+    // SAFETY: lparam 是 installed_apps 传入的 &mut Vec<u32>，EnumWindows 返回前一直有效
     unsafe {
-        let mut cloaked = 0u32;
         // 先排除本进程：对本进程 UI 线程的窗口取标题会跨线程发 WM_GETTEXTLENGTH，没有超时；
         // 再排除被 DWM 隐藏（cloaked）的窗口，如其他虚拟桌面上的、挂起的 UWP 窗口
         if IsWindowVisible(hwnd).as_bool()
             && let Some(pid) = window_pid(hwnd)
             && pid != GetCurrentProcessId()
-            && !(DwmGetWindowAttribute(
-                hwnd,
-                DWMWA_CLOAKED,
-                (&mut cloaked as *mut u32).cast(),
-                size_of::<u32>() as u32,
-            )
-            .is_ok()
-                && cloaked != 0)
+            && !is_cloaked(hwnd)
             && GetWindowTextLengthW(hwnd) > 0
         {
             (*(lparam.0 as *mut Vec<u32>)).push(pid);
         }
     }
     true.into()
+}
+
+/// 被 DWM 隐藏（cloaked）：其他虚拟桌面上的、挂起的 UWP 窗口等。
+fn is_cloaked(hwnd: HWND) -> bool {
+    let mut cloaked = 0u32;
+    // SAFETY: cloaked 是本地变量，大小随参数传入
+    unsafe {
+        DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAKED,
+            (&mut cloaked as *mut u32).cast(),
+            size_of::<u32>() as u32,
+        )
+    }
+    .is_ok()
+        && cloaked != 0
+}
+
+/// 截图写剪切板用的格式：`PNG` 加 `CF_DIB`（不认 PNG 的老程序也能粘贴）。
+pub fn png_flavors(png: Vec<u8>) -> Vec<Flavor> {
+    let flavor = |format: &str, data| Flavor {
+        item: 0,
+        format: format.into(),
+        data,
+    };
+    let dib = png_to_dib(&png);
+    let mut out = vec![flavor("PNG", png)];
+    out.extend(dib.map(|d| flavor("CF_DIB", d)));
+    out
+}
+
+/// 逐块显示器截整屏（主屏在前）。坐标为虚拟桌面物理像素，`scale` 为 DPI / 96。阻塞。
+///
+/// 前提：进程是 Per-Monitor-v2 DPI 感知（tao 在事件循环建立后设置）。否则显示器矩形与 `BitBlt`
+/// 按缩放后的逻辑坐标计算，而 `window_rects` 的 DWM 边框仍是物理像素，两者对不上。
+pub fn freeze_displays() -> Result<Vec<Frame>, PlatformError> {
+    let mut monitors: Vec<(HMONITOR, RECT)> = Vec::new();
+    // SAFETY: 回调只在 EnumDisplayMonitors 返回前经 lparam 访问 monitors
+    unsafe {
+        EnumDisplayMonitors(
+            None,
+            None,
+            Some(push_monitor),
+            LPARAM(&mut monitors as *mut Vec<(HMONITOR, RECT)> as isize),
+        )
+    }
+    .ok()
+    .map_err(|e| PlatformError::Capture(format!("枚举显示器失败：{e}")))?;
+    monitors.sort_by_key(|&(m, _)| !is_primary(m));
+    // SAFETY: 屏幕 DC 用完即释放
+    let screen = unsafe { GetDC(None) };
+    if screen.is_invalid() {
+        return Err(PlatformError::Capture("取屏幕 DC 失败".into()));
+    }
+    let frames = monitors
+        .iter()
+        .map(|&(m, r)| freeze_monitor(screen, m, r))
+        .collect();
+    // SAFETY: 上面取得的屏幕 DC
+    unsafe { ReleaseDC(None, screen) };
+    frames
+}
+
+extern "system" fn push_monitor(m: HMONITOR, _dc: HDC, rect: *mut RECT, lparam: LPARAM) -> BOOL {
+    // SAFETY: lparam 是 freeze_displays 传入的 &mut Vec，rect 由系统给出，都在回调期间有效
+    unsafe { (*(lparam.0 as *mut Vec<(HMONITOR, RECT)>)).push((m, *rect)) };
+    true.into()
+}
+
+fn is_primary(m: HMONITOR) -> bool {
+    let mut info = MONITORINFO {
+        cbSize: size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: info 是本地变量，cbSize 已填
+    unsafe { GetMonitorInfoW(m, &mut info) }.as_bool() && info.dwFlags & MONITORINFOF_PRIMARY != 0
+}
+
+/// 一块屏 `BitBlt` 到自上而下的 32 位 DIB section，再转 RGBA。
+/// `CAPTUREBLT` 把分层窗口（贴图）一起截进来。
+fn freeze_monitor(screen: HDC, m: HMONITOR, r: RECT) -> Result<Frame, PlatformError> {
+    let err = |what: &str| PlatformError::Capture(what.into());
+    let (w, h) = (r.right - r.left, r.bottom - r.top);
+    let (pw, ph) = match (u32::try_from(w), u32::try_from(h)) {
+        (Ok(pw), Ok(ph)) if pw > 0 && ph > 0 => (pw, ph),
+        _ => return Err(err("显示器尺寸无效")),
+    };
+    let (mut dpi, mut dpi_y) = (96u32, 96u32);
+    // SAFETY: 输出参数指向本地变量；失败时保持 96（100%）
+    let _ = unsafe { GetDpiForMonitor(m, MDT_EFFECTIVE_DPI, &mut dpi, &mut dpi_y) };
+    let bmi = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: w,
+            biHeight: -h, // 负高度：自上而下
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
+    // SAFETY: 内存 DC、DIB section 都在本块内创建并释放；BitBlt 完成并 GdiFlush 后 bits 指向
+    // pw * ph * 4 字节的像素，在 DeleteObject 之前读完
+    let rgba = unsafe {
+        let mem = CreateCompatibleDC(Some(screen));
+        if mem.is_invalid() {
+            return Err(err("创建内存 DC 失败"));
+        }
+        let rgba = match CreateDIBSection(Some(screen), &bmi, DIB_RGB_COLORS, &mut bits, None, 0) {
+            Ok(bmp) => {
+                let old = SelectObject(mem, bmp.into());
+                let blt = BitBlt(
+                    mem,
+                    0,
+                    0,
+                    w,
+                    h,
+                    Some(screen),
+                    r.left,
+                    r.top,
+                    SRCCOPY | CAPTUREBLT,
+                );
+                let _ = GdiFlush();
+                let rgba = blt.ok().and_then(|()| {
+                    let len = pw as usize * ph as usize * 4;
+                    let px = std::slice::from_raw_parts(bits as *const u8, len);
+                    bgra_to_opaque_rgba(px, pw, ph)
+                });
+                SelectObject(mem, old);
+                let _ = DeleteObject(bmp.into());
+                rgba
+            }
+            Err(_) => None,
+        };
+        let _ = DeleteDC(mem);
+        rgba
+    }
+    .ok_or_else(|| err("截屏失败"))?;
+    Ok(Frame {
+        origin: (f64::from(r.left), f64::from(r.top)),
+        size: (f64::from(w), f64::from(h)),
+        scale: f64::from(dpi) / 96.0,
+        px: (pw, ph),
+        rgba,
+    })
+}
+
+/// 屏上窗口外框（DWM 扩展边框，不含阴影），由前到后：别的进程取可见、未最小化、非 cloaked、非工具窗口、非桌面、非鼠标穿透的分层窗口；
+/// 本进程只取贴图窗口。前提同 `freeze_displays`（Per-Monitor-v2 DPI 感知）。
+pub fn window_rects() -> Vec<WinRect> {
+    let mut out: Vec<WinRect> = Vec::new();
+    // SAFETY: 回调只在 EnumWindows 返回前经 lparam 访问 out
+    let _ = unsafe {
+        EnumWindows(
+            Some(push_window_rect),
+            LPARAM(&mut out as *mut Vec<WinRect> as isize),
+        )
+    };
+    out
+}
+
+extern "system" fn push_window_rect(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    if let Some(r) = window_rect(hwnd) {
+        // SAFETY: lparam 是 window_rects 传入的 &mut Vec，EnumWindows 返回前一直有效
+        unsafe { (*(lparam.0 as *mut Vec<WinRect>)).push(r) };
+    }
+    true.into()
+}
+
+fn window_rect(hwnd: HWND) -> Option<WinRect> {
+    // SAFETY: 只读查询；buf、rect 是本地变量，大小随参数传入
+    unsafe {
+        if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+            return None;
+        }
+        if window_pid(hwnd)? == GetCurrentProcessId() {
+            // InternalGetWindowText 直接读标题，不向本进程 UI 线程发 WM_GETTEXT
+            let mut buf = [0u16; 32];
+            let n = InternalGetWindowText(hwnd, &mut buf).max(0) as usize;
+            if !String::from_utf16_lossy(&buf[..n]).starts_with(PIN_TITLE_PREFIX) {
+                return None;
+            }
+        } else {
+            let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+            // 鼠标穿透的分层窗口（屏幕标注、悬浮层等）对应 macOS 的 alpha 为 0：看不见，不吸附
+            let see_through = WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0;
+            let mut class = [0u16; 256];
+            // GetClassNameW 只读窗口类，不向窗口发消息
+            let len = GetClassNameW(hwnd, &mut class).max(0) as usize;
+            if ex & WS_EX_TOOLWINDOW.0 != 0
+                || ex & see_through == see_through
+                || is_desktop_class(&String::from_utf16_lossy(&class[..len]))
+                || is_cloaked(hwnd)
+            {
+                return None;
+            }
+        }
+        let mut rect = RECT::default();
+        DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_EXTENDED_FRAME_BOUNDS,
+            (&mut rect as *mut RECT).cast(),
+            size_of::<RECT>() as u32,
+        )
+        .ok()?;
+        let (w, h) = (rect.right - rect.left, rect.bottom - rect.top);
+        (w > 0 && h > 0).then(|| WinRect {
+            x: f64::from(rect.left),
+            y: f64::from(rect.top),
+            w: f64::from(w),
+            h: f64::from(h),
+        })
+    }
+}
+
+/// Windows 截屏不需要授权。
+pub fn screen_capture_granted() -> bool {
+    true
+}
+
+pub fn request_screen_capture() {}
+
+/// 不是 macOS。
+pub fn macos_version() -> Option<u32> {
+    None
+}
+
+/// 鼠标主键此刻是否按着。贴图据此判断拖动是否结束。
+pub fn mouse_button_down() -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_SWAPBUTTON};
+    // GetAsyncKeyState 查的是物理键：左右键互换时主键是物理右键
+    // SAFETY: 纯查询；最高位为 1 表示按着
+    unsafe {
+        let vk = if GetSystemMetrics(SM_SWAPBUTTON) != 0 {
+            VK_RBUTTON
+        } else {
+            VK_LBUTTON
+        };
+        GetAsyncKeyState(vk.0 as i32) < 0
+    }
 }
 
 /// 开始菜单（全体用户与当前用户）里 `.lnk` 指向的、存在的 `.exe`。调用方已初始化 COM。

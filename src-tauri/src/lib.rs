@@ -9,13 +9,14 @@ mod hotkey;
 mod housekeeping;
 mod ocr;
 mod panel;
+mod shot;
 pub mod state;
 mod tray;
 
 use state::AppState;
 use std::path::PathBuf;
 use tauri::{Manager, WindowEvent};
-use tauri_plugin_global_shortcut::ShortcutState;
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_log::{Target, TargetKind};
 use tauri_plugin_notification::NotificationExt;
 use xpaste_core::Store;
@@ -35,7 +36,10 @@ pub fn run() {
         }))
     };
     #[cfg(target_os = "macos")]
-    let builder = builder.plugin(tauri_nspanel::init());
+    let builder = builder
+        .plugin(tauri_nspanel::init())
+        // 遮罩页面的内容进程崩溃：会话不会再结束，结束它并重新加载页面（M23 规则 1）
+        .on_web_content_process_terminate(shot::overlay_crashed);
     builder
         .setup(move |app| {
             let isolated = override_.is_some();
@@ -66,10 +70,14 @@ pub fn run() {
             if timing {
                 log::info!("唤起计时已由 XPASTE_TIMING 开启");
             }
+            // 贴图只在本次运行内有效（M23 规则 9）
+            if let Err(e) = shot::clear_pins(&data_dir.join("pins")) {
+                log::warn!("清空贴图目录失败：{e}");
+            }
             if isolated {
                 log::info!("数据目录已由 XPASTE_DATA_DIR 覆盖，不启用单实例");
                 // tauri.conf.json 的 assetProtocol.scope 只覆盖默认数据目录
-                for sub in ["images", "thumbs", "icons"] {
+                for sub in ["images", "thumbs", "icons", "pins"] {
                     if let Err(e) = app
                         .asset_protocol_scope()
                         .allow_directory(data_dir.join(sub), true)
@@ -82,7 +90,11 @@ pub fn run() {
             let store = Store::open(&data_dir)?;
             let first_run = matches!(store.kv_get("onboarded"), Ok(None));
             let settings = store.load_settings();
-            let (hotkey, appearance) = (settings.hotkey.clone(), settings.appearance);
+            let (hotkey, shot_hotkey, appearance) = (
+                settings.hotkey.clone(),
+                settings.shot_hotkey.clone(),
+                settings.appearance,
+            );
             let enrich = enrich::start(app.handle().clone());
             let ocr = ocr::start(app.handle().clone());
             app.manage(AppState::new(
@@ -102,20 +114,28 @@ pub fn run() {
             if let Err(e) = tray::setup(app) {
                 log::warn!("托盘图标创建失败：{e}");
             }
-            if let Err(e) = hotkey::register(app.handle(), &hotkey) {
+            if let Err(e) = hotkey::register(app.handle(), &hotkey, &shot_hotkey) {
                 log::warn!("快捷键注册失败：{e}");
-                if let Err(e) = app
-                    .notification()
-                    .builder()
-                    .title("xPaste")
-                    .body("唤起快捷键被其他应用占用，请在设置中更换")
-                    .show()
+                // 唤起失败时 register 只报唤起，截图是否注册上另查；截图失败只提示，不标记托盘
+                let panel_failed = matches!(e, error::AppError::HotkeyTaken);
+                let shot_failed = !shot_hotkey.is_empty()
+                    && !app.global_shortcut().is_registered(shot_hotkey.as_str());
+                if let Some(body) = hotkey::failure_notice(panel_failed, shot_failed)
+                    && let Err(e) = app
+                        .notification()
+                        .builder()
+                        .title("xPaste")
+                        .body(body)
+                        .show()
                 {
                     log::warn!("发送快捷键注册失败通知失败：{e}");
                 }
-                tray::mark_hotkey_failed();
+                if panel_failed {
+                    tray::mark_hotkey_failed();
+                }
             }
             clipboard::start(app.handle().clone());
+            shot::prewarm(app.handle());
             // 首次启动直接显示面板与引导（AC-M18-01）
             if first_run {
                 app.state::<AppState>()
@@ -127,20 +147,42 @@ pub fn run() {
         })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        // 设置里选截图文件夹
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(move |app, _shortcut, event| {
-                    if event.state() == ShortcutState::Pressed {
-                        panel::toggle(app, timing.then(now_unix_ms), panel::Trigger::Hotkey);
+                .with_handler(move |app, shortcut, event| {
+                    if event.state() != ShortcutState::Pressed {
+                        return;
+                    }
+                    let (p, s) = {
+                        let st = app.state::<AppState>();
+                        let s = st.settings();
+                        (s.hotkey.clone(), s.shot_hotkey.clone())
+                    };
+                    match hotkey::role_of(shortcut, &p, &s) {
+                        Some(hotkey::Role::Panel) => {
+                            panel::toggle(app, timing.then(now_unix_ms), panel::Trigger::Hotkey)
+                        }
+                        Some(hotkey::Role::Shot) => hotkey::shot_pressed(app),
+                        None => {}
                     }
                 })
                 .build(),
         )
         .on_window_event(|window, event| {
+            // 遮罩不能被关掉（Windows 上 Alt+F4）：关掉后会话不会再结束、截图快捷键失灵，当作退出截图（M23 规则 8）
+            if shot::overlay_index(window.label()).is_some()
+                && let WindowEvent::CloseRequested { api, .. } = event
+            {
+                api.prevent_close();
+                shot::end(window.app_handle());
+            }
+            // 截图遮罩（shot-*）与贴图（pin-*）失焦不处理
             if window.label() != "panel" {
                 return;
             }
@@ -172,6 +214,8 @@ pub fn run() {
             commands::panel::set_dialog_open,
             commands::panel::accessibility_granted,
             commands::panel::request_accessibility,
+            commands::panel::screen_capture_granted,
+            commands::panel::request_screen_capture,
             commands::panel::open_url,
             commands::panel::reveal_file,
             commands::records::get_record,
@@ -184,7 +228,18 @@ pub fn run() {
             commands::records::copy,
             commands::records::copy_text_plain,
             commands::records::reocr,
-            commands::records::ocr_progress
+            commands::records::ocr_progress,
+            commands::shot::shot_frame,
+            commands::shot::shot_begin_payload,
+            commands::shot::shot_ready,
+            commands::shot::shot_alive,
+            commands::shot::shot_cancel,
+            commands::shot::shot_finish,
+            commands::shot::pin_close,
+            commands::shot::pin_copy,
+            commands::shot::pin_save,
+            commands::shot::pin_set_bounds,
+            commands::shot::pin_button_down
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

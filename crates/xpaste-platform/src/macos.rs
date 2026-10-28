@@ -14,25 +14,34 @@ use objc2_app_kit::{
 use objc2_av_foundation::{AVAssetImageGenerator, AVAssetTrack, AVMediaTypeVideo, AVURLAsset};
 use objc2_core_foundation::CFData;
 use objc2_core_graphics::{
-    CGBitmapInfo, CGColorRenderingIntent, CGColorSpace, CGDataProvider, CGEvent, CGEventFlags,
-    CGEventTapLocation, CGImage, CGImageAlphaInfo,
+    CGBitmapContextCreate, CGBitmapInfo, CGBlendMode, CGColorRenderingIntent, CGColorSpace,
+    CGContext, CGDataProvider, CGDirectDisplayID, CGDisplayBounds, CGDisplayMirrorsDisplay,
+    CGError, CGEvent, CGEventFlags, CGEventTapLocation, CGGetActiveDisplayList, CGImage,
+    CGImageAlphaInfo, CGImageByteOrderInfo, CGPreflightScreenCaptureAccess,
+    CGRequestScreenCaptureAccess, CGWindowListCopyWindowInfo, CGWindowListOption,
+    kCGColorSpaceSRGB, kCGNullWindowID,
 };
 use objc2_core_media::{CMFormatDescription, CMTime};
 use objc2_foundation::{
-    NSArray, NSData, NSDictionary, NSFileManager, NSIndexSet, NSNumber, NSPoint, NSRect, NSSize,
-    NSString, NSURL, ns_string,
+    NSArray, NSData, NSDictionary, NSFileManager, NSIndexSet, NSNumber, NSPoint, NSProcessInfo,
+    NSRect, NSSize, NSString, NSURL, ns_string,
 };
 use objc2_vision::{
     VNImageRequestHandler, VNRecognizeTextRequest, VNRequest, VNRequestTextRecognitionLevel,
 };
 use xpaste_core::{AppInfo, Flavor, Snapshot, VideoMeta};
 
-use crate::{OcrError, OcrText, PasteBlock, PlatformError};
+use crate::{Frame, OcrError, OcrText, PIN_TITLE_PREFIX, PasteBlock, PlatformError, WinRect};
 
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
     fn AXIsProcessTrusted() -> u8;
     fn AXIsProcessTrustedWithOptions(options: *const NSDictionary<NSString, NSNumber>) -> u8;
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGEventSourceButtonState(state_id: i32, button: u32) -> u8;
 }
 
 // libSystem，总是链接
@@ -217,6 +226,181 @@ pub fn write(flavors: &[Flavor]) -> Result<u64, PlatformError> {
     })
 }
 
+/// 截图写剪切板用的格式：只写 `public.png`。
+pub fn png_flavors(png: Vec<u8>) -> Vec<Flavor> {
+    vec![Flavor {
+        item: 0,
+        format: "public.png".into(),
+        data: png,
+    }]
+}
+
+/// 逐块显示器截整屏（主屏在前，镜像屏跳过），像素转成 sRGB。阻塞；2880×1800 实测约 55–75 ms（其中色彩转换约一半），进程内首次约 135 ms。
+/// 没有屏幕录制权限时不报错，只截到桌面壁纸和菜单栏，调用方须先查 `screen_capture_granted()`。
+/// ponytail: CGDisplayCreateImage 在 macOS 15 SDK 已标记废弃；Apple 真正移除或截图出现异常时换 SCScreenshotManager，平台层签名不变
+pub fn freeze_displays() -> Result<Vec<Frame>, PlatformError> {
+    let mut ids = [0 as CGDirectDisplayID; 16];
+    let mut n = 0u32;
+    // SAFETY: 两个输出指针指向本地变量，ids 容量随参数传入
+    let e = unsafe { CGGetActiveDisplayList(ids.len() as u32, ids.as_mut_ptr(), &mut n) };
+    if e != CGError::Success {
+        return Err(PlatformError::Capture(format!("取显示器列表失败：{}", e.0)));
+    }
+    // 第一项即主屏（CGGetActiveDisplayList 的约定）
+    ids[..n as usize]
+        .iter()
+        .filter(|&&id| CGDisplayMirrorsDisplay(id) == 0)
+        .map(|&id| freeze_display(id))
+        .collect()
+}
+
+#[allow(deprecated)] // 见 freeze_displays 的 ponytail 注释
+fn freeze_display(id: CGDirectDisplayID) -> Result<Frame, PlatformError> {
+    let err = |what: &str| PlatformError::Capture(what.into());
+    let bounds = CGDisplayBounds(id);
+    let img = objc2_core_graphics::CGDisplayCreateImage(id).ok_or_else(|| err("截屏失败"))?;
+    let (w, h) = (CGImage::width(Some(&img)), CGImage::height(Some(&img)));
+    let (w32, h32) = match (u32::try_from(w), u32::try_from(h)) {
+        (Ok(a), Ok(b)) if a > 0 && b > 0 => (a, b),
+        _ => return Err(err("截屏尺寸无效")),
+    };
+    let rgba = srgb_rgba(&img, w, h).ok_or_else(|| err("像素转换失败"))?;
+    let size = (bounds.size.width, bounds.size.height);
+    Ok(Frame {
+        origin: (bounds.origin.x, bounds.origin.y),
+        size,
+        scale: if size.0 > 0.0 { w as f64 / size.0 } else { 1.0 },
+        px: (w32, h32),
+        rgba,
+    })
+}
+
+/// 把图像画进 sRGB、RGBA8 的位图上下文，返回非预乘、行紧密排列的像素。屏幕图带的是显示器的色彩描述
+/// （如 P3），前端画布与 PNG 都按 sRGB 解读，不转换的话颜色发灰。任意位深（10 位、HDR）都由 Quartz 转成 8 位。
+fn srgb_rgba(img: &CGImage, w: usize, h: usize) -> Option<Vec<u8>> {
+    // SAFETY: CoreGraphics 导出的常量，进程内一直有效
+    let space = CGColorSpace::with_name(Some(unsafe { kCGColorSpaceSRGB }))?;
+    let mut buf = vec![0u8; w.checked_mul(h)?.checked_mul(4)?];
+    // SAFETY: buf 正好容纳 h 行 w * 4 字节；上下文在本函数内释放，早于 buf 被移出
+    let ctx = unsafe {
+        CGBitmapContextCreate(
+            buf.as_mut_ptr().cast(),
+            w,
+            h,
+            8,
+            w * 4,
+            Some(&space),
+            CGImageAlphaInfo::PremultipliedLast.0 | CGImageByteOrderInfo::Order32Big.0,
+        )
+    }?;
+    // 直接覆盖，不与底色混合
+    CGContext::set_blend_mode(Some(&ctx), CGBlendMode::Copy);
+    let rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(w as f64, h as f64));
+    CGContext::draw_image(Some(&ctx), rect, Some(img));
+    drop(ctx);
+    unpremultiply(&mut buf);
+    Some(buf)
+}
+
+/// 预乘 RGBA 原地还原成非预乘。屏幕像素都不透明，只有 alpha 不是 255 的像素才计算。
+fn unpremultiply(rgba: &mut [u8]) {
+    for p in rgba.as_chunks_mut::<4>().0 {
+        match p[3] {
+            255 => {}
+            0 => *p = [0; 4],
+            a => {
+                let a = u32::from(a);
+                for c in &mut p[..3] {
+                    *c = ((u32::from(*c) * 255 + a / 2) / a).min(255) as u8;
+                }
+            }
+        }
+    }
+}
+
+/// 屏上窗口外框，由前到后：别的应用只取 layer 0、不透明度大于 0 的普通窗口；本进程只取贴图窗口。
+/// 不读其他应用的窗口标题（需要屏幕录制权限，也用不到）。
+pub fn window_rects() -> Vec<WinRect> {
+    let option =
+        CGWindowListOption::OptionOnScreenOnly | CGWindowListOption::ExcludeDesktopElements;
+    let Some(list) = CGWindowListCopyWindowInfo(option, kCGNullWindowID) else {
+        return Vec::new();
+    };
+    let me = i64::from(std::process::id());
+    autoreleasepool(|_| {
+        // SAFETY: CFArray 与 NSArray 免费桥接，元素都是 CFDictionary；list 在闭包内存活
+        let list: &NSArray<NSDictionary<NSString, AnyObject>> = unsafe {
+            &*(objc2_core_foundation::CFRetained::as_ptr(&list)
+                .as_ptr()
+                .cast())
+        };
+        list.iter()
+            .filter(|w| {
+                let num = |k: &str| {
+                    w.objectForKey(&NSString::from_str(k))
+                        .and_then(|v| v.downcast::<NSNumber>().ok())
+                };
+                if num("kCGWindowOwnerPID").map(|n| n.longLongValue()) == Some(me) {
+                    w.objectForKey(ns_string!("kCGWindowName"))
+                        .and_then(|v| v.downcast::<NSString>().ok())
+                        .is_some_and(|t| t.to_string().starts_with(PIN_TITLE_PREFIX))
+                } else {
+                    num("kCGWindowLayer").is_some_and(|n| n.longLongValue() == 0)
+                        && num("kCGWindowAlpha").is_some_and(|n| n.doubleValue() > 0.0)
+                }
+            })
+            .filter_map(|w| {
+                let b = w.objectForKey(ns_string!("kCGWindowBounds"))?;
+                // SAFETY: kCGWindowBounds 的值是 CGRect 的字典表示（X、Y、Width、Height 为 NSNumber）
+                let b: Retained<NSDictionary<NSString, AnyObject>> =
+                    unsafe { Retained::cast_unchecked(b) };
+                let f = |k: &str| {
+                    b.objectForKey(&NSString::from_str(k))
+                        .and_then(|v| v.downcast::<NSNumber>().ok())
+                        .map(|n| n.doubleValue())
+                };
+                let r = WinRect {
+                    x: f("X")?,
+                    y: f("Y")?,
+                    w: f("Width")?,
+                    h: f("Height")?,
+                };
+                (r.w > 0.0 && r.h > 0.0).then_some(r)
+            })
+            .collect()
+    })
+}
+
+/// 是否已有屏幕录制权限（只查询，不弹窗）。
+pub fn screen_capture_granted() -> bool {
+    CGPreflightScreenCaptureAccess()
+}
+
+/// 未授权时请求系统授权（无 TCC 记录时弹框），再打开系统设置的“屏幕录制”页，理由同 `request_accessibility`。
+/// 须在主线程调用。
+pub fn request_screen_capture() {
+    if !CGRequestScreenCaptureAccess() {
+        open_privacy_pane("Privacy_ScreenCapture");
+    }
+}
+
+/// macOS 主版本号（如 15）。
+pub fn macos_version() -> Option<u32> {
+    u32::try_from(
+        NSProcessInfo::processInfo()
+            .operatingSystemVersion()
+            .majorVersion,
+    )
+    .ok()
+}
+
+/// 鼠标主键此刻是否按着（硬件状态，系统拖动窗口期间也准）。贴图据此判断拖动是否结束。
+pub fn mouse_button_down() -> bool {
+    // kCGEventSourceStateCombinedSessionState = 0，kCGMouseButtonLeft = 0
+    // SAFETY: 纯查询，无指针参数
+    unsafe { CGEventSourceButtonState(0, 0) != 0 }
+}
+
 /// 应用图标转 PNG：取 64 pt 对应的那档图像（Retina 屏上为 128×128 px），不重新绘制。
 pub fn app_icon(app_id: &str) -> Option<Vec<u8>> {
     autoreleasepool(|_| {
@@ -332,9 +516,10 @@ pub fn ocr_available() -> bool {
     true
 }
 
-/// Vision `VNRecognizeTextRequest`（accurate、语言校正、简繁中英）。阻塞，只在工作线程调用。
-pub fn ocr_png(path: &Path, max_side_px: u32) -> Result<Option<OcrText>, OcrError> {
-    let img = crate::load_rgba(path, max_side_px)?;
+/// Vision `VNRecognizeTextRequest`（accurate、语言校正、简繁中英）。`png` 为图片文件字节（按内容识别格式）。
+/// 阻塞，只在工作线程调用。
+pub fn ocr_png_bytes(png: &[u8], max_side_px: u32) -> Result<Option<OcrText>, OcrError> {
+    let img = crate::load_rgba(png, max_side_px)?;
     let engine = |what: &str| OcrError::Engine(what.into());
     autoreleasepool(|_| {
         let (w, h) = (img.width() as usize, img.height() as usize);
@@ -505,13 +690,18 @@ pub fn request_accessibility() {
 }
 
 pub fn open_accessibility_settings() {
+    open_privacy_pane("Privacy_Accessibility");
+}
+
+/// 打开系统设置“隐私与安全性”下的某一页。
+fn open_privacy_pane(pane: &str) {
     autoreleasepool(|_| {
-        let url = NSString::from_str(
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
-        );
+        let url = NSString::from_str(&format!(
+            "x-apple.systempreferences:com.apple.preference.security?{pane}"
+        ));
         match NSURL::URLWithString(&url) {
             Some(url) if NSWorkspace::sharedWorkspace().openURL(&url) => {}
-            _ => log::warn!("打开辅助功能设置失败"),
+            _ => log::warn!("打开系统设置 {pane} 失败"),
         }
     })
 }
@@ -521,9 +711,13 @@ pub fn foreground_window() -> Option<isize> {
     None
 }
 
+/// Windows 上把窗口切到前台；macOS 没有窗口句柄的概念（`foreground_window` 恒为 `None`），无操作。
+pub fn activate_window(_hwnd: isize) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use objc2_core_graphics::kCGColorSpaceLinearSRGB;
 
     #[test]
     fn oriented_size_swaps_on_quarter_turn() {
@@ -531,6 +725,47 @@ mod tests {
         assert_eq!(oriented_size(1920.0, 1080.0, 0.0, 1.0), (1080, 1920)); // 竖拍 90°
         assert_eq!(oriented_size(1920.0, 1080.0, 0.0, -1.0), (1080, 1920)); // 270°
         assert_eq!(oriented_size(1920.0, 1080.0, -1.0, 0.0), (1920, 1080)); // 180°
+    }
+
+    #[test]
+    fn png_flavors_is_public_png() {
+        let f = png_flavors(vec![1, 2, 3]);
+        assert_eq!(f.len(), 1);
+        assert_eq!((f[0].item, f[0].format.as_str()), (0, "public.png"));
+        assert_eq!(f[0].data, [1, 2, 3]);
+    }
+
+    #[test]
+    fn srgb_rgba_converts_colour_space_and_unpremultiplies() {
+        // 线性 sRGB 的 50% 灰转到 sRGB 约为 188；半透明纯红线性与 sRGB 相同，还原预乘后不变
+        let src = [128u8, 128, 128, 255, 255, 0, 0, 128];
+        let provider = CGDataProvider::with_cf_data(Some(&CFData::from_bytes(&src))).unwrap();
+        // SAFETY: AppKit 导出的常量，进程内一直有效
+        let space = CGColorSpace::with_name(Some(unsafe { kCGColorSpaceLinearSRGB })).unwrap();
+        // SAFETY: 尺寸与 RGBA8 缓冲一致；decode 传 null
+        let img = unsafe {
+            CGImage::new(
+                2,
+                1,
+                8,
+                32,
+                8,
+                Some(&space),
+                CGBitmapInfo(CGImageAlphaInfo::Last.0),
+                Some(&provider),
+                std::ptr::null(),
+                false,
+                CGColorRenderingIntent::RenderingIntentDefault,
+            )
+        }
+        .unwrap();
+        let out = srgb_rgba(&img, 2, 1).unwrap();
+        assert!((186..=190).contains(&out[0]), "{out:?}");
+        assert_eq!((out[0], out[3]), (out[1], 255));
+        assert!(
+            out[4] >= 253 && out[5] <= 1 && out[6] <= 1 && out[7] == 128,
+            "{out:?}"
+        );
     }
 
     #[test]

@@ -10,6 +10,8 @@ pub enum AppError {
     ClipboardWrite,
     #[error("该快捷键已被其他应用占用，请换一个")]
     HotkeyTaken,
+    #[error("截图快捷键已被其他应用占用，请换一个")]
+    ShotHotkeyTaken,
     /// 参数不合法（非 http 链接、记录不存在等）
     #[error("{0}")]
     Invalid(String),
@@ -19,6 +21,9 @@ pub enum AppError {
     Tauri(#[from] tauri::Error),
     #[error(transparent)]
     Opener(#[from] tauri_plugin_opener::Error),
+    /// 截图与贴图读写文件；`io::Error` 的消息不含路径
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
 }
 
 impl AppError {
@@ -27,9 +32,10 @@ impl AppError {
             Self::FileMissing => "fileMissing",
             Self::ClipboardWrite => "clipboardWrite",
             Self::HotkeyTaken => "hotkeyTaken",
+            Self::ShotHotkeyTaken => "shotHotkeyTaken",
             Self::Invalid(_) => "invalid",
             Self::Core(CoreError::InvalidSettings(_)) => "invalidSettings",
-            Self::Core(_) | Self::Tauri(_) | Self::Opener(_) => "internal",
+            Self::Core(_) | Self::Tauri(_) | Self::Opener(_) | Self::Io(_) => "internal",
         }
     }
 }
@@ -57,6 +63,10 @@ mod tests {
         assert_eq!(
             serde_json::to_value(AppError::HotkeyTaken).unwrap()["kind"],
             "hotkeyTaken"
+        );
+        assert_eq!(
+            serde_json::to_value(AppError::ShotHotkeyTaken).unwrap(),
+            json!({"kind": "shotHotkeyTaken", "message": "截图快捷键已被其他应用占用，请换一个"})
         );
         assert_eq!(
             serde_json::to_value(AppError::ClipboardWrite).unwrap()["message"],

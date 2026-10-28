@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const read = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8');
-const css = read('./styles.css'), ts = read('./main.ts'), keymap = read('./keymap.ts'), html = read('../index.html');
+const css = read('./tokens.css') + read('./styles.css'), ts = read('./main.ts'), keymap = read('./keymap.ts'), html = read('../index.html');
 const panelRs = read('../src-tauri/src/panel.rs');
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 /** 选择器（精确，整条规则的开头）对应的所有声明块，拼在一起 */
@@ -137,6 +137,14 @@ test('M20-12 设置对话框 420ms spring / 150ms ease-out，分组间隔 45ms�
   assert.match(rule('dialog.is-shown .dlg-body > *'), /animation: rowIn 460ms var\(--ease-enter\) both; animation-delay: calc\(60ms \+ var\(--i\) \* 45ms\)/);
   assert.match(rule('.switch input::after'), /transition: transform 360ms var\(--ease-spring\)/);
   assert.match(ts, /closeTimer = window\.setTimeout\(\(\) => dlg\.close\(\), reduced\.matches \? 0 : 150\);/);
+});
+
+test('M20 设置标签切换 300ms move，只改 transform；键盘与打开时即时，内容即时切换', () => {
+  assert.match(rule('.st-ind'), /transition: transform 300ms var\(--ease-move\)/);
+  assert.match(rule('.st-ind[data-instant]'), /transition: none/);
+  assert.match(ts, /if \(t\) selectStTab\(stTabs\.indexOf\(t\), false\);/);
+  assert.match(ts, /selectStTab\(i\);\s*stTabs\[i\]\.focus\(\);/);
+  assert.match(rule('.st-panes > [inert]'), /visibility: hidden/);
 });
 
 test('M20-13 悬停 0 / 140ms ease-out；快捷按钮从右侧滑入；视频封面播放钮放大', () => {
