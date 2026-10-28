@@ -1,1 +1,1 @@
-export { attachConsole, info } from '@tauri-apps/plugin-log';
+export { attachConsole, error, info } from '@tauri-apps/plugin-log';

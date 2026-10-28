@@ -69,7 +69,9 @@ pub fn shot_pressed(app: &AppHandle) {
         )
     });
     let dialog_open = app.state::<AppState>().dialog_open.load(Ordering::SeqCst);
-    match shot_route(dialog_open, visible, focused) {
+    let route = shot_route(dialog_open, visible, focused);
+    log::info!("截图快捷键按下 {route:?}");
+    match route {
         ShotRoute::Recorder => {
             crate::events::emit_to(app, "panel", crate::events::HOTKEY_PRESSED, "shot")
         }

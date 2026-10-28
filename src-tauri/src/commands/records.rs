@@ -217,7 +217,7 @@ pub fn copy_text_plain(state: State<'_, AppState>, text: String) -> Result<(), A
 }
 
 /// 写一份纯文本并标记为自身写入；截图的识别文字也走这里。
-pub(crate) fn write_text_plain(state: &AppState, text: &str) -> Result<(), AppError> {
+fn write_text_plain(state: &AppState, text: &str) -> Result<(), AppError> {
     write_text_plain_via(state, text, xpaste_platform::write)
 }
 
@@ -226,7 +226,12 @@ fn write_text_plain_via(
     text: &str,
     write: impl FnOnce(&[Flavor]) -> Result<u64, PlatformError>,
 ) -> Result<(), AppError> {
-    let flavor = if cfg!(windows) {
+    write_marked(state, || write(&[text_flavor(text)]))
+}
+
+/// 纯文本 flavor。
+pub(crate) fn text_flavor(text: &str) -> Flavor {
+    if cfg!(windows) {
         // 存储口径：UTF-16LE、不带结尾 NUL（写回时 winfmt::write_bytes 补上）
         Flavor {
             item: 0,
@@ -239,8 +244,7 @@ fn write_text_plain_via(
             format: "public.utf8-plain-text".into(),
             data: text.as_bytes().to_vec(),
         }
-    };
-    write_marked(state, || write(&[flavor]))
+    }
 }
 
 /// 设计 8.5 第 1–2 步：记录存在、文件都在、有可写回的 flavor。任何一步不满足都不碰剪切板。

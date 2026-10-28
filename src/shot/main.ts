@@ -5,10 +5,14 @@ import {
   onShotBegin, onShotClaim, shotCancel, shotClaim, shotFinish, shotFrame, shotReady,
   type BeginPayload, type ShotAction, type ShotOutcome,
 } from '../api/shot';
-import { info } from '../api/log';
+import { error as logError, info } from '../api/log';
 import type { AppError } from '../api/types';
 import { badgePos, hit, loupePos, norm, placeBar, resize, type Handle, type Rect } from './geom';
 import { COLORS, drawObj, FONT, nextStep, type Obj, type Tool } from './ink';
+
+// 遮罩页出错时整个截图会静默失败：报错写进日志（只记消息，不含截图内容）
+addEventListener('error', (e) => void logError(`遮罩页错误：${e.message}`));
+addEventListener('unhandledrejection', (e) => void logError(`遮罩页未处理的拒绝：${String(e.reason)}`));
 
 const ICON = {
   rect: '<rect x="4" y="5.5" width="16" height="13" rx="2"/>',
@@ -521,7 +525,7 @@ async function act(a: ShotAction) {
   const [msg, lead]: [string, Lead] =
     a === 'copy' ? ['截图已复制，已加入历史', { thumb: thumbUrl }]
     : a === 'save' ? [out.copied ? `已保存并复制 · ${file}` : `已保存 · ${file}`, { thumb: thumbUrl }]
-    : a === 'ocr' ? (chars ? [`已复制图中文字 · ${chars} 字`, { icon: 'check' }] : ['选区里没有识别到文字', { icon: 'ocr' }])
+    : a === 'ocr' ? (chars ? [`已复制图中文字 · ${chars} 字，已加入历史`, { icon: 'check' }] : ['选区里没有识别到文字', { icon: 'ocr' }])
     : ['已钉在屏幕上 · 拖动移动，滚轮缩放，双击关闭', { icon: 'pin' }];
   toast(msg, lead);
   const exit = reduced.matches ? 0 : 160;

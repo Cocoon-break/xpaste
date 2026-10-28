@@ -282,10 +282,6 @@ pub fn session(app: &AppHandle) -> MutexGuard<'_, Session> {
         .unwrap_or_else(PoisonError::into_inner)
 }
 
-fn timing() -> bool {
-    crate::timing_enabled(std::env::var_os("XPASTE_TIMING"))
-}
-
 /// 系统设置“隐私与安全性”里屏幕录制那一页的名字：macOS 15 起改叫“录屏与系统录音”。
 pub fn screen_capture_pane(macos_major: Option<u32>) -> &'static str {
     if macos_major.is_some_and(|v| v >= 15) {
@@ -322,6 +318,7 @@ pub fn begin(app: &AppHandle) {
         let mut s = session(app);
         let was_active = s.is_active();
         if !s.try_begin_at(Instant::now(), lost) {
+            log::info!("shot 上一次截图仍在进行，忽略本次按键");
             return;
         }
         // Windows 上本进程窗口（面板、刚点过的贴图）在前台时，foreground_window 取最后一个外部前台窗口；
@@ -371,13 +368,11 @@ fn freeze(app: &AppHandle, generation: u64, settle: bool) {
         }
     };
     let rects = xpaste_platform::window_rects();
-    if timing() {
-        log::info!(
-            "shot 冻结 {} 屏 {}ms",
-            frames.len(),
-            t.elapsed().as_millis()
-        );
-    }
+    log::info!(
+        "shot 冻结 {} 屏 {}ms",
+        frames.len(),
+        t.elapsed().as_millis()
+    );
     let points = POINTS;
     // macOS 上 tao 的光标按主屏缩放成物理像素（见 panel::monitor_contains），除以主屏（frames[0]）缩放换回点
     let k = if points { frames[0].scale } else { 1.0 };
@@ -427,6 +422,7 @@ fn freeze(app: &AppHandle, generation: u64, settle: bool) {
         s.set_frames(screens);
         s.set_payloads(payloads.clone());
     }
+    log::info!("shot 推送载荷 {} 屏 代 {generation}", payloads.len());
     for p in payloads {
         events::emit_to(app, &label(p.index), events::SHOT_BEGIN, p);
     }
@@ -544,6 +540,7 @@ pub fn ready(app: &AppHandle, generation: u64, i: usize) {
     let (all, key, started) = {
         let mut s = session(app);
         let Some(all) = s.mark_ready(generation, i) else {
+            log::info!("shot 遮罩 {i} 就绪但不是当前这次（代 {generation}），忽略");
             return;
         };
         (all, s.cursor.unwrap_or(0), s.started)
@@ -552,9 +549,7 @@ pub fn ready(app: &AppHandle, generation: u64, i: usize) {
         show_overlay(app, i, false);
         if all {
             show_overlay(app, key, true);
-            if timing()
-                && let Some(t) = started
-            {
+            if let Some(t) = started {
                 log::info!("shot 上屏 {}ms", t.elapsed().as_millis());
             }
         }
@@ -876,9 +871,8 @@ fn save(app: &AppHandle, png: Vec<u8>) -> Result<ShotOutcome, AppError> {
     })
 }
 
-/// 识别文字：PNG 字节直接交给系统识别（不落盘）；有文字就写纯文本（自身写入，不入库，M23 规则 7）。
+/// 识别文字：PNG 字节直接交给系统识别（不落盘）；有文字就按普通写入写纯文本，由监听器作为文字记录入库（M23 规则 7）。
 fn ocr(app: &AppHandle, generation: u64, png: Vec<u8>) -> Result<ShotOutcome, AppError> {
-    let state = app.state::<AppState>();
     let t = Instant::now();
     let text = match xpaste_platform::ocr_png_bytes(&png, SHOT_OCR_SIDE) {
         Ok(Some(t)) if !t.text.trim().is_empty() => Some(t.text),
@@ -895,7 +889,11 @@ fn ocr(app: &AppHandle, generation: u64, png: Vec<u8>) -> Result<ShotOutcome, Ap
         return Err(AppError::Invalid("截图已结束".into()));
     }
     if let Some(text) = &text {
-        crate::commands::records::write_text_plain(&state, text)?;
+        // 不经过 write_marked：同“复制截图”，要进历史
+        xpaste_platform::write(&[crate::commands::records::text_flavor(text)]).map_err(|e| {
+            log::warn!("识别文字写剪切板失败 {chars} 字：{e}");
+            AppError::ClipboardWrite
+        })?;
     }
     Ok(ShotOutcome {
         action: "ocr",
