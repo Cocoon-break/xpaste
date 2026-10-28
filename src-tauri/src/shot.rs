@@ -3,7 +3,7 @@
 //! 流程：快捷键 → `begin` 在后台线程冻结所有显示器 → 给每块屏的遮罩 `shot-<i>` 发 `shot-begin`
 //! → 遮罩用 `shot_frame` 取冻结图、画好后 `shot_ready` 上屏 → 全部就绪后光标所在屏拿键盘焦点。
 
-use std::sync::{MutexGuard, PoisonError, mpsc};
+use std::sync::{Arc, MutexGuard, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -16,6 +16,8 @@ use crate::panel::on_main;
 use crate::state::AppState;
 
 const LABEL_PREFIX: &str = "shot-";
+/// 按下快捷键后这么久还没全部上屏，视为卡住（某块屏的遮罩出错或没收到载荷），下次快捷键重新开始
+const STALE: Duration = Duration::from_secs(3);
 
 /// 显示器内的逻辑像素矩形（左上为原点）。
 #[derive(Serialize, Clone, Copy, PartialEq, Debug)]
@@ -70,8 +72,12 @@ pub fn begin_plan(granted: bool) -> BeginPlan {
 /// 一次截图的状态：从按下快捷键到遮罩全部隐藏。
 #[derive(Default)]
 pub struct Session {
-    frames: Vec<Frame>,
+    /// `Arc`：`shot_frame` 在锁外拷贝，不让几十 MB 的拷贝挡住其他屏和主线程
+    frames: Vec<Arc<Frame>>,
+    payloads: Vec<BeginPayload>,
     active: bool,
+    /// 每次开始加一，后台冻结线程据此认出自己是否已过期
+    generation: u64,
     started: Option<Instant>,
     /// 各屏遮罩是否已上屏
     ready: Vec<bool>,
@@ -82,30 +88,71 @@ pub struct Session {
 impl Session {
     /// 开始一次截图；已在进行中返回 false（连按快捷键只认第一次）。
     pub fn try_begin(&mut self) -> bool {
+        self.try_begin_at(Instant::now())
+    }
+
+    /// 同 `try_begin`；进行中但超过 `STALE` 仍未全部上屏的会话视为已结束，重置后开始新的。
+    pub fn try_begin_at(&mut self, now: Instant) -> bool {
         if self.active {
-            return false;
+            let stale = !self.all_ready()
+                && self
+                    .started
+                    .is_some_and(|t| now.saturating_duration_since(t) > STALE);
+            if !stale {
+                return false;
+            }
+            self.end();
         }
         self.active = true;
-        self.started = Some(Instant::now());
+        self.generation += 1;
+        self.started = Some(now);
         true
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// 后台线程开始时记下的代数仍是当前这次截图。
+    pub fn is_current(&self, generation: u64) -> bool {
+        self.active && self.generation == generation
     }
 
     pub fn set_frames(&mut self, f: Vec<Frame>) {
         self.ready = vec![false; f.len()];
-        self.frames = f;
+        self.frames = f.into_iter().map(Arc::new).collect();
     }
 
-    pub fn frame(&self, i: usize) -> Option<&Frame> {
-        self.frames.get(i)
+    pub fn frame(&self, i: usize) -> Option<Arc<Frame>> {
+        self.frames.get(i).cloned()
     }
 
-    /// 结束并释放冻结图（每屏几十 MB）。
+    pub fn set_payloads(&mut self, p: Vec<BeginPayload>) {
+        self.payloads = p;
+    }
+
+    /// 第 `i` 块屏的 `shot-begin` 载荷；已上屏的屏返回 `None`，免得前端推拉两路各处理一次。
+    pub fn payload(&self, i: usize) -> Option<BeginPayload> {
+        if self.ready.get(i).copied().unwrap_or(true) {
+            return None;
+        }
+        self.payloads.get(i).cloned()
+    }
+
+    /// 结束并释放冻结图（每屏几十 MB）；代数保留。
     pub fn end(&mut self) {
-        *self = Self::default();
+        *self = Self {
+            generation: self.generation,
+            ..Self::default()
+        };
     }
 
     pub fn is_active(&self) -> bool {
         self.active
+    }
+
+    fn all_ready(&self) -> bool {
+        !self.ready.is_empty() && self.ready.iter().all(|r| *r)
     }
 
     /// 记第 `i` 块屏已上屏；恰好让全部就绪的那一次返回 true，重复或越界的序号不算。
@@ -121,8 +168,8 @@ impl Session {
 }
 
 /// `shot-begin` 的载荷，前端 `src/api/shot.ts` 与之对应。
-#[derive(Serialize, Clone)]
-struct BeginPayload {
+#[derive(Serialize, Clone, PartialEq, Debug)]
+pub struct BeginPayload {
     index: usize,
     /// 与该屏相交的窗口，由前到后，供吸附
     rects: Vec<LRect>,
@@ -169,8 +216,18 @@ pub fn begin(app: &AppHandle) {
         events::emit_to(app, "panel", events::SHOT_NEED_PERMISSION, ());
         return;
     }
-    if !session(app).try_begin() {
-        return;
+    let (generation, stale) = {
+        let mut s = session(app);
+        let was_active = s.is_active();
+        if !s.try_begin() {
+            return;
+        }
+        (s.generation(), was_active)
+    };
+    // 上一次卡住的会话：已上屏的遮罩还盖在屏上，先撤下，不然会被截进去
+    if stale {
+        log::info!("shot 上次截图 {}s 内未全部上屏，重新开始", STALE.as_secs());
+        hide_overlays(app);
     }
     // 面板不能被截进去
     let panel_shown = app
@@ -180,12 +237,13 @@ pub fn begin(app: &AppHandle) {
         crate::panel::hide(app);
     }
     let app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || freeze(&app, panel_shown));
+    tauri::async_runtime::spawn_blocking(move || freeze(&app, generation, panel_shown || stale));
 }
 
-fn freeze(app: &AppHandle, panel_shown: bool) {
-    if panel_shown {
-        // ponytail: 固定等 50 ms 让窗口服务器撤下面板；冻结图里仍出现面板时改为等隐藏生效的回调
+/// `settle`：刚隐藏过窗口（面板或上次的遮罩），冻结前先等它们撤下。
+fn freeze(app: &AppHandle, generation: u64, settle: bool) {
+    if settle {
+        // ponytail: 固定等 50 ms 让窗口服务器撤下窗口；冻结图里仍出现面板时改为等隐藏生效的回调
         std::thread::sleep(Duration::from_millis(50));
     }
     let t = Instant::now();
@@ -193,11 +251,11 @@ fn freeze(app: &AppHandle, panel_shown: bool) {
         Ok(f) if !f.is_empty() => f,
         Ok(_) => {
             log::warn!("截图时没有可冻结的显示器");
-            return session(app).end();
+            return end_if_current(app, generation);
         }
         Err(e) => {
             log::warn!("冻结屏幕失败：{e}");
-            return session(app).end();
+            return end_if_current(app, generation);
         }
     };
     let rects = xpaste_platform::window_rects();
@@ -228,29 +286,39 @@ fn freeze(app: &AppHandle, panel_shown: bool) {
             scale: f.scale,
         })
         .collect();
-    let bounds: Vec<_> = frames.iter().map(|f| (f.origin, f.size)).collect();
-    {
-        let mut s = session(app);
-        if !s.is_active() {
-            return;
-        }
-        s.cursor = cursor.map(|(i, _)| i);
-        s.set_frames(frames);
-    }
-    // 显示器比遮罩多（启动后接了新屏）：补建，等页面加载完再发事件，否则新遮罩收不到。
+    // 显示器比遮罩多（启动后接了新屏）：补建，等页面加载完。新遮罩仍可能赶不上下面推送的事件
+    // （前端注册监听要走一次 IPC），所以载荷也存进会话，由前端注册好监听后用 `shot_begin_payload` 拉取。
     // 显示器变少时多出来的遮罩留着不用：tauri-nspanel 按标签持有 NSPanel，销毁后同名重建会重复释放
-    for rx in ensure_overlays(app, bounds.len()) {
+    for rx in ensure_overlays(app, frames.len()) {
         let _ = rx.recv_timeout(Duration::from_secs(5));
     }
-    for (i, (origin, size)) in bounds.into_iter().enumerate() {
+    // 先摆好位置再放出载荷：前端拿到载荷就可能上屏
+    for (i, f) in frames.iter().enumerate() {
         if let Some(w) = app.get_webview_window(&label(i))
-            && let Err(e) = place(&w, origin, size)
+            && let Err(e) = place(&w, f.origin, f.size)
         {
             log::warn!("摆放遮罩 {i} 失败：{e}");
         }
     }
+    {
+        let mut s = session(app);
+        // 冻结期间被取消，或已被新的一次截图取代
+        if !s.is_current(generation) {
+            return;
+        }
+        s.cursor = cursor.map(|(i, _)| i);
+        s.set_frames(frames);
+        s.set_payloads(payloads.clone());
+    }
     for p in payloads {
         events::emit_to(app, &label(p.index), events::SHOT_BEGIN, p);
+    }
+}
+
+fn end_if_current(app: &AppHandle, generation: u64) {
+    let mut s = session(app);
+    if s.is_current(generation) {
+        s.end();
     }
 }
 
@@ -413,6 +481,10 @@ fn show_overlay(app: &AppHandle, i: usize, focus: bool) {
 /// 隐藏全部遮罩并释放冻结图。
 pub fn end(app: &AppHandle) {
     session(app).end();
+    hide_overlays(app);
+}
+
+fn hide_overlays(app: &AppHandle) {
     on_main(app, |app| {
         for (l, w) in app.webview_windows() {
             if overlay_index(&l).is_some()
@@ -558,6 +630,73 @@ mod tests {
         assert!(!s.mark_ready(5), "越界序号忽略");
         assert!(s.mark_ready(0));
         assert!(!s.mark_ready(0));
+    }
+
+    #[test]
+    fn stale_session_is_replaced_after_3s() {
+        let t0 = Instant::now();
+        let mut s = Session::default();
+        assert!(s.try_begin_at(t0));
+        let g1 = s.generation();
+        s.set_frames(vec![
+            frame((0.0, 0.0), (10.0, 10.0), 1.0),
+            frame((10.0, 0.0), (10.0, 10.0), 1.0),
+        ]);
+        s.mark_ready(0);
+        assert!(!s.try_begin_at(t0 + Duration::from_secs(2)));
+        assert!(!s.try_begin_at(t0 + STALE), "正好 3 s 还不算卡住");
+        assert!(s.try_begin_at(t0 + Duration::from_millis(3001)));
+        assert!(s.frame(0).is_none(), "旧冻结图已释放");
+        assert!(s.generation() > g1);
+        // 冻结还没回来（尚无帧）也算未就绪
+        assert!(s.try_begin_at(t0 + Duration::from_secs(7)));
+    }
+
+    #[test]
+    fn all_ready_session_is_never_stale() {
+        let t0 = Instant::now();
+        let mut s = Session::default();
+        s.try_begin_at(t0);
+        s.set_frames(vec![frame((0.0, 0.0), (10.0, 10.0), 1.0)]);
+        s.mark_ready(0);
+        assert!(!s.try_begin_at(t0 + Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn old_freeze_generation_is_not_current() {
+        let mut s = Session::default();
+        s.try_begin();
+        let g1 = s.generation();
+        assert!(s.is_current(g1));
+        s.end();
+        assert!(!s.is_current(g1));
+        s.try_begin();
+        assert!(!s.is_current(g1), "begin → end → begin 后旧线程不能写入");
+        assert!(s.is_current(s.generation()));
+    }
+
+    #[test]
+    fn payload_until_ready() {
+        let mut s = Session::default();
+        s.try_begin();
+        assert_eq!(s.payload(0), None, "冻结完成前没有载荷");
+        s.set_frames(vec![
+            frame((0.0, 0.0), (10.0, 10.0), 1.0),
+            frame((10.0, 0.0), (10.0, 10.0), 2.0),
+        ]);
+        let p = |index, scale| BeginPayload {
+            index,
+            rects: vec![],
+            cursor: None,
+            scale,
+        };
+        s.set_payloads(vec![p(0, 1.0), p(1, 2.0)]);
+        assert_eq!(s.payload(1), Some(p(1, 2.0)));
+        s.mark_ready(1);
+        assert_eq!(s.payload(1), None, "已上屏不再给");
+        assert_eq!(s.payload(0), Some(p(0, 1.0)));
+        s.end();
+        assert_eq!(s.payload(0), None);
     }
 
     #[test]

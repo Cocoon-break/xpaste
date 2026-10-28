@@ -189,6 +189,7 @@ pub fn run() {
             commands::records::reocr,
             commands::records::ocr_progress,
             commands::shot::shot_frame,
+            commands::shot::shot_begin_payload,
             commands::shot::shot_ready,
             commands::shot::shot_cancel
         ])
