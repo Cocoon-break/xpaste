@@ -1,4 +1,4 @@
-use tauri::ipc::Response;
+use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::{AppHandle, WebviewWindow};
 
 use crate::error::AppError;
@@ -31,14 +31,60 @@ pub fn shot_begin_payload(
     Ok(shot::session(&app).payload(index_of(&window)?))
 }
 
-/// 遮罩已画好冻结图，可以上屏。
+/// 遮罩已画好冻结图，可以上屏。`generation` 取自 `shot-begin` 载荷；不是当前这次截图时忽略。
 #[tauri::command]
-pub fn shot_ready(app: AppHandle, window: WebviewWindow) -> Result<(), AppError> {
-    shot::ready(&app, index_of(&window)?);
+pub fn shot_ready(app: AppHandle, window: WebviewWindow, generation: u64) -> Result<(), AppError> {
+    shot::ready(&app, generation, index_of(&window)?);
     Ok(())
 }
 
+/// 退出截图：Esc / 右键，或提示条显示完后。隐藏全部遮罩、释放冻结图、撤销鼠标穿透。
 #[tauri::command]
 pub fn shot_cancel(app: AppHandle) {
     shot::end(&app);
+}
+
+/// 遮罩合成好的 PNG（请求体原始字节）。请求头：`x-action`（copy / save / ocr / pin）、
+/// `x-index`（显示器序号）、`x-rect`（`x,y,w,h`，显示器内逻辑像素，贴图用）。
+/// 成功后遮罩进入提示条模式（鼠标穿透、键盘已还给原应用），前端显示提示条后调 `shot_cancel`。
+#[tauri::command]
+pub async fn shot_finish(
+    app: AppHandle,
+    request: Request<'_>,
+) -> Result<shot::ShotOutcome, AppError> {
+    let invalid = |m: &str| AppError::Invalid(m.into());
+    let header = |k| request.headers().get(k).and_then(|v| v.to_str().ok());
+    let action = header("x-action")
+        .and_then(shot::parse_action)
+        .ok_or_else(|| invalid("未知的截图动作"))?;
+    let index = header("x-index")
+        .and_then(|v| v.parse().ok())
+        .ok_or_else(|| invalid("缺少显示器序号"))?;
+    let rect = header("x-rect").and_then(shot::parse_rect);
+    let InvokeBody::Raw(png) = request.body() else {
+        return Err(invalid("请求体应为 PNG 字节"));
+    };
+    let png = png.clone();
+    // 编码、写文件、识别文字都是阻塞调用
+    tauri::async_runtime::spawn_blocking(move || shot::finish(&app, action, index, rect, png))
+        .await
+        .map_err(|_| invalid("截图处理中断"))?
+}
+
+/// 关闭调用方贴图（双击、Esc、右键“关闭”）。
+#[tauri::command(async)]
+pub fn pin_close(app: AppHandle, window: WebviewWindow) -> Result<(), AppError> {
+    shot::pin_close(&app, &window)
+}
+
+/// 调用方贴图的原图写剪切板，进入历史。
+#[tauri::command(async)]
+pub fn pin_copy(app: AppHandle, window: WebviewWindow) -> Result<shot::ShotOutcome, AppError> {
+    shot::pin_copy(&app, &window)
+}
+
+/// 保存调用方贴图的原图，规则同截图的保存。
+#[tauri::command(async)]
+pub fn pin_save(app: AppHandle, window: WebviewWindow) -> Result<shot::ShotOutcome, AppError> {
+    shot::pin_save(&app, &window)
 }

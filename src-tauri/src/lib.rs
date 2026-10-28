@@ -67,10 +67,14 @@ pub fn run() {
             if timing {
                 log::info!("唤起计时已由 XPASTE_TIMING 开启");
             }
+            // 贴图只在本次运行内有效（设计 §4.5）
+            if let Err(e) = shot::clear_pins(&data_dir.join("pins")) {
+                log::warn!("清空贴图目录失败：{e}");
+            }
             if isolated {
                 log::info!("数据目录已由 XPASTE_DATA_DIR 覆盖，不启用单实例");
                 // tauri.conf.json 的 assetProtocol.scope 只覆盖默认数据目录
-                for sub in ["images", "thumbs", "icons"] {
+                for sub in ["images", "thumbs", "icons", "pins"] {
                     if let Err(e) = app
                         .asset_protocol_scope()
                         .allow_directory(data_dir.join(sub), true)
@@ -191,7 +195,11 @@ pub fn run() {
             commands::shot::shot_frame,
             commands::shot::shot_begin_payload,
             commands::shot::shot_ready,
-            commands::shot::shot_cancel
+            commands::shot::shot_cancel,
+            commands::shot::shot_finish,
+            commands::shot::pin_close,
+            commands::shot::pin_copy,
+            commands::shot::pin_save
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

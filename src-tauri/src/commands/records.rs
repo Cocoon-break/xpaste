@@ -213,6 +213,19 @@ pub async fn copy(
 /// 预览“复制文字”：只写一份纯文本，标记为自身写入（不入库、不计使用次数）。
 #[tauri::command(async)]
 pub fn copy_text_plain(state: State<'_, AppState>, text: String) -> Result<(), AppError> {
+    write_text_plain(&state, &text)
+}
+
+/// 写一份纯文本并标记为自身写入；截图的识别文字也走这里。
+pub(crate) fn write_text_plain(state: &AppState, text: &str) -> Result<(), AppError> {
+    write_text_plain_via(state, text, xpaste_platform::write)
+}
+
+fn write_text_plain_via(
+    state: &AppState,
+    text: &str,
+    write: impl FnOnce(&[Flavor]) -> Result<u64, PlatformError>,
+) -> Result<(), AppError> {
     let flavor = if cfg!(windows) {
         // 存储口径：UTF-16LE、不带结尾 NUL（写回时 winfmt::write_bytes 补上）
         Flavor {
@@ -224,10 +237,10 @@ pub fn copy_text_plain(state: State<'_, AppState>, text: String) -> Result<(), A
         Flavor {
             item: 0,
             format: "public.utf8-plain-text".into(),
-            data: text.into_bytes(),
+            data: text.as_bytes().to_vec(),
         }
     };
-    write_marked(&state, || xpaste_platform::write(&[flavor]))
+    write_marked(state, || write(&[flavor]))
 }
 
 /// 设计 8.5 第 1–2 步：记录存在、文件都在、有可写回的 flavor。任何一步不满足都不碰剪切板。
@@ -393,6 +406,26 @@ mod tests {
         assert_eq!(state.last_write_seq.load(Ordering::SeqCst), u64::MAX);
         write_marked(&state, || Ok(7)).unwrap();
         assert_eq!(state.last_write_seq.load(Ordering::SeqCst), 7);
+    }
+
+    #[test]
+    fn write_text_plain_marks_self_write() {
+        let state = AppState::for_test();
+        let mut seen = Vec::new();
+        write_text_plain_via(&state, "图中文字", |f| {
+            seen = f.to_vec();
+            Ok(9)
+        })
+        .unwrap();
+        assert_eq!(state.last_write_seq.load(Ordering::SeqCst), 9);
+        assert!(!state.writing.load(Ordering::SeqCst));
+        assert_eq!(seen.len(), 1);
+        if cfg!(windows) {
+            assert_eq!(seen[0].format, "CF_UNICODETEXT");
+        } else {
+            assert_eq!(seen[0].format, "public.utf8-plain-text");
+            assert_eq!(seen[0].data, "图中文字".as_bytes());
+        }
     }
 
     #[test]

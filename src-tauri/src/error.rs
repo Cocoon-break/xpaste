@@ -19,6 +19,9 @@ pub enum AppError {
     Tauri(#[from] tauri::Error),
     #[error(transparent)]
     Opener(#[from] tauri_plugin_opener::Error),
+    /// 截图与贴图读写文件；`io::Error` 的消息不含路径
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
 }
 
 impl AppError {
@@ -29,7 +32,7 @@ impl AppError {
             Self::HotkeyTaken => "hotkeyTaken",
             Self::Invalid(_) => "invalid",
             Self::Core(CoreError::InvalidSettings(_)) => "invalidSettings",
-            Self::Core(_) | Self::Tauri(_) | Self::Opener(_) => "internal",
+            Self::Core(_) | Self::Tauri(_) | Self::Opener(_) | Self::Io(_) => "internal",
         }
     }
 }
