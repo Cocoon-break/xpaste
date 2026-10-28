@@ -1,2 +1,557 @@
-// 截图遮罩页面（shot.html）。选区、标注与动作在阶段 12 Task 5 实现。
-export {};
+// 截图遮罩页面（shot.html），每块显示器一个窗口。结构对照原型 docs/specs/2026-10-28-截图与录屏-原型.html：
+// 状态 S、update / place、指针与键盘处理。坐标为本块屏的逻辑像素，冻结帧与标注 canvas 为物理像素。
+import './shot.css';
+import {
+  onShotBegin, onShotClaim, shotCancel, shotClaim, shotFinish, shotFrame, shotReady,
+  type BeginPayload, type ShotAction, type ShotOutcome,
+} from '../api/shot';
+import type { AppError } from '../api/types';
+import { badgePos, hit, loupePos, norm, placeBar, resize, type Handle, type Rect } from './geom';
+import { COLORS, drawObj, FONT, nextStep, type Obj, type Tool } from './ink';
+
+const ICON = {
+  rect: '<rect x="4" y="5.5" width="16" height="13" rx="2"/>',
+  ellipse: '<ellipse cx="12" cy="12" rx="8.5" ry="6.5"/>',
+  arrow: '<path d="M5.5 18.5 18 6"/><path d="M10 5.5h8.5V14"/>',
+  pen: '<path d="M15.5 4.5l4 4L9 19l-5 1 1-5z"/><path d="M13 7l4 4"/>',
+  mosaic: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 9.3h16M4 14.6h16M9.3 4v16M14.6 4v16"/><path d="M4.5 4.5h4.8v4.8H4.5zM14.6 9.3h4.9v5.3h-4.9zM9.3 14.6h5.3v4.9H9.3z" fill="currentColor" stroke="none"/>',
+  text: '<path d="M5 7V5h14v2"/><path d="M12 5v14"/><path d="M9 19h6"/>',
+  step: '<circle cx="12" cy="12" r="8.5"/><path d="M10.6 9.4 12.6 8v8"/>',
+  undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
+  redo: '<path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/>',
+  ocr: '<path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16"/><path d="M8 9h8M8 12h8M8 15h5"/>',
+  save: '<path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/>',
+  close: '<path d="M6 6l12 12M18 6 6 18"/>',
+  pin: '<path d="M9 3.5h6l-.8 6.2 3.3 3.3h-11l3.3-3.3z"/><path d="M12 13v7.5"/>',
+  check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+};
+type Icon = keyof typeof ICON;
+const svg = (n: Icon) =>
+  `<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[n]}</svg>`;
+
+const $ = <T extends HTMLElement = HTMLElement>(s: string) => document.querySelector<T>(s)!;
+const clamp = (v: number, a: number, b: number) => Math.min(Math.max(v, a), b);
+const isMac = /Mac/.test(navigator.userAgent);
+const MODK = isMac ? '⌘' : 'Ctrl';
+const reduced = matchMedia('(prefers-reduced-motion: reduce)');
+const mk = (w: number, h: number) => Object.assign(document.createElement('canvas'), { width: w, height: h });
+const inside = (x: number, y: number, r: Rect | null) => !!r && x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+const restart = (el: HTMLElement, cls: string) => { el.classList.remove(cls); void el.offsetWidth; el.classList.add(cls); };
+
+const ov = $('#ov'), frozen = $<HTMLCanvasElement>('#frozen'), ink = $<HTMLCanvasElement>('#ink'), ic = ink.getContext('2d')!;
+const cut = $('#cut'), badge = $('#badge'), loupe = $('#loupe'), lc = $<HTMLCanvasElement>('#lc').getContext('2d')!, linfo = $('#linfo');
+const tb = $('#tb'), sub = $('#sub'), busy = $('#busy'), hint = $('#hint'), gx = $('#gx'), gy = $('#gy');
+const toastEl = $('#toast'), toastLead = $('#toastLead'), toastMsg = $('#toastMsg');
+
+const TOOLS: [Tool, string][] = [['rect', '矩形'], ['ellipse', '椭圆'], ['arrow', '箭头'], ['pen', '画笔'], ['mosaic', '马赛克'], ['text', '文字'], ['step', '序号']];
+const COLOR_NAMES = ['红', '橙', '绿', '蓝', '紫', '白'];
+/** 复制成功的光扫时长（原型 300 ms 后退出，光扫 320 ms 收尾） */
+const SWEEP_MS = 300;
+/** 动作完成后提示条停留多久再退出截图 */
+const TOAST_MS = 1600;
+
+type Phase = 'off' | 'idle' | 'selected' | 'busy' | 'done';
+type Drag =
+  | { k: 'new'; x0: number; y0: number; moved: boolean }
+  | { k: 'move' | 'resize'; h?: Handle; s: Rect; x0: number; y0: number }
+  | { k: 'draw' };
+type Editing = { el: HTMLElement; x: number; y: number; color: string; size: 0 | 1 | 2 };
+
+const S = {
+  gen: 0, index: 0, scale: 1, rects: [] as Rect[],
+  phase: 'off' as Phase,
+  /** 光标在这块屏上（其他屏只显示蒙层） */
+  here: false,
+  snap: null as Rect | null, sel: null as Rect | null, drag: null as Drag | null,
+  tool: null as Tool | null, color: 0, size: 1 as 0 | 1 | 2,
+  objs: [] as Obj[], redo: [] as Obj[], cur: null as Obj | null, editing: null as Editing | null,
+  mx: 0, my: 0, barY: 0,
+};
+let W = innerWidth, H = innerHeight, tc = '#FFB84D';
+let pix: HTMLCanvasElement | null = null; // 马赛克底图，第一次用马赛克时生成
+let thumbUrl = '', toastT = 0, endT = 0;
+
+/* —— 开始：画冻结帧，画完才让后端上屏 —— */
+async function begin(p: BeginPayload) {
+  if (p.generation === S.gen) return; // 推送与主动拉取都到了
+  const gen = (S.gen = p.generation);
+  const f = await shotFrame();
+  if (gen !== S.gen) return;
+  for (const c of [frozen, ink]) { c.width = f.w; c.height = f.h; }
+  frozen.getContext('2d')!.putImageData(new ImageData(f.rgba, f.w, f.h), 0, 0);
+  pix = null;
+  W = innerWidth; H = innerHeight;
+  Object.assign(S, {
+    index: p.index, scale: p.scale, rects: p.rects, phase: 'idle', here: !!p.cursor, sel: null, drag: null,
+    tool: null, color: 0, size: 1, objs: [], redo: [], cur: null, editing: null,
+    mx: p.cursor?.[0] ?? 0, my: p.cursor?.[1] ?? 0,
+  });
+  S.snap = S.here ? hit(S.rects, S.mx, S.my, W, H) : null;
+  clearTimeout(toastT); clearTimeout(endT);
+  if (thumbUrl) URL.revokeObjectURL(thumbUrl);
+  thumbUrl = '';
+  toastEl.setAttribute('data-instant', ''); toastEl.dataset.open = 'false'; void toastEl.offsetWidth; toastEl.removeAttribute('data-instant');
+  document.querySelectorAll('.txt, #cut .sweep').forEach((el) => el.remove());
+  ic.clearRect(0, 0, ink.width, ink.height);
+  ov.hidden = false;
+  ov.classList.remove('out');
+  tc = getComputedStyle(ov).getPropertyValue('--tc').trim() || tc;
+  buildBar();
+  hint.innerHTML = '<span><b>单击</b>选中窗口</span><span><b>拖动</b>框选</span><span><kbd>F</kbd>全屏</span><span><kbd>Esc</kbd>退出</span>';
+  restart(hint, 'hintbar');
+  setCursor();
+  update();
+  restart(ov, 'in');
+  setTimeout(() => ov.classList.remove('in'), 120);
+  await shotReady(gen);
+}
+
+/** 退出截图：遮罩淡出后后端隐藏全部遮罩。 */
+function closeOverlay() {
+  if (S.phase === 'off') return;
+  S.phase = 'off';
+  S.editing?.el.remove();
+  S.editing = null;
+  ov.classList.add('out');
+  endT = window.setTimeout(() => void shotCancel(), reduced.matches ? 0 : 160);
+}
+
+/* 当前显示的框：选区前是吸附的窗口，拖动中和选区后是选区 */
+function shownRect() {
+  if (S.phase === 'idle') return S.drag?.k === 'new' && S.drag.moved ? S.sel : S.snap;
+  return S.sel;
+}
+
+function update() {
+  if (S.phase === 'off' || (S.phase === 'done' && !S.sel)) return;
+  const r = S.scale, rect = shownRect(), d = S.drag;
+  ov.dataset.phase = S.phase;
+  ov.dataset.tool = S.tool ?? '';
+  const c = rect ?? { x: 0, y: 0, w: 0, h: 0 };
+  Object.assign(cut.style, { left: c.x + 'px', top: c.y + 'px', width: c.w + 'px', height: c.h + 'px' });
+  cut.classList.toggle('none', !rect);
+  cut.classList.toggle('snap', S.phase === 'idle' && !(d?.k === 'new' && d.moved));
+
+  // 十字参考线与放大镜：选区前一直跟随光标，选区后只在调整大小时出现
+  const dragging = d?.k === 'new' || d?.k === 'resize';
+  const showLoupe = S.here && (S.phase === 'idle' || dragging);
+  gx.hidden = gy.hidden = !(S.here && S.phase === 'idle' && !dragging);
+  gx.style.transform = `translateY(${Math.round(S.my)}px)`;
+  gy.style.transform = `translateX(${Math.round(S.mx)}px)`;
+  loupe.hidden = !showLoupe;
+  if (showLoupe) drawLoupe(dragging ? rect : null);
+
+  hint.hidden = S.phase !== 'idle' || !S.here;
+  const above = place();
+
+  // 尺寸标签（物理像素）
+  badge.hidden = !rect || (S.phase !== 'idle' && S.phase !== 'selected');
+  if (rect && !badge.hidden) {
+    badge.innerHTML = `<i></i>${Math.round(rect.w * r)}<span class="x">×</span>${Math.round(rect.h * r)}`;
+    const b = badgePos(rect, badge.offsetWidth, above, W);
+    Object.assign(badge.style, { left: b.x + 'px', top: b.y + 'px' });
+  }
+}
+
+function drawLoupe(rect: Rect | null) {
+  const r = S.scale, N = 15, Z = 122 / N;
+  lc.imageSmoothingEnabled = false;
+  lc.fillStyle = '#000'; lc.fillRect(0, 0, 122, 122);
+  lc.drawImage(frozen, (S.mx - N / 2) * r, (S.my - N / 2) * r, N * r, N * r, 0, 0, 122, 122);
+  lc.strokeStyle = 'rgba(255,255,255,.08)'; lc.lineWidth = 1;
+  for (let i = 1; i < N; i++) { lc.beginPath(); lc.moveTo(i * Z, 0); lc.lineTo(i * Z, 122); lc.moveTo(0, i * Z); lc.lineTo(122, i * Z); lc.stroke(); }
+  lc.strokeStyle = tc; lc.lineWidth = 1.5;
+  lc.beginPath(); lc.moveTo(61, 0); lc.lineTo(61, 122); lc.moveTo(0, 61); lc.lineTo(122, 61); lc.globalAlpha = 0.45; lc.stroke(); lc.globalAlpha = 1;
+  lc.strokeRect(7 * Z, 7 * Z, Z, Z);
+  linfo.innerHTML = rect
+    ? `<span>${Math.round(rect.w * r)} × ${Math.round(rect.h * r)}</span>`
+    : `<span>X ${Math.round(S.mx * r)}</span><span>Y ${Math.round(S.my * r)}</span>`;
+  const p = loupePos(S.mx, S.my, W, H);
+  Object.assign(loupe.style, { left: p.x + 'px', top: p.y + 'px' });
+}
+
+/* —— 工具栏 —— */
+function buildBar() {
+  tb.innerHTML = TOOLS.map(([t, n], i) => `<button type="button" data-tool="${t}" aria-pressed="false" aria-label="${n}" data-tip="${n}  ${i + 1}">${svg(t)}</button>`).join('')
+    + '<span class="sep"></span>'
+    + `<button type="button" data-act="undo" aria-label="撤销" data-tip="撤销  ${MODK} Z">${svg('undo')}</button>`
+    + `<button type="button" data-act="redo" aria-label="重做" data-tip="重做  ${isMac ? '⇧ ⌘ Z' : 'Ctrl Shift Z'}">${svg('redo')}</button>`
+    + '<span class="sep"></span>'
+    + `<button type="button" data-act="ocr" aria-label="识别文字并复制" data-tip="识别文字并复制  O">${svg('ocr')}</button>`
+    + `<button type="button" data-act="pin" aria-label="钉在屏幕上" data-tip="钉在屏幕上  P">${svg('pin')}</button>`
+    + `<button type="button" data-act="save" aria-label="保存" data-tip="保存  ${MODK} S">${svg('save')}</button>`
+    + `<button type="button" data-act="close" aria-label="退出" data-tip="退出  Esc">${svg('close')}</button>`
+    + '<button type="button" class="go" data-act="copy">复制<kbd>↩</kbd></button>';
+  syncBar();
+}
+
+function syncBar() {
+  tb.querySelectorAll<HTMLElement>('[data-tool]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.tool === S.tool)));
+  tb.querySelector('[data-act="undo"]')?.setAttribute('aria-disabled', String(!S.objs.length));
+  tb.querySelector('[data-act="redo"]')?.setAttribute('aria-disabled', String(!S.redo.length));
+  if (!S.tool) { sub.innerHTML = ''; return; }
+  const colors = S.tool !== 'mosaic'
+    ? COLORS.map((c, i) => `<button type="button" class="sw" data-color="${i}" aria-pressed="${i === S.color}" aria-label="${COLOR_NAMES[i]}色" style="--c:${c}"><i></i></button>`).join('') + '<span class="sep"></span>'
+    : '';
+  const sizes = [0, 1, 2].map((i) => {
+    const glyph = S.tool === 'text' ? `<b style="--fs:${[11, 14, 18][i]}px">A</b>` : `<i style="width:${[4, 7, 11][i]}px;height:${[4, 7, 11][i]}px"></i>`;
+    const name = S.tool === 'text' ? ['小', '中', '大'][i] + '号字' : ['细', '中', '粗'][i];
+    return `<button type="button" class="sz" data-size="${i}" aria-pressed="${i === S.size}" aria-label="${name}">${glyph}</button>`;
+  }).join('');
+  sub.innerHTML = colors + sizes;
+}
+
+/** 摆放工具栏、颜色粗细条与识别中提示；返回工具栏是否在选区上方。 */
+function place(): boolean {
+  const sel = S.sel, show = S.phase === 'selected' && !!sel;
+  tb.hidden = !show;
+  sub.hidden = !(show && S.tool);
+  busy.hidden = S.phase !== 'busy';
+  if (S.phase === 'busy' && sel) {
+    const bw = busy.offsetWidth;
+    Object.assign(busy.style, { left: clamp(sel.x + sel.w - bw, 8, W - bw - 8) + 'px', top: S.barY + 'px' });
+    return false;
+  }
+  if (!show) return false;
+  const th = tb.offsetHeight, sw = sub.hidden ? 0 : sub.offsetWidth, sh = sub.hidden ? 0 : sub.offsetHeight + 6;
+  const p = placeBar(sel, { w: tb.offsetWidth, h: th }, sh, W, H);
+  S.barY = p.y;
+  Object.assign(tb.style, { left: p.x + 'px', top: p.y + 'px' });
+  tb.classList.toggle('below-tips', p.y < 44);
+  if (!sub.hidden) {
+    const btn = tb.querySelector<HTMLElement>(`[data-tool="${S.tool}"]`);
+    const bx = btn ? p.x + btn.offsetLeft + btn.offsetWidth / 2 - sw / 2 : p.x;
+    Object.assign(sub.style, { left: clamp(bx, 8, W - sw - 8) + 'px', top: (p.above ? p.y - sh : p.y + th + 6) + 'px' });
+  }
+  return p.above;
+}
+
+/** 进入选区后。`animate`：鼠标触发时工具栏浮入，键盘触发（F）即时出现（M20 原则 2）。 */
+function enterSelected(animate: boolean) {
+  S.phase = 'selected';
+  update();
+  tb.classList.remove('pop-in');
+  if (animate) restart(tb, 'pop-in');
+  // 选区只能落在一块屏内：其他屏放弃各自的选区
+  void shotClaim({ generation: S.gen, index: S.index, done: false });
+}
+
+tb.addEventListener('click', (e) => {
+  const b = (e.target as Element).closest<HTMLElement>('button');
+  if (!b || b.getAttribute('aria-disabled') === 'true') return;
+  if (b.dataset.tool) return toggleTool(b.dataset.tool as Tool, true);
+  const a = b.dataset.act;
+  if (a === 'undo') undo();
+  else if (a === 'redo') redo();
+  else if (a === 'close') closeOverlay();
+  else if (a) void act(a as ShotAction);
+});
+sub.addEventListener('click', (e) => {
+  const b = (e.target as Element).closest<HTMLElement>('button');
+  if (!b) return;
+  if (b.dataset.color) S.color = +b.dataset.color;
+  if (b.dataset.size) S.size = +b.dataset.size as 0 | 1 | 2;
+  syncBar();
+});
+function toggleTool(t: Tool, animate: boolean) {
+  commitText();
+  S.tool = S.tool === t ? null : t;
+  syncBar(); update();
+  sub.classList.remove('pop-in');
+  if (animate && !sub.hidden) restart(sub, 'pop-in');
+}
+
+/* —— 指针 —— */
+ov.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0) return;
+  if ((e.target as Element).closest('.bar, .txt')) return;
+  const x = e.clientX, y = e.clientY;
+  if (S.editing) { commitText(); if (S.tool === 'text') return; }
+  if (S.phase === 'idle') {
+    Object.assign(S, { here: true, mx: x, my: y, snap: hit(S.rects, x, y, W, H) });
+    S.drag = { k: 'new', x0: x, y0: y, moved: false };
+  } else if (S.phase === 'selected') {
+    const h = (e.target as HTMLElement).dataset?.h as Handle | undefined;
+    if (h) S.drag = { k: 'resize', h, s: { ...S.sel! }, x0: x, y0: y };
+    else if (inside(x, y, S.sel) && S.tool) { if (S.tool === 'text') e.preventDefault(); startDraw(x, y, e.shiftKey); if (!S.drag) return; }
+    else if (inside(x, y, S.sel)) S.drag = { k: 'move', s: { ...S.sel! }, x0: x, y0: y };
+    else return;
+  } else return;
+  ov.setPointerCapture(e.pointerId);
+  update();
+});
+
+ov.addEventListener('pointermove', (e) => {
+  if (S.phase === 'off') return;
+  const x = e.clientX, y = e.clientY, d = S.drag;
+  Object.assign(S, { mx: x, my: y, here: true });
+  if (!d) {
+    if (S.phase === 'idle') S.snap = hit(S.rects, x, y, W, H);
+    setCursor();
+    if (S.phase === 'idle') update();
+    return;
+  }
+  if (d.k === 'draw') return extendDraw(x, y, e.shiftKey);
+  const dx = Math.round(x - d.x0), dy = Math.round(y - d.y0);
+  if (d.k === 'new') {
+    if (!d.moved && Math.hypot(dx, dy) > 3) d.moved = true;
+    if (d.moved) S.sel = norm(d.x0, d.y0, x, y, W, H);
+  } else if (d.k === 'move') {
+    S.sel = { ...d.s, x: clamp(d.s.x + dx, 0, W - d.s.w), y: clamp(d.s.y + dy, 0, H - d.s.h) };
+    renderInk();
+  } else {
+    S.sel = resize(d.s, d.h!, dx, dy, W, H);
+    renderInk();
+  }
+  update();
+});
+
+ov.addEventListener('pointerup', () => {
+  const d = S.drag;
+  if (!d) return;
+  S.drag = null;
+  if (d.k === 'new') {
+    if (!d.moved || !S.sel || S.sel.w < 4 || S.sel.h < 4) S.sel = { ...S.snap! };
+    renderInk();
+    enterSelected(true);
+    return;
+  }
+  if (d.k === 'draw') finishDraw();
+  update();
+});
+
+// 光标离开这块屏：选区前只留蒙层
+document.documentElement.addEventListener('pointerleave', () => {
+  if (S.phase !== 'idle' || S.drag) return;
+  S.here = false;
+  S.snap = null;
+  update();
+});
+
+ov.addEventListener('dblclick', (e) => {
+  if (S.phase !== 'selected' || S.tool || !inside(e.clientX, e.clientY, S.sel) || (e.target as Element).closest('.bar')) return;
+  void act('copy');
+});
+ov.addEventListener('contextmenu', (e) => { e.preventDefault(); escape(); });
+
+function setCursor() {
+  let c = 'crosshair';
+  if (S.phase === 'selected') {
+    const on = inside(S.mx, S.my, S.sel);
+    if (S.tool) c = on ? (S.tool === 'text' ? 'text' : 'crosshair') : 'default';
+    else c = on ? 'move' : 'default';
+  }
+  ov.style.cursor = c;
+}
+
+function selectAll() {
+  S.here = true;
+  S.sel = { x: 0, y: 0, w: W, h: H };
+  renderInk();
+  if (S.phase === 'idle') enterSelected(false);
+  else update();
+}
+
+/* —— 标注 —— */
+function startDraw(x: number, y: number, shift: boolean) {
+  const color = COLORS[S.color], size = S.size, t = S.tool!;
+  if (t === 'text') return openText(x, y);
+  if (t === 'step') {
+    S.objs.push({ t, color, size, x, y, n: nextStep(S.objs) });
+    S.redo = []; renderInk(); syncBar();
+    return;
+  }
+  S.cur = t === 'pen' || t === 'mosaic'
+    ? { t, color, size, pts: [[x, y]] }
+    : { t, color, size, x0: x, y0: y, x1: x, y1: y, shift };
+  if (t === 'mosaic' && !pix) pix = mosaicBase();
+  S.drag = { k: 'draw' };
+  renderInk();
+}
+function extendDraw(x: number, y: number, shift: boolean) {
+  const o = S.cur;
+  if (!o) return;
+  if (o.t === 'pen' || o.t === 'mosaic') {
+    const last = o.pts[o.pts.length - 1];
+    if (Math.hypot(x - last[0], y - last[1]) > 1.5) o.pts.push([x, y]);
+  } else if (o.t === 'rect' || o.t === 'ellipse' || o.t === 'arrow') Object.assign(o, { x1: x, y1: y, shift });
+  renderInk();
+}
+function finishDraw() {
+  const o = S.cur;
+  S.cur = null;
+  if (!o) return;
+  const keep = o.t === 'pen' || o.t === 'mosaic'
+    || ((o.t === 'rect' || o.t === 'ellipse' || o.t === 'arrow') && (Math.abs(o.x1 - o.x0) > 2 || Math.abs(o.y1 - o.y0) > 2));
+  if (keep) { S.objs.push(o); S.redo = []; }
+  renderInk(); syncBar();
+}
+/** 马赛克底图：冻结帧缩小 10 × 缩放系数倍再不平滑地放大，块为 10 逻辑像素。 */
+function mosaicBase() {
+  const B = 10 * S.scale, w = frozen.width, h = frozen.height;
+  const small = mk(Math.ceil(w / B), Math.ceil(h / B));
+  small.getContext('2d')!.drawImage(frozen, 0, 0, small.width, small.height);
+  const out = mk(w, h), c = out.getContext('2d')!;
+  c.imageSmoothingEnabled = false;
+  c.drawImage(small, 0, 0, w, h);
+  return out;
+}
+function renderInk() {
+  const r = S.scale;
+  ic.setTransform(1, 0, 0, 1, 0, 0);
+  ic.clearRect(0, 0, ink.width, ink.height);
+  if (!S.sel) return;
+  ic.setTransform(r, 0, 0, r, 0, 0);
+  ic.save(); ic.beginPath(); ic.rect(S.sel.x, S.sel.y, S.sel.w, S.sel.h); ic.clip();
+  for (const o of S.objs) drawObj(ic, o, pix ?? frozen);
+  if (S.cur) drawObj(ic, S.cur, pix ?? frozen);
+  ic.restore();
+}
+function undo() { commitText(); const o = S.objs.pop(); if (!o) return; S.redo.push(o); renderInk(); syncBar(); }
+function redo() { const o = S.redo.pop(); if (!o) return; S.objs.push(o); renderInk(); syncBar(); }
+
+/* 文字标注：单击放置输入框，点别处或 Esc 完成；输入期间全局键位不生效 */
+function openText(x: number, y: number) {
+  const el = document.createElement('div');
+  el.className = 'txt';
+  el.contentEditable = 'plaintext-only';
+  if (el.contentEditable !== 'plaintext-only') el.contentEditable = 'true';
+  const color = COLORS[S.color];
+  Object.assign(el.style, { left: x - 5 + 'px', top: y - 3 + 'px', fontSize: FONT[S.size] + 'px', color });
+  el.setAttribute('aria-label', '标注文字');
+  ov.appendChild(el);
+  S.editing = { el, x, y, color, size: S.size };
+  el.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Escape' || (e.key === 'Enter' && (isMac ? e.metaKey : e.ctrlKey))) { e.preventDefault(); commitText(); }
+  });
+  el.addEventListener('pointerdown', (e) => e.stopPropagation());
+  el.focus();
+}
+function commitText() {
+  const ed = S.editing;
+  if (!ed) return;
+  S.editing = null;
+  const text = ed.el.innerText.replace(/\n$/, '');
+  ed.el.remove();
+  if (text.trim()) { S.objs.push({ t: 'text', x: ed.x, y: ed.y, text, color: ed.color, size: ed.size }); S.redo = []; }
+  renderInk(); syncBar();
+}
+
+/* —— 输出：选区 × 缩放系数，从冻结帧与标注合成 PNG —— */
+async function exportPng(sel: Rect): Promise<Blob> {
+  const r = S.scale;
+  const sx = Math.round(sel.x * r), sy = Math.round(sel.y * r);
+  const sw = clamp(Math.round(sel.w * r), 1, frozen.width - sx), sh = clamp(Math.round(sel.h * r), 1, frozen.height - sy);
+  const out = mk(sw, sh), oc = out.getContext('2d')!;
+  oc.drawImage(frozen, sx, sy, sw, sh, 0, 0, sw, sh);
+  oc.drawImage(ink, sx, sy, sw, sh, 0, 0, sw, sh);
+  const blob = await new Promise<Blob | null>((res) => out.toBlob(res, 'image/png'));
+  if (!blob) throw { message: '截图编码失败' };
+  return blob;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** 等待期间没有退出、也没有开始新的一次截图 */
+const live = (gen: number) => gen === S.gen && S.phase !== 'off';
+
+/** 复制 / 保存 / 识别文字 / 贴图。一次截图只做一个动作；识别文字期间显示“正在识别文字…”。 */
+async function act(a: ShotAction) {
+  if (S.phase !== 'selected' || !S.sel) return;
+  commitText();
+  const gen = S.gen, sel = { ...S.sel };
+  S.phase = a === 'ocr' ? 'busy' : 'done';
+  update();
+  const sweep = (a === 'copy' || a === 'save') && !reduced.matches;
+  if (sweep) cut.insertAdjacentHTML('beforeend', '<i class="sweep"></i>');
+  let out: ShotOutcome, blob: Blob;
+  try {
+    blob = await exportPng(sel);
+    [out] = await Promise.all([shotFinish(new Uint8Array(await blob.arrayBuffer()), a, S.index, sel), sweep && sleep(SWEEP_MS)]);
+  } catch (e) {
+    if (!live(gen)) return; // 识别期间已按 Esc 退出
+    // 失败：回到选区，可以重试或换个动作
+    cut.querySelector('.sweep')?.remove();
+    S.phase = 'selected';
+    update();
+    toast((e as AppError)?.message || '截图处理失败', { icon: 'close', danger: true });
+    toastT = window.setTimeout(() => (toastEl.dataset.open = 'false'), 2800);
+    return;
+  }
+  if (!live(gen)) return;
+  // 后端已让遮罩鼠标穿透并交还键盘：其余部分淡出，只留提示条，随后退出
+  S.phase = 'done';
+  ov.classList.add('out');
+  void shotClaim({ generation: gen, index: S.index, done: true });
+  if (a === 'copy' || a === 'save') thumbUrl = URL.createObjectURL(blob);
+  const file = out.file ?? '';
+  const chars = out.chars ?? 0;
+  const [msg, lead]: [string, Lead] =
+    a === 'copy' ? ['截图已复制，已加入历史', { thumb: thumbUrl }]
+    : a === 'save' ? [out.copied ? `已保存并复制 · ${file}` : `已保存 · ${file}`, { thumb: thumbUrl }]
+    : a === 'ocr' ? (chars ? [`已复制图中文字 · ${chars} 字`, { icon: 'check' }] : ['选区里没有识别到文字', { icon: 'ocr' }])
+    : ['已钉在屏幕上 · 拖动移动，滚轮缩放，双击关闭', { icon: 'pin' }];
+  toast(msg, lead);
+  const exit = reduced.matches ? 0 : 160;
+  toastT = window.setTimeout(() => (toastEl.dataset.open = 'false'), TOAST_MS - exit);
+  endT = window.setTimeout(() => { S.phase = 'off'; void shotCancel(); }, TOAST_MS);
+}
+
+/* —— 提示条 —— */
+type Lead = { thumb?: string; icon?: Icon; danger?: boolean };
+function toast(msg: string, lead: Lead) {
+  clearTimeout(toastT);
+  toastLead.innerHTML = lead.thumb
+    ? `<img class="t-th" alt="" src="${lead.thumb}">`
+    : `<span class="t-ic${lead.danger ? ' danger' : ''}">${svg(lead.icon ?? 'check')}</span>`;
+  toastMsg.textContent = msg;
+  toastEl.dataset.open = 'true';
+}
+
+/* —— Esc / 右键：有选区先取消选区，没有选区退出；识别文字期间也能退出 —— */
+function clearSelection() {
+  Object.assign(S, { phase: 'idle', sel: null, objs: [], redo: [], tool: null, drag: null, cur: null });
+  S.snap = S.here ? hit(S.rects, S.mx, S.my, W, H) : null;
+  renderInk(); syncBar(); setCursor(); update();
+}
+function escape() {
+  if (S.editing) return commitText();
+  if (S.phase === 'selected') return clearSelection();
+  if (S.phase === 'idle' || S.phase === 'busy') closeOverlay();
+}
+
+/* —— 键盘（键位对照原型） —— */
+addEventListener('keydown', (e) => {
+  if (S.phase === 'off' || S.phase === 'done' || S.editing) return;
+  const mod = isMac ? e.metaKey : e.ctrlKey;
+  if (e.key === 'Escape') { e.preventDefault(); escape(); return; }
+  if (S.phase !== 'idle' && S.phase !== 'selected') return;
+  if (e.key === 'Enter') { e.preventDefault(); if (S.phase === 'selected') void act('copy'); return; }
+  if (e.code === 'KeyF' && !mod) { e.preventDefault(); selectAll(); return; }
+  if (S.phase !== 'selected') return;
+  if (mod && e.code === 'KeyZ') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return; }
+  if (mod && e.code === 'KeyS') { e.preventDefault(); void act('save'); return; }
+  if (!mod && e.code === 'KeyO') { e.preventDefault(); void act('ocr'); return; }
+  if (!mod && e.code === 'KeyP') { e.preventDefault(); void act('pin'); return; }
+  const m = /^Digit([1-7])$/.exec(e.code);
+  if (!mod && m) { e.preventDefault(); toggleTool(TOOLS[+m[1] - 1][0], false); return; }
+  const dir = ({ ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] } as Record<string, number[]>)[e.key];
+  if (dir && S.sel) {
+    e.preventDefault();
+    const s = S.sel;
+    S.sel = e.shiftKey ? resize(s, 'se', dir[0], dir[1], W, H) : { ...s, x: clamp(s.x + dir[0], 0, W - s.w), y: clamp(s.y + dir[1], 0, H - s.h) };
+    renderInk(); update();
+  }
+});
+
+/* —— 启动 —— */
+// 别的屏有了选区：放弃这块屏的选区；别的屏动作完成：这块屏的蒙层一起淡出
+void onShotClaim((c) => {
+  if (c.generation !== S.gen || c.index === S.index || S.phase === 'off') return;
+  if (c.done) { S.phase = 'done'; ov.classList.add('out'); return; }
+  S.here = false;
+  if (S.phase === 'selected') clearSelection();
+  else if (S.phase === 'idle') { S.snap = null; update(); }
+});
+// 取帧失败（截图已结束）时什么也不做，后端 3 秒后视为卡住，下次快捷键重新开始
+void onShotBegin((p) => void begin(p).catch(() => {}));

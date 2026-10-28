@@ -6,5 +6,22 @@
     <title>xpaste-shot</title>
     <script type="module" src="/src/shot/main.ts"></script>
   </head>
-  <body></body>
+  <body>
+    <div id="ov" hidden>
+      <canvas id="frozen"></canvas>
+      <canvas id="ink"></canvas>
+      <div class="gx" id="gx"></div><div class="gy" id="gy"></div>
+      <div id="cut">
+        <b class="h" data-h="nw"></b><b class="h" data-h="n"></b><b class="h" data-h="ne"></b><b class="h" data-h="e"></b>
+        <b class="h" data-h="se"></b><b class="h" data-h="s"></b><b class="h" data-h="sw"></b><b class="h" data-h="w"></b>
+      </div>
+      <div class="badge" id="badge"></div>
+      <div class="loupe" id="loupe"><canvas id="lc" width="122" height="122"></canvas><div class="info" id="linfo"></div></div>
+      <div class="bar" id="tb" role="toolbar" aria-label="截图工具"></div>
+      <div class="bar sub" id="sub" role="toolbar" aria-label="颜色与粗细"></div>
+      <div class="bar busy" id="busy" hidden role="status"><span class="spin"></span>正在识别文字…</div>
+      <div class="hintbar" id="hint"></div>
+    </div>
+    <div class="toast" id="toast" role="status" aria-live="polite"><span id="toastLead"></span><span class="t-msg" id="toastMsg"></span></div>
+  </body>
 </html>

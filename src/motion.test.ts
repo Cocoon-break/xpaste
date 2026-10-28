@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const read = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8');
-const css = read('./styles.css'), ts = read('./main.ts'), keymap = read('./keymap.ts'), html = read('../index.html');
+const css = read('./tokens.css') + read('./styles.css'), ts = read('./main.ts'), keymap = read('./keymap.ts'), html = read('../index.html');
 const panelRs = read('../src-tauri/src/panel.rs');
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 /** 选择器（精确，整条规则的开头）对应的所有声明块，拼在一起 */
