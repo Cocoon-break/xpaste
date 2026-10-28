@@ -116,3 +116,21 @@ export type CopyResult =
   | { result: 'copied' }
   | { result: 'copiedOnly'; reason: 'needAccessibility' | 'elevated' | 'pasteFailed' }
   | { result: 'pasted' };
+
+/** 显示器内的逻辑像素矩形（左上为原点）。对应 `shot::LRect`。 */
+export type LRect = { x: number; y: number; w: number; h: number };
+/** `shot-begin` 的载荷，对应 `shot::BeginPayload`。 */
+export type BeginPayload = {
+  index: number;
+  generation: number;
+  /** 与该屏相交的窗口，由前到后 */
+  rects: LRect[];
+  /** 只有光标所在那块屏有值 */
+  cursor: [number, number] | null;
+  scale: number;
+  /** 设置“保存截图时同时复制” */
+  saveCopy: boolean;
+};
+export type ShotAction = 'copy' | 'save' | 'ocr' | 'pin';
+/** 对应 `shot::ShotOutcome`。 */
+export type ShotOutcome = { action: ShotAction; chars: number | null; file: string | null; copied: boolean };

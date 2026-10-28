@@ -4,30 +4,24 @@
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
 
-/** 显示器内的逻辑像素矩形（左上为原点）。 */
-export type LRect = { x: number; y: number; w: number; h: number };
-export type BeginPayload = {
-  index: number;
-  generation: number;
-  /** 与该屏相交的窗口，由前到后 */
-  rects: LRect[];
-  /** 只有光标所在那块屏有值 */
-  cursor: [number, number] | null;
-  scale: number;
-};
-export type ShotAction = 'copy' | 'save' | 'ocr' | 'pin';
-export type ShotOutcome = { action: ShotAction; chars: number | null; file: string | null; copied: boolean };
+import type { BeginPayload, LRect, ShotAction, ShotOutcome } from './types';
+
+export type { BeginPayload, LRect, ShotAction, ShotOutcome };
 /** 冻结帧：物理像素，RGBA（非预乘）。 */
 export type Frame = { w: number; h: number; rgba: Uint8ClampedArray<ArrayBuffer> };
-/** 跨遮罩广播：某块屏有了选区（其他屏放弃自己的选区），或动作已完成（`done`，其他屏的蒙层一起淡出）。 */
-export type ShotClaim = { generation: number; index: number; done: boolean };
+/**
+ * 跨遮罩广播这块屏的状态：有了选区（其他屏放弃自己的选区）、正在识别文字（其他屏不能再框选）、
+ * 动作已完成（其他屏的蒙层一起淡出）。
+ */
+export type ShotClaim = { generation: number; index: number; state: 'selected' | 'busy' | 'done' };
 
-const tauri = '__TAURI_INTERNALS__' in window;
+/** 开发替身：只在 `pnpm dev` 下、浏览器里（不在 Tauri 里）启用；生产构建里整段被摇掉 */
+const stub = import.meta.env.DEV && !('__TAURI_INTERNALS__' in window);
 const SHOT_BEGIN = 'shot-begin', SHOT_CLAIM = 'shot-claim';
 
 /** 推送的 `shot-begin` 可能早于监听注册好（刚建的遮罩），注册后再拉一次；两路可能都到，回调需按代数去重。 */
 export async function onShotBegin(cb: (p: BeginPayload) => void): Promise<void> {
-  if (!tauri) {
+  if (stub) {
     dev.begin = cb;
     setTimeout(() => cb(dev.payload()));
     return;
@@ -38,27 +32,27 @@ export async function onShotBegin(cb: (p: BeginPayload) => void): Promise<void> 
 }
 
 export async function shotFrame(): Promise<Frame> {
-  if (!tauri) return dev.frame();
+  if (stub) return dev.frame();
   const buf = await invoke<ArrayBuffer>('shot_frame');
   const v = new DataView(buf);
   const w = v.getUint32(0, true), h = v.getUint32(4, true);
   return { w, h, rgba: new Uint8ClampedArray(buf, 8, w * h * 4) };
 }
 
-export const shotReady = (generation: number) => (tauri ? invoke<void>('shot_ready', { generation }) : Promise.resolve());
+export const shotReady = (generation: number) => (stub ? Promise.resolve() : invoke<void>('shot_ready', { generation }));
 
-export const shotCancel = () => (tauri ? invoke<void>('shot_cancel') : dev.cancel());
+export const shotCancel = () => (stub ? dev.cancel() : invoke<void>('shot_cancel'));
 
 /** 合成好的 PNG 交给后端；`rect` 为显示器内逻辑像素（贴图用）。 */
 export function shotFinish(png: Uint8Array, action: ShotAction, index: number, rect: LRect): Promise<ShotOutcome> {
-  if (!tauri) return dev.finish(action);
+  if (stub) return dev.finish(action);
   const r = [rect.x, rect.y, rect.w, rect.h].map((n) => Math.round(n * 100) / 100).join(',');
   return invoke<ShotOutcome>('shot_finish', png, { headers: { 'x-action': action, 'x-index': String(index), 'x-rect': r } });
 }
 
-export const shotClaim = (c: ShotClaim) => (tauri ? emit(SHOT_CLAIM, c) : Promise.resolve());
+export const shotClaim = (c: ShotClaim) => (stub ? Promise.resolve() : emit(SHOT_CLAIM, c));
 export const onShotClaim = async (cb: (c: ShotClaim) => void) => {
-  if (tauri) await listen<ShotClaim>(SHOT_CLAIM, (e) => cb(e.payload));
+  if (!stub) await listen<ShotClaim>(SHOT_CLAIM, (e) => cb(e.payload));
 };
 
 /* —— 开发替身：一块模拟桌面，窗口布局同原型 —— */
@@ -71,7 +65,7 @@ const dev = {
     return [R(0, 0, W, 26), R(W * 0.33, H * 0.17, W * 0.44, H * 0.64), R(W * 0.745, H * 0.33, W * 0.22, H * 0.48), R(W * 0.04, H * 0.1, Math.max(W * 0.4, 420), H * 0.56)];
   },
   payload(): BeginPayload {
-    return { index: 0, generation: ++this.gen, rects: this.wins(), cursor: [innerWidth / 2, innerHeight / 2], scale: devicePixelRatio || 1 };
+    return { index: 0, generation: ++this.gen, rects: this.wins(), cursor: [innerWidth / 2, innerHeight / 2], scale: devicePixelRatio || 1, saveCopy: true };
   },
   frame(): Frame {
     const r = devicePixelRatio || 1, W = innerWidth, H = innerHeight;

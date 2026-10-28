@@ -5,6 +5,7 @@ import {
   onShotBegin, onShotClaim, shotCancel, shotClaim, shotFinish, shotFrame, shotReady,
   type BeginPayload, type ShotAction, type ShotOutcome,
 } from '../api/shot';
+import { info } from '../api/log';
 import type { AppError } from '../api/types';
 import { badgePos, hit, loupePos, norm, placeBar, resize, type Handle, type Rect } from './geom';
 import { COLORS, drawObj, FONT, nextStep, type Obj, type Tool } from './ink';
@@ -66,6 +67,10 @@ const S = {
   tool: null as Tool | null, color: 0, size: 1 as 0 | 1 | 2,
   objs: [] as Obj[], redo: [] as Obj[], cur: null as Obj | null, editing: null as Editing | null,
   mx: 0, my: 0, barY: 0,
+  /** 设置“保存截图时同时复制”（只影响工具栏提示） */
+  saveCopy: true,
+  /** 另一块屏正在识别文字：这块屏不能再框选 */
+  locked: false,
 };
 let W = innerWidth, H = innerHeight, tc = '#FFB84D';
 let pix: HTMLCanvasElement | null = null; // 马赛克底图，第一次用马赛克时生成
@@ -73,7 +78,8 @@ let thumbUrl = '', toastT = 0, endT = 0;
 
 /* —— 开始：画冻结帧，画完才让后端上屏 —— */
 async function begin(p: BeginPayload) {
-  if (p.generation === S.gen) return; // 推送与主动拉取都到了
+  // 推送与主动拉取都会到；代数单调递增，迟到的旧载荷也不能拿旧帧重开
+  if (p.generation <= S.gen) return;
   const gen = (S.gen = p.generation);
   const f = await shotFrame();
   if (gen !== S.gen) return;
@@ -81,8 +87,14 @@ async function begin(p: BeginPayload) {
   frozen.getContext('2d')!.putImageData(new ImageData(f.rgba, f.w, f.h), 0, 0);
   pix = null;
   W = innerWidth; H = innerHeight;
+  // 缩放系数以帧与窗口的实际尺寸为准（窗口摆位与显示器缩放不一致时，坐标仍能对上冻结帧）
+  let scale = p.scale;
+  if (W > 0 && Math.abs(f.w / W - p.scale) > 0.01) {
+    scale = f.w / W;
+    void info(`shot 屏 ${p.index} 缩放不一致：载荷 ${p.scale}，帧 ${f.w}×${f.h} / 窗口 ${W}×${H}`);
+  }
   Object.assign(S, {
-    index: p.index, scale: p.scale, rects: p.rects, phase: 'idle', here: !!p.cursor, sel: null, drag: null,
+    index: p.index, scale, saveCopy: p.saveCopy, locked: false, rects: p.rects, phase: 'idle', here: !!p.cursor, sel: null, drag: null,
     tool: null, color: 0, size: 1, objs: [], redo: [], cur: null, editing: null,
     mx: p.cursor?.[0] ?? 0, my: p.cursor?.[1] ?? 0,
   });
@@ -113,7 +125,17 @@ function closeOverlay() {
   S.editing?.el.remove();
   S.editing = null;
   ov.classList.add('out');
-  endT = window.setTimeout(() => void shotCancel(), reduced.matches ? 0 : 160);
+  endT = window.setTimeout(() => { release(); void shotCancel(); }, reduced.matches ? 0 : 160);
+}
+
+/** 遮罩隐藏后留着复用：放掉冻结帧、标注与马赛克底图的像素（5K 屏每张一百多 MB），用户的屏幕画面不留在内存里。 */
+function release() {
+  S.phase = 'off';
+  for (const c of [frozen, ink]) { c.width = 0; c.height = 0; }
+  pix = null;
+  lc.clearRect(0, 0, 122, 122);
+  if (thumbUrl) URL.revokeObjectURL(thumbUrl);
+  thumbUrl = '';
 }
 
 /* 当前显示的框：选区前是吸附的窗口，拖动中和选区后是选区 */
@@ -179,7 +201,7 @@ function buildBar() {
     + '<span class="sep"></span>'
     + `<button type="button" data-act="ocr" aria-label="识别文字并复制" data-tip="识别文字并复制  O">${svg('ocr')}</button>`
     + `<button type="button" data-act="pin" aria-label="钉在屏幕上" data-tip="钉在屏幕上  P">${svg('pin')}</button>`
-    + `<button type="button" data-act="save" aria-label="保存" data-tip="保存  ${MODK} S">${svg('save')}</button>`
+    + `<button type="button" data-act="save" aria-label="保存" data-tip="保存${S.saveCopy ? '并复制' : ''}  ${MODK} S">${svg('save')}</button>`
     + `<button type="button" data-act="close" aria-label="退出" data-tip="退出  Esc">${svg('close')}</button>`
     + '<button type="button" class="go" data-act="copy">复制<kbd>↩</kbd></button>';
   syncBar();
@@ -233,7 +255,7 @@ function enterSelected(animate: boolean) {
   tb.classList.remove('pop-in');
   if (animate) restart(tb, 'pop-in');
   // 选区只能落在一块屏内：其他屏放弃各自的选区
-  void shotClaim({ generation: S.gen, index: S.index, done: false });
+  void shotClaim({ generation: S.gen, index: S.index, state: 'selected' });
 }
 
 tb.addEventListener('click', (e) => {
@@ -268,6 +290,7 @@ ov.addEventListener('pointerdown', (e) => {
   const x = e.clientX, y = e.clientY;
   if (S.editing) { commitText(); if (S.tool === 'text') return; }
   if (S.phase === 'idle') {
+    if (S.locked) return;
     Object.assign(S, { here: true, mx: x, my: y, snap: hit(S.rects, x, y, W, H) });
     S.drag = { k: 'new', x0: x, y0: y, moved: false };
   } else if (S.phase === 'selected') {
@@ -345,6 +368,7 @@ function setCursor() {
 }
 
 function selectAll() {
+  if (S.locked) return;
   S.here = true;
   S.sel = { x: 0, y: 0, w: W, h: H };
   renderInk();
@@ -464,6 +488,8 @@ async function act(a: ShotAction) {
   update();
   const sweep = (a === 'copy' || a === 'save') && !reduced.matches;
   if (sweep) cut.insertAdjacentHTML('beforeend', '<i class="sweep"></i>');
+  // 识别要几秒：期间其他屏不能框选、出第二个动作
+  if (a === 'ocr') void shotClaim({ generation: gen, index: S.index, state: 'busy' });
   let out: ShotOutcome, blob: Blob;
   try {
     blob = await exportPng(sel);
@@ -474,6 +500,7 @@ async function act(a: ShotAction) {
     cut.querySelector('.sweep')?.remove();
     S.phase = 'selected';
     update();
+    if (a === 'ocr') void shotClaim({ generation: gen, index: S.index, state: 'selected' });
     toast((e as AppError)?.message || '截图处理失败', { icon: 'close', danger: true });
     toastT = window.setTimeout(() => (toastEl.dataset.open = 'false'), 2800);
     return;
@@ -482,7 +509,7 @@ async function act(a: ShotAction) {
   // 后端已让遮罩鼠标穿透并交还键盘：其余部分淡出，只留提示条，随后退出
   S.phase = 'done';
   ov.classList.add('out');
-  void shotClaim({ generation: gen, index: S.index, done: true });
+  void shotClaim({ generation: gen, index: S.index, state: 'done' });
   if (a === 'copy' || a === 'save') thumbUrl = URL.createObjectURL(blob);
   const file = out.file ?? '';
   const chars = out.chars ?? 0;
@@ -494,7 +521,7 @@ async function act(a: ShotAction) {
   toast(msg, lead);
   const exit = reduced.matches ? 0 : 160;
   toastT = window.setTimeout(() => (toastEl.dataset.open = 'false'), TOAST_MS - exit);
-  endT = window.setTimeout(() => { S.phase = 'off'; void shotCancel(); }, TOAST_MS);
+  endT = window.setTimeout(() => { release(); void shotCancel(); }, TOAST_MS);
 }
 
 /* —— 提示条 —— */
@@ -522,7 +549,9 @@ function escape() {
 
 /* —— 键盘（键位对照原型） —— */
 addEventListener('keydown', (e) => {
-  if (S.phase === 'off' || S.phase === 'done' || S.editing) return;
+  if (S.phase === 'off' || S.phase === 'done') return;
+  // 文字输入框获得焦点时按键由它自己处理；点了颜色粗细后焦点不在框里，Esc 仍提交文字
+  if (S.editing) { if (e.key === 'Escape') { e.preventDefault(); commitText(); } return; }
   const mod = isMac ? e.metaKey : e.ctrlKey;
   if (e.key === 'Escape') { e.preventDefault(); escape(); return; }
   if (S.phase !== 'idle' && S.phase !== 'selected') return;
@@ -545,13 +574,20 @@ addEventListener('keydown', (e) => {
 });
 
 /* —— 启动 —— */
-// 别的屏有了选区：放弃这块屏的选区；别的屏动作完成：这块屏的蒙层一起淡出
+// 别的屏有了选区：放弃这块屏的选区；正在识别文字：这块屏先不能框选；动作完成：这块屏的蒙层一起淡出，随后放掉像素
+// （只有动作那块屏调 shot_cancel）
 void onShotClaim((c) => {
   if (c.generation !== S.gen || c.index === S.index || S.phase === 'off') return;
-  if (c.done) { S.phase = 'done'; ov.classList.add('out'); return; }
+  if (c.state === 'done') {
+    S.phase = 'done';
+    ov.classList.add('out');
+    endT = window.setTimeout(release, reduced.matches ? 0 : 160);
+    return;
+  }
+  S.locked = c.state === 'busy';
   S.here = false;
   if (S.phase === 'selected') clearSelection();
-  else if (S.phase === 'idle') { S.snap = null; update(); }
+  else if (S.phase === 'idle') { S.snap = null; S.drag = null; update(); }
 });
 // 取帧失败（截图已结束）时什么也不做，后端 3 秒后视为卡住，下次快捷键重新开始
 void onShotBegin((p) => void begin(p).catch(() => {}));

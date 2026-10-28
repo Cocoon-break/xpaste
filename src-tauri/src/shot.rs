@@ -200,8 +200,9 @@ impl Session {
     }
 }
 
-/// `shot-begin` 的载荷，前端 `src/api/shot.ts` 与之对应。
+/// `shot-begin` 的载荷，前端 `src/api/types.ts` 与之对应。
 #[derive(Serialize, Clone, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct BeginPayload {
     index: usize,
     /// 本次截图的代数，前端调 `shot_ready` 时带回
@@ -211,6 +212,8 @@ pub struct BeginPayload {
     /// 只有光标所在那块屏有值
     cursor: Option<(f64, f64)>,
     scale: f64,
+    /// 设置“保存截图时同时复制”，工具栏提示用
+    save_copy: bool,
 }
 
 pub fn overlay_index(label: &str) -> Option<usize> {
@@ -318,6 +321,7 @@ fn freeze(app: &AppHandle, generation: u64, settle: bool) {
         .cursor_position()
         .ok()
         .and_then(|c| cursor_on(&frames, (c.x / k, c.y / k), points));
+    let save_copy = app.state::<AppState>().settings().shot_save_copy;
     let payloads: Vec<BeginPayload> = frames
         .iter()
         .enumerate()
@@ -330,6 +334,7 @@ fn freeze(app: &AppHandle, generation: u64, settle: bool) {
                 .collect(),
             cursor: cursor.filter(|(j, _)| *j == i).map(|(_, p)| p),
             scale: f.scale,
+            save_copy,
         })
         .collect();
     // 显示器比遮罩多（启动后接了新屏）：补建，等页面加载完。新遮罩仍可能赶不上下面推送的事件
@@ -1179,6 +1184,7 @@ mod tests {
             rects: vec![],
             cursor: None,
             scale,
+            save_copy: true,
         };
         s.set_payloads(vec![p(0, 1.0), p(1, 2.0)]);
         assert_eq!(s.payload(1), Some(p(1, 2.0)));
