@@ -565,7 +565,8 @@ addEventListener('keydown', (e) => {
   // 文字输入框获得焦点时按键由它自己处理；点了颜色粗细后焦点不在框里，Esc 仍提交文字
   if (S.editing) { if (e.key === 'Escape') { e.preventDefault(); commitText(); } return; }
   const mod = isMac ? e.metaKey : e.ctrlKey;
-  if (e.key === 'Escape') { e.preventDefault(); escape(); return; }
+  // Esc 直接退出，有选区也不先取消（M23 规则 8；取消选区用右键）
+  if (e.key === 'Escape') { e.preventDefault(); closeOverlay(); return; }
   if (S.phase !== 'idle' && S.phase !== 'selected') return;
   if (e.key === 'Enter') { e.preventDefault(); if (S.phase === 'selected') void act('copy'); return; }
   if (e.code === 'KeyF' && !mod) { e.preventDefault(); selectAll(); return; }
