@@ -135,6 +135,12 @@ export type BeginPayload = {
   scale: number;
   /** 设置“保存截图时同时复制” */
   saveCopy: boolean;
+  /** 截图（M23）或选录屏区域（M24） */
+  mode: 'shot' | 'rec';
+  /** 设置“录制系统声音”，录屏开关的初值 */
+  systemAudio: boolean;
+  /** 设置“录制麦克风”；本机不支持（macOS 15 以下）为 null */
+  microphone: boolean | null;
 };
 export type ShotAction = 'copy' | 'save' | 'ocr' | 'pin';
 /** 对应 `shot::ShotOutcome`。 */

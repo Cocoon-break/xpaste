@@ -2050,10 +2050,10 @@ await onConfirmClear(() => {
   if (dlg.open) showStControl($('#clearBtn'));
   void confirmClear().then((m) => m && dlg.open && (clearNote.textContent = m));
 });
-// 截图缺少屏幕录制权限：后端已唤起面板（M18 规则 4、M23 规则 2）
-await onShotNeedPermission((pane) =>
+// 截图或录屏缺少屏幕录制权限：后端已唤起面板（M18 规则 4、M23 规则 2）
+await onShotNeedPermission(({ pane, mode }) =>
   void confirm({
-    title: '截图需要屏幕录制权限',
+    title: mode === 'rec' ? '录屏需要屏幕录制权限' : '截图需要屏幕录制权限',
     body: `在“系统设置 › 隐私与安全性 › ${pane}”里打开 xPaste，然后退出并重新打开 xPaste。`,
     ok: '前往授权',
     cancel: '以后再说',

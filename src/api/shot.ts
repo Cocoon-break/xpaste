@@ -1,6 +1,7 @@
 // 截图遮罩（shot.html）、贴图（pin.html）与 Rust 侧 src-tauri/src/shot.rs、commands/shot.rs 的对接。
 // 不在 Tauri 里（浏览器打开 `pnpm dev` 的 /shot.html、/pin.html）时换成开发替身：遮罩生成一张测试帧并立即开始一次截图，
 // 供对照原型调界面；动作返回模拟结果，退出后 0.8 秒再开始一次。贴图见文末 devPin。
+// 替身的查询参数：`?rec` 录屏模式，`&mic=none` 本机不支持麦克风，`&recfail` 开始录屏失败。
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
 import { Menu } from '@tauri-apps/api/menu';
@@ -55,6 +56,13 @@ export function shotFinish(png: Uint8Array, action: ShotAction, index: number, r
   const r = [rect.x, rect.y, rect.w, rect.h].map((n) => Math.round(n * 100) / 100).join(',');
   return invoke<ShotOutcome>('shot_finish', png, { headers: { 'x-action': action, 'x-index': String(index), 'x-rect': r } });
 }
+
+/** 倒计时结束，开始录屏（M24）。成功时后端已结束这次截图、隐藏遮罩；`generation`、`index` 取自载荷。 */
+export const recStart = (a: { generation: number; index: number; rect: LRect; systemAudio: boolean; microphone: boolean }) =>
+  stub ? dev.recStart() : invoke<void>('rec_start', a);
+
+/** 停止录制；不在录制时后端什么也不做。 */
+export const recStop = () => (stub ? Promise.resolve() : invoke<void>('rec_stop'));
 
 /** 后端结束了这次截图（载荷为代数）：再按快捷键、看门狗、Alt+F4 等，页面自己不知道。 */
 export const onShotEnd = async (cb: (generation: number) => void) => {
@@ -136,8 +144,12 @@ const dev = {
     // 由前到后：菜单栏、浏览器、聊天、编辑器
     return [R(0, 0, W, 26), R(W * 0.33, H * 0.17, W * 0.44, H * 0.64), R(W * 0.745, H * 0.33, W * 0.22, H * 0.48), R(W * 0.04, H * 0.1, Math.max(W * 0.4, 420), H * 0.56)];
   },
+  q: new URLSearchParams(location.search),
   payload(): BeginPayload {
-    return { index: 0, generation: ++this.gen, rects: this.wins(), cursor: [innerWidth / 2, innerHeight / 2], scale: devicePixelRatio || 1, saveCopy: true };
+    return {
+      index: 0, generation: ++this.gen, rects: this.wins(), cursor: [innerWidth / 2, innerHeight / 2], scale: devicePixelRatio || 1, saveCopy: true,
+      mode: this.q.has('rec') ? 'rec' : 'shot', systemAudio: false, microphone: this.q.get('mic') === 'none' ? null : false,
+    };
   },
   frame(): Frame {
     const r = devicePixelRatio || 1, W = innerWidth, H = innerHeight;
@@ -171,6 +183,11 @@ const dev = {
   },
   async cancel() {
     setTimeout(() => this.begin?.(this.payload()), 800);
+  },
+  async recStart() {
+    await new Promise((r) => setTimeout(r, 60));
+    if (this.q.has('recfail')) throw { message: '正在录屏' };
+    void this.cancel();
   },
 };
 

@@ -76,7 +76,7 @@ pub fn shot_pressed(app: &AppHandle) {
             crate::events::emit_to(app, "panel", crate::events::HOTKEY_PRESSED, "shot")
         }
         ShotRoute::Refocus => crate::panel::refocus(app),
-        ShotRoute::Begin => crate::shot::begin(app),
+        ShotRoute::Begin => crate::shot::begin(app, crate::shot::Mode::Shot),
     }
 }
 

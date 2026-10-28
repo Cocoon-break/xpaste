@@ -312,6 +312,44 @@ pub struct BeginPayload {
     scale: f64,
     /// 设置“保存截图时同时复制”，工具栏提示用
     save_copy: bool,
+    /// `"shot"` 截图 / `"rec"` 录屏（M24）
+    mode: &'static str,
+    /// 设置“录制系统声音”，录屏工具栏开关的初值
+    system_audio: bool,
+    /// 设置“录制麦克风”；本机不支持（macOS 15 以下）为 `None`，开关不可用
+    microphone: Option<bool>,
+}
+
+/// 遮罩用途：截图（M23）或选录屏区域（M24）。
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Mode {
+    Shot,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "录屏快捷键（M24）接上前只有测试用到")
+    )]
+    Rec,
+}
+
+impl Mode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Mode::Shot => "shot",
+            Mode::Rec => "rec",
+        }
+    }
+}
+
+/// 麦克风开关的载荷：只在 macOS 15 及以上可用（`captureMicrophone`），否则为 `None`（M24）。
+pub fn mic_option(macos_major: Option<u32>, setting: bool) -> Option<bool> {
+    macos_major.is_some_and(|v| v >= 15).then_some(setting)
+}
+
+/// `shot-need-permission` 的载荷，发给面板：系统设置那一页的名字与遮罩用途（权限框标题按它选）。
+#[derive(Serialize, Clone)]
+struct NeedPermission {
+    pane: &'static str,
+    mode: &'static str,
 }
 
 pub fn overlay_index(label: &str) -> Option<usize> {
@@ -340,7 +378,7 @@ pub fn screen_capture_pane(macos_major: Option<u32>) -> &'static str {
 }
 
 /// 快捷键入口。主线程调用。
-pub fn begin(app: &AppHandle) {
+pub fn begin(app: &AppHandle, mode: Mode) {
     let granted = xpaste_platform::screen_capture_granted();
     let panel_shown = app
         .get_webview_window("panel")
@@ -376,13 +414,16 @@ pub fn begin(app: &AppHandle) {
             if was_active {
                 hide_overlays(app);
             }
-            log::info!("截图缺少屏幕录制权限，提示授权");
+            log::info!("{} 缺少屏幕录制权限，提示授权", mode.as_str());
             crate::panel::show(app, None, crate::panel::Trigger::Hotkey);
             events::emit_to(
                 app,
                 "panel",
                 events::SHOT_NEED_PERMISSION,
-                screen_capture_pane(xpaste_platform::macos_version()),
+                NeedPermission {
+                    pane: screen_capture_pane(xpaste_platform::macos_version()),
+                    mode: mode.as_str(),
+                },
             );
             return;
         }
@@ -412,7 +453,9 @@ pub fn begin(app: &AppHandle) {
     }
     warm_ocr();
     let app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || freeze(&app, generation, panel_shown || stale));
+    tauri::async_runtime::spawn_blocking(move || {
+        freeze(&app, generation, panel_shown || stale, mode)
+    });
 }
 
 /// 每个进程第一次截图时在后台预加载系统识别模型（首次加载要几秒），之后第一次按 O 不再等（M23 规则 7、12）。
@@ -446,7 +489,7 @@ fn warm_ocr() {
 }
 
 /// `settle`：刚隐藏过窗口（面板或上次的遮罩），冻结前先等它们撤下。
-fn freeze(app: &AppHandle, generation: u64, settle: bool) {
+fn freeze(app: &AppHandle, generation: u64, settle: bool, mode: Mode) {
     if settle {
         // ponytail: 固定等 50 ms 让窗口服务器撤下窗口；冻结图里仍出现面板时改为等隐藏生效的回调
         std::thread::sleep(Duration::from_millis(50));
@@ -476,7 +519,15 @@ fn freeze(app: &AppHandle, generation: u64, settle: bool) {
         .cursor_position()
         .ok()
         .and_then(|c| cursor_on(&frames, (c.x / k, c.y / k), points));
-    let save_copy = app.state::<AppState>().settings().shot_save_copy;
+    let (save_copy, system_audio, microphone) = {
+        let st = app.state::<AppState>();
+        let s = st.settings();
+        (
+            s.shot_save_copy,
+            s.rec_system_audio,
+            mic_option(xpaste_platform::macos_version(), s.rec_microphone),
+        )
+    };
     let payloads: Vec<BeginPayload> = frames
         .iter()
         .enumerate()
@@ -490,6 +541,9 @@ fn freeze(app: &AppHandle, generation: u64, settle: bool) {
             cursor: cursor.filter(|(j, _)| *j == i).map(|(_, p)| p),
             scale: f.scale,
             save_copy,
+            mode: mode.as_str(),
+            system_audio,
+            microphone,
         })
         .collect();
     // 显示器比遮罩多（启动后接了新屏）：补建，等页面加载完。新遮罩仍可能赶不上下面推送的事件
@@ -1273,6 +1327,21 @@ mod tests {
         assert_eq!(screen_capture_pane(None), "屏幕录制");
     }
 
+    #[test]
+    fn rec_payload_hides_mic_below_15() {
+        assert_eq!(mic_option(Some(14), true), None);
+        assert_eq!(mic_option(Some(15), true), Some(true));
+        assert_eq!(mic_option(Some(15), false), Some(false));
+        assert_eq!(mic_option(Some(26), true), Some(true));
+        assert_eq!(mic_option(None, true), None);
+    }
+
+    #[test]
+    fn mode_serializes_for_front_end() {
+        assert_eq!(Mode::Shot.as_str(), "shot");
+        assert_eq!(Mode::Rec.as_str(), "rec");
+    }
+
     fn frame(origin: (f64, f64), size: (f64, f64), scale: f64) -> Frame {
         Frame {
             id: 0,
@@ -1553,9 +1622,16 @@ mod tests {
             cursor: None,
             scale,
             save_copy: true,
+            mode: "rec",
+            system_audio: true,
+            microphone: None,
         };
         s.set_payloads(vec![p(0, 1.0), p(1, 2.0)]);
         assert_eq!(s.payload(1), Some(p(1, 2.0)));
+        let json = serde_json::to_value(p(1, 2.0)).unwrap();
+        assert_eq!(json["mode"], "rec");
+        assert_eq!(json["systemAudio"], true);
+        assert!(json["microphone"].is_null(), "不支持麦克风时为 null");
         s.mark_ready(generation, 1);
         assert_eq!(s.payload(1), None, "已上屏不再给");
         assert_eq!(s.payload(0), Some(p(0, 1.0)));
