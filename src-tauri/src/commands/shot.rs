@@ -37,6 +37,14 @@ pub fn shot_ready(app: AppHandle, window: WebviewWindow, generation: u64) -> Res
     Ok(())
 }
 
+/// 遮罩页心跳：已上屏的遮罩每秒调一次，后端 3 s 收不到就撤下遮罩（M23 规则 1）。
+/// 返回这次截图是否仍在进行；`false` 时前端放掉像素、停止心跳。
+/// 不走主线程：只量页面是否还活着。
+#[tauri::command(async)]
+pub fn shot_alive(app: AppHandle, generation: u64) -> bool {
+    shot::alive(&app, generation)
+}
+
 /// 退出截图：Esc / 右键，或提示条显示完后。隐藏全部遮罩、释放冻结图、撤销鼠标穿透。
 /// `generation` 取自 `shot-begin` 载荷；不是当前这次截图时忽略（上一次截图迟到的退出不能结束新的一次）。
 #[tauri::command]

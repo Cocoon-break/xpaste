@@ -43,6 +43,9 @@ export async function shotFrame(): Promise<Frame> {
 
 export const shotReady = (generation: number) => (stub ? Promise.resolve() : invoke<void>('shot_ready', { generation }));
 
+/** 遮罩页心跳；返回这次截图是否仍在进行（后端已结束时为 false）。 */
+export const shotAlive = (generation: number) => (stub ? Promise.resolve(true) : invoke<boolean>('shot_alive', { generation }));
+
 /** 退出截图；`generation` 不是当前这次时后端忽略（上一次截图迟到的退出不能结束新的一次）。 */
 export const shotCancel = (generation: number) => (stub ? dev.cancel() : invoke<void>('shot_cancel', { generation }));
 

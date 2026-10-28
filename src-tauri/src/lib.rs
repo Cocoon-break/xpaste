@@ -232,6 +232,7 @@ pub fn run() {
             commands::shot::shot_frame,
             commands::shot::shot_begin_payload,
             commands::shot::shot_ready,
+            commands::shot::shot_alive,
             commands::shot::shot_cancel,
             commands::shot::shot_finish,
             commands::shot::pin_close,

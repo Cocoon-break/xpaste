@@ -109,33 +109,49 @@ pub struct Session {
     pub previous_window: Option<isize>,
     /// 某个动作正在执行（识别文字可能要几秒），同一次截图里的第二个动作被拒绝
     finishing: bool,
+    /// 遮罩页最后一次心跳（`shot_alive`，就绪也算一次），看门狗据此判断页面是否卡死
+    alive: Option<Instant>,
+}
+
+/// 按下截图快捷键时怎么处理（M23 规则 1）。
+#[derive(Debug, PartialEq)]
+pub enum Press {
+    /// 开始新的一次（含重置卡住的旧会话）
+    Begin,
+    /// 上一次还在冻结或提示条里，忽略本次按键
+    Ignore,
+    /// 遮罩已全部上屏：再按一次快捷键退出截图，同 Esc
+    Exit,
 }
 
 impl Session {
     /// 开始一次截图；已在进行中返回 false（连按快捷键只认第一次）。
+    #[cfg(test)]
     pub fn try_begin(&mut self) -> bool {
-        self.try_begin_at(Instant::now(), false)
+        self.try_begin_at(Instant::now(), false) == Press::Begin
     }
 
-    /// 同 `try_begin`；进行中的会话在两种情况下视为已结束，重置后开始新的（M23 规则 1）：
+    /// 按下截图快捷键（M23 规则 1）。进行中的会话在两种情况下视为已结束，重置后开始新的：
     /// 超过 `STALE` 仍未全部上屏；已全部上屏但遮罩丢了（`lost`：某块屏的遮罩已不在或已隐藏）。
-    pub fn try_begin_at(&mut self, now: Instant, lost: bool) -> bool {
+    /// 已全部上屏、遮罩都在时返回 `Exit`，会话不动，由调用方结束；冻结中、未全部上屏或提示条模式里忽略。
+    pub fn try_begin_at(&mut self, now: Instant, lost: bool) -> Press {
         if self.active {
-            let stale = if self.all_ready() {
-                lost
-            } else {
-                self.started
-                    .is_some_and(|t| now.saturating_duration_since(t) > STALE)
-            };
-            if !stale {
-                return false;
+            if self.all_ready() {
+                if !lost {
+                    return Press::Exit;
+                }
+            } else if !self
+                .started
+                .is_some_and(|t| now.saturating_duration_since(t) > STALE)
+            {
+                return Press::Ignore;
             }
             self.end();
         }
         self.active = true;
         self.generation += 1;
         self.started = Some(now);
-        true
+        Press::Begin
     }
 
     pub fn generation(&self) -> u64 {
@@ -205,6 +221,23 @@ impl Session {
 
     pub fn is_active(&self) -> bool {
         self.active
+    }
+
+    /// 遮罩页心跳；不是当前这次截图（上一次的页面迟到的心跳）时忽略。
+    pub fn alive(&mut self, generation: u64, now: Instant) {
+        if self.is_current(generation) {
+            self.alive = Some(now);
+        }
+    }
+
+    /// 看门狗：`generation` 这次截图已全部上屏（不在提示条模式）、距最后一次心跳超过 `STALE`，
+    /// 视为遮罩页卡死或崩溃（M23 规则 1）。提示条模式已释放就绪状态，不判。
+    pub fn unresponsive_at(&self, generation: u64, now: Instant) -> bool {
+        self.is_current(generation)
+            && self.all_ready()
+            && self
+                .alive
+                .is_some_and(|t| now.saturating_duration_since(t) > STALE)
     }
 
     fn all_ready(&self) -> bool {
@@ -317,9 +350,18 @@ pub fn begin(app: &AppHandle) {
     let (generation, stale) = {
         let mut s = session(app);
         let was_active = s.is_active();
-        if !s.try_begin_at(Instant::now(), lost) {
-            log::info!("shot 上一次截图仍在进行，忽略本次按键");
-            return;
+        match s.try_begin_at(Instant::now(), lost) {
+            Press::Begin => {}
+            Press::Ignore => {
+                log::info!("shot 上一次截图仍在进行，忽略本次按键");
+                return;
+            }
+            Press::Exit => {
+                let previous = s.end();
+                drop(s);
+                log::info!("shot 再按快捷键，退出截图");
+                return after_end(app, previous);
+            }
         }
         // Windows 上本进程窗口（面板、刚点过的贴图）在前台时，foreground_window 取最后一个外部前台窗口；
         // 取不到时（前台切换钩子没装上）面板开着就用面板唤起时记下的那个，面板没开时那个值可能早已过期，不用
@@ -345,8 +387,39 @@ pub fn begin(app: &AppHandle) {
     if panel_shown {
         crate::panel::hide(app);
     }
+    warm_ocr();
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || freeze(&app, generation, panel_shown || stale));
+}
+
+/// 每个进程第一次截图时在后台预加载系统识别模型（首次加载要几秒），之后第一次按 O 不再等（M23 规则 7、12）。
+/// 只识别一张内存里生成的白图，不碰屏幕像素；不在启动时做，不截图的人不付这个开销。
+fn warm_ocr() {
+    static WARMED: std::sync::Once = std::sync::Once::new();
+    WARMED.call_once(|| {
+        let spawned = std::thread::Builder::new()
+            .name("shot-ocr-warm".into())
+            .spawn(|| {
+                xpaste_platform::lower_thread_priority();
+                if !xpaste_platform::ocr_available() {
+                    return;
+                }
+                let mut png = Vec::new();
+                if let Err(e) = image::RgbaImage::from_pixel(8, 8, image::Rgba([255; 4]))
+                    .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+                {
+                    return log::debug!("shot 预加载识别模型：生成白图失败：{e}");
+                }
+                let t = Instant::now();
+                if let Err(e) = xpaste_platform::ocr_png_bytes(&png, 64) {
+                    log::debug!("shot 预加载识别模型失败：{e:?}");
+                }
+                log::info!("shot 预加载识别模型 {}ms", t.elapsed().as_millis());
+            });
+        if let Err(e) = spawned {
+            log::debug!("shot 预加载识别模型：启动线程失败：{e}");
+        }
+    });
 }
 
 /// `settle`：刚隐藏过窗口（面板或上次的遮罩），冻结前先等它们撤下。
@@ -535,7 +608,7 @@ pub fn prewarm(app: &AppHandle) {
     log::info!("shot 预建遮罩 {made} 个");
 }
 
-/// 遮罩画好冻结图（`shot_ready`）：上屏；全部就绪后光标所在屏拿键盘焦点。
+/// 遮罩画好冻结图（`shot_ready`）：上屏；全部就绪后光标所在屏拿键盘焦点，并起看门狗。
 pub fn ready(app: &AppHandle, generation: u64, i: usize) {
     let (all, key, started) = {
         let mut s = session(app);
@@ -543,8 +616,12 @@ pub fn ready(app: &AppHandle, generation: u64, i: usize) {
             log::info!("shot 遮罩 {i} 就绪但不是当前这次（代 {generation}），忽略");
             return;
         };
+        s.alive(generation, Instant::now());
         (all, s.cursor.unwrap_or(0), s.started)
     };
+    if all {
+        watch(app, generation);
+    }
     on_main(app, move |app| {
         show_overlay(app, i, false);
         if all {
@@ -554,6 +631,41 @@ pub fn ready(app: &AppHandle, generation: u64, i: usize) {
             }
         }
     });
+}
+
+/// `shot_alive`：遮罩页心跳。返回本次截图是否仍在进行；已结束（再按快捷键、看门狗）时前端放掉像素、停止心跳。
+pub fn alive(app: &AppHandle, generation: u64) -> bool {
+    let mut s = session(app);
+    s.alive(generation, Instant::now());
+    s.is_current(generation)
+}
+
+/// 遮罩全部上屏后每秒检查一次心跳：遮罩页卡死或崩溃时遮罩仍在最上层截走全部输入，
+/// 3 s 收不到心跳就撤下遮罩、交还焦点、释放冻结图（M23 规则 1）。会话结束、换代或进入提示条模式即退出。
+fn watch(app: &AppHandle, generation: u64) {
+    let app = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("shot-watch".into())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_secs(1));
+                let previous = {
+                    let mut s = session(&app);
+                    if !s.is_current(generation) || s.shown_overlays() == 0 {
+                        return;
+                    }
+                    if !s.unresponsive_at(generation, Instant::now()) {
+                        continue;
+                    }
+                    s.end()
+                };
+                log::warn!("shot 遮罩页 3 s 无响应，撤下遮罩");
+                return after_end(&app, previous);
+            }
+        });
+    if let Err(e) = spawned {
+        log::warn!("shot 启动看门狗失败：{e}");
+    }
 }
 
 /// 主线程调用。macOS 上不激活应用，前台应用保持不变。
@@ -1235,24 +1347,37 @@ mod tests {
     fn stale_session_is_replaced_after_3s() {
         let t0 = Instant::now();
         let mut s = Session::default();
-        assert!(s.try_begin_at(t0, false));
+        assert_eq!(s.try_begin_at(t0, false), Press::Begin);
         let g1 = s.generation();
         s.set_frames(screens(vec![
             frame((0.0, 0.0), (10.0, 10.0), 1.0),
             frame((10.0, 0.0), (10.0, 10.0), 1.0),
         ]));
         s.mark_ready(g1, 0);
-        assert!(!s.try_begin_at(t0 + Duration::from_secs(2), false));
-        assert!(!s.try_begin_at(t0 + STALE, false), "正好 3 s 还不算卡住");
-        assert!(s.try_begin_at(t0 + Duration::from_millis(3001), false));
+        assert_eq!(
+            s.try_begin_at(t0 + Duration::from_secs(2), false),
+            Press::Ignore
+        );
+        assert_eq!(
+            s.try_begin_at(t0 + STALE, false),
+            Press::Ignore,
+            "正好 3 s 还不算卡住"
+        );
+        assert_eq!(
+            s.try_begin_at(t0 + Duration::from_millis(3001), false),
+            Press::Begin
+        );
         assert!(s.screen(0).is_none(), "旧冻结图已释放");
         assert!(s.generation() > g1);
         // 冻结还没回来（尚无帧）也算未就绪
-        assert!(s.try_begin_at(t0 + Duration::from_secs(7), false));
+        assert_eq!(
+            s.try_begin_at(t0 + Duration::from_secs(7), false),
+            Press::Begin
+        );
     }
 
     #[test]
-    fn all_ready_session_restarts_only_when_overlay_lost() {
+    fn all_ready_session_exits_or_restarts_when_overlay_lost() {
         let t0 = Instant::now();
         let mut s = Session::default();
         s.try_begin_at(t0, false);
@@ -1265,14 +1390,60 @@ mod tests {
         s.mark_ready(g, 0);
         s.mark_ready(g, 1);
         assert_eq!(s.shown_overlays(), 2);
-        // 遮罩都在：正在框选，多久都不算卡住
-        assert!(!s.try_begin_at(t0 + Duration::from_secs(60), false));
+        // 遮罩都在：再按一次快捷键退出截图（由调用方 end），会话本身不动
+        assert_eq!(
+            s.try_begin_at(t0 + Duration::from_secs(60), false),
+            Press::Exit
+        );
+        assert!(s.is_current(g));
         // 遮罩被关掉或隐藏（Alt+F4 等）：重新开始
-        assert!(s.try_begin_at(t0 + Duration::from_secs(61), true));
+        assert_eq!(
+            s.try_begin_at(t0 + Duration::from_secs(61), true),
+            Press::Begin
+        );
         assert!(s.generation() > g);
         assert!(s.screen(0).is_none(), "旧冻结图已释放");
-        // 未全部上屏时只看 3 秒超时，lost 不算数
-        assert!(!s.try_begin_at(t0 + Duration::from_secs(62), true));
+        // 未全部上屏时只看 3 秒超时，lost 不算数，也不退出
+        assert_eq!(
+            s.try_begin_at(t0 + Duration::from_secs(62), true),
+            Press::Ignore
+        );
+    }
+
+    #[test]
+    fn unresponsive_overlay_detected_after_3s_without_heartbeat() {
+        let t0 = Instant::now();
+        let mut s = Session::default();
+        s.try_begin_at(t0, false);
+        let g = s.generation();
+        s.set_frames(screens(vec![
+            frame((0.0, 0.0), (10.0, 10.0), 1.0),
+            frame((10.0, 0.0), (10.0, 10.0), 1.0),
+        ]));
+        s.mark_ready(g, 0);
+        s.alive(g, t0);
+        let late = t0 + Duration::from_secs(10);
+        assert!(!s.unresponsive_at(g, late), "未全部上屏不判");
+        s.mark_ready(g, 1);
+        let t1 = t0 + Duration::from_secs(1);
+        s.alive(g, t1);
+        assert!(!s.unresponsive_at(g, t1 + STALE), "3 s 内不判");
+        assert!(s.unresponsive_at(g, t1 + Duration::from_millis(3001)));
+        assert!(!s.unresponsive_at(g + 1, late), "代数不符不判");
+        // 上一次截图迟到的心跳不算数
+        s.alive(g - 1, late);
+        assert!(s.unresponsive_at(g, late));
+        // 任一屏的心跳续上即可
+        s.alive(g, late);
+        assert!(!s.unresponsive_at(g, late + Duration::from_secs(2)));
+        // 提示条模式不判（已有 shot_cancel 与 3 s 卡住兜底）
+        s.finish(late);
+        assert!(!s.unresponsive_at(g, late + Duration::from_secs(60)));
+        s.end();
+        assert!(
+            !s.unresponsive_at(g, late + Duration::from_secs(60)),
+            "会话已结束"
+        );
     }
 
     #[test]
@@ -1485,12 +1656,16 @@ mod tests {
         s.finish(t1);
         assert!(s.screen(0).is_none(), "动作完成即释放冻结图");
         assert!(s.is_current(g), "提示条期间会话仍在");
-        assert!(
-            !s.try_begin_at(t1 + Duration::from_secs(1), false),
-            "提示条期间按快捷键忽略"
+        assert_eq!(
+            s.try_begin_at(t1 + Duration::from_secs(1), false),
+            Press::Ignore,
+            "提示条期间按快捷键忽略，不退出"
         );
         // 前端没调 shot_cancel 时，下次快捷键照常开始
-        assert!(s.try_begin_at(t1 + Duration::from_millis(3001), false));
+        assert_eq!(
+            s.try_begin_at(t1 + Duration::from_millis(3001), false),
+            Press::Begin
+        );
     }
 
     #[test]

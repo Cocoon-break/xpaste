@@ -2,7 +2,7 @@
 // 状态 S、update / place、指针与键盘处理。坐标为本块屏的逻辑像素，冻结帧与标注 canvas 为物理像素。
 import './shot.css';
 import {
-  onShotBegin, onShotClaim, shotCancel, shotClaim, shotFinish, shotFrame, shotReady,
+  onShotBegin, onShotClaim, shotAlive, shotCancel, shotClaim, shotFinish, shotFrame, shotReady,
   type BeginPayload, type ShotAction, type ShotOutcome,
 } from '../api/shot';
 import { error as logError, info } from '../api/log';
@@ -79,6 +79,8 @@ const S = {
 let W = innerWidth, H = innerHeight, tc = '#FFB84D';
 let pix: HTMLCanvasElement | null = null; // 马赛克底图，第一次用马赛克时生成
 let thumbUrl = '', toastT = 0, endT = 0;
+/** 本屏已调用 shot_ready 的代数：只有已上屏的屏发心跳 */
+let readyGen = 0;
 
 /* —— 开始：画冻结帧，画完才让后端上屏 —— */
 async function begin(p: BeginPayload) {
@@ -119,6 +121,7 @@ async function begin(p: BeginPayload) {
   update();
   restart(ov, 'in');
   setTimeout(() => ov.classList.remove('in'), 120);
+  readyGen = gen;
   await shotReady(gen);
 }
 
@@ -599,5 +602,12 @@ void onShotClaim((c) => {
   if (S.phase === 'selected') clearSelection();
   else if (S.phase === 'idle') { S.snap = null; S.drag = null; update(); }
 });
+// 心跳：已上屏期间每秒一次，后端 3 s 收不到就撤下遮罩（M23 规则 1）。后端已结束这次截图
+// （再按截图快捷键、看门狗）时页面不知道，靠心跳的返回值放掉像素、停止心跳
+setInterval(() => {
+  const gen = S.gen;
+  if (readyGen !== gen || S.phase === 'off') return;
+  void shotAlive(gen).then((ok) => { if (!ok && gen === S.gen && S.phase !== 'off') release(); }, () => {});
+}, 1000);
 // 取帧失败（截图已结束）时什么也不做，后端 3 秒后视为卡住，下次快捷键重新开始
 void onShotBegin((p) => void begin(p).catch(() => {}));
