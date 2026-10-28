@@ -87,7 +87,11 @@ pub fn run() {
             let store = Store::open(&data_dir)?;
             let first_run = matches!(store.kv_get("onboarded"), Ok(None));
             let settings = store.load_settings();
-            let (hotkey, appearance) = (settings.hotkey.clone(), settings.appearance);
+            let (hotkey, shot_hotkey, appearance) = (
+                settings.hotkey.clone(),
+                settings.shot_hotkey.clone(),
+                settings.appearance,
+            );
             let enrich = enrich::start(app.handle().clone());
             let ocr = ocr::start(app.handle().clone());
             app.manage(AppState::new(
@@ -107,18 +111,26 @@ pub fn run() {
             if let Err(e) = tray::setup(app) {
                 log::warn!("托盘图标创建失败：{e}");
             }
-            if let Err(e) = hotkey::register(app.handle(), &hotkey) {
+            if let Err(e) = hotkey::register(app.handle(), &hotkey, &shot_hotkey) {
                 log::warn!("快捷键注册失败：{e}");
+                // 截图快捷键注册失败只提示，不标记托盘（托盘标记只管唤起快捷键）
+                let shot = matches!(e, error::AppError::ShotHotkeyTaken);
                 if let Err(e) = app
                     .notification()
                     .builder()
                     .title("xPaste")
-                    .body("唤起快捷键被其他应用占用，请在设置中更换")
+                    .body(if shot {
+                        "截图快捷键被其他应用占用，请在设置中更换"
+                    } else {
+                        "唤起快捷键被其他应用占用，请在设置中更换"
+                    })
                     .show()
                 {
                     log::warn!("发送快捷键注册失败通知失败：{e}");
                 }
-                tray::mark_hotkey_failed();
+                if !shot {
+                    tray::mark_hotkey_failed();
+                }
             }
             clipboard::start(app.handle().clone());
             shot::prewarm(app.handle());
@@ -133,15 +145,29 @@ pub fn run() {
         })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        // 设置里选截图文件夹
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(move |app, _shortcut, event| {
-                    if event.state() == ShortcutState::Pressed {
-                        panel::toggle(app, timing.then(now_unix_ms), panel::Trigger::Hotkey);
+                .with_handler(move |app, shortcut, event| {
+                    if event.state() != ShortcutState::Pressed {
+                        return;
+                    }
+                    let (p, s) = {
+                        let st = app.state::<AppState>();
+                        let s = st.settings();
+                        (s.hotkey.clone(), s.shot_hotkey.clone())
+                    };
+                    match hotkey::role_of(shortcut, &p, &s) {
+                        Some(hotkey::Role::Panel) => {
+                            panel::toggle(app, timing.then(now_unix_ms), panel::Trigger::Hotkey)
+                        }
+                        Some(hotkey::Role::Shot) => shot::begin(app),
+                        None => {}
                     }
                 })
                 .build(),
@@ -179,6 +205,8 @@ pub fn run() {
             commands::panel::set_dialog_open,
             commands::panel::accessibility_granted,
             commands::panel::request_accessibility,
+            commands::panel::screen_capture_granted,
+            commands::panel::request_screen_capture,
             commands::panel::open_url,
             commands::panel::reveal_file,
             commands::records::get_record,

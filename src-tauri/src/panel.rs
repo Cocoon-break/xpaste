@@ -614,15 +614,20 @@ pub fn theme_of(a: Appearance) -> Option<Theme> {
     }
 }
 
-/// 窗口外观跟随设置（毛玻璃明暗随之变化）；失败只记日志。
+/// 窗口外观跟随设置（毛玻璃明暗随之变化）：面板、截图遮罩与贴图一起换；失败只记日志。
 pub fn apply_theme(app: &AppHandle, a: Appearance) {
     on_main(app, move |app| {
-        if let Some(w) = window(app)
-            && let Err(e) = w.set_theme(theme_of(a))
-        {
-            log::warn!("设置面板外观失败：{e}");
+        for (label, w) in app.webview_windows() {
+            if let Err(e) = w.set_theme(theme_of(a)) {
+                log::warn!("设置窗口 {label} 外观失败：{e}");
+            }
         }
     });
+}
+
+/// 新建遮罩 / 贴图窗口时用的外观，与 `apply_theme` 一致。
+pub fn current_theme(app: &AppHandle) -> Option<Theme> {
+    theme_of(app.state::<AppState>().settings().appearance)
 }
 
 /// 物理尺寸换成逻辑像素；不可见或小于 720 × 520 时不记。

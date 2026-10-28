@@ -1150,6 +1150,11 @@ pub fn screen_capture_granted() -> bool {
 
 pub fn request_screen_capture() {}
 
+/// Windows 没有这一页（截屏不需要授权，`shot-need-permission` 不会发出）。
+pub fn screen_capture_pane() -> &'static str {
+    ""
+}
+
 /// 鼠标主键此刻是否按着。贴图据此判断拖动是否结束。
 pub fn mouse_button_down() -> bool {
     use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_SWAPBUTTON};

@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "面板、截图遮罩与贴图窗口的基础权限",
   "windows": ["panel", "shot-*", "pin-*"],
-  "permissions": ["core:default", "log:default", "core:window:allow-start-dragging"]
+  "permissions": ["core:default", "log:default", "core:window:allow-start-dragging", "dialog:allow-open"]
 }

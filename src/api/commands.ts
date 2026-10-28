@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { open } from '@tauri-apps/plugin-dialog';
 import type {
   Bootstrap,
   CopyResult,
@@ -20,6 +21,10 @@ export const copy = (id: number, paste: boolean) => invoke<CopyResult>('copy', {
 export const copyTextPlain = (text: string) => invoke<void>('copy_text_plain', { text });
 export const requestAccessibility = () => invoke<void>('request_accessibility');
 export const accessibilityGranted = () => invoke<boolean>('accessibility_granted');
+export const requestScreenCapture = () => invoke<void>('request_screen_capture');
+export const screenCaptureGranted = () => invoke<boolean>('screen_capture_granted');
+/** 系统的选择文件夹对话框；取消返回 null。 */
+export const pickFolder = (defaultPath?: string) => open({ directory: true, defaultPath }) as Promise<string | null>;
 export const openUrl = (url: string) => invoke<void>('open_url', { url });
 export const revealFile = (path: string) => invoke<void>('reveal_file', { path });
 

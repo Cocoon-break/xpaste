@@ -23,8 +23,8 @@ use objc2_core_graphics::{
 };
 use objc2_core_media::{CMFormatDescription, CMTime};
 use objc2_foundation::{
-    NSArray, NSData, NSDictionary, NSFileManager, NSIndexSet, NSNumber, NSPoint, NSRect, NSSize,
-    NSString, NSURL, ns_string,
+    NSArray, NSData, NSDictionary, NSFileManager, NSIndexSet, NSNumber, NSPoint, NSProcessInfo,
+    NSRect, NSSize, NSString, NSURL, ns_string,
 };
 use objc2_vision::{
     VNImageRequestHandler, VNRecognizeTextRequest, VNRequest, VNRequestTextRecognitionLevel,
@@ -381,6 +381,19 @@ pub fn screen_capture_granted() -> bool {
 pub fn request_screen_capture() {
     if !CGRequestScreenCaptureAccess() {
         open_privacy_pane("Privacy_ScreenCapture");
+    }
+}
+
+/// 系统设置“隐私与安全性”里屏幕录制权限那一页的名字：macOS 15 起改叫“录屏与系统录音”。
+pub fn screen_capture_pane() -> &'static str {
+    if NSProcessInfo::processInfo()
+        .operatingSystemVersion()
+        .majorVersion
+        >= 15
+    {
+        "录屏与系统录音"
+    } else {
+        "屏幕录制"
     }
 }
 

@@ -485,7 +485,7 @@ dialog > form { display: contents; }
 }
 .field select option { background: var(--pop-solid); color: var(--fg); }
 .field input:focus-visible, .field select:focus-visible { outline: none; border-color: var(--beam); box-shadow: 0 0 0 3px color-mix(in srgb, var(--beam) 18%, transparent); }
-#hotkey { font-family: var(--font-mono); cursor: pointer; }
+#hotkey, #shotHotkey { font-family: var(--font-mono); cursor: pointer; }
 /* 不记录这些应用：芯片 + 组合框，外框代替输入框描边与焦点环；候选列表在文档流内，不会被中部滚动区裁掉 */
 .apps-box {
   display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 38px; padding: 5px 6px 5px 8px; border-radius: 10px;
@@ -545,6 +545,14 @@ dialog > form { display: contents; }
 @media (hover: hover) and (pointer: fine) { .seg button:hover { color: var(--fg); } }
 /* 外观、自动粘贴权限（仅 macOS）：说明在左、控件在右 */
 .line { display: flex; justify-content: space-between; align-items: center; gap: 16px; min-height: 26px; }
+/* 截图与贴图分组（原型 #settings）：小标题、只读路径 + 更改按钮、开关列表里的权限行 */
+.sec { margin: 4px 0 -6px; font-size: 11.5px; font-weight: 500; color: var(--faint); letter-spacing: .04em; }
+.pick { display: flex; gap: 8px; }
+.pick input { flex: 1; min-width: 0; }
+.pick .btn { height: 38px; }
+.switches .line { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.ok { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--c-code); white-space: nowrap; }
+.ok .ic { width: 14px; height: 14px; }
 /* 确认框：比设置窄，只有一段说明 */
 #confirm { width: min(380px, calc(100% - 32px)); }
 #cfBody { margin: 0; font-size: 13px; line-height: 1.6; color: var(--muted); }

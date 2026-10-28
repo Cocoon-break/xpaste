@@ -22,7 +22,7 @@ pub const CONFIRM_CLEAR: &str = "confirm-clear";
 
 /// 冻结完成，发给每块屏的遮罩 `shot-<i>`（载荷见 `shot::BeginPayload`）。
 pub const SHOT_BEGIN: &str = "shot-begin";
-/// 截图缺少屏幕录制权限，发给面板（M18）。
+/// 截图缺少屏幕录制权限，发给面板（M18）；载荷是系统设置里那一页的名字（`screen_capture_pane`）。
 pub const SHOT_NEED_PERMISSION: &str = "shot-need-permission";
 
 pub fn emit<S: Serialize + Clone>(app: &AppHandle, event: &str, payload: S) {

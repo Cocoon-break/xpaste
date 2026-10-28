@@ -123,7 +123,7 @@ pub fn changed_fields(old: &Settings, new: &Settings) -> Vec<&'static str> {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum HotkeyAction {
-    /// 快捷键改了：先注册，失败则恢复旧快捷键并返回 `HotkeyTaken`，不保存
+    /// 唤起或截图快捷键改了：先注册新的一对，失败则恢复旧的一对并返回 `HotkeyTaken` / `ShotHotkeyTaken`，不保存
     Register,
     /// 没改但启动时注册失败过：保存之后顺带重试，失败不算保存失败
     RetryBestEffort,
@@ -137,6 +137,10 @@ pub fn hotkey_action(hotkey_changed: bool, startup_failed: bool) -> HotkeyAction
         (false, true) => HotkeyAction::RetryBestEffort,
         (false, false) => HotkeyAction::None,
     }
+}
+
+fn hotkeys_changed(changed: &[&str]) -> bool {
+    changed.contains(&"hotkey") || changed.contains(&"shotHotkey")
 }
 
 /// 开关开机启动；开发构建从不改系统登录项。失败只记日志（错误里可能带路径，只在 debug 级别输出）。
@@ -153,27 +157,27 @@ fn set_autostart(app: &AppHandle, on: bool) {
     }
 }
 
-/// 校验 → 按 `hotkey_action` 注册新快捷键（失败恢复旧快捷键）→ 持久化（失败也恢复）；返回变化的字段名。
-/// `register` 是唯一注入点（正式为 `hotkey::register`），测试借此模拟快捷键被占用。
+/// 校验 → 按 `hotkey_action` 注册新的唤起与截图快捷键（失败恢复旧的一对）→ 持久化（失败也恢复）；返回变化的字段名。
+/// `register(唤起, 截图)` 是唯一注入点（正式为 `hotkey::register`），测试借此模拟快捷键被占用。
 pub fn commit_settings(
     state: &AppState,
     mut settings: Settings,
-    mut register: impl FnMut(&str) -> Result<(), AppError>,
+    mut register: impl FnMut(&str, &str) -> Result<(), AppError>,
 ) -> Result<Vec<&'static str>, AppError> {
     settings.validate()?;
     let old = state.settings().clone();
     // 面板尺寸只由拖动记忆（panel::remember_size）写；这里只为 changed 不含 panelSize，落库时 save_settings_inner 持锁再取
     settings.panel_size = old.panel_size;
     let changed = changed_fields(&old, &settings);
-    let action = hotkey_action(changed.contains(&"hotkey"), crate::tray::hotkey_failed());
+    let action = hotkey_action(hotkeys_changed(&changed), crate::tray::hotkey_failed());
     let hotkey_changed = action == HotkeyAction::Register;
-    // register 会先注销全部快捷键，失败时要把旧的注册回去
-    let restore = |register: &mut dyn FnMut(&str) -> Result<(), AppError>| {
-        if let Err(e) = register(&old.hotkey) {
+    // register 会先注销全部快捷键，失败时要把旧的一对注册回去
+    let restore = |register: &mut dyn FnMut(&str, &str) -> Result<(), AppError>| {
+        if let Err(e) = register(&old.hotkey, &old.shot_hotkey) {
             log::warn!("恢复原快捷键失败：{e}");
         }
     };
-    if hotkey_changed && let Err(e) = register(&settings.hotkey) {
+    if hotkey_changed && let Err(e) = register(&settings.hotkey, &settings.shot_hotkey) {
         restore(&mut register);
         return Err(e);
     }
@@ -192,15 +196,16 @@ pub fn save_settings(
     state: State<'_, AppState>,
     settings: Settings,
 ) -> Result<(), AppError> {
-    let (hotkey, appearance, launch, ocr_on) = (
+    let (hotkey, shot_hotkey, appearance, launch, ocr_on) = (
         settings.hotkey.clone(),
+        settings.shot_hotkey.clone(),
         settings.appearance,
         settings.launch_at_login,
         settings.ocr_enabled,
     );
-    let changed = commit_settings(&state, settings, |s| crate::hotkey::register(&app, s))?;
+    let changed = commit_settings(&state, settings, |p, s| crate::hotkey::register(&app, p, s))?;
     // 快捷键改了必为 Register，与 commit_settings 内一致；没改时只决定是否尽力重试
-    let action = hotkey_action(changed.contains(&"hotkey"), crate::tray::hotkey_failed());
+    let action = hotkey_action(hotkeys_changed(&changed), crate::tray::hotkey_failed());
     log::info!("设置已保存 changed=[{}]", changed.join(", "));
     // 设置已持久化并生效：以下步骤失败不回滚、不算保存失败（都只记日志）
     let removed = prune_to_settings(&state);
@@ -210,9 +215,12 @@ pub fn save_settings(
     }
     match action {
         HotkeyAction::Register => crate::tray::set_hotkey_label(&hotkey),
-        // 成功后 set_hotkey_label 清掉失败状态；失败时 register 已注销全部，原本也没注册上，无需恢复
+        // 唤起注册上后 set_hotkey_label 清掉失败状态（截图失败不算）；唤起失败时原本也没注册上，无需恢复
         HotkeyAction::RetryBestEffort => {
-            if crate::hotkey::register(&app, &hotkey).is_ok() {
+            if !matches!(
+                crate::hotkey::register(&app, &hotkey, &shot_hotkey),
+                Err(AppError::HotkeyTaken)
+            ) {
                 crate::tray::set_hotkey_label(&hotkey);
             }
         }
@@ -420,9 +428,9 @@ mod tests {
             ..Settings::default()
         };
         let mut calls = Vec::new();
-        let r = commit_settings(&state, new, |s| {
-            calls.push(s.to_string());
-            if s == "CommandOrControl+Alt+C" {
+        let r = commit_settings(&state, new, |p, s| {
+            calls.push((p.to_string(), s.to_string()));
+            if p == "CommandOrControl+Alt+C" {
                 Err(AppError::HotkeyTaken)
             } else {
                 Ok(())
@@ -431,8 +439,40 @@ mod tests {
         assert!(matches!(r, Err(AppError::HotkeyTaken)));
         assert_eq!(*state.settings(), old);
         assert_eq!(state.store().load_settings(), old);
-        assert_eq!(calls.first().unwrap(), "CommandOrControl+Alt+C");
-        assert_eq!(calls.last().unwrap(), "CommandOrControl+Shift+V");
+        assert_eq!(calls.first().unwrap().0, "CommandOrControl+Alt+C");
+        assert_eq!(
+            *calls.last().unwrap(),
+            (old.hotkey.clone(), old.shot_hotkey.clone())
+        );
+    }
+
+    #[test]
+    fn shot_hotkey_change_restores_pair_on_failure() {
+        let state = AppState::for_test();
+        let old = state.settings().clone();
+        let new = Settings {
+            shot_hotkey: "Alt+Shift+S".into(),
+            ..Settings::default()
+        };
+        let mut calls = Vec::new();
+        let r = commit_settings(&state, new, |p, s| {
+            calls.push((p.to_string(), s.to_string()));
+            if s == "Alt+Shift+S" {
+                Err(AppError::ShotHotkeyTaken)
+            } else {
+                Ok(())
+            }
+        });
+        assert!(matches!(r, Err(AppError::ShotHotkeyTaken)));
+        assert_eq!(*state.settings(), old);
+        assert_eq!(state.store().load_settings(), old);
+        assert_eq!(
+            calls,
+            [
+                (old.hotkey.clone(), "Alt+Shift+S".to_string()),
+                (old.hotkey.clone(), old.shot_hotkey.clone())
+            ]
+        );
     }
 
     #[test]
@@ -443,7 +483,7 @@ mod tests {
             ..Settings::default()
         };
         let mut calls = 0;
-        let changed = commit_settings(&state, new, |_| {
+        let changed = commit_settings(&state, new, |_, _| {
             calls += 1;
             Ok(())
         })
@@ -461,6 +501,7 @@ mod tests {
                 bootstrap,
                 prune_preview,
                 crate::commands::panel::accessibility_granted,
+                crate::commands::panel::screen_capture_granted,
                 crate::commands::records::search,
                 crate::commands::records::count_unpinned,
                 crate::commands::records::ocr_progress,

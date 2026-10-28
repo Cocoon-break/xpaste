@@ -108,7 +108,7 @@ export interface RecordDetail extends RecordSummary {
 }
 
 export interface AppError {
-  kind: 'fileMissing' | 'clipboardWrite' | 'hotkeyTaken' | 'invalidSettings' | 'invalid' | 'internal';
+  kind: 'fileMissing' | 'clipboardWrite' | 'hotkeyTaken' | 'shotHotkeyTaken' | 'invalidSettings' | 'invalid' | 'internal';
   message: string;
 }
 

@@ -22,6 +22,12 @@ export const HOTKEY_PRESSED = 'hotkey-pressed';
 
 export const onHotkeyPressed = (cb: () => void): Promise<UnlistenFn> => listen(HOTKEY_PRESSED, () => cb());
 
+/** 截图缺少屏幕录制权限（后端已唤起面板）；载荷是系统设置里那一页的名字。 */
+export const SHOT_NEED_PERMISSION = 'shot-need-permission';
+
+export const onShotNeedPermission = (cb: (pane: string) => void): Promise<UnlistenFn> =>
+  listen<string>(SHOT_NEED_PERMISSION, (e) => cb(e.payload));
+
 export const RECORD_ADDED = 'record-added';
 export const RECORD_UPDATED = 'record-updated';
 export const RECORDS_REMOVED = 'records-removed';

@@ -246,12 +246,16 @@ fn timing() -> bool {
 }
 
 /// 快捷键入口。主线程调用。
-#[allow(dead_code)] // Task 7 接快捷键
 pub fn begin(app: &AppHandle) {
     if let BeginPlan::NeedPermission = begin_plan(xpaste_platform::screen_capture_granted()) {
         log::info!("截图缺少屏幕录制权限，提示授权");
         crate::panel::show(app, None, crate::panel::Trigger::Hotkey);
-        events::emit_to(app, "panel", events::SHOT_NEED_PERMISSION, ());
+        events::emit_to(
+            app,
+            "panel",
+            events::SHOT_NEED_PERMISSION,
+            xpaste_platform::screen_capture_pane(),
+        );
         return;
     }
     let panel_shown = app
@@ -414,6 +418,7 @@ fn build_overlay(app: &AppHandle, i: usize, loaded: mpsc::Sender<()>) -> tauri::
     let w = WebviewWindowBuilder::new(app, label(i), WebviewUrl::App("shot.html".into()))
         // 平台层 window_rects 按标题排除本进程窗口
         .title("xpaste-shot")
+        .theme(crate::panel::current_theme(app))
         .visible(false)
         .focused(false)
         .transparent(true)
@@ -885,6 +890,7 @@ fn open_pin(
     let w = WebviewWindowBuilder::new(app, format!("{PIN_PREFIX}{n}"), WebviewUrl::App(url.into()))
         // 平台层 window_rects 只保留本进程里标题以此开头的窗口：再次截图时贴图可被吸附
         .title("xpaste-pin")
+        .theme(crate::panel::current_theme(app))
         // macOS 换成 NSPanel 后再上屏。Windows 建窗口时直接可见：tao 只在创建时按 focused(false)
         // 用 SW_SHOWNOACTIVATE，之后的 show() 一律 SW_SHOW 会激活贴图、抢走原应用的键盘；
         // 先按选区的逻辑坐标大致摆好，下面 place 再按物理像素校正

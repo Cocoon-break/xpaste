@@ -169,6 +169,24 @@
             <span><b>历史记录</b><small id="clearNote" aria-live="polite">置顶记录会保留</small></span>
             <button class="btn sm" type="button" id="clearBtn">清空历史…</button>
           </div>
+          <p class="sec" style="--i:9">截图与贴图</p>
+          <div class="field" style="--i:10">
+            <label for="shotHotkey">截图快捷键</label>
+            <input id="shotHotkey" readonly autocomplete="off" spellcheck="false" placeholder="未启用" aria-describedby="shotHotkeyHelp">
+            <p class="help" id="shotHotkeyHelp">点击输入框后按下新的组合键；按 ⌫ 清空表示不启用</p>
+          </div>
+          <div class="field" style="--i:11">
+            <label for="shotDir">截图文件夹</label>
+            <div class="pick"><input id="shotDir" readonly autocomplete="off" spellcheck="false"><button class="btn" type="button" id="shotDirBtn">更改…</button></div>
+          </div>
+          <div class="switches" style="--i:12">
+            <label class="switch"><span><b>保存截图时同时复制</b><small>按 <span class="mod"></span> S 保存的截图也进入历史</small></span><input type="checkbox" id="shotSaveCopy" checked></label>
+            <div class="line perm" id="shotPermRow" hidden>
+              <span><b>屏幕录制权限</b><small>截图需要</small></span>
+              <span class="ok" id="shotPermOk" hidden><span data-icon="check"></span>已授权</span>
+              <button class="btn sm" type="button" id="shotPermBtn" hidden>前往授权</button>
+            </div>
+          </div>
         </div>
         <footer class="dlg-foot">
           <button class="btn" type="button" data-close>取消</button>
