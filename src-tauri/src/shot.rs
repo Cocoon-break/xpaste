@@ -1253,6 +1253,7 @@ mod tests {
 
     fn frame(origin: (f64, f64), size: (f64, f64), scale: f64) -> Frame {
         Frame {
+            id: 0,
             origin,
             size,
             scale,

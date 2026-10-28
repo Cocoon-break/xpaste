@@ -2,6 +2,7 @@
 
 pub mod decode;
 pub mod error;
+pub mod record;
 pub mod winfmt;
 pub use error::PlatformError;
 
@@ -20,6 +21,8 @@ pub enum PasteBlock {
 /// 冻结的一块显示器。坐标为原生单位：macOS 全局点（主屏左上为原点），Windows 虚拟桌面物理像素。
 /// `rgba` 非预乘、行紧密排列（`px.0 * px.1 * 4` 字节）。
 pub struct Frame {
+    /// macOS 为 `CGDirectDisplayID`（录屏按它找显示器），Windows 为显示器序号（主屏为 0）
+    pub id: u32,
     pub origin: (f64, f64),
     pub size: (f64, f64),
     pub scale: f64,

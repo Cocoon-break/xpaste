@@ -31,6 +31,12 @@ use objc2_vision::{
 };
 use xpaste_core::{AppInfo, Flavor, Snapshot, VideoMeta};
 
+#[path = "macos_record.rs"]
+mod macos_record;
+pub use macos_record::{
+    Recorder, file_flavors, microphone_access, request_microphone, start_recording, window_number,
+};
+
 use crate::{Frame, OcrError, OcrText, PIN_TITLE_PREFIX, PasteBlock, PlatformError, WinRect};
 
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -300,6 +306,7 @@ fn freeze_display(id: CGDirectDisplayID) -> Result<Frame, PlatformError> {
     let rgba = srgb_rgba(&img, w, h).ok_or_else(|| err("像素转换失败"))?;
     let size = (bounds.size.width, bounds.size.height);
     Ok(Frame {
+        id,
         origin: (bounds.origin.x, bounds.origin.y),
         size,
         scale: if size.0 > 0.0 { w as f64 / size.0 } else { 1.0 },
