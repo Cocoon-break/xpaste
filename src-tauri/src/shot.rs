@@ -1020,7 +1020,15 @@ fn ocr(app: &AppHandle, generation: u64, png: Vec<u8>) -> Result<ShotOutcome, Ap
         Ok(Some(t)) if !t.text.trim().is_empty() => Some(t.text),
         Ok(_) => None,
         Err(e) => {
-            log::warn!("截图识别文字失败：{e:?}");
+            // 真机偶发 CRImageReaderError（读图阶段），没能复现：记下选区尺寸供排查
+            let dims = image::ImageReader::new(std::io::Cursor::new(&png))
+                .with_guessed_format()
+                .ok()
+                .and_then(|r| r.into_dimensions().ok());
+            log::warn!(
+                "截图识别文字失败 {dims:?} {}ms：{e:?}",
+                t.elapsed().as_millis()
+            );
             return Err(AppError::Invalid("识别文字失败".into()));
         }
     };
