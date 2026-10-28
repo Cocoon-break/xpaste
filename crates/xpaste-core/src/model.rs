@@ -132,10 +132,33 @@ fn has_modifier(s: &str) -> bool {
         .any(|part| MODIFIERS.contains(&part.trim().to_lowercase().as_str()))
 }
 
-/// 按 `+` 切分、trim、小写、排序，用来比较两个快捷键是否是同一组合。
+/// 按 `+` 切分、trim、小写、修饰键别名归一、排序去重，用来比较两个快捷键是否是同一组合（M15）。
 fn hotkey_key(s: &str) -> Vec<String> {
-    let mut parts: Vec<String> = s.split('+').map(|p| p.trim().to_lowercase()).collect();
+    hotkey_key_on(s, cfg!(target_os = "macos"))
+}
+
+/// 别名同全局快捷键插件的解析：`CommandOrControl` 在 macOS 上是 ⌘，在 Windows 上是 Ctrl。
+fn hotkey_key_on(s: &str, mac: bool) -> Vec<String> {
+    let mut parts: Vec<String> = s
+        .split('+')
+        .map(|p| {
+            let p = p.trim().to_lowercase();
+            match p.as_str() {
+                "commandorcontrol" | "cmdorctrl" | "cmdorcontrol" | "commandorctrl" if mac => {
+                    "super".into()
+                }
+                "commandorcontrol" | "cmdorctrl" | "cmdorcontrol" | "commandorctrl" => {
+                    "control".into()
+                }
+                "cmd" | "command" | "super" | "meta" => "super".into(),
+                "ctrl" | "control" => "control".into(),
+                "option" | "alt" => "alt".into(),
+                _ => p,
+            }
+        })
+        .collect();
     parts.sort();
+    parts.dedup();
     parts
 }
 
@@ -637,6 +660,33 @@ mod tests {
             invalid(&with("Shift+Alt+A", " Alt + shift+A")),
             "截图快捷键不能与唤起快捷键相同"
         );
+        assert_eq!(
+            invalid(&with("Option+Shift+A", "Alt+Shift+A")),
+            "截图快捷键不能与唤起快捷键相同"
+        );
+    }
+
+    #[test]
+    fn hotkey_key_merges_modifier_aliases_per_platform() {
+        use super::hotkey_key_on as key;
+        // 两端都一样的别名
+        for mac in [true, false] {
+            assert_eq!(key("Option+A", mac), key("Alt+A", mac));
+            assert_eq!(key("Ctrl+A", mac), key("Control+A", mac));
+            assert_eq!(key("Cmd+A", mac), key("Super+A", mac));
+            assert_eq!(key("Command+A", mac), key("Meta+A", mac));
+            assert_eq!(key("CmdOrCtrl+A", mac), key("CommandOrControl+A", mac));
+        }
+        // Windows：CommandOrControl 就是 Ctrl，同一个修饰键写两次也只算一次
+        assert_eq!(key("CommandOrControl+A", false), key("Ctrl+A", false));
+        assert_eq!(
+            key("CommandOrControl+Control+A", false),
+            key("Ctrl+A", false)
+        );
+        assert_ne!(key("CommandOrControl+A", false), key("Super+A", false));
+        // macOS：CommandOrControl 是 ⌘，与 ⌃ 不同
+        assert_eq!(key("CommandOrControl+A", true), key("Cmd+A", true));
+        assert_ne!(key("CommandOrControl+A", true), key("Ctrl+A", true));
     }
 
     #[test]
