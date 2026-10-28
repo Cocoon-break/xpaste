@@ -55,8 +55,8 @@ use windows::Win32::System::Threading::{
 use windows::Win32::System::Variant::VT_EMPTY;
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
-    VIRTUAL_KEY, VK_CONTROL,
+    GetAsyncKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT,
+    KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CONTROL, VK_LBUTTON, VK_RBUTTON,
 };
 use windows::Win32::UI::Shell::PropertiesSystem::{
     GPS_DEFAULT, IPropertyStore, SHGetPropertyStoreFromParsingName,
@@ -1149,6 +1149,21 @@ pub fn screen_capture_granted() -> bool {
 }
 
 pub fn request_screen_capture() {}
+
+/// 鼠标主键此刻是否按着。贴图据此判断拖动是否结束。
+pub fn mouse_button_down() -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_SWAPBUTTON};
+    // GetAsyncKeyState 查的是物理键：左右键互换时主键是物理右键
+    // SAFETY: 纯查询；最高位为 1 表示按着
+    unsafe {
+        let vk = if GetSystemMetrics(SM_SWAPBUTTON) != 0 {
+            VK_RBUTTON
+        } else {
+            VK_LBUTTON
+        };
+        GetAsyncKeyState(vk.0 as i32) < 0
+    }
+}
 
 /// 开始菜单（全体用户与当前用户）里 `.lnk` 指向的、存在的 `.exe`。调用方已初始化 COM。
 fn start_menu_targets() -> Vec<String> {

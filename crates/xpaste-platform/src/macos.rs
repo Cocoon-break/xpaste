@@ -39,6 +39,11 @@ unsafe extern "C" {
     fn AXIsProcessTrustedWithOptions(options: *const NSDictionary<NSString, NSNumber>) -> u8;
 }
 
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGEventSourceButtonState(state_id: i32, button: u32) -> u8;
+}
+
 // libSystem，总是链接
 unsafe extern "C" {
     fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
@@ -377,6 +382,13 @@ pub fn request_screen_capture() {
     if !CGRequestScreenCaptureAccess() {
         open_privacy_pane("Privacy_ScreenCapture");
     }
+}
+
+/// 鼠标主键此刻是否按着（硬件状态，系统拖动窗口期间也准）。贴图据此判断拖动是否结束。
+pub fn mouse_button_down() -> bool {
+    // kCGEventSourceStateCombinedSessionState = 0，kCGMouseButtonLeft = 0
+    // SAFETY: 纯查询，无指针参数
+    unsafe { CGEventSourceButtonState(0, 0) != 0 }
 }
 
 /// 应用图标转 PNG：取 64 pt 对应的那档图像（Retina 屏上为 128×128 px），不重新绘制。

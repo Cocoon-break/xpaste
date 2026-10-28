@@ -103,3 +103,9 @@ pub fn pin_set_bounds(
 ) -> Result<(), AppError> {
     shot::pin_set_bounds(&window, x, y, w, h)
 }
+
+/// 鼠标主键是否按着：贴图被系统拖动时，松开后才把拖出屏的拉回来。
+#[tauri::command]
+pub fn pin_button_down() -> bool {
+    xpaste_platform::mouse_button_down()
+}

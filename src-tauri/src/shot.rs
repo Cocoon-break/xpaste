@@ -971,6 +971,8 @@ pub fn pin_close(app: &AppHandle, w: &WebviewWindow) -> Result<(), AppError> {
     Ok(())
 }
 
+const MAX_PIN_PX: f64 = 16384.0;
+
 /// 贴图滚轮缩放、恢复原始大小、拖回屏内：逻辑坐标，位置和尺寸一起改。同步命令跑在主线程，
 /// `place` 的两步在同一轮里改完、中间不重绘，以光标为锚的缩放不会先跳一下。
 pub fn pin_set_bounds(
@@ -984,8 +986,12 @@ pub fn pin_set_bounds(
     if ![x, y, width, height].iter().all(|v| v.is_finite()) || width < 1.0 || height < 1.0 {
         return Err(AppError::Invalid("贴图尺寸无效".into()));
     }
+    let s = w.scale_factor()?;
+    // 整屏贴图放大到 400% 会超出 webview 的纹理上限：等比缩到每边不超过 16384 物理像素
+    let f = (MAX_PIN_PX / s / width.max(height)).min(1.0);
+    let (width, height) = (width * f, height * f);
     // 换成原生单位：macOS 为点，Windows 为物理像素（同 builder 的换算）
-    let k = scale_for_builder(w.scale_factor()?);
+    let k = scale_for_builder(s);
     place(w, (x * k, y * k), (width * k, height * k))?;
     Ok(())
 }

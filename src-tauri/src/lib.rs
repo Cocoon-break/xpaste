@@ -200,7 +200,8 @@ pub fn run() {
             commands::shot::pin_close,
             commands::shot::pin_copy,
             commands::shot::pin_save,
-            commands::shot::pin_set_bounds
+            commands::shot::pin_set_bounds,
+            commands::shot::pin_button_down
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

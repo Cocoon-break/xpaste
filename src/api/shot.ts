@@ -87,6 +87,9 @@ export async function pinWorkArea(): Promise<Box | null> {
   return { x: p.x, y: p.y, w: s.width, h: s.height };
 }
 
+/** 鼠标主键此刻是否按着（系统拖动期间页面收不到指针事件，靠它判断拖完）。 */
+export const pinButtonDown = () => (stub ? Promise.resolve(false) : invoke<boolean>('pin_button_down'));
+
 /** 窗口被移动（含原生拖动）后回调。 */
 export const onPinMoved = async (cb: () => void) => {
   if (!stub) await getCurrentWindow().onMoved(cb);

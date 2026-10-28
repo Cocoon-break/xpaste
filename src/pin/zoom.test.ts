@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { clampPos, zoomAt } from './zoom.ts';
+import { clampPos, wheelSteps, zoomAt, type Wheel } from './zoom.ts';
 
 const WIN = { x: 100, y: 100, w0: 200, h0: 100 };
 
@@ -53,4 +53,36 @@ test('clampPos：至少留 40 px 在屏内，顶边不出屏', () => {
   assert.deepEqual(clampPos(10, -50, 200, 100, screen), { x: 10, y: 0 });
   assert.deepEqual(clampPos(10, 2000, 200, 100, screen), { x: 10, y: 900 - 40 });
   assert.deepEqual(clampPos(10, 20, 200, 100, screen), { x: 10, y: 20 });
+});
+
+/** 依次喂事件 [deltaY, 时间 ms, deltaMode?]，返回每次的格数 */
+function feed(events: [number, number, number?][]): number[] {
+  let s: Wheel = { acc: 0, t: -Infinity };
+  return events.map(([dy, t, mode]) => {
+    const r = wheelSteps(s, dy, mode ?? 0, t, 800);
+    s = r.next;
+    return r.steps;
+  });
+}
+
+test('wheelSteps：停顿后的第一下固定一格（鼠标一格就是一格，不论 delta 大小）', () => {
+  assert.deepEqual(feed([[4, 0], [-4, 400], [100, 1000], [-1, 2000]]), [1, -1, 1, -1]);
+});
+
+test('wheelSteps：连续的小 delta 按距离累计，每 50 px 一格，余数留到下次', () => {
+  // 第一下算一格并清零；之后 30 + 30 = 60 → 一格，余 10；再 +40 = 50 → 一格
+  assert.deepEqual(feed([[2, 0], [30, 16], [30, 32], [40, 48]]), [1, 0, 1, 1]);
+});
+
+test('wheelSteps：触控板一串事件的格数有上限（按距离，不按事件数）', () => {
+  // 100 个 3 px 的事件，16 ms 一个：共 300 px → 首格 + 297/50 取整 5 格
+  const steps = feed(Array.from({ length: 100 }, (_, i) => [-3, i * 16] as [number, number]));
+  assert.equal(steps.reduce((a, b) => a + b, 0), -6);
+});
+
+test('wheelSteps：按行 / 按页的 delta 换算成像素；一个事件最多一格', () => {
+  // 3 行 = 48 px，不足一格；再 1 行 → 64，一格，余 14
+  assert.deepEqual(feed([[1, 0, 1], [3, 10, 1], [1, 20, 1]]), [1, 0, 1]);
+  // 一页 = 800 px，也只算一格，余数不超过一格
+  assert.deepEqual(feed([[1, 0], [1, 10, 2], [1, 20]]), [1, 1, 0]);
 });

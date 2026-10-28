@@ -2,10 +2,10 @@
 // 的 makePin：拖动移动、滚轮以光标为锚缩放、双击或 Esc 关闭、右键菜单。坐标为屏幕逻辑坐标。
 import './pin.css';
 import {
-  onPinMoved, pinClose, pinCopy, pinImageSrc, pinMenu, pinPosition, pinSave, pinSetBounds, pinStartDrag, pinWorkArea,
+  onPinMoved, pinButtonDown, pinClose, pinCopy, pinImageSrc, pinMenu, pinPosition, pinSave, pinSetBounds, pinStartDrag, pinWorkArea,
   type MenuEntry,
 } from '../api/shot';
-import { clampPos, zoomAt } from './zoom';
+import { clampPos, wheelSteps, zoomAt, type Wheel } from './zoom';
 
 const $ = (id: string) => document.getElementById(id)!;
 const pin = $('pin'), img = $('img') as HTMLImageElement, chip = $('zoom');
@@ -42,17 +42,25 @@ pin.addEventListener('pointermove', (e) => {
   if (Math.hypot(e.clientX - down.x, e.clientY - down.y) <= 3) return;
   down = null;
   pin.classList.add('drag');
-  void pinStartDrag();
+  pinStartDrag().catch(() => pin.classList.remove('drag'));
 });
 addEventListener('pointerup', () => { down = null; pin.classList.remove('drag'); });
 
-/* 系统拖动期间收不到指针事件：移动停下 200 ms 算拖完，拖出屏的拉回到至少留 40 px（自己改的位置也会触发，夹过的不再变） */
+/* 改窗口的操作（缩放、恢复原始大小、拉回屏内）排成一队：每步都在上一步改完之后再读 k 和位置。
+   失败（窗口正在关闭等）静默跳过，不影响后面的步骤。 */
+let chain = Promise.resolve();
+const run = (f: () => Promise<void>) => { chain = chain.then(f).catch(() => {}); };
+
+/* 系统拖动期间收不到指针事件：移动停下 200 ms 后看主键，松开了才把拖出屏的拉回到至少留 40 px
+   （拖动途中改位置会和系统的拖动打架）；自己改的位置也会触发，已在屏内的不再变 */
 let moveT = 0;
-void onPinMoved(() => {
+const arm = () => {
   clearTimeout(moveT);
-  moveT = window.setTimeout(() => void settle(), 200);
-});
+  moveT = window.setTimeout(() => run(settle), 200);
+};
+onPinMoved(arm).catch(() => {});
 async function settle() {
+  if (await pinButtonDown()) { arm(); return; }
   pin.classList.remove('drag');
   const [p, a] = await Promise.all([pinPosition(), pinWorkArea()]);
   if (!a) return;
@@ -62,30 +70,42 @@ async function settle() {
   if (Math.abs(x - p.x) > 0.5 || Math.abs(y - p.y) > 0.5) await pinSetBounds({ x, y, w, h });
 }
 
-/* —— 滚轮缩放：每格 ×1.1，光标为锚；位置每次现取（系统拖动会改它），一次只改一次窗口 —— */
-// ponytail: 按事件计格、两格至少隔 40 ms，触控板的连串小 delta 才不会一下缩到头；要按 delta 大小连续缩放再改
-let busy = false, lastWheel = -Infinity;
+/* —— 滚轮缩放：每格 ×1.1，光标为锚。格数按 wheelSteps 累计；改窗口期间来的格攒着，下一步一起改 —— */
+let wheel: Wheel = { acc: 0, t: -Infinity }, pend = 0, queued = false, at = { x: 0, y: 0 };
 pin.addEventListener('wheel', (e) => {
   e.preventDefault();
-  if (busy || e.deltaY === 0 || e.timeStamp - lastWheel < 40) return;
-  lastWheel = e.timeStamp;
-  busy = true;
-  void zoom(e).finally(() => { busy = false; });
+  const r = wheelSteps(wheel, e.deltaY, e.deltaMode, e.timeStamp, innerHeight);
+  wheel = r.next;
+  if (!r.steps) return;
+  pend += r.steps;
+  const b = pin.getBoundingClientRect();
+  at = { x: e.clientX - b.left, y: e.clientY - b.top };
+  if (!queued) { queued = true; run(zoom); }
 }, { passive: false });
-async function zoom(e: WheelEvent) {
-  const r = pin.getBoundingClientRect(), p = await pinPosition();
-  const z = zoomAt(k, e.deltaY, { x: p.x + e.clientX - r.left, y: p.y + e.clientY - r.top }, { x: p.x, y: p.y, w0: W0, h0: H0 });
-  await pinSetBounds(z);
-  k = z.k;
+/** 位置每次现取（系统拖动会改它）；攒下的几格算完只改一次窗口。 */
+async function zoom() {
+  queued = false;
+  const n = pend;
+  pend = 0;
+  if (!n) return;
+  const p = await pinPosition(), a = { x: p.x + at.x, y: p.y + at.y };
+  let z = { k, x: p.x, y: p.y, w: 0, h: 0 };
+  for (let i = 0; i < Math.abs(n); i++) z = zoomAt(z.k, n, a, { x: z.x, y: z.y, w0: W0, h0: H0 });
+  if (z.k !== k) {
+    await pinSetBounds(z);
+    k = z.k;
+  }
   flash(`${Math.round(k * 100)}%`);
 }
 
 /** 恢复原始大小：左上角不动（同原型 resetPin）。 */
-async function reset() {
-  if (k === 1) return;
-  const p = await pinPosition();
-  await pinSetBounds({ x: p.x, y: p.y, w: W0, h: H0 });
-  k = 1;
+function reset() {
+  run(async () => {
+    if (k === 1) return;
+    const p = await pinPosition();
+    await pinSetBounds({ x: p.x, y: p.y, w: W0, h: H0 });
+    k = 1;
+  });
 }
 
 async function copy() {
@@ -111,18 +131,18 @@ addEventListener('contextmenu', (e) => {
   const items: MenuEntry[] = [
     { text: '复制', accel: 'CmdOrCtrl+C', run: () => void copy() },
     { text: '保存', accel: 'CmdOrCtrl+S', run: () => void save() },
-    ...(k !== 1 ? [{ text: '恢复原始大小', accel: 'CmdOrCtrl+0', run: () => void reset() }] : []),
+    ...(k !== 1 ? [{ text: '恢复原始大小', accel: 'CmdOrCtrl+0', run: reset }] : []),
     'sep',
     { text: '关闭', accel: 'Escape', run: () => close(true) },
   ];
-  void pinMenu(items);
+  pinMenu(items).catch(() => {});
 });
 addEventListener('keydown', (e) => {
   const mod = isMac ? e.metaKey : e.ctrlKey;
   if (e.key === 'Escape') close(false);
   else if (mod && e.code === 'KeyC') void copy();
   else if (mod && e.code === 'KeyS') void save();
-  else if (mod && e.code === 'Digit0') void reset();
+  else if (mod && e.code === 'Digit0') reset();
   else return;
   e.preventDefault();
 });

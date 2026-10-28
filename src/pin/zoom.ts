@@ -24,3 +24,21 @@ export function zoomAt(
 export function clampPos(x: number, y: number, w: number, _h: number, screen: { w: number; h: number }): { x: number; y: number } {
   return { x: clamp(x, 40 - w, screen.w - 40), y: clamp(y, 0, screen.h - 40) };
 }
+
+/** 滚轮累计：`acc` 为未用完的像素，`t` 为上一个事件的时间（ms）。 */
+export type Wheel = { acc: number; t: number };
+const STEP_PX = 50, GAP_MS = 150;
+
+/**
+ * 滚轮事件 → 缩放格数（符号同 deltaY）。停顿超过 150 ms 后的第一下固定算一格：鼠标一格就是一格，不论 delta 大小；
+ * 连续的事件（触控板、惯性）按距离累计，每 50 px 一格，余数留到下次。一个事件最多一格，超出的部分丢掉。
+ * `deltaMode` 1 为行（×16 px），2 为页（×`page` px）。
+ */
+export function wheelSteps(s: Wheel, deltaY: number, deltaMode: number, t: number, page: number): { steps: number; next: Wheel } {
+  const px = deltaY * (deltaMode === 1 ? 16 : deltaMode === 2 ? page : 1);
+  if (t - s.t > GAP_MS) return { steps: Math.sign(px), next: { acc: 0, t } };
+  const acc = s.acc + px;
+  const steps = Math.abs(acc) >= STEP_PX ? Math.sign(acc) : 0;
+  const rest = acc - steps * STEP_PX;
+  return { steps, next: { acc: Math.abs(rest) < STEP_PX ? rest : 0, t } };
+}
