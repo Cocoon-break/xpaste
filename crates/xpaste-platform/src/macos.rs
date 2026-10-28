@@ -164,20 +164,24 @@ pub fn read_snapshot(skip_sensitive: bool) -> Result<Option<Snapshot>, PlatformE
     })
 }
 
-/// 微信等沙盒应用复制图片时同时给位图和自己容器里的临时文件路径：路径没有权限读（或已被删掉），
-/// 按文件记就预览不了。文件一个都打不开且有位图时，丢掉路径按位图记（M02 规则 2 补充）。
+/// 微信等沙盒应用复制图片时同时给位图和自己容器里的临时文件路径：路径没有权限读，且很快被删掉，
+/// 按文件记就预览不了。文件都不可用且有位图时，丢掉路径按位图记（M02 规则 2 补充）。
 fn prefer_bitmap_over_unreadable_files(snapshot: &mut Snapshot) {
-    if snapshot
-        .file_paths
-        .iter()
-        .any(|p| std::fs::File::open(p).is_ok())
-    {
+    if snapshot.file_paths.iter().any(|p| usable_file(p)) {
         return;
     }
     if let Some(bitmap) = read_bitmap(&snapshot.flavors) {
         snapshot.file_paths.clear();
         snapshot.bitmap = Some(bitmap);
     }
+}
+
+/// 其他应用沙盒容器里的路径不去打开：读不了，打开还可能弹出“访问其他应用的数据”授权框；
+/// 即使有完全磁盘访问权限，那也是对方的临时文件，随时会被删掉。
+fn usable_file(p: &Path) -> bool {
+    let s = p.to_string_lossy();
+    !(s.contains("/Library/Containers/") || s.contains("/Library/Group Containers/"))
+        && std::fs::File::open(p).is_ok()
 }
 
 /// 已读出的 flavor 中第一个 PNG 原样返回；否则第一个 TIFF 转成 PNG。
@@ -551,6 +555,12 @@ mod tests {
             data: vec![1, 2, 3],
         };
         let gone = PathBuf::from("/nonexistent/wechat-temp.jpg");
+        assert!(!usable_file(Path::new(
+            "/Users/u/Library/Containers/com.tencent.xinWeChat/Data/a.jpg"
+        )));
+        assert!(!usable_file(Path::new(
+            "/Users/u/Library/Group Containers/5A4RE8SF68.com.tencent.xinWeChat/a.jpg"
+        )));
         let mut s = Snapshot {
             flavors: vec![png.clone()],
             file_paths: vec![gone.clone()],
