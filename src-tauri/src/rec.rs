@@ -72,7 +72,7 @@ impl<R> Default for RecState<R> {
 }
 
 impl<R> RecState<R> {
-    /// 开始一次录制；已在录或正在停止时返回 false（M24，Review Focus 5）。
+    /// 开始一次录制；已在录或正在停止时返回 false（M24 规则 1）。
     pub fn begin(&mut self) -> bool {
         if self.phase != Phase::Idle {
             return false;
@@ -234,7 +234,12 @@ fn launch(
     }
 
     let dir = resolve_rec_dir(&cur.rec_dir, app.path().video_dir().ok(), &st.data_dir);
-    std::fs::create_dir_all(&dir)?;
+    // 遮罩已撤下，此后的失败都要通知，不能静默（M24 规则 9）；io::Error 的描述不带路径
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        log::warn!("rec 创建录屏文件夹失败：{e}");
+        notify(app, "录屏失败");
+        return Err(e.into());
+    }
     let stamp = xpaste_core::capture::local_stamp(crate::clock::now_ms());
     // 写入器直接写最终路径；失败或太短时平台层删掉
     let path = dir.join(shot::unique_file_name("录屏", &stamp, "mp4", |n| {
@@ -337,7 +342,7 @@ fn tick(app: &AppHandle, t0: Instant) {
     }
 }
 
-/// 停止录制（菜单项、快捷键、`rec_stop`）。不阻塞：写文件与收尾在后台线程。重复调用只停一次。
+/// 停止录制（托盘菜单项、快捷键）。不阻塞：写文件与收尾在后台线程。重复调用只停一次。
 pub fn stop(app: &AppHandle) {
     stop_with(app, false);
 }

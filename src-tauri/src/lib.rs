@@ -248,7 +248,6 @@ pub fn run() {
             commands::shot::pin_set_bounds,
             commands::shot::pin_button_down,
             commands::shot::rec_start,
-            commands::shot::rec_stop,
             commands::shot::rec_frame
         ])
         .build(tauri::generate_context!())

@@ -105,12 +105,6 @@ pub async fn rec_start(
     .map_err(|_| AppError::Invalid("录屏开始中断".into()))?
 }
 
-/// 停止录制；不在录制时什么也不做。
-#[tauri::command]
-pub fn rec_stop(app: AppHandle) {
-    rec::stop(&app);
-}
-
 /// 录屏边框页注册好监听后拉一次当前位置（刚建的窗口可能错过推送）；不在录制时为 `null`。
 #[tauri::command]
 pub fn rec_frame(app: AppHandle) -> Option<shot::LRect> {

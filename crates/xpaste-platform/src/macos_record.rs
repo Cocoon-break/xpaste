@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, PoisonError, mpsc};
+use std::time::Duration;
 
 use block2::{DynBlock, RcBlock};
 use dispatch2::{DispatchQueue, DispatchQueueAttr, DispatchRetained};
@@ -42,6 +43,10 @@ const AAC: u32 = u32::from_be_bytes(*b"aac ");
 const AUDIO_RATE: i32 = 48_000;
 const AUDIO_CHANNELS: i32 = 2;
 const AUDIO_BITRATE: i32 = 128_000;
+/// 等 ScreenCaptureKit 完成回调的上限：回调不来时不让应用卡在开始或停止里（M24 规则 8）
+const CALLBACK_WAIT: Duration = Duration::from_secs(10);
+/// 等写完文件的上限；正常不到一秒，留足慢盘的余量
+const FINISH_WAIT: Duration = Duration::from_secs(30);
 
 fn record_err(what: impl Into<String>) -> PlatformError {
     PlatformError::Record(what.into())
@@ -52,7 +57,8 @@ fn ns_err(e: &NSError) -> String {
     format!("{} {}", e.domain(), e.code())
 }
 
-/// 调用带 `NSError *` 完成回调的接口并阻塞到回调。
+/// 调用带 `NSError *` 完成回调的接口并阻塞到回调，最多 `CALLBACK_WAIT`。
+/// 超时后回调仍可能到来：系统复制并持有 block，里面的发送端随之存活，接收端已丢弃时发送只是返回错误。
 fn wait_done(call: impl FnOnce(&DynBlock<dyn Fn(*mut NSError)>)) -> Result<(), String> {
     let (tx, rx) = mpsc::channel();
     let block = RcBlock::new(move |e: *mut NSError| {
@@ -60,10 +66,13 @@ fn wait_done(call: impl FnOnce(&DynBlock<dyn Fn(*mut NSError)>)) -> Result<(), S
         let _ = tx.send(unsafe { e.as_ref() }.map(ns_err));
     });
     call(&block);
-    match rx.recv() {
+    match rx.recv_timeout(CALLBACK_WAIT) {
         Ok(None) => Ok(()),
         Ok(Some(e)) => Err(e),
-        Err(_) => Err("系统未回调".into()),
+        Err(_) => {
+            log::warn!("录屏：等系统回调超时");
+            Err("系统未回调".into())
+        }
     }
 }
 
@@ -262,11 +271,6 @@ fn finish(st: &mut State, path: &Path) -> Result<RecordOutcome, PlatformError> {
         }
         return Ok(RecordOutcome::Empty);
     };
-    // SAFETY: 只读属性
-    if unsafe { st.writer.status() } != AVAssetWriterStatus::Writing {
-        discard(st, path);
-        return Err(record_err("写入器已出错"));
-    }
     // 画面静止时只有空闲帧，视频会停在最后一次变化处：把最后一帧按此刻再写一次，延续到停止时刻
     if let Some((last, at)) = st.last.take() {
         // SAFETY: 主机时钟是 SCK 采样 PTS 用的时钟；纯查询
@@ -277,6 +281,12 @@ fn finish(st: &mut State, path: &Path) -> Result<RecordOutcome, PlatformError> {
             Some(copy) if append(st, &st.video, &copy) => (copy, now),
             _ => (last, at),
         });
+    }
+    // 在补帧之后查：补帧那次追加也可能让写入器变成 Failed，对它 markAsFinished / finishWriting 会抛异常
+    // SAFETY: 只读属性
+    if unsafe { st.writer.status() } != AVAssetWriterStatus::Writing {
+        discard(st, path);
+        return Err(record_err("写入器已出错"));
     }
     let end = st.last.as_ref().map_or(first, |l| l.1);
     // SAFETY: 写入器在写；markAsFinished 之后不再追加（closed 已置）
@@ -291,9 +301,14 @@ fn finish(st: &mut State, path: &Path) -> Result<RecordOutcome, PlatformError> {
     let block = RcBlock::new(move || {
         let _ = tx.send(());
     });
-    // SAFETY: 写入器在写，所有输入已 markAsFinished；block 在回调前一直存活
+    // SAFETY: 写入器在写，所有输入已 markAsFinished；系统复制并持有 block，超时后回调照样安全
     unsafe { writer.finishWritingWithCompletionHandler(&block) };
-    let _ = rx.recv();
+    if rx.recv_timeout(FINISH_WAIT).is_err() {
+        // 写入器还在收尾，不能 cancelWriting；文件多半是坏的，不留下（M24 规则 9）
+        log::warn!("录屏：等写完文件超时");
+        let _ = std::fs::remove_file(path);
+        return Err(record_err("写完文件超时"));
+    }
     // SAFETY: 只读属性
     if unsafe { writer.status() } != AVAssetWriterStatus::Completed {
         // SAFETY: 只读属性
@@ -366,7 +381,7 @@ fn shareable_content() -> Result<Retained<SCShareableContent>, PlatformError> {
     });
     // SAFETY: block 在回调前一直存活（系统复制并持有）
     unsafe { SCShareableContent::getShareableContentWithCompletionHandler(&block) };
-    rx.recv()
+    rx.recv_timeout(CALLBACK_WAIT)
         .map_err(|_| record_err("取可录制内容时系统未回调"))?
         .map_err(|e| record_err(format!("取可录制内容失败：{e}")))
 }

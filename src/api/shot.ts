@@ -61,9 +61,6 @@ export function shotFinish(png: Uint8Array, action: ShotAction, index: number, r
 export const recStart = (a: { generation: number; index: number; rect: LRect; systemAudio: boolean; microphone: boolean }) =>
   stub ? dev.recStart() : invoke<void>('rec_start', a);
 
-/** 停止录制；不在录制时后端什么也不做。 */
-export const recStop = () => (stub ? Promise.resolve() : invoke<void>('rec_stop'));
-
 /** 后端结束了这次截图（载荷为代数）：再按快捷键、看门狗、Alt+F4 等，页面自己不知道。 */
 export const onShotEnd = async (cb: (generation: number) => void) => {
   if (!stub) await listen<number>(SHOT_END, (e) => cb(e.payload));

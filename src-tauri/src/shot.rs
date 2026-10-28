@@ -453,7 +453,10 @@ pub fn begin(app: &AppHandle, mode: Mode) {
     if panel_shown {
         crate::panel::hide(app);
     }
-    warm_ocr();
+    // 录屏用不到识别，不在开始采集时抢 CPU 加载模型
+    if mode == Mode::Shot {
+        warm_ocr();
+    }
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         freeze(&app, generation, panel_shown || stale, mode)
