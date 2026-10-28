@@ -17,7 +17,7 @@ mod tray;
 use state::AppState;
 use std::path::PathBuf;
 use tauri::{Manager, WindowEvent};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+use tauri_plugin_global_shortcut::ShortcutState;
 use tauri_plugin_log::{Target, TargetKind};
 use tauri_plugin_notification::NotificationExt;
 use xpaste_core::Store;
@@ -91,9 +91,10 @@ pub fn run() {
             let store = Store::open(&data_dir)?;
             let first_run = matches!(store.kv_get("onboarded"), Ok(None));
             let settings = store.load_settings();
-            let (hotkey, shot_hotkey, appearance) = (
+            let (hotkey, shot_hotkey, rec_hotkey, appearance) = (
                 settings.hotkey.clone(),
                 settings.shot_hotkey.clone(),
+                settings.rec_hotkey.clone(),
                 settings.appearance,
             );
             let enrich = enrich::start(app.handle().clone());
@@ -115,13 +116,13 @@ pub fn run() {
             if let Err(e) = tray::setup(app) {
                 log::warn!("托盘图标创建失败：{e}");
             }
-            if let Err(e) = hotkey::register(app.handle(), &hotkey, &shot_hotkey) {
+            if let Err(e) = hotkey::register(app.handle(), &hotkey, &shot_hotkey, &rec_hotkey) {
                 log::warn!("快捷键注册失败：{e}");
-                // 唤起失败时 register 只报唤起，截图是否注册上另查；截图失败只提示，不标记托盘
+                // register 只报第一个失败，截图、录屏是否注册上另查；它们失败只提示，不标记托盘
                 let panel_failed = matches!(e, error::AppError::HotkeyTaken);
-                let shot_failed = !shot_hotkey.is_empty()
-                    && !app.global_shortcut().is_registered(shot_hotkey.as_str());
-                if let Some(body) = hotkey::failure_notice(panel_failed, shot_failed)
+                let (shot_failed, rec_failed) =
+                    hotkey::unregistered(app.handle(), &shot_hotkey, &rec_hotkey);
+                if let Some(body) = hotkey::failure_notice(panel_failed, shot_failed, rec_failed)
                     && let Err(e) = app
                         .notification()
                         .builder()
@@ -160,16 +161,21 @@ pub fn run() {
                     if event.state() != ShortcutState::Pressed {
                         return;
                     }
-                    let (p, s) = {
+                    let (p, s, r) = {
                         let st = app.state::<AppState>();
                         let s = st.settings();
-                        (s.hotkey.clone(), s.shot_hotkey.clone())
+                        (
+                            s.hotkey.clone(),
+                            s.shot_hotkey.clone(),
+                            s.rec_hotkey.clone(),
+                        )
                     };
-                    match hotkey::role_of(shortcut, &p, &s) {
+                    match hotkey::role_of(shortcut, &p, &s, &r) {
                         Some(hotkey::Role::Panel) => {
                             panel::toggle(app, timing.then(now_unix_ms), panel::Trigger::Hotkey)
                         }
                         Some(hotkey::Role::Shot) => hotkey::shot_pressed(app),
+                        Some(hotkey::Role::Rec) => hotkey::rec_pressed(app),
                         None => {}
                     }
                 })

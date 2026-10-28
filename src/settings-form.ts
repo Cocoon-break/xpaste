@@ -54,12 +54,11 @@ export type SettingsForm = {
   shotHotkey: string;
   shotDir: string;
   shotSaveCopy: boolean;
-  // 录屏设置的表单控件在 M24 的界面任务里接入，之前缺省时沿用 base
-  recHotkey?: string;
-  recDir?: string;
-  recSystemAudio?: boolean;
-  recMicrophone?: boolean;
-  recCopy?: boolean;
+  recHotkey: string;
+  recDir: string;
+  recSystemAudio: boolean;
+  recMicrophone: boolean;
+  recCopy: boolean;
 };
 
 export const formToSettings = (base: Settings, f: SettingsForm): Settings => ({
@@ -78,9 +77,9 @@ export const formToSettings = (base: Settings, f: SettingsForm): Settings => ({
   shotHotkey: f.shotHotkey,
   shotDir: f.shotDir,
   shotSaveCopy: f.shotSaveCopy,
-  recHotkey: f.recHotkey ?? base.recHotkey,
-  recDir: f.recDir ?? base.recDir,
-  recSystemAudio: f.recSystemAudio ?? base.recSystemAudio,
-  recMicrophone: f.recMicrophone ?? base.recMicrophone,
-  recCopy: f.recCopy ?? base.recCopy,
+  recHotkey: f.recHotkey,
+  recDir: f.recDir,
+  recSystemAudio: f.recSystemAudio,
+  recMicrophone: f.recMicrophone,
+  recCopy: f.recCopy,
 });

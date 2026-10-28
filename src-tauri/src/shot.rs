@@ -324,15 +324,11 @@ pub struct BeginPayload {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Mode {
     Shot,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "录屏快捷键（M24）接上前只有测试用到")
-    )]
     Rec,
 }
 
 impl Mode {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Mode::Shot => "shot",
             Mode::Rec => "rec",
@@ -379,6 +375,12 @@ pub fn screen_capture_pane(macos_major: Option<u32>) -> &'static str {
 
 /// 快捷键入口。主线程调用。
 pub fn begin(app: &AppHandle, mode: Mode) {
+    // 录制中不开遮罩（M24）：录屏快捷键在录制中已改为停止，到这里的只有截图快捷键
+    if crate::rec::is_recording(app) {
+        log::info!("{} 录屏中，不开始", mode.as_str());
+        crate::rec::notify(app, "正在录屏，停止录制后再截图");
+        return;
+    }
     let granted = xpaste_platform::screen_capture_granted();
     let panel_shown = app
         .get_webview_window("panel")

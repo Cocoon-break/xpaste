@@ -10,12 +10,14 @@ pub const PANEL_HIDDEN: &str = "panel-hidden";
 /// 快捷键 / 托盘要隐藏面板：前端播完淡出后调 `hide_panel`，400 ms 内没隐藏则后端兜底。
 pub const PANEL_HIDE_REQUESTED: &str = "panel-hide-requested";
 /// 引导或对话框打开时按下快捷键，面板保持显示：载荷 `"panel"`（唤起，前端据此推进引导、写入录制框）
-/// 或 `"shot"`（截图，见 `hotkey::shot_pressed`）。
+/// 或 `"shot"` / `"rec"`（截图、录屏，见 `hotkey::overlay_pressed`）。
 pub const HOTKEY_PRESSED: &str = "hotkey-pressed";
 pub const RECORD_ADDED: &str = "record-added";
 pub const RECORD_UPDATED: &str = "record-updated";
 pub const RECORDS_REMOVED: &str = "records-removed";
 pub const PAUSED_CHANGED: &str = "paused-changed";
+/// 后端改了设置（录屏遮罩的声音开关写回，M24），发给面板，载荷是完整设置；面板换掉手里的副本，免得之后保存把它改回去。
+pub const SETTINGS_CHANGED: &str = "settings-changed";
 /// 托盘“设置…”：面板显示后打开设置弹窗。
 pub const OPEN_SETTINGS: &str = "open-settings";
 /// 托盘“清空历史…”：面板显示后打开清空确认。

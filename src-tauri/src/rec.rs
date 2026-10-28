@@ -140,7 +140,7 @@ pub fn is_recording(app: &AppHandle) -> bool {
     state(app).is_recording()
 }
 
-fn is_busy(app: &AppHandle) -> bool {
+pub fn is_busy(app: &AppHandle) -> bool {
     state(app).is_busy()
 }
 
@@ -149,7 +149,7 @@ pub fn frame_rect(app: &AppHandle) -> Option<LRect> {
     state(app).frame
 }
 
-fn notify(app: &AppHandle, body: &str) {
+pub fn notify(app: &AppHandle, body: &str) {
     if let Err(e) = app
         .notification()
         .builder()
@@ -220,8 +220,9 @@ fn launch(
         let mut s = cur.clone();
         s.rec_system_audio = system_audio;
         s.rec_microphone = microphone;
-        if let Err(e) = crate::commands::settings::save_settings_inner(&st, s) {
-            log::warn!("录屏声音开关写回设置失败：{e}");
+        match crate::commands::settings::save_settings_inner(&st, s.clone()) {
+            Ok(()) => events::emit_to(app, "panel", events::SETTINGS_CHANGED, s),
+            Err(e) => log::warn!("录屏声音开关写回设置失败：{e}"),
         }
     }
     shot::end_if_current(app, generation);

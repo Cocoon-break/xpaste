@@ -33,6 +33,8 @@ export interface Settings {
 export interface PlatformInfo {
   os: 'macos' | 'windows';
   material: 'glass' | 'opaque';
+  /** macOS 主版本号；Windows 为 null */
+  macosMajor: number | null;
 }
 
 export interface Bootstrap {
@@ -113,7 +115,7 @@ export interface RecordDetail extends RecordSummary {
 }
 
 export interface AppError {
-  kind: 'fileMissing' | 'clipboardWrite' | 'hotkeyTaken' | 'shotHotkeyTaken' | 'invalidSettings' | 'invalid' | 'internal';
+  kind: 'fileMissing' | 'clipboardWrite' | 'hotkeyTaken' | 'shotHotkeyTaken' | 'recHotkeyTaken' | 'invalidSettings' | 'invalid' | 'internal';
   message: string;
 }
 

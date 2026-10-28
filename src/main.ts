@@ -17,6 +17,7 @@ import {
   onRecordAdded,
   onRecordsRemoved,
   onRecordUpdated,
+  onSettingsChanged,
   onShotNeedPermission,
 } from './api/events';
 import type { AppError, Appearance, FileEntry, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
@@ -37,7 +38,7 @@ import {
   ticks as winTicks, winLabel, xOf, zoomWin, type Layout, type Win,
 } from './spectrum';
 import { addIgnored, formToSettings, optionFromRetention, parseFrequent, parseLimit, pickerOptions, removeIgnored } from './settings-form';
-import { tabKeyTarget } from './settings-tabs';
+import { errorControl, tabKeyTarget } from './settings-tabs';
 import {
   armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, nextSelection, UNDO_MS, visible, type UndoState,
 } from './view';
@@ -1363,10 +1364,10 @@ const ocrProgressEl = $('#ocrProgress'), ocrUnsupportedEl = $('#ocrUnsupported')
 const permRow = $('#permRow'), permState = $('#permState'), permBtn = $<HTMLButtonElement>('#permBtn');
 const themeSeg = $('#themeSeg'), themePill = themeSeg.querySelector<HTMLElement>('.pill')!;
 const themeOpts = [...themeSeg.querySelectorAll<HTMLElement>('[data-theme-opt]')];
-const shotIn = $<HTMLInputElement>('#shotHotkey'), shotHelp = $('#shotHotkeyHelp'), shotDirIn = $<HTMLInputElement>('#shotDir');
 const shotSaveCopyIn = $<HTMLInputElement>('#shotSaveCopy'), shotPermRow = $('#shotPermRow');
-const HOTKEY_IDLE = '点击输入框，然后按下新的组合键', SHOT_IDLE = '点击输入框后按下新的组合键；按 ⌫ 清空表示不启用';
-let pendingHotkey = '', pendingShot = '', pendingShotDir = '', dlgReturn: HTMLElement | null = null, closeTimer = 0, saving = false;
+const recSystemAudioIn = $<HTMLInputElement>('#recSystemAudio'), recMicIn = $<HTMLInputElement>('#recMicrophone'), recCopyIn = $<HTMLInputElement>('#recCopy');
+const HOTKEY_IDLE = '点击输入框，然后按下新的组合键', OPT_IDLE = '点击输入框后按下新的组合键；按 ⌫ 清空表示不启用';
+let pendingHotkey = '', dlgReturn: HTMLElement | null = null, closeTimer = 0, saving = false;
 
 // 分标签（M15 规则 5）：本次运行内记住上次停留的标签，不落盘。内容即时切换；
 // 指示条点击时滑动，键盘与打开时即时（同切换分类，M20）
@@ -1393,6 +1394,75 @@ function showStControl(el: HTMLElement) {
 }
 // 出错项所在标签显示红点：跟着行内错误走（.err 显示着），改正或复原后消失
 const paintStErr = () => stTabs.forEach((t, j) => t.toggleAttribute('data-err', !!stPanes[j].querySelector('.err:not([hidden])')));
+
+// 截图、录屏快捷键录制框（M15、M24）：同唤起快捷键，另可按不带修饰键的 ⌫ / Delete 清空，表示不启用
+function optHotkey(id: string) {
+  const input = $<HTMLInputElement>(`#${id}`), help = $(`#${id}Help`);
+  const f = {
+    input,
+    pending: '',
+    setHelp(msg: string, err = false) {
+      help.textContent = msg;
+      help.className = err ? 'err' : 'help';
+      input.setAttribute('aria-invalid', String(err));
+      paintStErr();
+    },
+    reset(h: string) {
+      f.pending = h;
+      input.value = hotkeyLabel(h, S.platform.os);
+      f.setHelp(OPT_IDLE);
+    },
+    record(h: string) {
+      f.pending = h;
+      input.value = hotkeyLabel(h, S.platform.os);
+      f.setHelp('已记录，保存后生效');
+      fx(input, [{ transform: 'scale(.98)' }, { transform: 'scale(1)' }], { duration: 300, easing: EASE_SPRING });
+    },
+  };
+  input.addEventListener('focus', () => f.setHelp('请按下组合键，至少包含一个修饰键；⌫ 清空…'));
+  input.addEventListener('blur', () => f.setHelp(OPT_IDLE));
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Tab' || e.key === 'Escape') return;
+    e.preventDefault();
+    if (e.repeat || ['Control', 'Meta', 'Shift', 'Alt'].includes(e.key)) return;
+    if ((e.key === 'Backspace' || e.key === 'Delete') && !(e.ctrlKey || e.metaKey || e.altKey || e.shiftKey)) {
+      f.pending = '';
+      input.value = '';
+      return f.setHelp('已清空，保存后不启用');
+    }
+    const h = hotkeyFromEvent({ key: e.key, code: e.code, ctrl: e.ctrlKey, meta: e.metaKey, alt: e.altKey, shift: e.shiftKey }, S.platform.os);
+    if (!h) return f.setHelp(S.platform.os === 'macos' ? '至少需要包含 ⌘、⌃ 或 ⌥' : '至少需要包含 Ctrl 或 Alt');
+    f.record(h);
+  });
+  return f;
+}
+const shotKey = optHotkey('shotHotkey'), recKey = optHotkey('recHotkey');
+
+// 截图、录屏文件夹：设置里存空字符串表示默认文件夹，输入框只显示默认路径的写法。
+// 取消选择不改；选好的路径只在保存时写回。失败写在这一行下方（提示条会被设置框盖住）
+function dirField(id: string, placeholder: () => string) {
+  const input = $<HTMLInputElement>(`#${id}`), errEl = $(`#${id}Err`);
+  const f = {
+    pending: '',
+    paint(err = '') {
+      errEl.textContent = err;
+      errEl.hidden = !err;
+      paintStErr();
+      input.value = f.pending;
+      input.placeholder = placeholder();
+    },
+  };
+  $(`#${id}Btn`).addEventListener('click', () =>
+    void pickFolder(f.pending || undefined).then((d) => {
+      if (!d) return;
+      f.pending = d;
+      f.paint();
+    }, (err) => f.paint(`打开选择文件夹窗口失败：${String(err)}`)),
+  );
+  return f;
+}
+const shotDir = dirField('shotDir', () => (S.platform.os === 'macos' ? '~/Pictures/xPaste' : '图片\\xPaste'));
+const recDir = dirField('recDir', () => '~/Movies/xPaste');
 $('#stTabs').addEventListener('click', (e) => {
   const t = (e.target as Element).closest<HTMLElement>('[role="tab"]');
   if (t) selectStTab(stTabs.indexOf(t), false);
@@ -1561,12 +1631,6 @@ const setHotkeyHelp = (msg: string, err = false) => {
   hotkeyIn.setAttribute('aria-invalid', String(err));
   paintStErr();
 };
-const setShotHelp = (msg: string, err = false) => {
-  shotHelp.textContent = msg;
-  shotHelp.className = err ? 'err' : 'help';
-  shotIn.setAttribute('aria-invalid', String(err));
-  paintStErr();
-};
 async function paintPerm() {
   permRow.hidden = shotPermRow.hidden = S.platform.os !== 'macos';
   if (permRow.hidden) return;
@@ -1576,15 +1640,6 @@ async function paintPerm() {
   $('#shotPermOk').hidden = !shotOk;
   $('#shotPermBtn').hidden = shotOk;
 }
-// 截图文件夹：设置里存空字符串表示默认文件夹，输入框只显示默认路径的写法
-const shotDirErr = $('#shotDirErr');
-const paintShotDir = (err = '') => {
-  shotDirErr.textContent = err;
-  shotDirErr.hidden = !err;
-  paintStErr();
-  shotDirIn.value = pendingShotDir;
-  shotDirIn.placeholder = S.platform.os === 'macos' ? '~/Pictures/xPaste' : '图片\\xPaste';
-};
 // 识别设置：总开关关闭时子开关置灰（保存时照样带上它的勾选，后端两个都看）
 function paintOcrBackfill() {
   ocrBackfillIn.disabled = !ocrOnIn.checked;
@@ -1626,12 +1681,16 @@ function openSettings() {
   pendingHotkey = st.hotkey;
   hotkeyIn.value = hotkeyLabel(st.hotkey, S.platform.os);
   setHotkeyHelp(HOTKEY_IDLE);
-  pendingShot = st.shotHotkey;
-  shotIn.value = hotkeyLabel(st.shotHotkey, S.platform.os);
-  setShotHelp(SHOT_IDLE);
-  pendingShotDir = st.shotDir;
-  paintShotDir();
+  shotKey.reset(st.shotHotkey);
+  recKey.reset(st.recHotkey);
+  shotDir.pending = st.shotDir;
+  shotDir.paint();
+  recDir.pending = st.recDir;
+  recDir.paint();
   shotSaveCopyIn.checked = st.shotSaveCopy;
+  recSystemAudioIn.checked = st.recSystemAudio;
+  recMicIn.checked = st.recMicrophone;
+  recCopyIn.checked = st.recCopy;
   retainIn.value = optionFromRetention(st.retentionDays);
   limitIn.value = String(st.maxRecords);
   limitErr.hidden = true;
@@ -1713,36 +1772,6 @@ function recordHotkey(h: string) {
   setHotkeyHelp('已记录，保存后生效');
   fx(hotkeyIn, [{ transform: 'scale(.98)' }, { transform: 'scale(1)' }], { duration: 300, easing: EASE_SPRING });
 }
-shotIn.addEventListener('focus', () => setShotHelp('请按下组合键，至少包含一个修饰键；⌫ 清空…'));
-shotIn.addEventListener('blur', () => setShotHelp(SHOT_IDLE));
-shotIn.addEventListener('keydown', (e) => {
-  if (e.key === 'Tab' || e.key === 'Escape') return;
-  e.preventDefault();
-  if (e.repeat || ['Control', 'Meta', 'Shift', 'Alt'].includes(e.key)) return;
-  // 不带修饰键的 ⌫ / Delete：清空，表示不启用（M15 截图快捷键）
-  if ((e.key === 'Backspace' || e.key === 'Delete') && !(e.ctrlKey || e.metaKey || e.altKey || e.shiftKey)) {
-    pendingShot = '';
-    shotIn.value = '';
-    return setShotHelp('已清空，保存后不启用');
-  }
-  const h = hotkeyFromEvent({ key: e.key, code: e.code, ctrl: e.ctrlKey, meta: e.metaKey, alt: e.altKey, shift: e.shiftKey }, S.platform.os);
-  if (!h) return setShotHelp(S.platform.os === 'macos' ? '至少需要包含 ⌘、⌃ 或 ⌥' : '至少需要包含 Ctrl 或 Alt');
-  recordShot(h);
-});
-function recordShot(h: string) {
-  pendingShot = h;
-  shotIn.value = hotkeyLabel(h, S.platform.os);
-  setShotHelp('已记录，保存后生效');
-  fx(shotIn, [{ transform: 'scale(.98)' }, { transform: 'scale(1)' }], { duration: 300, easing: EASE_SPRING });
-}
-// 取消选择不改；选好的路径只在保存时写回。失败写在这一行下方（提示条会被设置框盖住）
-$('#shotDirBtn').addEventListener('click', () =>
-  void pickFolder(pendingShotDir || undefined).then((d) => {
-    if (!d) return;
-    pendingShotDir = d;
-    paintShotDir();
-  }, (err) => paintShotDir(`打开选择文件夹窗口失败：${String(err)}`)),
-);
 // 授权要切去系统设置：设置框开着时失焦不隐藏，这里主动收起，免得面板盖住系统设置
 const grantScreenCapture = () => void requestScreenCapture().then(hide, (err: AppError) => toast(err.message));
 permBtn.addEventListener('click', () => void requestAccessibility().then(hide, (err: AppError) => toast(err.message)));
@@ -1764,7 +1793,8 @@ async function submitSettings() {
   const s = formToSettings(S.settings, {
     hotkey: pendingHotkey, retain: retainIn.value, limit, frequent, ignored: addIgnored(draftIgnored, ignoreIn.value), skipSensitive: sensitiveIn.checked,
     moveToTop: moveTopIn.checked, launchAtLogin: autostartIn.checked, ocrEnabled: ocrOnIn.checked, ocrBackfill: ocrBackfillIn.checked, searchFileText: fileTextIn.checked,
-    shotHotkey: pendingShot, shotDir: pendingShotDir, shotSaveCopy: shotSaveCopyIn.checked,
+    shotHotkey: shotKey.pending, shotDir: shotDir.pending, shotSaveCopy: shotSaveCopyIn.checked,
+    recHotkey: recKey.pending, recDir: recDir.pending, recSystemAudio: recSystemAudioIn.checked, recMicrophone: recMicIn.checked, recCopy: recCopyIn.checked,
   });
   saving = true;
   try {
@@ -1787,14 +1817,15 @@ async function submitSettings() {
     toast('设置已保存');
   } catch (e) {
     const err = e as AppError;
-    if (err.kind === 'hotkeyTaken') {
-      // 先聚焦再写错误：focus 处理器会改帮助文字
+    // 快捷键被占用或校验不过（与唤起相同等）写在对应录制框下方；先聚焦再写错误：focus 处理器会改帮助文字。
+    // 录制框所在行藏着（Windows 上的录屏）时写不上，走提示条
+    const at = errorControl(err.kind, err.message), f = at === 'shotHotkey' ? shotKey : at === 'recHotkey' ? recKey : null;
+    if (at === 'hotkey') {
       showStControl(hotkeyIn);
       setHotkeyHelp(err.message, true);
-    } else if (err.kind === 'shotHotkeyTaken' || (err.kind === 'invalidSettings' && err.message.startsWith('截图快捷键'))) {
-      // 同上；截图快捷键的校验错误（与唤起相同等）也写在这一行下方
-      showStControl(shotIn);
-      setShotHelp(err.message, true);
+    } else if (f && !f.input.closest('[hidden]')) {
+      showStControl(f.input);
+      f.setHelp(err.message, true);
     } else toast(err.message);
   } finally {
     saving = false;
@@ -2042,6 +2073,8 @@ await onRecordAdded((s) => handlers.added(s));
 await onRecordUpdated((s) => handlers.updated(s));
 await onRecordsRemoved((ids) => handlers.removed(ids));
 await onPausedChanged((p) => handlers.paused(p));
+// 录屏遮罩的声音开关写回了设置（M24）：换掉手里的副本，之后保存设置或界面状态才不会把它改回去
+await onSettingsChanged((s) => void (S.settings = s));
 // 托盘“设置…”：后端已先唤起面板
 await onOpenSettings(openSettings);
 // 设置对话框开着时提示条被它盖住，结果同样写进“历史记录”行内：先切到“记录”标签，
@@ -2061,17 +2094,19 @@ await onShotNeedPermission(({ pane, mode }) =>
 );
 // 引导中按唤起快捷键：可见时面板不隐藏，隐藏时先 panel-shown 再到这里；只在“试按快捷键”这一步算成功
 // 设置对话框打开时按唤起快捷键：面板同样不隐藏；录制框有焦点就当作按下了当前快捷键（网页收不到被全局注册拦下的按键）
-// 截图快捷键同理：对话框开着且面板有焦点时后端不截图，只发到这里（role = shot）
+// 截图、录屏快捷键同理：对话框开着且面板有焦点时后端不开遮罩，只发到这里（role = shot / rec）
 await onHotkeyPressed((role) => {
   // 只认面板有焦点时的按键：失焦时后端只把面板拉回焦点，这里再防一道
   const on = (el: Element) => document.activeElement === el && document.hasFocus();
-  if (role === 'shot') {
-    if (on(shotIn)) recordShot(S.settings.shotHotkey);
-    else if (on(hotkeyIn)) setHotkeyHelp('不能与截图快捷键相同', true);
+  if (role !== 'panel') {
+    const [self, other, name, otherName] = role === 'shot' ? [shotKey, recKey, '截图', '录屏'] : [recKey, shotKey, '录屏', '截图'];
+    if (on(self.input)) self.record(role === 'shot' ? S.settings.shotHotkey : S.settings.recHotkey);
+    else if (on(hotkeyIn)) setHotkeyHelp(`不能与${name}快捷键相同`, true);
+    else if (on(other.input)) other.setHelp(`${otherName}快捷键不能与${name}快捷键相同`, true);
     return;
   }
   if (on(hotkeyIn)) return recordHotkey(S.settings.hotkey);
-  if (on(shotIn)) return setShotHelp('截图快捷键不能与唤起快捷键相同', true);
+  for (const [f, name] of [[shotKey, '截图'], [recKey, '录屏']] as const) if (on(f.input)) return f.setHelp(`${name}快捷键不能与唤起快捷键相同`, true);
   if (obStep === 'hotkey' && obDlg.open) obSucceed();
 });
 
@@ -2101,8 +2136,15 @@ root.toggleAttribute('data-native-fade', nativeFade());
 const MOD = b.platform.os === 'macos' ? '⌘' : 'Ctrl';
 document.querySelectorAll('.mod').forEach((k) => (k.textContent = MOD));
 $('.modp').textContent = `${MOD} P`;
-// macOS 没有 ⌦ 键（MacBook），删除提示写 ⌘ ⌫：状态栏与邻项一样拆成两枚键帽，菜单里是一枚
 const mac = b.platform.os === 'macos';
+// 录屏只在 macOS 上做（M24）；麦克风要 macOS 15 起
+document.querySelectorAll<HTMLElement>('.os-mac').forEach((el) => (el.hidden = !mac));
+if ((b.platform.macosMajor ?? 0) < 15) {
+  recMicIn.disabled = true;
+  $('#recMicRow').classList.add('is-disabled');
+  $('#recMicNote').textContent = '需要 macOS 15';
+}
+// macOS 没有 ⌦ 键（MacBook），删除提示写 ⌘ ⌫：状态栏与邻项一样拆成两枚键帽，菜单里是一枚
 $('.statusbar .del').textContent = mac ? '⌫' : 'Del';
 $('.statusbar .delmod').hidden = !mac;
 $('#menu .del').textContent = mac ? '⌘ ⌫' : 'Del';
