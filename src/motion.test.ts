@@ -139,6 +139,14 @@ test('M20-12 设置对话框 420ms spring / 150ms ease-out，分组间隔 45ms�
   assert.match(ts, /closeTimer = window\.setTimeout\(\(\) => dlg\.close\(\), reduced\.matches \? 0 : 150\);/);
 });
 
+test('M20 设置标签切换 300ms move，只改 transform；键盘与打开时即时，内容即时切换', () => {
+  assert.match(rule('.st-ind'), /transition: transform 300ms var\(--ease-move\)/);
+  assert.match(rule('.st-ind[data-instant]'), /transition: none/);
+  assert.match(ts, /if \(t\) selectStTab\(stTabs\.indexOf\(t\), false\);/);
+  assert.match(ts, /selectStTab\(i\);\s*stTabs\[i\]\.focus\(\);/);
+  assert.match(rule('.st-panes > [inert]'), /visibility: hidden/);
+});
+
 test('M20-13 悬停 0 / 140ms ease-out；快捷按钮从右侧滑入；视频封面播放钮放大', () => {
   assert.match(rule('.row::before'), /opacity: 0; transition: opacity 140ms ease-out/);
   assert.match(rule('.row:hover::before'), /opacity: 1; transition-duration: 0ms/);

@@ -37,6 +37,7 @@ import {
   ticks as winTicks, winLabel, xOf, zoomWin, type Layout, type Win,
 } from './spectrum';
 import { addIgnored, formToSettings, optionFromRetention, parseFrequent, parseLimit, pickerOptions, removeIgnored } from './settings-form';
+import { tabKeyTarget } from './settings-tabs';
 import {
   armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, nextSelection, UNDO_MS, visible, type UndoState,
 } from './view';
@@ -1367,6 +1368,45 @@ const shotSaveCopyIn = $<HTMLInputElement>('#shotSaveCopy'), shotPermRow = $('#s
 const HOTKEY_IDLE = '点击输入框，然后按下新的组合键', SHOT_IDLE = '点击输入框后按下新的组合键；按 ⌫ 清空表示不启用';
 let pendingHotkey = '', pendingShot = '', pendingShotDir = '', dlgReturn: HTMLElement | null = null, closeTimer = 0, saving = false;
 
+// 分标签（M15 规则 5）：本次运行内记住上次停留的标签，不落盘。内容即时切换；
+// 指示条点击时滑动，键盘与打开时即时（同切换分类，M20）
+const stTabs = [...document.querySelectorAll<HTMLElement>('#stTabs [role="tab"]')], stInd = $('#stTabs .st-ind');
+const stPanes = stTabs.map((t) => $(`#${t.getAttribute('aria-controls')}`));
+let stTab = 0;
+function selectStTab(i: number, instant = true) {
+  stTab = i;
+  stTabs.forEach((t, j) => {
+    t.setAttribute('aria-selected', String(j === i));
+    t.tabIndex = j === i ? 0 : -1;
+    stPanes[j].inert = j !== i;
+  });
+  instantly(stInd, instant, () => {
+    stInd.style.width = `${stTabs[i].offsetWidth}px`;
+    stInd.style.transform = `translateX(${stTabs[i].offsetLeft}px)`;
+  });
+}
+// 切到控件所在的标签再聚焦（隐藏的面板里聚焦不了）
+function showStControl(el: HTMLElement) {
+  const i = stPanes.findIndex((p) => p.contains(el));
+  if (i !== stTab) selectStTab(i, false);
+  el.focus();
+}
+// 出错项所在标签显示红点：跟着行内错误走（.err 显示着），改正或复原后消失
+const paintStErr = () => stTabs.forEach((t, j) => t.toggleAttribute('data-err', !!stPanes[j].querySelector('.err:not([hidden])')));
+$('#stTabs').addEventListener('click', (e) => {
+  const t = (e.target as Element).closest<HTMLElement>('[role="tab"]');
+  if (t) selectStTab(stTabs.indexOf(t), false);
+});
+// WAI-ARIA Tabs：←/→ 循环、Home / End，选中跟随焦点
+$('#stTabs').addEventListener('keydown', (e) => {
+  const i = tabKeyTarget(e.key, stTab, stTabs.length);
+  if (i === null) return;
+  e.preventDefault();
+  e.stopPropagation();
+  selectStTab(i);
+  stTabs[i].focus();
+});
+
 // 不记录这些应用：芯片 + 组合框（M15 P1）。草稿只在保存时写回，取消 / Esc / 遮罩丢弃
 const ignoreBox = $('#ignoreBox'), ignoreChips = $('#ignoreChips'), ignoreList = $('#ignoreList');
 let draftIgnored: string[] = [], allApps: string[] = [], appOpts: string[] = [], appActive = -1, escClosedList = false;
@@ -1519,11 +1559,13 @@ const setHotkeyHelp = (msg: string, err = false) => {
   hotkeyHelp.textContent = msg;
   hotkeyHelp.className = err ? 'err' : 'help';
   hotkeyIn.setAttribute('aria-invalid', String(err));
+  paintStErr();
 };
 const setShotHelp = (msg: string, err = false) => {
   shotHelp.textContent = msg;
   shotHelp.className = err ? 'err' : 'help';
   shotIn.setAttribute('aria-invalid', String(err));
+  paintStErr();
 };
 async function paintPerm() {
   permRow.hidden = shotPermRow.hidden = S.platform.os !== 'macos';
@@ -1539,6 +1581,7 @@ const shotDirErr = $('#shotDirErr');
 const paintShotDir = (err = '') => {
   shotDirErr.textContent = err;
   shotDirErr.hidden = !err;
+  paintStErr();
   shotDirIn.value = pendingShotDir;
   shotDirIn.placeholder = S.platform.os === 'macos' ? '~/Pictures/xPaste' : '图片\\xPaste';
 };
@@ -1548,6 +1591,14 @@ function paintOcrBackfill() {
   $('#ocrBackfillRow').classList.toggle('is-disabled', !ocrOnIn.checked);
 }
 ocrOnIn.addEventListener('change', paintOcrBackfill);
+// 数字项改正后行内错误随即消失（只清不报，报错仍在保存时）
+for (const [inp, err, parse] of [[limitIn, limitErr, parseLimit], [frequentIn, frequentErr, parseFrequent]] as const)
+  inp.addEventListener('input', () => {
+    if (err.hidden || parse(inp.value) === null) return;
+    err.hidden = true;
+    inp.removeAttribute('aria-invalid');
+    paintStErr();
+  });
 // 进度只在设置对话框打开时每 2 s 取一次；取不到就保持上一次的显示（纯展示，不提示）
 let ocrTimer = 0;
 function pollOcr() {
@@ -1588,6 +1639,7 @@ function openSettings() {
   frequentIn.value = String(st.frequentMinUses);
   frequentErr.hidden = true;
   frequentIn.removeAttribute('aria-invalid');
+  paintStErr();
   draftIgnored = [...st.ignoredApps];
   ignoreIn.value = '';
   paintChips();
@@ -1613,11 +1665,13 @@ function openSettings() {
   void paintPerm();
   if (!dlg.open) dlg.showModal();
   syncDialogOpen();
-  // 关闭时 display:none 不会清掉滚动位置，打开后再回到顶部
-  dlg.querySelector('.dlg-body')!.scrollTop = 0;
+  // 回到上次停留的标签（显示后才量得到指示条位置）；关闭时 display:none 不会清掉滚动位置，打开后再回到顶部
+  selectStTab(stTab);
+  stPanes.forEach((p) => (p.scrollTop = 0));
   void dlg.offsetWidth;
   dlg.classList.add('is-shown');
-  hotkeyIn.focus();
+  // “通用”照旧聚焦唤起快捷键录制框；其他标签聚焦标签本身，不让截图录制框或下拉框一打开就接按键
+  (stTab === 0 ? hotkeyIn : stTabs[stTab]).focus();
 }
 function closeSettings() {
   dlg.classList.remove('is-shown');
@@ -1704,8 +1758,9 @@ async function submitSettings() {
   limitIn.setAttribute('aria-invalid', String(limit === null));
   frequentErr.hidden = frequent !== null;
   frequentIn.setAttribute('aria-invalid', String(frequent === null));
-  if (limit === null) return limitIn.focus();
-  if (frequent === null) return frequentIn.focus();
+  paintStErr();
+  // 切到第一个出错的标签（按标签顺序），聚焦其中出错的控件
+  if (limit === null || frequent === null) return showStControl(stPanes.map((p) => p.querySelector<HTMLElement>('[aria-invalid="true"]')).find(Boolean)!);
   const s = formToSettings(S.settings, {
     hotkey: pendingHotkey, retain: retainIn.value, limit, frequent, ignored: addIgnored(draftIgnored, ignoreIn.value), skipSensitive: sensitiveIn.checked,
     moveToTop: moveTopIn.checked, launchAtLogin: autostartIn.checked, ocrEnabled: ocrOnIn.checked, ocrBackfill: ocrBackfillIn.checked, searchFileText: fileTextIn.checked,
@@ -1734,11 +1789,11 @@ async function submitSettings() {
     const err = e as AppError;
     if (err.kind === 'hotkeyTaken') {
       // 先聚焦再写错误：focus 处理器会改帮助文字
-      hotkeyIn.focus();
+      showStControl(hotkeyIn);
       setHotkeyHelp(err.message, true);
     } else if (err.kind === 'shotHotkeyTaken' || (err.kind === 'invalidSettings' && err.message.startsWith('截图快捷键'))) {
       // 同上；截图快捷键的校验错误（与唤起相同等）也写在这一行下方
-      shotIn.focus();
+      showStControl(shotIn);
       setShotHelp(err.message, true);
     } else toast(err.message);
   } finally {
@@ -1989,8 +2044,12 @@ await onRecordsRemoved((ids) => handlers.removed(ids));
 await onPausedChanged((p) => handlers.paused(p));
 // 托盘“设置…”：后端已先唤起面板
 await onOpenSettings(openSettings);
-// 设置对话框开着时提示条被它盖住，结果同样写进“历史记录”行内
-await onConfirmClear(() => void confirmClear().then((m) => m && dlg.open && (clearNote.textContent = m)));
+// 设置对话框开着时提示条被它盖住，结果同样写进“历史记录”行内：先切到“记录”标签，
+// 如同点了行内的“清空历史…”（确认框关闭后焦点回到这个按钮）
+await onConfirmClear(() => {
+  if (dlg.open) showStControl($('#clearBtn'));
+  void confirmClear().then((m) => m && dlg.open && (clearNote.textContent = m));
+});
 // 截图缺少屏幕录制权限：后端已唤起面板（M18 规则 4、M23 规则 2）
 await onShotNeedPermission((pane) =>
   void confirm({
