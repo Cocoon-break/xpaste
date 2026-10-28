@@ -14,7 +14,7 @@ image.workspace = true
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSArray", "NSData", "NSEnumerator", "NSFileManager", "NSURL", "NSDictionary", "NSGeometry", "NSValue", "NSError", "NSIndexSet"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSPasteboard", "NSPasteboardItem", "NSWorkspace", "NSRunningApplication", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphicsContext", "objc2-core-graphics"] }
-objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "CGEvent", "CGEventTypes", "CGRemoteOperation", "CGImage", "CGDataProvider", "CGColorSpace", "CGDirectDisplay", "CGDisplayConfiguration", "CGError", "CGWindow"] }
+objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "CGEvent", "CGEventTypes", "CGRemoteOperation", "CGImage", "CGDataProvider", "CGColorSpace", "CGBitmapContext", "CGContext", "CGDirectDisplay", "CGDisplayConfiguration", "CGError", "CGWindow"] }
 objc2-av-foundation = { version = "0.3", default-features = false, features = ["std", "AVAsset", "AVAssetImageGenerator", "AVAssetTrack", "AVMediaFormat", "objc2-core-foundation", "objc2-core-media", "objc2-core-graphics"] }
 objc2-core-media = { version = "0.3", default-features = false, features = ["std", "CMTime", "CMFormatDescription"] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFData"] }

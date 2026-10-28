@@ -1,4 +1,4 @@
-//! Windows 平台层的纯函数：格式名映射、读取筛选、CF_HTML / CF_HDROP / DIB 解码、版本资源查询路径、托盘窗口类名、识别结果按词拼行、PNG 转 DIB、BGRA 行转 RGBA（macOS 截屏也用）。
+//! Windows 平台层的纯函数：格式名映射、读取筛选、CF_HTML / CF_HDROP / DIB 解码、版本资源查询路径、托盘窗口类名、识别结果按词拼行、桌面窗口类名、PNG 转 DIB、BGRA 转不透明 RGBA。
 //! 与 `decode.rs` 一样全平台编译，`windows.rs` 只负责 Win32 调用。
 
 use std::borrow::Cow;
@@ -160,37 +160,19 @@ pub fn png_to_dib(png: &[u8]) -> Option<Vec<u8>> {
     Some(v)
 }
 
-/// 每行 `stride` 字节的 BGRA 转紧密排列的 RGBA（非预乘）。`opaque` 为真时 alpha 一律记 255
-/// （GDI `BitBlt`、`NoneSkipFirst` 的 alpha 字节无意义）；否则按预乘还原。数据不够 `h` 行时返回 `None`。
-pub fn bgra_rows_to_rgba(
-    src: &[u8],
-    w: u32,
-    h: u32,
-    stride: usize,
-    opaque: bool,
-) -> Option<Vec<u8>> {
-    let row = (w as usize).checked_mul(4)?;
-    let (w, h) = (w as usize, h as usize);
-    if h > 0 && (stride < row || src.len() < stride * (h - 1) + row) {
+/// 紧密排列的 BGRA 转 RGBA，alpha 一律记 255（GDI `BitBlt` 的 alpha 字节无意义）。
+/// 长度不是 `w * h * 4` 时返回 `None`。
+pub fn bgra_to_opaque_rgba(bgra: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
+    if (w as usize).checked_mul(h as usize)?.checked_mul(4)? != bgra.len() {
         return None;
     }
-    let mut out = Vec::with_capacity(row * h);
-    for y in 0..h {
-        for &[b, g, r, a] in src[y * stride..y * stride + row].as_chunks::<4>().0 {
-            out.extend(match (opaque, a) {
-                (true, _) | (false, 255) => [r, g, b, 255],
-                (false, 0) => [0, 0, 0, 0],
-                (false, a) => {
-                    let un = |c: u8| {
-                        ((u32::from(c) * 255 + u32::from(a) / 2) / u32::from(a)).min(255) as u8
-                    };
-                    [un(r), un(g), un(b), a]
-                }
-            });
-        }
-    }
-    debug_assert_eq!(out.len(), w * h * 4);
-    Some(out)
+    Some(
+        bgra.as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|&[b, g, r, _]| [r, g, b, 255])
+            .collect(),
+    )
 }
 
 /// 自上而下的 BGRA 像素转 PNG；长度必须正好是 `w * h * 4`。
@@ -259,6 +241,11 @@ pub fn is_shell_tray_class(class: &str) -> bool {
             | "NotifyIconOverflowWindow"
             | "TopLevelWindowForOverflowXamlIsland"
     )
+}
+
+/// 桌面（壁纸与图标层）窗口的类名（区分大小写）：不参与截图的窗口吸附，对应 macOS 的 `ExcludeDesktopElements`。
+pub fn is_desktop_class(class: &str) -> bool {
+    matches!(class, "Progman" | "WorkerW")
 }
 
 /// 视频文件属性库（`IPropertyStore`）里读到的原始值，读不到的为 `None`。
@@ -537,19 +524,12 @@ mod tests {
         assert_eq!(png_to_dib(b"not png"), None);
     }
     #[test]
-    fn bgra_rows_to_rgba_drops_padding_and_unpremultiplies() {
-        // 2×1，每行补 4 字节；第二个像素半透明预乘红
-        let src = [10, 20, 30, 255, 0, 0, 64, 128, 0xEE, 0xEE, 0xEE, 0xEE];
+    fn bgra_to_opaque_rgba_swaps_and_forces_alpha() {
         assert_eq!(
-            bgra_rows_to_rgba(&src, 2, 1, 12, false),
-            Some(vec![30, 20, 10, 255, 128, 0, 0, 128])
+            bgra_to_opaque_rgba(&[1, 2, 3, 0, 4, 5, 6, 7], 2, 1),
+            Some(vec![3, 2, 1, 255, 6, 5, 4, 255])
         );
-        // 不透明：alpha 一律 255
-        assert_eq!(
-            bgra_rows_to_rgba(&[1, 2, 3, 0], 1, 1, 4, true),
-            Some(vec![3, 2, 1, 255])
-        );
-        assert_eq!(bgra_rows_to_rgba(&[0; 7], 1, 2, 4, true), None);
+        assert_eq!(bgra_to_opaque_rgba(&[0; 7], 1, 2), None);
     }
     #[test]
     fn write_bytes_terminates_unicode_text() {
@@ -631,6 +611,14 @@ mod tests {
         }
         assert!(!is_shell_tray_class("Notepad"));
         assert!(!is_shell_tray_class("shell_traywnd")); // 类名区分大小写
+    }
+
+    #[test]
+    fn desktop_classes_are_not_snap_targets() {
+        assert!(is_desktop_class("Progman"));
+        assert!(is_desktop_class("WorkerW"));
+        assert!(!is_desktop_class("workerw")); // 类名区分大小写
+        assert!(!is_desktop_class("Notepad"));
     }
 
     #[test]

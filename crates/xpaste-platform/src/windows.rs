@@ -71,7 +71,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowTextLengthW, GetWindowThreadProcessId, HICON, HWND_MESSAGE, ICONINFO,
     InternalGetWindowText, IsIconic, IsWindowVisible, MONITORINFOF_PRIMARY, MSG, RegisterClassW,
     SetForegroundWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLIPBOARDUPDATE, WNDCLASSW,
-    WS_EX_TOOLWINDOW,
+    WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
 };
 use windows::core::{BOOL, Error, HSTRING, Interface, PCWSTR, PWSTR, w};
 use xpaste_core::capture::MAX_FLAVOR_BYTES;
@@ -79,10 +79,10 @@ use xpaste_core::{AppInfo, Flavor, Snapshot};
 
 use crate::decode::normalize_newlines;
 use crate::winfmt::{
-    VideoProps, bgra_rows_to_rgba, bgra_to_png, bgra_to_png_within, bitmap_from_flavors,
-    cf_html_fragment, file_description_query, formats_to_read, is_shell_tray_class, join_ocr_words,
-    parse_hdrop, png_to_dib, standard_format_id, standard_format_name, video_meta_from_props,
-    write_bytes,
+    VideoProps, bgra_to_opaque_rgba, bgra_to_png, bgra_to_png_within, bitmap_from_flavors,
+    cf_html_fragment, file_description_query, formats_to_read, is_desktop_class,
+    is_shell_tray_class, join_ocr_words, parse_hdrop, png_to_dib, standard_format_id,
+    standard_format_name, video_meta_from_props, write_bytes,
 };
 use crate::{Frame, OcrError, OcrText, PIN_TITLE_PREFIX, PasteBlock, PlatformError, WinRect};
 
@@ -949,6 +949,9 @@ pub fn png_flavors(png: Vec<u8>) -> Vec<Flavor> {
 }
 
 /// 逐块显示器截整屏（主屏在前）。坐标为虚拟桌面物理像素，`scale` 为 DPI / 96。阻塞。
+///
+/// 前提：进程是 Per-Monitor-v2 DPI 感知（tao 在事件循环建立后设置）。否则显示器矩形与 `BitBlt`
+/// 按缩放后的逻辑坐标计算，而 `window_rects` 的 DWM 边框仍是物理像素，两者对不上。
 pub fn freeze_displays() -> Result<Vec<Frame>, PlatformError> {
     let mut monitors: Vec<(HMONITOR, RECT)> = Vec::new();
     // SAFETY: 回调只在 EnumDisplayMonitors 返回前经 lparam 访问 monitors
@@ -1042,7 +1045,7 @@ fn freeze_monitor(screen: HDC, m: HMONITOR, r: RECT) -> Result<Frame, PlatformEr
                 let rgba = blt.ok().and_then(|()| {
                     let len = pw as usize * ph as usize * 4;
                     let px = std::slice::from_raw_parts(bits as *const u8, len);
-                    bgra_rows_to_rgba(px, pw, ph, pw as usize * 4, true)
+                    bgra_to_opaque_rgba(px, pw, ph)
                 });
                 SelectObject(mem, old);
                 let _ = DeleteObject(bmp.into());
@@ -1063,8 +1066,8 @@ fn freeze_monitor(screen: HDC, m: HMONITOR, r: RECT) -> Result<Frame, PlatformEr
     })
 }
 
-/// 屏上窗口外框（DWM 扩展边框，不含阴影），由前到后：别的进程取可见、未最小化、非 cloaked、非工具窗口；
-/// 本进程只取贴图窗口。
+/// 屏上窗口外框（DWM 扩展边框，不含阴影），由前到后：别的进程取可见、未最小化、非 cloaked、非工具窗口、非桌面、非鼠标穿透的分层窗口；
+/// 本进程只取贴图窗口。前提同 `freeze_displays`（Per-Monitor-v2 DPI 感知）。
 pub fn window_rects() -> Vec<WinRect> {
     let mut out: Vec<WinRect> = Vec::new();
     // SAFETY: 回调只在 EnumWindows 返回前经 lparam 访问 out
@@ -1098,10 +1101,20 @@ fn window_rect(hwnd: HWND) -> Option<WinRect> {
             if !String::from_utf16_lossy(&buf[..n]).starts_with(PIN_TITLE_PREFIX) {
                 return None;
             }
-        } else if GetWindowLongW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW.0 != 0
-            || is_cloaked(hwnd)
-        {
-            return None;
+        } else {
+            let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+            // 鼠标穿透的分层窗口（屏幕标注、悬浮层等）对应 macOS 的 alpha 为 0：看不见，不吸附
+            let see_through = WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0;
+            let mut class = [0u16; 256];
+            // GetClassNameW 只读窗口类，不向窗口发消息
+            let len = GetClassNameW(hwnd, &mut class).max(0) as usize;
+            if ex & WS_EX_TOOLWINDOW.0 != 0
+                || ex & see_through == see_through
+                || is_desktop_class(&String::from_utf16_lossy(&class[..len]))
+                || is_cloaked(hwnd)
+            {
+                return None;
+            }
         }
         let mut rect = RECT::default();
         DwmGetWindowAttribute(

@@ -14,11 +14,12 @@ use objc2_app_kit::{
 use objc2_av_foundation::{AVAssetImageGenerator, AVAssetTrack, AVMediaTypeVideo, AVURLAsset};
 use objc2_core_foundation::CFData;
 use objc2_core_graphics::{
-    CGBitmapInfo, CGColorRenderingIntent, CGColorSpace, CGDataProvider, CGDirectDisplayID,
-    CGDisplayBounds, CGDisplayMirrorsDisplay, CGError, CGEvent, CGEventFlags, CGEventTapLocation,
-    CGGetActiveDisplayList, CGImage, CGImageAlphaInfo, CGImageByteOrderInfo,
-    CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess, CGWindowListCopyWindowInfo,
-    CGWindowListOption, kCGNullWindowID,
+    CGBitmapContextCreate, CGBitmapInfo, CGBlendMode, CGColorRenderingIntent, CGColorSpace,
+    CGContext, CGDataProvider, CGDirectDisplayID, CGDisplayBounds, CGDisplayMirrorsDisplay,
+    CGError, CGEvent, CGEventFlags, CGEventTapLocation, CGGetActiveDisplayList, CGImage,
+    CGImageAlphaInfo, CGImageByteOrderInfo, CGPreflightScreenCaptureAccess,
+    CGRequestScreenCaptureAccess, CGWindowListCopyWindowInfo, CGWindowListOption,
+    kCGColorSpaceSRGB, kCGNullWindowID,
 };
 use objc2_core_media::{CMFormatDescription, CMTime};
 use objc2_foundation::{
@@ -229,7 +230,8 @@ pub fn png_flavors(png: Vec<u8>) -> Vec<Flavor> {
     }]
 }
 
-/// 逐块显示器截整屏（主屏在前，镜像屏跳过）。阻塞；2880×1800 实测约 30 ms，进程内首次约 110 ms。
+/// 逐块显示器截整屏（主屏在前，镜像屏跳过），像素转成 sRGB。阻塞；2880×1800 实测约 55–75 ms（其中色彩转换约一半），进程内首次约 135 ms。
+/// 没有屏幕录制权限时不报错，只截到桌面壁纸和菜单栏，调用方须先查 `screen_capture_granted()`。
 /// ponytail: CGDisplayCreateImage 在 macOS 15 SDK 已标记废弃；Apple 真正移除或截图出现异常时换 SCScreenshotManager，平台层签名不变
 pub fn freeze_displays() -> Result<Vec<Frame>, PlatformError> {
     let mut ids = [0 as CGDirectDisplayID; 16];
@@ -252,36 +254,12 @@ fn freeze_display(id: CGDirectDisplayID) -> Result<Frame, PlatformError> {
     let err = |what: &str| PlatformError::Capture(what.into());
     let bounds = CGDisplayBounds(id);
     let img = objc2_core_graphics::CGDisplayCreateImage(id).ok_or_else(|| err("截屏失败"))?;
-    let img = Some(&*img);
-    let (w, h) = (CGImage::width(img), CGImage::height(img));
-    // 屏幕图实测是 32 位小端 BGRA（预乘或 skip），其他布局不认
-    let alpha = CGImage::alpha_info(img);
-    if CGImage::bits_per_pixel(img) != 32
-        || CGImage::bits_per_component(img) != 8
-        || CGImage::byte_order_info(img) != CGImageByteOrderInfo::Order32Little
-        || !matches!(
-            alpha,
-            CGImageAlphaInfo::PremultipliedFirst | CGImageAlphaInfo::NoneSkipFirst
-        )
-    {
-        return Err(err("不认识的屏幕像素格式"));
-    }
-    let data = CGDataProvider::data(CGImage::data_provider(img).as_deref())
-        .ok_or_else(|| err("读取像素失败"))?;
-    let (w32, h32) = (
-        u32::try_from(w).map_err(|_| err("尺寸溢出"))?,
-        u32::try_from(h).map_err(|_| err("尺寸溢出"))?,
-    );
-    // SAFETY: data 在本函数内存活，切片不越过它的长度
-    let bytes = unsafe { data.as_bytes_unchecked() };
-    let rgba = crate::winfmt::bgra_rows_to_rgba(
-        bytes,
-        w32,
-        h32,
-        CGImage::bytes_per_row(img),
-        alpha == CGImageAlphaInfo::NoneSkipFirst,
-    )
-    .ok_or_else(|| err("像素数据不完整"))?;
+    let (w, h) = (CGImage::width(Some(&img)), CGImage::height(Some(&img)));
+    let (w32, h32) = match (u32::try_from(w), u32::try_from(h)) {
+        (Ok(a), Ok(b)) if a > 0 && b > 0 => (a, b),
+        _ => return Err(err("截屏尺寸无效")),
+    };
+    let rgba = srgb_rgba(&img, w, h).ok_or_else(|| err("像素转换失败"))?;
     let size = (bounds.size.width, bounds.size.height);
     Ok(Frame {
         origin: (bounds.origin.x, bounds.origin.y),
@@ -290,6 +268,49 @@ fn freeze_display(id: CGDirectDisplayID) -> Result<Frame, PlatformError> {
         px: (w32, h32),
         rgba,
     })
+}
+
+/// 把图像画进 sRGB、RGBA8 的位图上下文，返回非预乘、行紧密排列的像素。屏幕图带的是显示器的色彩描述
+/// （如 P3），前端画布与 PNG 都按 sRGB 解读，不转换的话颜色发灰。任意位深（10 位、HDR）都由 Quartz 转成 8 位。
+fn srgb_rgba(img: &CGImage, w: usize, h: usize) -> Option<Vec<u8>> {
+    // SAFETY: CoreGraphics 导出的常量，进程内一直有效
+    let space = CGColorSpace::with_name(Some(unsafe { kCGColorSpaceSRGB }))?;
+    let mut buf = vec![0u8; w.checked_mul(h)?.checked_mul(4)?];
+    // SAFETY: buf 正好容纳 h 行 w * 4 字节；上下文在本函数内释放，早于 buf 被移出
+    let ctx = unsafe {
+        CGBitmapContextCreate(
+            buf.as_mut_ptr().cast(),
+            w,
+            h,
+            8,
+            w * 4,
+            Some(&space),
+            CGImageAlphaInfo::PremultipliedLast.0 | CGImageByteOrderInfo::Order32Big.0,
+        )
+    }?;
+    // 直接覆盖，不与底色混合
+    CGContext::set_blend_mode(Some(&ctx), CGBlendMode::Copy);
+    let rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(w as f64, h as f64));
+    CGContext::draw_image(Some(&ctx), rect, Some(img));
+    drop(ctx);
+    unpremultiply(&mut buf);
+    Some(buf)
+}
+
+/// 预乘 RGBA 原地还原成非预乘。屏幕像素都不透明，只有 alpha 不是 255 的像素才计算。
+fn unpremultiply(rgba: &mut [u8]) {
+    for p in rgba.as_chunks_mut::<4>().0 {
+        match p[3] {
+            255 => {}
+            0 => *p = [0; 4],
+            a => {
+                let a = u32::from(a);
+                for c in &mut p[..3] {
+                    *c = ((u32::from(*c) * 255 + a / 2) / a).min(255) as u8;
+                }
+            }
+        }
+    }
 }
 
 /// 屏上窗口外框，由前到后：别的应用只取 layer 0、不透明度大于 0 的普通窗口；本进程只取贴图窗口。
@@ -670,6 +691,7 @@ pub fn foreground_window() -> Option<isize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use objc2_core_graphics::kCGColorSpaceLinearSRGB;
 
     #[test]
     fn oriented_size_swaps_on_quarter_turn() {
@@ -685,6 +707,39 @@ mod tests {
         assert_eq!(f.len(), 1);
         assert_eq!((f[0].item, f[0].format.as_str()), (0, "public.png"));
         assert_eq!(f[0].data, [1, 2, 3]);
+    }
+
+    #[test]
+    fn srgb_rgba_converts_colour_space_and_unpremultiplies() {
+        // 线性 sRGB 的 50% 灰转到 sRGB 约为 188；半透明纯红线性与 sRGB 相同，还原预乘后不变
+        let src = [128u8, 128, 128, 255, 255, 0, 0, 128];
+        let provider = CGDataProvider::with_cf_data(Some(&CFData::from_bytes(&src))).unwrap();
+        // SAFETY: AppKit 导出的常量，进程内一直有效
+        let space = CGColorSpace::with_name(Some(unsafe { kCGColorSpaceLinearSRGB })).unwrap();
+        // SAFETY: 尺寸与 RGBA8 缓冲一致；decode 传 null
+        let img = unsafe {
+            CGImage::new(
+                2,
+                1,
+                8,
+                32,
+                8,
+                Some(&space),
+                CGBitmapInfo(CGImageAlphaInfo::Last.0),
+                Some(&provider),
+                std::ptr::null(),
+                false,
+                CGColorRenderingIntent::RenderingIntentDefault,
+            )
+        }
+        .unwrap();
+        let out = srgb_rgba(&img, 2, 1).unwrap();
+        assert!((186..=190).contains(&out[0]), "{out:?}");
+        assert_eq!((out[0], out[3]), (out[1], 255));
+        assert!(
+            out[4] >= 253 && out[5] <= 1 && out[6] <= 1 && out[7] == 128,
+            "{out:?}"
+        );
     }
 
     #[test]
