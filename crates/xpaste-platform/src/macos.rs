@@ -14,8 +14,11 @@ use objc2_app_kit::{
 use objc2_av_foundation::{AVAssetImageGenerator, AVAssetTrack, AVMediaTypeVideo, AVURLAsset};
 use objc2_core_foundation::CFData;
 use objc2_core_graphics::{
-    CGBitmapInfo, CGColorRenderingIntent, CGColorSpace, CGDataProvider, CGEvent, CGEventFlags,
-    CGEventTapLocation, CGImage, CGImageAlphaInfo,
+    CGBitmapInfo, CGColorRenderingIntent, CGColorSpace, CGDataProvider, CGDirectDisplayID,
+    CGDisplayBounds, CGDisplayMirrorsDisplay, CGError, CGEvent, CGEventFlags, CGEventTapLocation,
+    CGGetActiveDisplayList, CGImage, CGImageAlphaInfo, CGImageByteOrderInfo,
+    CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess, CGWindowListCopyWindowInfo,
+    CGWindowListOption, kCGNullWindowID,
 };
 use objc2_core_media::{CMFormatDescription, CMTime};
 use objc2_foundation::{
@@ -27,7 +30,7 @@ use objc2_vision::{
 };
 use xpaste_core::{AppInfo, Flavor, Snapshot, VideoMeta};
 
-use crate::{OcrError, OcrText, PasteBlock, PlatformError};
+use crate::{Frame, OcrError, OcrText, PIN_TITLE_PREFIX, PasteBlock, PlatformError, WinRect};
 
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
@@ -215,6 +218,144 @@ pub fn write(flavors: &[Flavor]) -> Result<u64, PlatformError> {
         }
         Ok(change_count())
     })
+}
+
+/// 截图写剪切板用的格式：只写 `public.png`。
+pub fn png_flavors(png: Vec<u8>) -> Vec<Flavor> {
+    vec![Flavor {
+        item: 0,
+        format: "public.png".into(),
+        data: png,
+    }]
+}
+
+/// 逐块显示器截整屏（主屏在前，镜像屏跳过）。阻塞；2880×1800 实测约 30 ms，进程内首次约 110 ms。
+/// ponytail: CGDisplayCreateImage 在 macOS 15 SDK 已标记废弃；Apple 真正移除或截图出现异常时换 SCScreenshotManager，平台层签名不变
+pub fn freeze_displays() -> Result<Vec<Frame>, PlatformError> {
+    let mut ids = [0 as CGDirectDisplayID; 16];
+    let mut n = 0u32;
+    // SAFETY: 两个输出指针指向本地变量，ids 容量随参数传入
+    let e = unsafe { CGGetActiveDisplayList(ids.len() as u32, ids.as_mut_ptr(), &mut n) };
+    if e != CGError::Success {
+        return Err(PlatformError::Capture(format!("取显示器列表失败：{}", e.0)));
+    }
+    // 第一项即主屏（CGGetActiveDisplayList 的约定）
+    ids[..n as usize]
+        .iter()
+        .filter(|&&id| CGDisplayMirrorsDisplay(id) == 0)
+        .map(|&id| freeze_display(id))
+        .collect()
+}
+
+#[allow(deprecated)] // 见 freeze_displays 的 ponytail 注释
+fn freeze_display(id: CGDirectDisplayID) -> Result<Frame, PlatformError> {
+    let err = |what: &str| PlatformError::Capture(what.into());
+    let bounds = CGDisplayBounds(id);
+    let img = objc2_core_graphics::CGDisplayCreateImage(id).ok_or_else(|| err("截屏失败"))?;
+    let img = Some(&*img);
+    let (w, h) = (CGImage::width(img), CGImage::height(img));
+    // 屏幕图实测是 32 位小端 BGRA（预乘或 skip），其他布局不认
+    let alpha = CGImage::alpha_info(img);
+    if CGImage::bits_per_pixel(img) != 32
+        || CGImage::bits_per_component(img) != 8
+        || CGImage::byte_order_info(img) != CGImageByteOrderInfo::Order32Little
+        || !matches!(
+            alpha,
+            CGImageAlphaInfo::PremultipliedFirst | CGImageAlphaInfo::NoneSkipFirst
+        )
+    {
+        return Err(err("不认识的屏幕像素格式"));
+    }
+    let data = CGDataProvider::data(CGImage::data_provider(img).as_deref())
+        .ok_or_else(|| err("读取像素失败"))?;
+    let (w32, h32) = (
+        u32::try_from(w).map_err(|_| err("尺寸溢出"))?,
+        u32::try_from(h).map_err(|_| err("尺寸溢出"))?,
+    );
+    // SAFETY: data 在本函数内存活，切片不越过它的长度
+    let bytes = unsafe { data.as_bytes_unchecked() };
+    let rgba = crate::winfmt::bgra_rows_to_rgba(
+        bytes,
+        w32,
+        h32,
+        CGImage::bytes_per_row(img),
+        alpha == CGImageAlphaInfo::NoneSkipFirst,
+    )
+    .ok_or_else(|| err("像素数据不完整"))?;
+    let size = (bounds.size.width, bounds.size.height);
+    Ok(Frame {
+        origin: (bounds.origin.x, bounds.origin.y),
+        size,
+        scale: if size.0 > 0.0 { w as f64 / size.0 } else { 1.0 },
+        px: (w32, h32),
+        rgba,
+    })
+}
+
+/// 屏上窗口外框，由前到后：别的应用只取 layer 0、不透明度大于 0 的普通窗口；本进程只取贴图窗口。
+/// 不读其他应用的窗口标题（需要屏幕录制权限，也用不到）。
+pub fn window_rects() -> Vec<WinRect> {
+    let option =
+        CGWindowListOption::OptionOnScreenOnly | CGWindowListOption::ExcludeDesktopElements;
+    let Some(list) = CGWindowListCopyWindowInfo(option, kCGNullWindowID) else {
+        return Vec::new();
+    };
+    let me = i64::from(std::process::id());
+    autoreleasepool(|_| {
+        // SAFETY: CFArray 与 NSArray 免费桥接，元素都是 CFDictionary；list 在闭包内存活
+        let list: &NSArray<NSDictionary<NSString, AnyObject>> = unsafe {
+            &*(objc2_core_foundation::CFRetained::as_ptr(&list)
+                .as_ptr()
+                .cast())
+        };
+        list.iter()
+            .filter(|w| {
+                let num = |k: &str| {
+                    w.objectForKey(&NSString::from_str(k))
+                        .and_then(|v| v.downcast::<NSNumber>().ok())
+                };
+                if num("kCGWindowOwnerPID").map(|n| n.longLongValue()) == Some(me) {
+                    w.objectForKey(ns_string!("kCGWindowName"))
+                        .and_then(|v| v.downcast::<NSString>().ok())
+                        .is_some_and(|t| t.to_string().starts_with(PIN_TITLE_PREFIX))
+                } else {
+                    num("kCGWindowLayer").is_some_and(|n| n.longLongValue() == 0)
+                        && num("kCGWindowAlpha").is_some_and(|n| n.doubleValue() > 0.0)
+                }
+            })
+            .filter_map(|w| {
+                let b = w.objectForKey(ns_string!("kCGWindowBounds"))?;
+                // SAFETY: kCGWindowBounds 的值是 CGRect 的字典表示（X、Y、Width、Height 为 NSNumber）
+                let b: Retained<NSDictionary<NSString, AnyObject>> =
+                    unsafe { Retained::cast_unchecked(b) };
+                let f = |k: &str| {
+                    b.objectForKey(&NSString::from_str(k))
+                        .and_then(|v| v.downcast::<NSNumber>().ok())
+                        .map(|n| n.doubleValue())
+                };
+                let r = WinRect {
+                    x: f("X")?,
+                    y: f("Y")?,
+                    w: f("Width")?,
+                    h: f("Height")?,
+                };
+                (r.w > 0.0 && r.h > 0.0).then_some(r)
+            })
+            .collect()
+    })
+}
+
+/// 是否已有屏幕录制权限（只查询，不弹窗）。
+pub fn screen_capture_granted() -> bool {
+    CGPreflightScreenCaptureAccess()
+}
+
+/// 未授权时请求系统授权（无 TCC 记录时弹框），再打开系统设置的“屏幕录制”页，理由同 `request_accessibility`。
+/// 须在主线程调用。
+pub fn request_screen_capture() {
+    if !CGRequestScreenCaptureAccess() {
+        open_privacy_pane("Privacy_ScreenCapture");
+    }
 }
 
 /// 应用图标转 PNG：取 64 pt 对应的那档图像（Retina 屏上为 128×128 px），不重新绘制。
@@ -505,13 +646,18 @@ pub fn request_accessibility() {
 }
 
 pub fn open_accessibility_settings() {
+    open_privacy_pane("Privacy_Accessibility");
+}
+
+/// 打开系统设置“隐私与安全性”下的某一页。
+fn open_privacy_pane(pane: &str) {
     autoreleasepool(|_| {
-        let url = NSString::from_str(
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
-        );
+        let url = NSString::from_str(&format!(
+            "x-apple.systempreferences:com.apple.preference.security?{pane}"
+        ));
         match NSURL::URLWithString(&url) {
             Some(url) if NSWorkspace::sharedWorkspace().openURL(&url) => {}
-            _ => log::warn!("打开辅助功能设置失败"),
+            _ => log::warn!("打开系统设置 {pane} 失败"),
         }
     })
 }
@@ -531,6 +677,14 @@ mod tests {
         assert_eq!(oriented_size(1920.0, 1080.0, 0.0, 1.0), (1080, 1920)); // 竖拍 90°
         assert_eq!(oriented_size(1920.0, 1080.0, 0.0, -1.0), (1080, 1920)); // 270°
         assert_eq!(oriented_size(1920.0, 1080.0, -1.0, 0.0), (1920, 1080)); // 180°
+    }
+
+    #[test]
+    fn png_flavors_is_public_png() {
+        let f = png_flavors(vec![1, 2, 3]);
+        assert_eq!(f.len(), 1);
+        assert_eq!((f[0].item, f[0].format.as_str()), (0, "public.png"));
+        assert_eq!(f[0].data, [1, 2, 3]);
     }
 
     #[test]

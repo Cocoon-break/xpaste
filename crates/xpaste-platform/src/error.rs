@@ -2,6 +2,8 @@
 pub enum PlatformError {
     #[error("剪切板访问失败：{0}")]
     Clipboard(String),
+    #[error("截屏失败：{0}")]
+    Capture(String),
     #[error("当前平台不支持")]
     Unsupported,
 }

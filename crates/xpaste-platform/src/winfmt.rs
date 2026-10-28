@@ -1,4 +1,4 @@
-//! Windows 平台层的纯函数：格式名映射、读取筛选、CF_HTML / CF_HDROP / DIB 解码、版本资源查询路径、托盘窗口类名、识别结果按词拼行。
+//! Windows 平台层的纯函数：格式名映射、读取筛选、CF_HTML / CF_HDROP / DIB 解码、版本资源查询路径、托盘窗口类名、识别结果按词拼行、PNG 转 DIB、BGRA 行转 RGBA（macOS 截屏也用）。
 //! 与 `decode.rs` 一样全平台编译，`windows.rs` 只负责 Win32 调用。
 
 use std::borrow::Cow;
@@ -136,6 +136,61 @@ pub fn dib_to_png(dib: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
     encode_png(DynamicImage::from_decoder(decoder).ok()?.to_rgba8())
+}
+
+/// PNG 转 `CF_DIB`：40 字节 `BITMAPINFOHEADER`（32 bpp、`BI_RGB`、高度为正即自下而上）+ BGRA 行。
+pub fn png_to_dib(png: &[u8]) -> Option<Vec<u8>> {
+    let img = image::load_from_memory_with_format(png, ImageFormat::Png)
+        .ok()?
+        .to_rgba8();
+    let (w, h) = img.dimensions();
+    let size = (w as usize).checked_mul(h as usize)?.checked_mul(4)?;
+    let mut v = Vec::with_capacity(40 + size);
+    v.extend(40u32.to_le_bytes());
+    v.extend(i32::try_from(w).ok()?.to_le_bytes());
+    v.extend(i32::try_from(h).ok()?.to_le_bytes());
+    v.extend(1u16.to_le_bytes()); // planes
+    v.extend(32u16.to_le_bytes());
+    v.extend(0u32.to_le_bytes()); // BI_RGB
+    v.extend(u32::try_from(size).ok()?.to_le_bytes());
+    v.extend([0; 16]); // 分辨率、调色板计数
+    for row in img.rows().rev() {
+        v.extend(row.flat_map(|p| [p[2], p[1], p[0], p[3]]));
+    }
+    Some(v)
+}
+
+/// 每行 `stride` 字节的 BGRA 转紧密排列的 RGBA（非预乘）。`opaque` 为真时 alpha 一律记 255
+/// （GDI `BitBlt`、`NoneSkipFirst` 的 alpha 字节无意义）；否则按预乘还原。数据不够 `h` 行时返回 `None`。
+pub fn bgra_rows_to_rgba(
+    src: &[u8],
+    w: u32,
+    h: u32,
+    stride: usize,
+    opaque: bool,
+) -> Option<Vec<u8>> {
+    let row = (w as usize).checked_mul(4)?;
+    let (w, h) = (w as usize, h as usize);
+    if h > 0 && (stride < row || src.len() < stride * (h - 1) + row) {
+        return None;
+    }
+    let mut out = Vec::with_capacity(row * h);
+    for y in 0..h {
+        for &[b, g, r, a] in src[y * stride..y * stride + row].as_chunks::<4>().0 {
+            out.extend(match (opaque, a) {
+                (true, _) | (false, 255) => [r, g, b, 255],
+                (false, 0) => [0, 0, 0, 0],
+                (false, a) => {
+                    let un = |c: u8| {
+                        ((u32::from(c) * 255 + u32::from(a) / 2) / u32::from(a)).min(255) as u8
+                    };
+                    [un(r), un(g), un(b), a]
+                }
+            });
+        }
+    }
+    debug_assert_eq!(out.len(), w * h * 4);
+    Some(out)
 }
 
 /// 自上而下的 BGRA 像素转 PNG；长度必须正好是 `w * h * 4`。
@@ -462,6 +517,39 @@ mod tests {
         let png = dib_to_png(&dib(2, 1, 32, &[0, 0, 255, 0, 0, 255, 0, 0])).unwrap();
         assert_eq!(px(&png, 1, 0), [0, 255, 0, 255]);
         assert_eq!(dib_to_png(&[1, 2, 3]), None);
+    }
+    #[test]
+    fn png_to_dib_roundtrips() {
+        let px = [
+            [255, 0, 0, 255],
+            [0, 255, 0, 255],
+            [0, 0, 255, 255],
+            [9, 8, 7, 255],
+        ];
+        let img = RgbaImage::from_fn(2, 2, |x, y| image::Rgba(px[(y * 2 + x) as usize]));
+        let png = encode_png(img.clone()).unwrap();
+        let dib = png_to_dib(&png).unwrap();
+        assert_eq!(dib.len(), 40 + 2 * 2 * 4);
+        let back = image::load_from_memory(&dib_to_png(&dib).unwrap())
+            .unwrap()
+            .to_rgba8();
+        assert_eq!(back, img);
+        assert_eq!(png_to_dib(b"not png"), None);
+    }
+    #[test]
+    fn bgra_rows_to_rgba_drops_padding_and_unpremultiplies() {
+        // 2×1，每行补 4 字节；第二个像素半透明预乘红
+        let src = [10, 20, 30, 255, 0, 0, 64, 128, 0xEE, 0xEE, 0xEE, 0xEE];
+        assert_eq!(
+            bgra_rows_to_rgba(&src, 2, 1, 12, false),
+            Some(vec![30, 20, 10, 255, 128, 0, 0, 128])
+        );
+        // 不透明：alpha 一律 255
+        assert_eq!(
+            bgra_rows_to_rgba(&[1, 2, 3, 0], 1, 1, 4, true),
+            Some(vec![3, 2, 1, 255])
+        );
+        assert_eq!(bgra_rows_to_rgba(&[0; 7], 1, 2, 4, true), None);
     }
     #[test]
     fn write_bytes_terminates_unicode_text() {

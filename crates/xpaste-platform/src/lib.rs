@@ -17,6 +17,28 @@ pub enum PasteBlock {
     Elevated,
 }
 
+/// 冻结的一块显示器。坐标为原生单位：macOS 全局点（主屏左上为原点），Windows 虚拟桌面物理像素。
+/// `rgba` 非预乘、行紧密排列（`px.0 * px.1 * 4` 字节）。
+pub struct Frame {
+    pub origin: (f64, f64),
+    pub size: (f64, f64),
+    pub scale: f64,
+    pub px: (u32, u32),
+    pub rgba: Vec<u8>,
+}
+
+/// 窗口外框，单位同 `Frame`。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WinRect {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+/// 本进程窗口里只有贴图（标题以此开头）参与窗口吸附；遮罩（`xpaste-shot…`）与面板都不算。
+const PIN_TITLE_PREFIX: &str = "xpaste-pin";
+
 /// 视频编码的显示名：macOS 传 FourCC（`avc1`），Windows 传子类型名（`H264`）。不区分大小写、去首尾空白；
 /// 不认识的大写原样返回。
 pub fn codec_label(fourcc: &str) -> String {
