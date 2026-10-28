@@ -175,7 +175,7 @@ xPaste 是一款常驻后台的剪切板历史工具。它自动记录用户复�
 - 图片扩展名：`png jpg jpeg gif webp heic bmp tif tiff svg`。
 - 代码编辑器与终端名单（初始）：VS Code、Cursor、JetBrains 系列、Xcode、Sublime Text、终端（Terminal）、iTerm2、Windows Terminal、PowerShell。
 - 一次复制多个文件时：全部属于同一类（都是视频或都是图片）则取该类型，否则为“文件”〔待确认〕。
-- 文件引用都不可用且同时有位图时，忽略文件引用，按规则 4 判为图片，预览与文字识别用位图（本期 macOS）。不可用指打不开，或位于其他应用的沙盒容器（`~/Library/Containers/`、`~/Library/Group Containers/`）里：如微信复制图片时附带的是它容器里的临时文件，无权读取、很快被删除；容器里的路径不去打开，以免弹出“访问其他应用的数据”授权框。
+- 文件引用都不可用且同时有位图时，忽略文件引用，按规则 4 判为图片，预览与文字识别用位图（本期 macOS）。不可用指打不开，或位于其他应用的沙盒容器（`~/Library/Containers/`、`~/Library/Group Containers/`）里：如微信复制图片时附带的是它容器里的临时文件，无权读取、很快被删除；容器里的路径不去打开，以免弹出“访问其他应用的数据”授权框。这时记录不保留文件引用，粘贴时只写回图片。
 - 代码记录尽量识别语言并显示语言标签（如 JavaScript、Shell、SQL）；识别不出时不显示标签（P1）。
 
 **验收标准**
