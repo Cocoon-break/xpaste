@@ -6,7 +6,14 @@ fn freeze_returns_tight_rgba() {
         eprintln!("跳过：无屏幕录制权限");
         return;
     }
-    let frames = freeze_displays().unwrap();
+    // Windows 上权限恒为真，CI 的托管机器可能没有可截的桌面：CI 里冻结失败只跳过，本机照常严格
+    let frames = match freeze_displays() {
+        Err(e) if std::env::var_os("CI").is_some() => {
+            eprintln!("跳过：CI 环境冻结屏幕失败：{e}");
+            return;
+        }
+        r => r.unwrap(),
+    };
     assert!(!frames.is_empty());
     for f in &frames {
         assert_eq!(f.rgba.len(), f.px.0 as usize * f.px.1 as usize * 4);

@@ -42,12 +42,25 @@ pub fn role_of(pressed: &Shortcut, panel: &str, shot: &str) -> Option<Role> {
     }
 }
 
-/// 设置或确认框开着且面板有焦点时，截图快捷键只交给录制框，不开始截图（同 M15 规则 3）。
-pub fn shot_to_panel(dialog_open: bool, panel_visible: bool, panel_focused: bool) -> bool {
-    dialog_open && panel_visible && panel_focused
+#[derive(Debug, PartialEq, Eq)]
+pub enum ShotRoute {
+    /// 交给录制框（`hotkey-pressed`，载荷 `"shot"`）
+    Recorder,
+    /// 只把面板拉回焦点：开始截图会隐藏面板、关掉对话框，未保存的修改就丢了（M15 规则 4）
+    Refocus,
+    Begin,
 }
 
-/// 截图快捷键按下：按 `shot_to_panel` 通知面板（`hotkey-pressed`，载荷 `"shot"`）或开始截图。主线程调用。
+/// 设置或确认框开着且面板可见时从不开始截图：有焦点交给录制框（同 M15 规则 3），失焦只取回焦点（同 M15 规则 4）。
+pub fn shot_route(dialog_open: bool, panel_visible: bool, panel_focused: bool) -> ShotRoute {
+    match (dialog_open && panel_visible, panel_focused) {
+        (false, _) => ShotRoute::Begin,
+        (true, true) => ShotRoute::Recorder,
+        (true, false) => ShotRoute::Refocus,
+    }
+}
+
+/// 截图快捷键按下：按 `shot_route` 通知面板、取回面板焦点或开始截图。主线程调用。
 pub fn shot_pressed(app: &AppHandle) {
     let (visible, focused) = app.get_webview_window("panel").map_or((false, false), |w| {
         (
@@ -56,10 +69,12 @@ pub fn shot_pressed(app: &AppHandle) {
         )
     });
     let dialog_open = app.state::<AppState>().dialog_open.load(Ordering::SeqCst);
-    if shot_to_panel(dialog_open, visible, focused) {
-        crate::events::emit_to(app, "panel", crate::events::HOTKEY_PRESSED, "shot");
-    } else {
-        crate::shot::begin(app);
+    match shot_route(dialog_open, visible, focused) {
+        ShotRoute::Recorder => {
+            crate::events::emit_to(app, "panel", crate::events::HOTKEY_PRESSED, "shot")
+        }
+        ShotRoute::Refocus => crate::panel::refocus(app),
+        ShotRoute::Begin => crate::shot::begin(app),
     }
 }
 
@@ -105,14 +120,19 @@ pub fn label(shortcut: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Role, failure_notice, label, role_of, shot_to_panel};
+    use super::{Role, ShotRoute, failure_notice, label, role_of, shot_route};
 
     #[test]
-    fn shot_goes_to_recorder_only_when_dialog_open_and_panel_focused() {
-        assert!(shot_to_panel(true, true, true));
-        assert!(!shot_to_panel(false, true, true));
-        assert!(!shot_to_panel(true, false, true));
-        assert!(!shot_to_panel(true, true, false));
+    fn shot_never_begins_while_dialog_open_and_panel_visible() {
+        use ShotRoute::*;
+        assert_eq!(shot_route(true, true, true), Recorder);
+        assert_eq!(shot_route(true, true, false), Refocus);
+        // 对话框没开或面板不可见：照常截图
+        assert_eq!(shot_route(false, true, true), Begin);
+        assert_eq!(shot_route(false, true, false), Begin);
+        assert_eq!(shot_route(false, false, false), Begin);
+        assert_eq!(shot_route(true, false, false), Begin);
+        assert_eq!(shot_route(true, false, true), Begin);
     }
 
     #[test]

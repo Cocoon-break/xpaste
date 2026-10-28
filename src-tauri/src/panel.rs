@@ -575,13 +575,7 @@ pub fn toggle(app: &AppHandle, t0: Option<u64>, trigger: Trigger) {
             // 免得录制框把它当成按下了当前快捷键。引导中照发：首次运行面板可见但未取得焦点时试按也算成功
             let focused = w.is_focused().unwrap_or(true);
             if !focused {
-                on_main(app, |app| {
-                    if let Some(w) = window(app)
-                        && let Err(e) = front_and_focus(app, &w)
-                    {
-                        log::warn!("面板取得焦点失败：{e}");
-                    }
-                });
+                refocus(app);
             }
             if focused || state.onboarding.load(Ordering::SeqCst) {
                 crate::events::emit(app, crate::events::HOTKEY_PRESSED, "panel")
@@ -589,6 +583,17 @@ pub fn toggle(app: &AppHandle, t0: Option<u64>, trigger: Trigger) {
         }
         ToggleAction::Ignore => {}
     }
+}
+
+/// 把可见的面板拉回前台并取得键盘焦点（对话框开着、面板失焦时按快捷键）。
+pub fn refocus(app: &AppHandle) {
+    on_main(app, |app| {
+        if let Some(w) = window(app)
+            && let Err(e) = front_and_focus(app, &w)
+        {
+            log::warn!("面板取得焦点失败：{e}");
+        }
+    });
 }
 
 fn request_hide(app: &AppHandle) {

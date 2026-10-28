@@ -71,6 +71,9 @@ pub fn run() {
             if let Err(e) = shot::clear_pins(&data_dir.join("pins")) {
                 log::warn!("清空贴图目录失败：{e}");
             }
+            if let Err(e) = shot::clear_ocr_tmp(&data_dir.join("tmp")) {
+                log::warn!("清理截图识别临时图失败：{e}");
+            }
             if isolated {
                 log::info!("数据目录已由 XPASTE_DATA_DIR 覆盖，不启用单实例");
                 // tauri.conf.json 的 assetProtocol.scope 只覆盖默认数据目录

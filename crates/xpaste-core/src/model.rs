@@ -140,6 +140,15 @@ fn hotkey_key(s: &str) -> Vec<String> {
 }
 
 impl Settings {
+    /// 截图快捷键与唤起快捷键是同一组合时停用截图快捷键（M15）：升级前把唤起设成了 `Alt+Shift+A`
+    /// 的用户读出时会撞上截图的默认值，不处理的话整份设置校验不过、回落到默认值。
+    pub fn disable_clashing_shot_hotkey(&mut self) {
+        if !self.shot_hotkey.is_empty() && hotkey_key(&self.shot_hotkey) == hotkey_key(&self.hotkey)
+        {
+            self.shot_hotkey.clear();
+        }
+    }
+
     /// 按顺序检查，返回第一条不满足的规则。
     pub fn validate(&self) -> Result<(), CoreError> {
         let fail = |m: &str| Err(CoreError::InvalidSettings(m.into()));
@@ -593,6 +602,19 @@ mod tests {
         assert_eq!(s.shot_hotkey, d.shot_hotkey);
         assert_eq!(s.shot_dir, d.shot_dir);
         assert_eq!(s.shot_save_copy, d.shot_save_copy);
+    }
+
+    #[test]
+    fn old_json_with_default_shot_combo_disables_shot_hotkey() {
+        let mut s: Settings = serde_json::from_str(r#"{"hotkey":"Alt+Shift+A"}"#).unwrap();
+        s.disable_clashing_shot_hotkey();
+        assert_eq!(s.shot_hotkey, "");
+        assert_eq!(s.hotkey, "Alt+Shift+A");
+        assert!(s.validate().is_ok());
+        // 不撞时不动
+        let mut s = Settings::default();
+        s.disable_clashing_shot_hotkey();
+        assert_eq!(s.shot_hotkey, "Alt+Shift+A");
     }
 
     #[test]

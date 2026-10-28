@@ -10,6 +10,7 @@ use crate::error::AppError;
 use crate::events::{PAUSED_CHANGED, emit, emit_removed};
 use crate::state::AppState;
 use tauri_plugin_autostart::ManagerExt;
+use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -125,14 +126,19 @@ pub fn changed_fields(old: &Settings, new: &Settings) -> Vec<&'static str> {
 pub enum HotkeyAction {
     /// 唤起或截图快捷键改了：先注册新的一对，失败则恢复旧的一对并返回 `HotkeyTaken` / `ShotHotkeyTaken`，不保存
     Register,
-    /// 没改但启动时注册失败过：保存之后顺带重试，失败不算保存失败
+    /// 没改但唤起快捷键启动时注册失败过，或截图快捷键没注册上：保存之后顺带重试，失败不算保存失败
     RetryBestEffort,
     None,
 }
 
 /// 启动时注册失败而组合仍被占用时，不能让每次保存（分类防抖、引导、改其他字段）都因重试失败而保存不了。
-pub fn hotkey_action(hotkey_changed: bool, startup_failed: bool) -> HotkeyAction {
-    match (hotkey_changed, startup_failed) {
+/// `shot_unregistered`：截图快捷键非空却没注册上（托盘只记唤起的失败）。
+pub fn hotkey_action(
+    hotkey_changed: bool,
+    startup_failed: bool,
+    shot_unregistered: bool,
+) -> HotkeyAction {
+    match (hotkey_changed, startup_failed || shot_unregistered) {
         (true, _) => HotkeyAction::Register,
         (false, true) => HotkeyAction::RetryBestEffort,
         (false, false) => HotkeyAction::None,
@@ -157,7 +163,7 @@ fn set_autostart(app: &AppHandle, on: bool) {
     }
 }
 
-/// 校验 → 按 `hotkey_action` 注册新的唤起与截图快捷键（失败恢复旧的一对）→ 持久化（失败也恢复）；返回变化的字段名。
+/// 校验 → 快捷键改了就注册新的唤起与截图快捷键（失败恢复旧的一对）→ 持久化（失败也恢复）；返回变化的字段名。
 /// `register(唤起, 截图)` 是唯一注入点（正式为 `hotkey::register`），测试借此模拟快捷键被占用。
 pub fn commit_settings(
     state: &AppState,
@@ -169,8 +175,7 @@ pub fn commit_settings(
     // 面板尺寸只由拖动记忆（panel::remember_size）写；这里只为 changed 不含 panelSize，落库时 save_settings_inner 持锁再取
     settings.panel_size = old.panel_size;
     let changed = changed_fields(&old, &settings);
-    let action = hotkey_action(hotkeys_changed(&changed), crate::tray::hotkey_failed());
-    let hotkey_changed = action == HotkeyAction::Register;
+    let hotkey_changed = hotkeys_changed(&changed);
     // register 会先注销全部快捷键，失败时要把旧的一对注册回去
     let restore = |register: &mut dyn FnMut(&str, &str) -> Result<(), AppError>| {
         // 截图键在被占用时恢复不了很常见（多半正是它被占用），只记 debug
@@ -208,7 +213,13 @@ pub fn save_settings(
     );
     let changed = commit_settings(&state, settings, |p, s| crate::hotkey::register(&app, p, s))?;
     // 快捷键改了必为 Register，与 commit_settings 内一致；没改时只决定是否尽力重试
-    let action = hotkey_action(hotkeys_changed(&changed), crate::tray::hotkey_failed());
+    let shot_unregistered =
+        !shot_hotkey.is_empty() && !app.global_shortcut().is_registered(shot_hotkey.as_str());
+    let action = hotkey_action(
+        hotkeys_changed(&changed),
+        crate::tray::hotkey_failed(),
+        shot_unregistered,
+    );
     log::info!("设置已保存 changed=[{}]", changed.join(", "));
     // 设置已持久化并生效：以下步骤失败不回滚、不算保存失败（都只记日志）
     let removed = prune_to_settings(&state);
@@ -415,10 +426,18 @@ mod tests {
 
     #[test]
     fn hotkey_action_retries_only_best_effort_when_unchanged() {
-        assert_eq!(hotkey_action(true, false), HotkeyAction::Register);
-        assert_eq!(hotkey_action(true, true), HotkeyAction::Register);
-        assert_eq!(hotkey_action(false, true), HotkeyAction::RetryBestEffort);
-        assert_eq!(hotkey_action(false, false), HotkeyAction::None);
+        assert_eq!(hotkey_action(true, false, false), HotkeyAction::Register);
+        assert_eq!(hotkey_action(true, true, true), HotkeyAction::Register);
+        assert_eq!(
+            hotkey_action(false, true, false),
+            HotkeyAction::RetryBestEffort
+        );
+        // 截图快捷键启动时没注册上（托盘不记）也重试
+        assert_eq!(
+            hotkey_action(false, false, true),
+            HotkeyAction::RetryBestEffort
+        );
+        assert_eq!(hotkey_action(false, false, false), HotkeyAction::None);
     }
 
     #[test]

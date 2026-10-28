@@ -147,12 +147,14 @@ impl Session {
         self.payloads.get(i).cloned()
     }
 
-    /// 结束并释放冻结图（每屏几十 MB）；代数保留。
-    pub fn end(&mut self) {
+    /// 结束并释放冻结图（每屏几十 MB）；代数保留。返回还没交还键盘的截图前前台窗口。
+    pub fn end(&mut self) -> Option<isize> {
+        let previous = self.previous_window;
         *self = Self {
             generation: self.generation,
             ..Self::default()
         };
+        previous
     }
 
     pub fn is_active(&self) -> bool {
@@ -190,13 +192,15 @@ impl Session {
 
     /// 动作已完成，遮罩进入提示条模式：释放冻结图，会话保持进行中，提示条期间按快捷键不会把提示条截进去。
     /// 计时从现在重新算：前端没调 `shot_cancel` 时，`STALE` 之后的快捷键照常开始新的一次。
-    pub fn finish(&mut self, now: Instant) {
+    /// 返回截图前的前台窗口并清掉它：键盘只还一次，之后 `shot_cancel` 不会把用户已切去的应用又切回来。
+    pub fn finish(&mut self, now: Instant) -> Option<isize> {
         self.frames.clear();
         self.payloads.clear();
         self.ready.clear();
         self.started = Some(now);
         // 冻结图已释放，之后的 shot_finish 因取不到帧被拒绝
         self.finishing = false;
+        self.previous_window.take()
     }
 }
 
@@ -482,10 +486,6 @@ pub fn prewarm(app: &AppHandle) {
     let n = app.available_monitors().map_or(1, |m| m.len().max(1));
     let made = ensure_overlays(app, n).len();
     log::info!("shot 预建遮罩 {made} 个");
-    // 进程里第一次冻结要多花几十毫秒，启动时空转一次；没权限时不调，免得启动就弹授权
-    if xpaste_platform::screen_capture_granted() {
-        std::thread::spawn(|| drop(xpaste_platform::freeze_displays()));
-    }
 }
 
 /// 遮罩画好冻结图（`shot_ready`）：上屏；全部就绪后光标所在屏拿键盘焦点。
@@ -543,10 +543,15 @@ fn show_overlay(app: &AppHandle, i: usize, focus: bool) {
     }
 }
 
-/// 隐藏全部遮罩并释放冻结图。
+/// 隐藏全部遮罩并释放冻结图。Windows 上把键盘还给截图前的前台窗口（Esc / 右键 / 工具栏退出），
+/// 不然系统按 z 序交给下一个窗口，可能是贴图；macOS 上 `previous_window` 恒为 `None`。
 pub fn end(app: &AppHandle) {
-    session(app).end();
+    let previous = session(app).end();
     hide_overlays(app);
+    if let Some(h) = previous {
+        // 排在 hide_overlays 之后：遮罩还拿着前台，本进程此刻是前台进程，系统允许切
+        on_main(app, move |_| xpaste_platform::activate_window(h));
+    }
 }
 
 /// 隐藏全部遮罩，并撤销提示条模式的鼠标穿透，下次截图能点。
@@ -667,6 +672,21 @@ pub struct ShotOutcome {
     pub file: Option<String>,
     /// 是否写了剪切板（保存时看“保存截图时同时复制”，识别没有文字时为 false）
     pub copied: bool,
+}
+
+/// 启动时删掉识别文字留下的 `shot-ocr-*` 临时图（屏幕像素）：正常流程用完即删，崩溃或写一半时会留下。
+pub fn clear_ocr_tmp(tmp: &Path) -> std::io::Result<()> {
+    let entries = match std::fs::read_dir(tmp) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        r => r?,
+    };
+    for e in entries {
+        let e = e?;
+        if e.file_name().to_string_lossy().starts_with("shot-ocr-") {
+            std::fs::remove_file(e.path())?;
+        }
+    }
+    Ok(())
 }
 
 /// 贴图图片目录；启动时清空（贴图只在本次运行内有效）。
@@ -844,8 +864,7 @@ fn enter_toast(app: &AppHandle, generation: u64) {
         if !s.is_current(generation) {
             return;
         }
-        s.finish(Instant::now());
-        s.previous_window
+        s.finish(Instant::now())
     };
     on_main(app, move |app| {
         for (l, w) in app.webview_windows() {
@@ -1311,6 +1330,39 @@ mod tests {
         assert!(dir.is_dir());
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
         std::fs::remove_dir(&dir).unwrap();
+    }
+
+    #[test]
+    fn ocr_tmp_cleared_on_start() {
+        let dir = std::env::temp_dir().join(format!("xpaste-ocr-tmp-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("shot-ocr-3.png"), b"a").unwrap();
+        std::fs::write(dir.join("shot-ocr-4.png"), b"").unwrap();
+        std::fs::write(dir.join("other.png"), b"b").unwrap();
+        clear_ocr_tmp(&dir).unwrap();
+        let left: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(left, ["other.png"], "只删截图识别的临时图");
+        std::fs::remove_dir_all(&dir).unwrap();
+        // 目录不存在不算错
+        clear_ocr_tmp(&dir).unwrap();
+    }
+
+    #[test]
+    fn previous_window_handed_back_once() {
+        let mut s = Session::default();
+        s.try_begin();
+        s.previous_window = Some(7);
+        // 动作完成（提示条）时交还；之后 shot_cancel 结束会话时不再切回
+        assert_eq!(s.finish(Instant::now()), Some(7));
+        assert_eq!(s.end(), None);
+        // Esc 直接退出：结束会话时交还
+        s.try_begin();
+        s.previous_window = Some(9);
+        assert_eq!(s.end(), Some(9));
+        assert_eq!(s.end(), None);
     }
 
     #[test]
