@@ -30,7 +30,7 @@ pub enum RecordOutcome {
         duration_ms: u64,
         bytes: u64,
     },
-    /// 一帧画面都没收到，文件已删
+    /// 一帧画面都没收到，没有留下文件
     Empty,
 }
 

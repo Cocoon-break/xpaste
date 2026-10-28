@@ -146,7 +146,13 @@ impl Output {
                 return;
             }
             if st.first.is_none() {
-                // SAFETY: 写入器尚未开始，输入都已添加
+                // startWriting 失败后写入器停在 Failed，再调会抛 Objective-C 异常（穿过回调即中止进程）：
+                // 只在 Unknown 时调用，失败后的样本都丢掉（failed 已置）
+                // SAFETY: 只读属性
+                if unsafe { st.writer.status() } != AVAssetWriterStatus::Unknown {
+                    return;
+                }
+                // SAFETY: 写入器状态为 Unknown，输入都已添加
                 if !unsafe { st.writer.startWriting() } {
                     self.writer_failed(&st);
                     return;
@@ -243,7 +249,17 @@ impl Recorder {
 
 fn finish(st: &mut State, path: &Path) -> Result<RecordOutcome, PlatformError> {
     let Some(first) = st.first else {
-        // 没开始写（startWriting 在首帧才调用），磁盘上没有文件
+        // 没开始写（startWriting 在首帧才调用），磁盘上没有我们写的文件。startWriting 失败（如文件夹
+        // 不可写、目标已存在）是保存失败而不是录得太短；路径上原有的文件不删
+        // SAFETY: 只读属性
+        if unsafe { st.writer.status() } == AVAssetWriterStatus::Failed {
+            // SAFETY: 只读属性
+            let e = unsafe { st.writer.error() };
+            return Err(record_err(format!(
+                "无法开始写入：{}",
+                e.as_deref().map_or_else(|| "未知".into(), ns_err)
+            )));
+        }
         return Ok(RecordOutcome::Empty);
     };
     // SAFETY: 只读属性
@@ -280,6 +296,7 @@ fn finish(st: &mut State, path: &Path) -> Result<RecordOutcome, PlatformError> {
     let _ = rx.recv();
     // SAFETY: 只读属性
     if unsafe { writer.status() } != AVAssetWriterStatus::Completed {
+        // SAFETY: 只读属性
         let e = unsafe { writer.error() };
         discard(st, path);
         return Err(record_err(format!(
