@@ -1817,13 +1817,13 @@ async function submitSettings() {
     toast('设置已保存');
   } catch (e) {
     const err = e as AppError;
-    // 快捷键被占用或校验不过（与唤起相同等）写在对应录制框下方；先聚焦再写错误：focus 处理器会改帮助文字。
-    // 录制框所在行藏着（Windows 上的录屏）时写不上，走提示条
-    const at = errorControl(err.kind, err.message), f = at === 'shotHotkey' ? shotKey : at === 'recHotkey' ? recKey : null;
+    // 快捷键被占用或校验不过（与唤起相同等）写在对应录制框下方；先聚焦再写错误：focus 处理器会改帮助文字
+    const at = errorControl(err.kind, err.message);
     if (at === 'hotkey') {
       showStControl(hotkeyIn);
       setHotkeyHelp(err.message, true);
-    } else if (f && !f.input.closest('[hidden]')) {
+    } else if (at) {
+      const f = at === 'shotHotkey' ? shotKey : recKey;
       showStControl(f.input);
       f.setHelp(err.message, true);
     } else toast(err.message);

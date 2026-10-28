@@ -210,7 +210,8 @@ impl Settings {
                 return fail("截图快捷键不能与唤起快捷键相同");
             }
         }
-        if !self.rec_hotkey.is_empty() {
+        // 录屏只在 macOS 上做（M24）：别处不注册录屏快捷键、设置里也没有这一行，不校验，免得占住用户看不到的组合
+        if cfg!(target_os = "macos") && !self.rec_hotkey.is_empty() {
             if !has_modifier(&self.rec_hotkey) {
                 return fail("录屏快捷键至少需要包含 Mod 或 Alt");
             }
@@ -722,6 +723,7 @@ mod tests {
         assert_eq!(s.rec_copy, d.rec_copy);
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn validate_rec_hotkey() {
         let with = |hotkey: &str, shot: &str, rec: &str| Settings {
@@ -744,6 +746,29 @@ mod tests {
             "录屏快捷键不能与截图快捷键相同"
         );
         assert!(with("Alt+Space", "", "Alt+Shift+A").validate().is_ok());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn validate_ignores_rec_hotkey_off_macos() {
+        let with = |hotkey: &str, shot: &str, rec: &str| Settings {
+            hotkey: hotkey.into(),
+            shot_hotkey: shot.into(),
+            rec_hotkey: rec.into(),
+            ..Default::default()
+        };
+        // 默认的 Alt+Shift+R 不占住唤起与截图
+        assert!(
+            with("Alt+Shift+R", "Alt+Shift+A", "Alt+Shift+R")
+                .validate()
+                .is_ok()
+        );
+        assert!(
+            with("Alt+Space", "Alt+Shift+R", "Alt+Shift+R")
+                .validate()
+                .is_ok()
+        );
+        assert!(with("Alt+Space", "Alt+Shift+A", "R").validate().is_ok());
     }
 
     #[test]
