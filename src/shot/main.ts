@@ -125,6 +125,8 @@ function closeOverlay() {
   S.editing?.el.remove();
   S.editing = null;
   ov.classList.add('out');
+  // 后端 end 只隐藏窗口：告诉其他屏一起淡出并放掉像素
+  void shotClaim({ generation: S.gen, index: S.index, state: 'done' });
   endT = window.setTimeout(() => { release(); void shotCancel(); }, reduced.matches ? 0 : 160);
 }
 
@@ -156,14 +158,16 @@ function update() {
 
   // 十字参考线与放大镜：选区前一直跟随光标，选区后只在调整大小时出现
   const dragging = d?.k === 'new' || d?.k === 'resize';
-  const showLoupe = S.here && (S.phase === 'idle' || dragging);
-  gx.hidden = gy.hidden = !(S.here && S.phase === 'idle' && !dragging);
+  // 另一块屏正在识别文字（locked）：这块屏只有蒙层
+  const live = S.here && !S.locked;
+  const showLoupe = live && (S.phase === 'idle' || dragging);
+  gx.hidden = gy.hidden = !(live && S.phase === 'idle' && !dragging);
   gx.style.transform = `translateY(${Math.round(S.my)}px)`;
   gy.style.transform = `translateX(${Math.round(S.mx)}px)`;
   loupe.hidden = !showLoupe;
   if (showLoupe) drawLoupe(dragging ? rect : null);
 
-  hint.hidden = S.phase !== 'idle' || !S.here;
+  hint.hidden = S.phase !== 'idle' || !live;
   const above = place();
 
   // 尺寸标签（物理像素）
@@ -309,7 +313,7 @@ ov.addEventListener('pointermove', (e) => {
   const x = e.clientX, y = e.clientY, d = S.drag;
   Object.assign(S, { mx: x, my: y, here: true });
   if (!d) {
-    if (S.phase === 'idle') S.snap = hit(S.rects, x, y, W, H);
+    if (S.phase === 'idle' && !S.locked) S.snap = hit(S.rects, x, y, W, H);
     setCursor();
     if (S.phase === 'idle') update();
     return;
@@ -579,7 +583,8 @@ addEventListener('keydown', (e) => {
 void onShotClaim((c) => {
   if (c.generation !== S.gen || c.index === S.index || S.phase === 'off') return;
   if (c.state === 'done') {
-    S.phase = 'done';
+    // 正在识别的屏直接 off：迟到的识别结果不能再起提示条和 shot_cancel 计时
+    S.phase = S.phase === 'busy' ? 'off' : 'done';
     ov.classList.add('out');
     endT = window.setTimeout(release, reduced.matches ? 0 : 160);
     return;
