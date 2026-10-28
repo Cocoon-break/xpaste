@@ -1,0 +1,17 @@
+@import './tokens.css';
+
+/* 录屏边框窗口（铺满被录的那块屏，鼠标穿透，不被录进去）。样式取自原型 docs/specs/2026-10-28-截图与录屏-原型.html 的 #recFrame：
+   选区外 3 px 处一圈 2 px 的视频色线，外加辉光。 */
+html, body { margin: 0; height: 100%; overflow: hidden; background: transparent; }
+#frame {
+  position: fixed; pointer-events: none; border-radius: 3px;
+  box-shadow: 0 0 0 2px var(--c-video), 0 0 26px -4px color-mix(in srgb, var(--c-video) 70%, transparent);
+  animation: fadeIn 200ms ease-out both;
+}
+/* 淡出时长与 src-tauri/src/rec.rs 的 FADE 一致，播完后端隐藏窗口 */
+#frame.out { opacity: 0; transition: opacity 200ms ease-out; }
+@keyframes fadeIn { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  #frame { animation: none; }
+  #frame.out { transition: none; }
+}

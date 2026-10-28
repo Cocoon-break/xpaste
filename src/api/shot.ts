@@ -66,6 +66,18 @@ export const onShotClaim = async (cb: (c: ShotClaim) => void) => {
   if (!stub) await listen<ShotClaim>(SHOT_CLAIM, (e) => cb(e.payload));
 };
 
+/* —— 录屏边框（rec-frame.html）—— */
+const REC_FRAME = 'rec-frame';
+/** 边框位置（该屏内逻辑像素），`null` 淡出。推送可能早于监听注册好（刚建的窗口），注册后再拉一次当前值。 */
+export async function onRecFrame(cb: (r: LRect | null) => void): Promise<void> {
+  if (stub) {
+    setTimeout(() => cb({ x: 120, y: 90, w: 640, h: 360 }));
+    return;
+  }
+  await listen<LRect | null>(REC_FRAME, (e) => cb(e.payload));
+  cb(await invoke<LRect | null>('rec_frame'));
+}
+
 /* —— 贴图：每张一个窗口 pin-<n>，命令都作用于调用方窗口；坐标为屏幕逻辑坐标 —— */
 export type Box = { x: number; y: number; w: number; h: number };
 export type MenuEntry = { text: string; accel: string; run: () => void } | 'sep';

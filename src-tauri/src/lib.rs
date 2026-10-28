@@ -9,6 +9,7 @@ mod hotkey;
 mod housekeeping;
 mod ocr;
 mod panel;
+mod rec;
 mod shot;
 pub mod state;
 mod tray;
@@ -239,17 +240,20 @@ pub fn run() {
             commands::shot::pin_copy,
             commands::shot::pin_save,
             commands::shot::pin_set_bounds,
-            commands::shot::pin_button_down
+            commands::shot::pin_button_down,
+            commands::shot::rec_start,
+            commands::shot::rec_stop,
+            commands::shot::rec_frame
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
-        .run(|app, event| {
+        .run(|app, event| match event {
             // macOS 重开已运行的 .app（Finder / Spotlight）不起第二个进程，而是发 Reopen
             #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen { .. } = event {
-                panel::toggle(app, None, panel::Trigger::Relaunch);
-            }
-            let _ = (app, &event);
+            tauri::RunEvent::Reopen { .. } => panel::toggle(app, None, panel::Trigger::Relaunch),
+            // 托盘“退出”已先停；兜住其他退出途径：录制中先把文件写完，不然 mp4 打不开（M24）
+            tauri::RunEvent::ExitRequested { .. } => rec::stop_blocking(app),
+            _ => {}
         });
 }
 

@@ -13,8 +13,11 @@ use crate::state::AppState;
 use crate::{hotkey, panel};
 
 struct Handles {
+    menu: Menu<Wry>,
     open: MenuItem<Wry>,
     pause: MenuItem<Wry>,
+    /// “停止录制”：只在录制中插在第一项（M24）
+    rec_stop: MenuItem<Wry>,
 }
 
 static TRAY: OnceLock<Handles> = OnceLock::new();
@@ -30,6 +33,15 @@ pub fn pause_label(paused: bool) -> &'static str {
         "继续记录"
     } else {
         "暂停记录"
+    }
+}
+
+/// 菜单“停止录制（<录屏快捷键>）”；没设录屏快捷键时不带括号。
+pub fn rec_stop_label(hotkey_label: &str) -> String {
+    if hotkey_label.is_empty() {
+        "停止录制".into()
+    } else {
+        format!("停止录制（{hotkey_label}）")
     }
 }
 
@@ -73,6 +85,36 @@ pub fn set_paused(app: &AppHandle, on: bool) {
     }
 }
 
+/// 录制中的菜单栏标题（`rec::tray_title`）；`None` 清空。
+pub fn set_recording(app: &AppHandle, elapsed: Option<std::time::Duration>) {
+    if let Some(tray) = app.tray_by_id("main")
+        && let Err(e) = tray.set_title(elapsed.map(crate::rec::tray_title))
+    {
+        log::warn!("更新托盘标题失败：{e}");
+    }
+}
+
+/// 录制中在菜单第一项插入“停止录制”，停止后移除。重复调用不重复插入。
+pub fn show_stop_item(app: &AppHandle, on: bool) {
+    let Some(h) = TRAY.get() else {
+        return;
+    };
+    let shown = h.menu.get(h.rec_stop.id()).is_some();
+    let r = if on && !shown {
+        let key = hotkey::label(&app.state::<AppState>().settings().rec_hotkey);
+        h.rec_stop
+            .set_text(rec_stop_label(&key))
+            .and_then(|()| h.menu.insert(&h.rec_stop, 0))
+    } else if !on && shown {
+        h.menu.remove(&h.rec_stop)
+    } else {
+        Ok(())
+    };
+    if let Err(e) = r {
+        log::warn!("更新托盘“停止录制”失败：{e}");
+    }
+}
+
 /// 快捷键改成功后更新第一项文字，并恢复“打开 xPaste”的点击行为。
 pub fn set_hotkey_label(shortcut: &str) {
     HOTKEY_FAILED.store(false, Ordering::SeqCst);
@@ -113,6 +155,7 @@ pub fn setup(app: &App) -> tauri::Result<()> {
         None::<&str>,
     )?;
     let quit = MenuItem::with_id(app, "quit", "退出 xPaste", true, None::<&str>)?;
+    let rec_stop = MenuItem::with_id(app, "rec-stop", rec_stop_label(""), true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[
@@ -147,7 +190,12 @@ pub fn setup(app: &App) -> tauri::Result<()> {
                 emit(app, CONFIRM_CLEAR, ());
             }
             "settings" => open_settings(app),
-            "quit" => app.exit(0),
+            "rec-stop" => crate::rec::stop(app),
+            // 录制中退出：先把文件写完，不然 mp4 缺 moov 打不开（M24）
+            "quit" => {
+                crate::rec::stop_blocking(app);
+                app.exit(0);
+            }
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
@@ -162,7 +210,12 @@ pub fn setup(app: &App) -> tauri::Result<()> {
             }
         })
         .build(app)?;
-    let _ = TRAY.set(Handles { open, pause });
+    let _ = TRAY.set(Handles {
+        menu,
+        open,
+        pause,
+        rec_stop,
+    });
     Ok(())
 }
 
@@ -176,6 +229,8 @@ mod tests {
         assert_eq!(pause_label(true), "继续记录");
         assert_eq!(pause_label(false), "暂停记录");
         assert_eq!(version_label("0.1.0"), "xPaste 0.1.0");
+        assert_eq!(rec_stop_label("⌥ + Shift + R"), "停止录制（⌥ + Shift + R）");
+        assert_eq!(rec_stop_label(""), "停止录制");
     }
 
     // 托盘未建时 set_text 不做事，只验失败标志；本文件外的测试不碰 HOTKEY_FAILED

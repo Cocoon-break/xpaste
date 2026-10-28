@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{MutexGuard, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use xpaste_platform::{Frame, WinRect};
@@ -34,7 +34,7 @@ fn native_per_logical(scale: f64, points: bool) -> f64 {
 }
 
 /// 显示器内的逻辑像素矩形（左上为原点）。
-#[derive(Serialize, Clone, Copy, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
 pub struct LRect {
     pub x: f64,
     pub y: f64,
@@ -71,7 +71,10 @@ pub fn cursor_on(frames: &[Frame], c: (f64, f64), points: bool) -> Option<(usize
 
 /// 一块屏的冻结结果：位置与缩放留到动作完成，像素由遮罩取走一次。
 pub struct Screen {
+    /// 显示器 id（macOS 为 `CGDirectDisplayID`），录屏用
+    id: u32,
     origin: (f64, f64),
+    size: (f64, f64),
     scale: f64,
     /// `shot_frame` 的响应体：小端 `u32` 宽、高，接着是 RGBA。冻结时就拼好（在锁外），
     /// 遮罩取走时原样交出、不再拷贝几十 MB；取走后为空
@@ -85,7 +88,9 @@ impl From<Frame> for Screen {
         bytes.extend_from_slice(&f.px.1.to_le_bytes());
         bytes.extend_from_slice(&f.rgba);
         Self {
+            id: f.id,
             origin: f.origin,
+            size: f.size,
             scale: f.scale,
             bytes,
         }
@@ -171,6 +176,16 @@ impl Session {
     /// 第 `i` 块屏的位置与缩放；冻结图已释放时为 `None`。
     pub fn screen(&self, i: usize) -> Option<((f64, f64), f64)> {
         self.frames.get(i).map(|f| (f.origin, f.scale))
+    }
+
+    /// 第 `i` 块屏的显示器 id 与缩放（录屏）；冻结图已释放时为 `None`。
+    pub fn screen_target(&self, i: usize) -> Option<(u32, f64)> {
+        self.frames.get(i).map(|f| (f.id, f.scale))
+    }
+
+    /// 第 `i` 块屏的位置与尺寸（原生单位，同 `place`）：录屏边框铺满该屏。
+    pub fn screen_bounds(&self, i: usize) -> Option<((f64, f64), (f64, f64))> {
+        self.frames.get(i).map(|f| (f.origin, f.size))
     }
 
     /// 取走第 `i` 块屏的 `shot_frame` 响应体（只移动、不拷贝）；已取走或冻结图已释放时为 `None`。
@@ -518,8 +533,8 @@ pub fn end_if_current(app: &AppHandle, generation: u64) {
     after_end(app, generation, previous);
 }
 
-/// 遮罩铺满整块屏（含菜单栏）。
-fn place(w: &WebviewWindow, origin: (f64, f64), size: (f64, f64)) -> tauri::Result<()> {
+/// 遮罩铺满整块屏（含菜单栏）。录屏边框也用。
+pub(crate) fn place(w: &WebviewWindow, origin: (f64, f64), size: (f64, f64)) -> tauri::Result<()> {
     // macOS 改内容尺寸时左下角不动，先改尺寸再定左上角
     #[cfg(target_os = "macos")]
     {
@@ -587,10 +602,10 @@ fn build_overlay(app: &AppHandle, i: usize, loaded: mpsc::Sender<()>) -> tauri::
     Ok(())
 }
 
-/// 不激活应用的 NSPanel，层级在菜单栏之上，进入任何空间与全屏应用。主线程调用；每个窗口只能调一次。
+/// 不激活应用的 NSPanel，层级在菜单栏之上（录屏边框同），进入任何空间与全屏应用。主线程调用；每个窗口只能调一次。
 #[cfg(target_os = "macos")]
 #[allow(deprecated)] // cocoa 已弃用，但 tauri-nspanel 公开的就是它的类型
-fn to_overlay_panel(w: &WebviewWindow) -> tauri::Result<()> {
+pub(crate) fn to_overlay_panel(w: &WebviewWindow) -> tauri::Result<()> {
     use tauri_nspanel::WebviewWindowExt;
     use tauri_nspanel::cocoa::{
         appkit::{NSWindow, NSWindowCollectionBehavior as B},
@@ -810,12 +825,17 @@ pub fn parse_rect(h: &str) -> Option<LRect> {
     }
 }
 
-/// `截图 <stamp>.png`，重名依次加 ` 2`、` 3`。
-pub fn shot_file_name(stamp: &str, exists: impl Fn(&str) -> bool) -> String {
+/// `<prefix> <stamp>.<ext>`，重名依次加 ` 2`、` 3`。截图与录屏共用。
+pub fn unique_file_name(
+    prefix: &str,
+    stamp: &str,
+    ext: &str,
+    exists: impl Fn(&str) -> bool,
+) -> String {
     (1..)
         .map(|k| match k {
-            1 => format!("截图 {stamp}.png"),
-            _ => format!("截图 {stamp} {k}.png"),
+            1 => format!("{prefix} {stamp}.{ext}"),
+            _ => format!("{prefix} {stamp} {k}.{ext}"),
         })
         .find(|n| !exists(n))
         .expect("总有不重名的序号")
@@ -845,7 +865,9 @@ pub fn write_unique(dir: &Path, stamp: &str, png: &[u8]) -> std::io::Result<Stri
     let mut tries = 0;
     loop {
         // symlink_metadata：失效的符号链接也算占用，否则 create_new 会一直撞上它
-        let name = shot_file_name(stamp, |n| dir.join(n).symlink_metadata().is_ok());
+        let name = unique_file_name("截图", stamp, "png", |n| {
+            dir.join(n).symlink_metadata().is_ok()
+        });
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -1562,14 +1584,14 @@ mod tests {
     }
 
     #[test]
-    fn shot_file_name_appends_counter() {
+    fn unique_file_name_appends_counter() {
         let taken = ["截图 2026-10-28 14.32.png", "截图 2026-10-28 14.32 2.png"];
         assert_eq!(
-            shot_file_name("2026-10-28 14.32", |n| taken.contains(&n)),
+            unique_file_name("截图", "2026-10-28 14.32", "png", |n| taken.contains(&n)),
             "截图 2026-10-28 14.32 3.png"
         );
         assert_eq!(
-            shot_file_name("2026-10-28 14.32", |_| false),
+            unique_file_name("截图", "2026-10-28 14.32", "png", |_| false),
             "截图 2026-10-28 14.32.png"
         );
     }
