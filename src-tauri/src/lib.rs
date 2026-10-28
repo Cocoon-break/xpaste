@@ -251,8 +251,9 @@ pub fn run() {
             // macOS 重开已运行的 .app（Finder / Spotlight）不起第二个进程，而是发 Reopen
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => panel::toggle(app, None, panel::Trigger::Relaunch),
-            // 托盘“退出”已先停；兜住其他退出途径：录制中先把文件写完，不然 mp4 打不开（M24）
-            tauri::RunEvent::ExitRequested { .. } => rec::stop_blocking(app),
+            // 托盘“退出”已先停；兜住其他退出途径：录制中先把文件写完，不然 mp4 打不开（M24）。
+            // 另一个线程上的开始或停止还没完时先拦下，等它结束后 rec 再退出（守卫里的 hold_exit 每次都会执行）
+            tauri::RunEvent::ExitRequested { api, .. } if rec::hold_exit(app) => api.prevent_exit(),
             _ => {}
         });
 }

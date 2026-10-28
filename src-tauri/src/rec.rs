@@ -3,8 +3,15 @@
 //! 线程：`rec_start` 在阻塞线程里跑 `start`（取屏幕、问麦克风权限、`start_recording` 都会阻塞）；
 //! 录制中一个 `rec-tick` 线程每秒更新菜单栏标题、轮询中断；`stop` 把 `Recorder::stop`（阻塞到文件写完）
 //! 与收尾放到后台线程；`stop_blocking` 在当前线程做完，退出前用。
+//!
+//! 主线程从不等别的线程（开始线程要切主线程建窗口、改菜单栏）：退出时别的线程上的开始或停止还没完，
+//! 由 `hold_exit` 拦下这次退出，在等待线程里等它结束再退出。
+//!
+//! 锁：`state(app)` 的结果一律先 `let` 绑定再用。edition 2024 里 `if let` 判别式的临时锁活到分支结束，
+//! 分支里再加锁（如 `wrap_up` 的 `done()`）会在同一线程上死锁。
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{MutexGuard, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
@@ -25,7 +32,7 @@ use crate::tray;
 const FRAME: &str = "rec-frame";
 /// 边框淡出时长（同 `src/rec-frame.css`），淡出后再隐藏窗口
 const FADE: Duration = Duration::from_millis(200);
-/// 退出时最多等另一个线程上进行中的开始或停止这么久
+/// 退出时最多等另一个线程上进行中的开始或停止这么久，超时照常退出
 const EXIT_WAIT: Duration = Duration::from_secs(10);
 
 /// 录制阶段。开始录制期间（`begin` 之后、录屏器到手之前）也算 `Recording`。
@@ -129,9 +136,12 @@ fn state(app: &AppHandle) -> MutexGuard<'_, RecState> {
         .unwrap_or_else(PoisonError::into_inner)
 }
 
-#[expect(dead_code, reason = "录屏快捷键接入后使用（阶段 13 Task 5）")]
 pub fn is_recording(app: &AppHandle) -> bool {
     state(app).is_recording()
+}
+
+fn is_busy(app: &AppHandle) -> bool {
+    state(app).is_busy()
 }
 
 /// 当前边框位置；不在录制时为 `None`。
@@ -216,6 +226,11 @@ fn launch(
     }
     shot::end_if_current(app, generation);
     let microphone = microphone && microphone_allowed(app);
+    // 开始期间已按停止或退出：还没开始录，直接放弃（权限框可能等了很久）
+    let cancelled = || AppError::Invalid("录屏已停止".into());
+    if !is_recording(app) {
+        return Err(cancelled());
+    }
 
     let dir = resolve_rec_dir(&cur.rec_dir, app.path().video_dir().ok(), &st.data_dir);
     std::fs::create_dir_all(&dir)?;
@@ -228,6 +243,11 @@ fn launch(
     state(app).frame = Some(rect);
     let exclude = show_frame(app, bounds);
     events::emit_to(app, FRAME, events::REC_FRAME, Some(rect));
+    if !is_recording(app) {
+        frame_out(app);
+        hide_frame_after_fade(app, Instant::now());
+        return Err(cancelled());
+    }
     let opts = RecordOptions {
         display,
         rect: (rect.x, rect.y, rect.w, rect.h),
@@ -247,12 +267,20 @@ fn launch(
             return Err(AppError::Invalid("录屏失败".into()));
         }
     };
-    // 先亮菜单栏再登记录屏器：登记之后随时可能被停止，停止的收尾会清掉这里设的标题
+    // 录屏器到手立即登记，再碰要切主线程的菜单栏：此后退出或停止都能拿到它去写完文件
+    let t0 = Instant::now();
+    let handed_back = state(app).attach(recorder, path, cur.rec_copy, t0);
+    if let Some(taken) = handed_back {
+        return Ok(Some(taken));
+    }
     tray::set_recording(app, Some(Duration::ZERO));
     tray::show_stop_item(app, true);
-    let t0 = Instant::now();
-    if let Some(taken) = state(app).attach(recorder, path, cur.rec_copy, t0) {
-        return Ok(Some(taken));
+    // 设菜单栏的同时被停止了：收尾可能先清了，这里再清一次，不留下过期的计时与菜单项
+    let current = state(app).started() == Some(t0);
+    if !current {
+        tray::set_recording(app, None);
+        tray::show_stop_item(app, false);
+        return Ok(None);
     }
     log::info!(
         "rec 开始 屏 {index} {}x{} 系统声音={system_audio} 麦克风={microphone}",
@@ -280,7 +308,10 @@ fn microphone_allowed(app: &AppHandle) -> bool {
 
 /// 计时线程：每到整秒更新菜单栏标题；录屏器报告中断时按中断停止。本次录制结束（`started` 变了）就退出。
 fn tick(app: &AppHandle, t0: Instant) {
-    let current = |app: &AppHandle| state(app).started() == Some(t0);
+    let current = |app: &AppHandle| {
+        let started = state(app).started();
+        started == Some(t0)
+    };
     loop {
         // 睡眠时不持锁
         let next = Duration::from_secs(t0.elapsed().as_secs() + 1);
@@ -311,22 +342,61 @@ pub fn stop(app: &AppHandle) {
 }
 
 fn stop_with(app: &AppHandle, interrupted: bool) {
-    let Some(taken) = state(app).take_for_stop() else {
+    let taken = state(app).take_for_stop();
+    let Some(taken) = taken else {
         return;
     };
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || wrap_up(&app, taken, interrupted));
 }
 
-/// 退出前调用：在当前线程停止并写完文件；另一个线程上的开始或停止进行中时等它结束（最多 `EXIT_WAIT`）。
+/// 退出前调用（托盘“退出”）：录制中在当前线程停止并写完文件。不等别的线程（见模块注释与 `hold_exit`）。
 pub fn stop_blocking(app: &AppHandle) {
-    if let Some(taken) = state(app).take_for_stop() {
+    // 先绑定：判别式里的临时锁会活到分支结束，wrap_up 再加锁就死锁
+    let taken = state(app).take_for_stop();
+    if let Some(taken) = taken {
         wrap_up(app, taken, false);
     }
-    let t = Instant::now();
-    // ponytail: 轮询等待，够用；要更及时再换 Condvar
-    while state(app).is_busy() && t.elapsed() < EXIT_WAIT {
-        std::thread::sleep(Duration::from_millis(50));
+}
+
+/// 已拦下过一次退出：等待线程超时后的 `exit` 不再拦
+static EXIT_DEFERRED: AtomicBool = AtomicBool::new(false);
+
+/// 忙（开始或停止进行中）且还没拦过时拦下这次退出。
+fn defer_exit(busy: bool, deferred: &AtomicBool) -> bool {
+    busy && !deferred.swap(true, Ordering::SeqCst)
+}
+
+/// `RunEvent::ExitRequested`（主线程）：先 `stop_blocking`；另一个线程上的开始或停止还没完时返回 true，
+/// 调用方 `prevent_exit`，等待线程等它结束（最多 `EXIT_WAIT`）后再 `exit`。主线程不阻塞，开始线程的主线程调用照常执行。
+pub fn hold_exit(app: &AppHandle) -> bool {
+    stop_blocking(app);
+    if !defer_exit(is_busy(app), &EXIT_DEFERRED) {
+        return false;
+    }
+    let waiter = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("rec-exit".into())
+        .spawn(move || {
+            let t = Instant::now();
+            // ponytail: 轮询等待，够用；要更及时再换 Condvar
+            while is_busy(&waiter) && t.elapsed() < EXIT_WAIT {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            if is_busy(&waiter) {
+                log::warn!("rec 退出时等待超时，照常退出");
+            }
+            waiter.exit(0);
+        });
+    match spawned {
+        Ok(_) => {
+            log::info!("rec 退出前等待录屏开始或停止完成");
+            true
+        }
+        Err(e) => {
+            log::warn!("rec 启动退出等待线程失败：{e}");
+            false
+        }
     }
 }
 
@@ -610,11 +680,24 @@ mod tests {
     }
 
     #[test]
+    fn exit_is_deferred_once_and_only_while_busy() {
+        use std::sync::atomic::AtomicBool;
+        let deferred = AtomicBool::new(false);
+        assert!(!defer_exit(false, &deferred), "空闲时直接退出");
+        assert!(
+            defer_exit(true, &deferred),
+            "开始或停止进行中：拦下第一次退出"
+        );
+        assert!(!defer_exit(true, &deferred), "等待线程超时后的退出不再拦");
+    }
+
+    #[test]
     fn stop_during_start_hands_recorder_back() {
         let mut s = RecState::<()>::default();
         assert!(s.begin());
-        // 录屏器还没到手时按停止：记下请求，不重复停止
+        // 录屏器还没到手时按停止：记下请求，不重复停止；开始的一方据 is_recording 提前放弃
         assert!(s.take_for_stop().is_none());
+        assert!(!s.is_recording());
         assert!(s.take_for_stop().is_none());
         assert!(!s.begin());
         // 录屏器到手后交回，由开始的一方立即停止
