@@ -1,5 +1,12 @@
 name: CI
 on: { push: { branches: [main] }, pull_request: {}, workflow_dispatch: {} }
+# 同一个 PR 推了新提交就取消还在跑的旧检查
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+env:
+  # 不生成调试信息：编译、链接更快，缓存更小（测试失败仍有 panic 信息）
+  CARGO_PROFILE_DEV_DEBUG: 0
 jobs:
   build:
     strategy:
@@ -14,13 +21,15 @@ jobs:
         with: { node-version: 25, cache: pnpm }
       - uses: dtolnay/rust-toolchain@stable
         with: { components: "rustfmt, clippy" }
+      # 只在 main 上写缓存：PR 写的缓存别的 PR 用不到，还要多花近一分钟上传
       - uses: swatinem/rust-cache@v2
+        with: { save-if: "${{ github.ref == 'refs/heads/main' }}" }
       - if: runner.os == 'Windows'
         run: command -v make || choco install make -y
       - run: make install
       - run: make check
-      - run: make build-check
-      # PR 只跑上面的检查；合并进 main 或手动触发才打安装包并上传
+      # PR 不做发布版完整编译（LTO、单编译单元，一次 4–6 分钟）：发布版代码已由 make check 里的 clippy --release 检查；
+      # 合并进 main 或手动触发时由 make release 完整编译并打安装包上传
       - if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
         run: make release
       - if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')

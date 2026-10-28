@@ -48,7 +48,7 @@ make release-win   # 在 macOS 上交叉打 Windows 安装程序（见下文）
 
 - `main` 是唯一的长期分支，随时可发布。它受保护，不能直接推送。
 - 每个改动从 `main` 拉一个短分支（如 `feat/pinyin-search`、`fix/windows-ci`），推上去后开 Pull Request 到 `main`。外部贡献者先 fork 仓库再开 PR。
-- PR 上的 CI 在 macOS 与 Windows 上各跑一遍 `make check` 和 `make build-check`，两项都通过才能合并。合并后删掉分支。
+- PR 上的 CI 在 macOS 与 Windows 上各跑一遍 `make check`，两项都通过才能合并。发布版的完整编译（LTO，较慢）只在合并进 `main` 后由 `make release` 做；怀疑改动只影响发布版时，本地先跑 `make build-check`。合并后删掉分支。
 
 ## 发版
 

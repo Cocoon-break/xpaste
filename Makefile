@@ -54,7 +54,7 @@ check: lint test build ## 全量检查：lint + 测试 + 前端构建（提交�
 build: ## 构建前端（tsc + vite）
 	pnpm build
 
-build-check: ## 编译应用但不打安装包（CI 用）
+build-check: ## 按发布配置编译应用但不打安装包
 	pnpm tauri build --no-bundle
 
 # CI=true：Tauri 打 dmg 时检测到它会给 bundle_dmg.sh 加 --skip-jenkins，跳过 Finder AppleScript
