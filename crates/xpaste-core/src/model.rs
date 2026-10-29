@@ -194,6 +194,38 @@ fn hotkey_key_on(s: &str, mac: bool) -> Vec<String> {
 }
 
 impl Settings {
+    /// 逐项读出已保存的设置（M15）：某一项读不出（类型不对、降级后遇到新版本加的取值）或使读出的设置
+    /// 通不过校验时，只把这一项回落到默认值，其余保留；返回设置与回落了的字段名。整段不是 JSON 对象时报错。
+    /// ponytail: 每项都整份反序列化加校验一次，字段数平方级，几十项无所谓
+    pub fn from_json_lenient(raw: &str) -> Result<(Self, Vec<String>), serde_json::Error> {
+        use serde_json::{Map, Value};
+        let stored: Map<String, Value> = serde_json::from_str(raw)?;
+        let Value::Object(mut merged) = serde_json::to_value(Self::default())? else {
+            unreachable!("Settings 序列化为对象");
+        };
+        let usable = |m: &Map<String, Value>| {
+            serde_json::from_value::<Self>(Value::Object(m.clone())).is_ok_and(|mut s| {
+                s.disable_clashing_hotkeys();
+                s.validate().is_ok()
+            })
+        };
+        let mut dropped = Vec::new();
+        for (k, v) in stored {
+            // 新版本才有的字段：旧版不认识，照旧忽略
+            let Some(old) = merged.insert(k.clone(), v) else {
+                merged.remove(&k);
+                continue;
+            };
+            if !usable(&merged) {
+                merged.insert(k.clone(), old);
+                dropped.push(k);
+            }
+        }
+        let mut s: Self = serde_json::from_value(Value::Object(merged))?;
+        s.disable_clashing_hotkeys();
+        Ok((s, dropped))
+    }
+
     /// 截图、录屏快捷键与别的快捷键是同一组合时停用它（M15、M24）：升级前把唤起设成了 `Alt+Shift+A`
     /// 或 `Alt+Shift+R` 的用户读出时会撞上新功能的默认值，不处理的话整份设置校验不过、回落到默认值。
     pub fn disable_clashing_hotkeys(&mut self) {
