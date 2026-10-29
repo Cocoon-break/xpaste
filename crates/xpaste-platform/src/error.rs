@@ -4,6 +4,8 @@ pub enum PlatformError {
     Clipboard(String),
     #[error("截屏失败：{0}")]
     Capture(String),
+    #[error("录屏失败：{0}")]
+    Record(String),
     #[error("当前平台不支持")]
     Unsupported,
 }

@@ -142,17 +142,19 @@ impl Store {
         Ok(())
     }
 
-    /// 缺失或损坏时回落到默认设置。
+    /// 缺失或整段损坏时回落到默认设置；个别项读不出或不合法时只回落那几项（`Settings::from_json_lenient`）。
     pub fn load_settings(&self) -> Settings {
         match self.kv_get("settings") {
-            Ok(Some(raw)) => match serde_json::from_str::<Settings>(&raw).map(|mut s| {
-                s.disable_clashing_shot_hotkey();
-                s
-            }) {
-                Ok(s) if s.validate().is_ok() => s,
-                Ok(_) => {
-                    log::warn!("已保存的设置未通过校验，使用默认值");
-                    Settings::default()
+            Ok(Some(raw)) => match Settings::from_json_lenient(&raw) {
+                Ok((s, dropped)) => {
+                    if !dropped.is_empty() {
+                        log::warn!(
+                            "已保存的设置有 {} 项读不出或不合法，这几项用默认值：{}",
+                            dropped.len(),
+                            dropped.join(", ")
+                        );
+                    }
+                    s
                 }
                 Err(e) => {
                     log::warn!("设置解析失败，使用默认值：{e}");
@@ -1261,6 +1263,24 @@ pub(crate) mod tests {
         let s = Store::open_in_memory(&tmp()).unwrap();
         s.kv_set("settings", r#"{"maxRecords":0}"#).unwrap();
         assert_eq!(s.load_settings(), Settings::default());
+    }
+
+    #[test]
+    fn unreadable_field_falls_back_alone() {
+        let s = Store::open_in_memory(&tmp()).unwrap();
+        // 新版本加的取值（降级回旧版）、类型不对、未通过校验：只回落那一项
+        s.kv_set(
+            "settings",
+            r#"{"maxRecords":1000,"recQuality":"lossless","recFps":120,"retentionDays":"x","hotkey":"Alt+Space"}"#,
+        )
+        .unwrap();
+        let cfg = s.load_settings();
+        let d = Settings::default();
+        assert_eq!(cfg.max_records, 1000);
+        assert_eq!(cfg.hotkey, "Alt+Space");
+        assert_eq!(cfg.rec_quality, d.rec_quality);
+        assert_eq!(cfg.rec_fps, d.rec_fps);
+        assert_eq!(cfg.retention_days, d.retention_days);
     }
 
     #[test]

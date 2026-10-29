@@ -9,14 +9,15 @@ mod hotkey;
 mod housekeeping;
 mod ocr;
 mod panel;
+mod rec;
 mod shot;
 pub mod state;
 mod tray;
 
 use state::AppState;
 use std::path::PathBuf;
-use tauri::{Manager, WindowEvent};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+use tauri::{AppHandle, Manager, WindowEvent};
+use tauri_plugin_global_shortcut::ShortcutState;
 use tauri_plugin_log::{Target, TargetKind};
 use tauri_plugin_notification::NotificationExt;
 use xpaste_core::Store;
@@ -90,9 +91,10 @@ pub fn run() {
             let store = Store::open(&data_dir)?;
             let first_run = matches!(store.kv_get("onboarded"), Ok(None));
             let settings = store.load_settings();
-            let (hotkey, shot_hotkey, appearance) = (
+            let (hotkey, shot_hotkey, rec_hotkey, appearance) = (
                 settings.hotkey.clone(),
                 settings.shot_hotkey.clone(),
+                settings.rec_hotkey.clone(),
                 settings.appearance,
             );
             let enrich = enrich::start(app.handle().clone());
@@ -114,21 +116,14 @@ pub fn run() {
             if let Err(e) = tray::setup(app) {
                 log::warn!("托盘图标创建失败：{e}");
             }
-            if let Err(e) = hotkey::register(app.handle(), &hotkey, &shot_hotkey) {
+            if let Err(e) = hotkey::register(app.handle(), &hotkey, &shot_hotkey, &rec_hotkey) {
                 log::warn!("快捷键注册失败：{e}");
-                // 唤起失败时 register 只报唤起，截图是否注册上另查；截图失败只提示，不标记托盘
+                // register 只报第一个失败，截图、录屏是否注册上另查；它们失败只提示，不标记托盘
                 let panel_failed = matches!(e, error::AppError::HotkeyTaken);
-                let shot_failed = !shot_hotkey.is_empty()
-                    && !app.global_shortcut().is_registered(shot_hotkey.as_str());
-                if let Some(body) = hotkey::failure_notice(panel_failed, shot_failed)
-                    && let Err(e) = app
-                        .notification()
-                        .builder()
-                        .title("xPaste")
-                        .body(body)
-                        .show()
-                {
-                    log::warn!("发送快捷键注册失败通知失败：{e}");
+                let (shot_failed, rec_failed) =
+                    hotkey::unregistered(app.handle(), &shot_hotkey, &rec_hotkey);
+                if let Some(body) = hotkey::failure_notice(panel_failed, shot_failed, rec_failed) {
+                    notify(app.handle(), &body);
                 }
                 if panel_failed {
                     tray::mark_hotkey_failed();
@@ -159,16 +154,21 @@ pub fn run() {
                     if event.state() != ShortcutState::Pressed {
                         return;
                     }
-                    let (p, s) = {
+                    let (p, s, r) = {
                         let st = app.state::<AppState>();
                         let s = st.settings();
-                        (s.hotkey.clone(), s.shot_hotkey.clone())
+                        (
+                            s.hotkey.clone(),
+                            s.shot_hotkey.clone(),
+                            s.rec_hotkey.clone(),
+                        )
                     };
-                    match hotkey::role_of(shortcut, &p, &s) {
+                    match hotkey::role_of(shortcut, &p, &s, &r) {
                         Some(hotkey::Role::Panel) => {
                             panel::toggle(app, timing.then(now_unix_ms), panel::Trigger::Hotkey)
                         }
                         Some(hotkey::Role::Shot) => hotkey::shot_pressed(app),
+                        Some(hotkey::Role::Rec) => hotkey::rec_pressed(app),
                         None => {}
                     }
                 })
@@ -239,18 +239,34 @@ pub fn run() {
             commands::shot::pin_copy,
             commands::shot::pin_save,
             commands::shot::pin_set_bounds,
-            commands::shot::pin_button_down
+            commands::shot::pin_button_down,
+            commands::shot::rec_start,
+            commands::shot::rec_frame
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
-        .run(|app, event| {
+        .run(|app, event| match event {
             // macOS 重开已运行的 .app（Finder / Spotlight）不起第二个进程，而是发 Reopen
             #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen { .. } = event {
-                panel::toggle(app, None, panel::Trigger::Relaunch);
-            }
-            let _ = (app, &event);
+            tauri::RunEvent::Reopen { .. } => panel::toggle(app, None, panel::Trigger::Relaunch),
+            // 录制、开始或停止进行中时拦下这次退出（托盘“退出”也走这里）：rec 先停止、把文件写完再退出，
+            // 不然 mp4 打不开（M24 规则 8）。守卫里的 hold_exit 每次都会执行
+            tauri::RunEvent::ExitRequested { api, .. } if rec::hold_exit(app) => api.prevent_exit(),
+            _ => {}
         });
+}
+
+/// 系统通知，标题“xPaste”；发送失败只记日志。
+pub(crate) fn notify(app: &AppHandle, body: &str) {
+    if let Err(e) = app
+        .notification()
+        .builder()
+        .title("xPaste")
+        .body(body)
+        .show()
+    {
+        log::warn!("发送系统通知失败：{e}");
+    }
 }
 
 /// 环境变量非空（去首尾空白后）时用它作数据目录，否则用默认目录；开发版隔离真实数据用。

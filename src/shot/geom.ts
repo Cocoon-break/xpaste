@@ -53,6 +53,14 @@ export function badgePos(sel: Rect, badgeW: number, barAbove: boolean, W: number
   return { x: clamp(out ? sel.x : sel.x + 6, 4, W - badgeW - 4), y: out ? sel.y - 30 : sel.y + 6 };
 }
 
+/** 录屏输出像素，与 `record::output_size` 同口径（M24 规则 6）：× 缩放，长边不超过 3840 等比缩小，向下取偶，至少 2。 */
+export function outputSize(w: number, h: number, scale: number): [number, number] {
+  const sw = w * scale, sh = h * scale, long = Math.max(sw, sh), k = Math.min(3840 / long, 1);
+  const side = (v: number) => (v >= long ? Math.min(v, 3840) : v * k);
+  const even = (v: number) => Math.max(Math.floor(v) & ~1, 2);
+  return [even(side(sw)), even(side(sh))];
+}
+
 /** 放大镜（124 × 约 150）：光标右下方 22 px，靠近右边 / 下边时翻到左 / 上。 */
 export function loupePos(mx: number, my: number, W: number, H: number) {
   let x = mx + 22, y = my + 22;

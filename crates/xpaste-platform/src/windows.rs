@@ -81,6 +81,7 @@ use xpaste_core::capture::MAX_FLAVOR_BYTES;
 use xpaste_core::{AppInfo, Flavor, Snapshot};
 
 use crate::decode::normalize_newlines;
+use crate::record::{MicAccess, RecordOptions, RecordOutcome};
 use crate::winfmt::{
     Foreground, VideoProps, bgra_to_opaque_rgba, bgra_to_png, bgra_to_png_within,
     bitmap_from_flavors, cf_html_fragment, file_description_query, foreground_target,
@@ -1029,7 +1030,8 @@ pub fn freeze_displays() -> Result<Vec<Frame>, PlatformError> {
     }
     let frames = monitors
         .iter()
-        .map(|&(m, r)| freeze_monitor(screen, m, r))
+        .zip(0u32..)
+        .map(|(&(m, r), id)| freeze_monitor(screen, id, m, r))
         .collect();
     // SAFETY: 上面取得的屏幕 DC
     unsafe { ReleaseDC(None, screen) };
@@ -1053,7 +1055,7 @@ fn is_primary(m: HMONITOR) -> bool {
 
 /// 一块屏 `BitBlt` 到自上而下的 32 位 DIB section，再转 RGBA。
 /// `CAPTUREBLT` 把分层窗口（贴图）一起截进来。
-fn freeze_monitor(screen: HDC, m: HMONITOR, r: RECT) -> Result<Frame, PlatformError> {
+fn freeze_monitor(screen: HDC, id: u32, m: HMONITOR, r: RECT) -> Result<Frame, PlatformError> {
     let err = |what: &str| PlatformError::Capture(what.into());
     let (w, h) = (r.right - r.left, r.bottom - r.top);
     let (pw, ph) = match (u32::try_from(w), u32::try_from(h)) {
@@ -1114,6 +1116,7 @@ fn freeze_monitor(screen: HDC, m: HMONITOR, r: RECT) -> Result<Frame, PlatformEr
     }
     .ok_or_else(|| err("截屏失败"))?;
     Ok(Frame {
+        id,
         origin: (f64::from(r.left), f64::from(r.top)),
         size: (f64::from(w), f64::from(h)),
         scale: f64::from(dpi) / 96.0,
@@ -1200,6 +1203,39 @@ pub fn request_screen_capture() {}
 /// 不是 macOS。
 pub fn macos_version() -> Option<u32> {
     None
+}
+
+/// 录屏（M24）只做了 macOS；以下是同名桩，让应用层两端都能编译。
+pub struct Recorder;
+
+impl Recorder {
+    pub fn failed(&self) -> bool {
+        false
+    }
+
+    pub fn stop(self) -> Result<RecordOutcome, PlatformError> {
+        Err(PlatformError::Unsupported)
+    }
+}
+
+pub fn start_recording(_opts: RecordOptions) -> Result<Recorder, PlatformError> {
+    Err(PlatformError::Unsupported)
+}
+
+pub fn microphone_access() -> MicAccess {
+    MicAccess::Denied
+}
+
+pub fn request_microphone() -> bool {
+    false
+}
+
+pub fn window_number(_ns_window: *mut std::ffi::c_void) -> Option<u32> {
+    None
+}
+
+pub fn file_flavors(_path: &Path) -> Vec<Flavor> {
+    Vec::new()
 }
 
 /// 鼠标主键此刻是否按着。贴图据此判断拖动是否结束。

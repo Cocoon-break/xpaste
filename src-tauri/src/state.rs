@@ -4,7 +4,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError, mpsc};
 
 use xpaste_core::{Settings, Store};
 
-use crate::{enrich, ocr, shot};
+use crate::{enrich, ocr, rec, shot};
 
 /// 由 Tauri 托管、各命令共享的应用状态。
 /// 锁顺序：不同时持有 `settings` 与 `store`；持锁期间不发事件。
@@ -28,6 +28,8 @@ pub struct AppState {
     pub dialog_open: AtomicBool,
     /// 进行中的截图（冻结图与各屏遮罩就绪情况）
     pub shot: Mutex<shot::Session>,
+    /// 进行中的录屏（M24）
+    pub rec: Mutex<rec::RecState>,
 }
 
 impl AppState {
@@ -53,6 +55,7 @@ impl AppState {
             onboarding: AtomicBool::new(false),
             dialog_open: AtomicBool::new(false),
             shot: Mutex::default(),
+            rec: Mutex::default(),
         }
     }
 

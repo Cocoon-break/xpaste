@@ -2,7 +2,7 @@ use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::{AppHandle, WebviewWindow};
 
 use crate::error::AppError;
-use crate::shot;
+use crate::{rec, shot};
 
 fn index_of(window: &WebviewWindow) -> Result<usize, AppError> {
     shot::overlay_index(window.label()).ok_or_else(|| AppError::Invalid("不是截图遮罩".into()))
@@ -80,6 +80,35 @@ pub async fn shot_finish(
     tauri::async_runtime::spawn_blocking(move || shot::finish(&app, action, index, rect, png))
         .await
         .map_err(|_| invalid("截图处理中断"))?
+}
+
+/// 倒计时结束，开始录屏（M24）。`generation` 与 `index` 取自 `shot-begin` 载荷：只接受当前这一次截图、
+/// 由该序号遮罩发起的调用。`rect` 为该屏内逻辑像素；两个声音开关与设置不同时写回设置。
+#[tauri::command]
+pub async fn rec_start(
+    app: AppHandle,
+    window: WebviewWindow,
+    generation: u64,
+    index: usize,
+    rect: shot::LRect,
+    system_audio: bool,
+    microphone: bool,
+) -> Result<(), AppError> {
+    if index_of(&window)? != index {
+        return Err(AppError::Invalid("显示器序号与遮罩不符".into()));
+    }
+    // 取屏幕、申请麦克风权限、开始录制都是阻塞调用
+    tauri::async_runtime::spawn_blocking(move || {
+        rec::start(&app, generation, index, rect, system_audio, microphone)
+    })
+    .await
+    .map_err(|_| AppError::Invalid("录屏开始中断".into()))?
+}
+
+/// 录屏边框页注册好监听后拉一次当前位置（刚建的窗口可能错过推送）；不在录制时为 `null`。
+#[tauri::command]
+pub fn rec_frame(app: AppHandle) -> Option<shot::LRect> {
+    rec::frame_rect(&app)
 }
 
 /// 关闭调用方贴图（双击、Esc、右键“关闭”）。

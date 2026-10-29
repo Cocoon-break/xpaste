@@ -12,6 +12,8 @@ pub enum AppError {
     HotkeyTaken,
     #[error("截图快捷键已被其他应用占用，请换一个")]
     ShotHotkeyTaken,
+    #[error("录屏快捷键已被其他应用占用，请换一个")]
+    RecHotkeyTaken,
     /// 参数不合法（非 http 链接、记录不存在等）
     #[error("{0}")]
     Invalid(String),
@@ -33,6 +35,7 @@ impl AppError {
             Self::ClipboardWrite => "clipboardWrite",
             Self::HotkeyTaken => "hotkeyTaken",
             Self::ShotHotkeyTaken => "shotHotkeyTaken",
+            Self::RecHotkeyTaken => "recHotkeyTaken",
             Self::Invalid(_) => "invalid",
             Self::Core(CoreError::InvalidSettings(_)) => "invalidSettings",
             Self::Core(_) | Self::Tauri(_) | Self::Opener(_) | Self::Io(_) => "internal",
@@ -67,6 +70,10 @@ mod tests {
         assert_eq!(
             serde_json::to_value(AppError::ShotHotkeyTaken).unwrap(),
             json!({"kind": "shotHotkeyTaken", "message": "截图快捷键已被其他应用占用，请换一个"})
+        );
+        assert_eq!(
+            serde_json::to_value(AppError::RecHotkeyTaken).unwrap(),
+            json!({"kind": "recHotkeyTaken", "message": "录屏快捷键已被其他应用占用，请换一个"})
         );
         assert_eq!(
             serde_json::to_value(AppError::ClipboardWrite).unwrap()["message"],

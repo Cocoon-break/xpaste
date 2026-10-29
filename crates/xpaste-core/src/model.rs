@@ -45,6 +45,16 @@ pub enum Appearance {
     Dark,
 }
 
+/// 录屏清晰度（M24 规则 6）：高按屏幕实际像素，标准按逻辑尺寸，小文件在标准上再压低码率。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RecQuality {
+    High,
+    #[default]
+    Standard,
+    Small,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -78,6 +88,20 @@ pub struct Settings {
     pub shot_dir: String,
     /// 保存截图时同时复制到剪切板
     pub shot_save_copy: bool,
+    /// 录屏全局快捷键；空字符串表示不启用（M24）
+    pub rec_hotkey: String,
+    /// 录屏保存文件夹；空字符串表示平台默认（影片/xPaste）
+    pub rec_dir: String,
+    /// 录制系统声音
+    pub rec_system_audio: bool,
+    /// 录制麦克风
+    pub rec_microphone: bool,
+    /// 录完把视频文件复制到剪切板
+    pub rec_copy: bool,
+    /// 录屏清晰度（M24 规则 6）
+    pub rec_quality: RecQuality,
+    /// 录屏帧率，30 | 60（M24 规则 6）
+    pub rec_fps: u32,
 }
 
 impl Default for Settings {
@@ -108,6 +132,13 @@ impl Default for Settings {
             shot_hotkey: "Alt+Shift+A".into(),
             shot_dir: String::new(),
             shot_save_copy: true,
+            rec_hotkey: "Alt+Shift+R".into(),
+            rec_dir: String::new(),
+            rec_system_audio: false,
+            rec_microphone: false,
+            rec_copy: true,
+            rec_quality: RecQuality::Standard,
+            rec_fps: 30,
         }
     }
 }
@@ -163,12 +194,52 @@ fn hotkey_key_on(s: &str, mac: bool) -> Vec<String> {
 }
 
 impl Settings {
-    /// 截图快捷键与唤起快捷键是同一组合时停用截图快捷键（M15）：升级前把唤起设成了 `Alt+Shift+A`
-    /// 的用户读出时会撞上截图的默认值，不处理的话整份设置校验不过、回落到默认值。
-    pub fn disable_clashing_shot_hotkey(&mut self) {
+    /// 逐项读出已保存的设置（M15）：某一项读不出（类型不对、降级后遇到新版本加的取值）或使读出的设置
+    /// 通不过校验时，只把这一项回落到默认值，其余保留；返回设置与回落了的字段名。整段不是 JSON 对象时报错。
+    /// ponytail: 每项都整份反序列化加校验一次，字段数平方级，几十项无所谓
+    pub fn from_json_lenient(raw: &str) -> Result<(Self, Vec<String>), serde_json::Error> {
+        use serde_json::{Map, Value};
+        let stored: Map<String, Value> = serde_json::from_str(raw)?;
+        let Value::Object(mut merged) = serde_json::to_value(Self::default())? else {
+            unreachable!("Settings 序列化为对象");
+        };
+        let usable = |m: &Map<String, Value>| {
+            serde_json::from_value::<Self>(Value::Object(m.clone())).is_ok_and(|mut s| {
+                s.disable_clashing_hotkeys();
+                s.validate().is_ok()
+            })
+        };
+        let mut dropped = Vec::new();
+        for (k, v) in stored {
+            // 新版本才有的字段：旧版不认识，照旧忽略
+            let Some(old) = merged.insert(k.clone(), v) else {
+                merged.remove(&k);
+                continue;
+            };
+            if !usable(&merged) {
+                merged.insert(k.clone(), old);
+                dropped.push(k);
+            }
+        }
+        let mut s: Self = serde_json::from_value(Value::Object(merged))?;
+        s.disable_clashing_hotkeys();
+        Ok((s, dropped))
+    }
+
+    /// 截图、录屏快捷键与别的快捷键是同一组合时停用它（M15、M24）：升级前把唤起设成了 `Alt+Shift+A`
+    /// 或 `Alt+Shift+R` 的用户读出时会撞上新功能的默认值，不处理的话整份设置校验不过、回落到默认值。
+    pub fn disable_clashing_hotkeys(&mut self) {
         if !self.shot_hotkey.is_empty() && hotkey_key(&self.shot_hotkey) == hotkey_key(&self.hotkey)
         {
             self.shot_hotkey.clear();
+        }
+        if !self.rec_hotkey.is_empty() {
+            let rec = hotkey_key(&self.rec_hotkey);
+            if rec == hotkey_key(&self.hotkey)
+                || (!self.shot_hotkey.is_empty() && rec == hotkey_key(&self.shot_hotkey))
+            {
+                self.rec_hotkey.clear();
+            }
         }
     }
 
@@ -186,6 +257,22 @@ impl Settings {
             if hotkey_key(&self.shot_hotkey) == hotkey_key(&self.hotkey) {
                 return fail("截图快捷键不能与唤起快捷键相同");
             }
+        }
+        // 录屏只在 macOS 上做（M24）：别处不注册录屏快捷键、设置里也没有这一行，不校验，免得占住用户看不到的组合
+        if cfg!(target_os = "macos") && !self.rec_hotkey.is_empty() {
+            if !has_modifier(&self.rec_hotkey) {
+                return fail("录屏快捷键至少需要包含 Mod 或 Alt");
+            }
+            let rec = hotkey_key(&self.rec_hotkey);
+            if rec == hotkey_key(&self.hotkey) {
+                return fail("录屏快捷键不能与唤起快捷键相同");
+            }
+            if !self.shot_hotkey.is_empty() && rec == hotkey_key(&self.shot_hotkey) {
+                return fail("录屏快捷键不能与截图快捷键相同");
+            }
+        }
+        if !matches!(self.rec_fps, 30 | 60) {
+            return fail("录屏帧率只能是 30 或 60");
         }
         if !matches!(self.retention_days, None | Some(7 | 30 | 90)) {
             return fail("历史保留只能是 7 天、30 天、90 天或永久");
@@ -630,13 +717,13 @@ mod tests {
     #[test]
     fn old_json_with_default_shot_combo_disables_shot_hotkey() {
         let mut s: Settings = serde_json::from_str(r#"{"hotkey":"Alt+Shift+A"}"#).unwrap();
-        s.disable_clashing_shot_hotkey();
+        s.disable_clashing_hotkeys();
         assert_eq!(s.shot_hotkey, "");
         assert_eq!(s.hotkey, "Alt+Shift+A");
         assert!(s.validate().is_ok());
         // 不撞时不动
         let mut s = Settings::default();
-        s.disable_clashing_shot_hotkey();
+        s.disable_clashing_hotkeys();
         assert_eq!(s.shot_hotkey, "Alt+Shift+A");
     }
 
@@ -664,6 +751,126 @@ mod tests {
             invalid(&with("Option+Shift+A", "Alt+Shift+A")),
             "截图快捷键不能与唤起快捷键相同"
         );
+    }
+
+    #[test]
+    fn default_rec_settings() {
+        let s = Settings::default();
+        assert_eq!(s.rec_hotkey, "Alt+Shift+R");
+        assert_eq!(s.rec_dir, "");
+        assert!(!s.rec_system_audio);
+        assert!(!s.rec_microphone);
+        assert!(s.rec_copy);
+    }
+
+    #[test]
+    fn old_json_gets_rec_defaults() {
+        let s: Settings = serde_json::from_str(r#"{"hotkey":"Alt+Space"}"#).unwrap();
+        let d = Settings::default();
+        assert_eq!(s.rec_hotkey, d.rec_hotkey);
+        assert_eq!(s.rec_dir, d.rec_dir);
+        assert_eq!(s.rec_system_audio, d.rec_system_audio);
+        assert_eq!(s.rec_microphone, d.rec_microphone);
+        assert_eq!(s.rec_copy, d.rec_copy);
+        assert_eq!(s.rec_quality, d.rec_quality);
+        assert_eq!(s.rec_fps, d.rec_fps);
+    }
+
+    #[test]
+    fn rec_quality_and_fps_defaults_and_serde() {
+        let d = Settings::default();
+        assert_eq!(d.rec_quality, RecQuality::Standard);
+        assert_eq!(d.rec_fps, 30);
+        let json = serde_json::to_string(&d).unwrap();
+        assert!(json.contains(r#""recQuality":"standard""#), "{json}");
+        assert!(json.contains(r#""recFps":30"#), "{json}");
+        let s: Settings = serde_json::from_str(r#"{"recQuality":"small","recFps":60}"#).unwrap();
+        assert_eq!((s.rec_quality, s.rec_fps), (RecQuality::Small, 60));
+        let s: Settings = serde_json::from_str(r#"{"recQuality":"high"}"#).unwrap();
+        assert_eq!(s.rec_quality, RecQuality::High);
+    }
+
+    #[test]
+    fn validate_rec_fps() {
+        let with = |fps| Settings {
+            rec_fps: fps,
+            ..Default::default()
+        };
+        assert!(with(30).validate().is_ok());
+        assert!(with(60).validate().is_ok());
+        for fps in [0, 24, 59, 120] {
+            assert_eq!(invalid(&with(fps)), "录屏帧率只能是 30 或 60", "{fps}");
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn validate_rec_hotkey() {
+        let with = |hotkey: &str, shot: &str, rec: &str| Settings {
+            hotkey: hotkey.into(),
+            shot_hotkey: shot.into(),
+            rec_hotkey: rec.into(),
+            ..Default::default()
+        };
+        assert!(with("Alt+Space", "Alt+Shift+A", "").validate().is_ok());
+        assert_eq!(
+            invalid(&with("Alt+Space", "Alt+Shift+A", "R")),
+            "录屏快捷键至少需要包含 Mod 或 Alt"
+        );
+        assert_eq!(
+            invalid(&with("Alt+Shift+R", "Alt+Shift+A", " shift+ALT+r")),
+            "录屏快捷键不能与唤起快捷键相同"
+        );
+        assert_eq!(
+            invalid(&with("Alt+Space", "Alt+Shift+A", "Option+Shift+A")),
+            "录屏快捷键不能与截图快捷键相同"
+        );
+        assert!(with("Alt+Space", "", "Alt+Shift+A").validate().is_ok());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn validate_ignores_rec_hotkey_off_macos() {
+        let with = |hotkey: &str, shot: &str, rec: &str| Settings {
+            hotkey: hotkey.into(),
+            shot_hotkey: shot.into(),
+            rec_hotkey: rec.into(),
+            ..Default::default()
+        };
+        // 默认的 Alt+Shift+R 不占住唤起与截图
+        assert!(
+            with("Alt+Shift+R", "Alt+Shift+A", "Alt+Shift+R")
+                .validate()
+                .is_ok()
+        );
+        assert!(
+            with("Alt+Space", "Alt+Shift+R", "Alt+Shift+R")
+                .validate()
+                .is_ok()
+        );
+        assert!(with("Alt+Space", "Alt+Shift+A", "R").validate().is_ok());
+    }
+
+    #[test]
+    fn disable_clashing_hotkeys_clears_rec() {
+        let mut s = Settings {
+            hotkey: "Alt+Shift+R".into(),
+            ..Default::default()
+        };
+        s.disable_clashing_hotkeys();
+        assert_eq!(s.rec_hotkey, "");
+        assert_eq!(s.shot_hotkey, "Alt+Shift+A");
+        let mut s = Settings {
+            shot_hotkey: "Alt+Shift+R".into(),
+            ..Default::default()
+        };
+        s.disable_clashing_hotkeys();
+        assert_eq!(s.rec_hotkey, "");
+        assert_eq!(s.shot_hotkey, "Alt+Shift+R");
+        // 不撞时不动
+        let mut s = Settings::default();
+        s.disable_clashing_hotkeys();
+        assert_eq!(s.rec_hotkey, "Alt+Shift+R");
     }
 
     #[test]

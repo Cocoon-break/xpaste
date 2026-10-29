@@ -4,6 +4,9 @@ export type Kind = 'text' | 'link' | 'code' | 'image' | 'video' | 'file';
 
 export type Appearance = 'system' | 'light' | 'dark';
 
+/** 录屏清晰度（M24 规则 6） */
+export type RecQuality = 'high' | 'standard' | 'small';
+
 export interface Settings {
   hotkey: string;
   retentionDays: number | null;
@@ -23,11 +26,21 @@ export interface Settings {
   shotHotkey: string;
   shotDir: string;
   shotSaveCopy: boolean;
+  recHotkey: string;
+  recDir: string;
+  recSystemAudio: boolean;
+  recMicrophone: boolean;
+  recCopy: boolean;
+  recQuality: RecQuality;
+  /** 30 | 60 */
+  recFps: number;
 }
 
 export interface PlatformInfo {
   os: 'macos' | 'windows';
   material: 'glass' | 'opaque';
+  /** macOS 主版本号；Windows 为 null */
+  macosMajor: number | null;
 }
 
 export interface Bootstrap {
@@ -108,7 +121,7 @@ export interface RecordDetail extends RecordSummary {
 }
 
 export interface AppError {
-  kind: 'fileMissing' | 'clipboardWrite' | 'hotkeyTaken' | 'shotHotkeyTaken' | 'invalidSettings' | 'invalid' | 'internal';
+  kind: 'fileMissing' | 'clipboardWrite' | 'hotkeyTaken' | 'shotHotkeyTaken' | 'recHotkeyTaken' | 'invalidSettings' | 'invalid' | 'internal';
   message: string;
 }
 
@@ -130,6 +143,16 @@ export type BeginPayload = {
   scale: number;
   /** 设置“保存截图时同时复制” */
   saveCopy: boolean;
+  /** 截图（M23）或选录屏区域（M24） */
+  mode: 'shot' | 'rec';
+  /** 设置“录制系统声音”，录屏开关的初值 */
+  systemAudio: boolean;
+  /** 设置“录制麦克风”；本机不支持（macOS 15 以下）为 null */
+  microphone: boolean | null;
+  /** 录屏输出缩放（按清晰度与该屏缩放），尺寸标签显示输出像素 */
+  recScale: number;
+  /** 设置“录屏帧率” */
+  recFps: number;
 };
 export type ShotAction = 'copy' | 'save' | 'ocr' | 'pin';
 /** 对应 `shot::ShotOutcome`。 */

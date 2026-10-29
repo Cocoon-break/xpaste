@@ -542,6 +542,7 @@ dialog > form { display: contents; }
 .suffix span { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); color: var(--faint); font-size: 13px; pointer-events: none; }
 .suffix input { padding-right: 34px; font-variant-numeric: tabular-nums; }
 .line .suffix { flex: none; width: 96px; }
+.line select { flex: none; width: 112px; }
 .switches { display: grid; border-top: 1px solid var(--line); }
 .switch { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
 .switch b, .line b { display: block; font-weight: 500; font-size: 13px; }

@@ -1,5 +1,5 @@
 // 设置表单 ⇄ Settings：校验与解析。纯函数。
-import type { Settings } from './api/types';
+import type { RecQuality, Settings } from './api/types';
 
 /** 原型 submit 的校验：非空、50–5000、50 的整数倍。 */
 export function parseLimit(s: string): number | null {
@@ -54,6 +54,14 @@ export type SettingsForm = {
   shotHotkey: string;
   shotDir: string;
   shotSaveCopy: boolean;
+  recHotkey: string;
+  recDir: string;
+  recSystemAudio: boolean;
+  recMicrophone: boolean;
+  recCopy: boolean;
+  /** 两个 `<select>` 的值 */
+  recQuality: string;
+  recFps: string;
 };
 
 export const formToSettings = (base: Settings, f: SettingsForm): Settings => ({
@@ -72,4 +80,11 @@ export const formToSettings = (base: Settings, f: SettingsForm): Settings => ({
   shotHotkey: f.shotHotkey,
   shotDir: f.shotDir,
   shotSaveCopy: f.shotSaveCopy,
+  recHotkey: f.recHotkey,
+  recDir: f.recDir,
+  recSystemAudio: f.recSystemAudio,
+  recMicrophone: f.recMicrophone,
+  recCopy: f.recCopy,
+  recQuality: f.recQuality as RecQuality,
+  recFps: Number(f.recFps),
 });

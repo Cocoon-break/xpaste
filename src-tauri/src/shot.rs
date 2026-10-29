@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{MutexGuard, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use xpaste_platform::{Frame, WinRect};
@@ -34,7 +34,7 @@ fn native_per_logical(scale: f64, points: bool) -> f64 {
 }
 
 /// 显示器内的逻辑像素矩形（左上为原点）。
-#[derive(Serialize, Clone, Copy, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
 pub struct LRect {
     pub x: f64,
     pub y: f64,
@@ -71,7 +71,10 @@ pub fn cursor_on(frames: &[Frame], c: (f64, f64), points: bool) -> Option<(usize
 
 /// 一块屏的冻结结果：位置与缩放留到动作完成，像素由遮罩取走一次。
 pub struct Screen {
+    /// 显示器 id（macOS 为 `CGDirectDisplayID`），录屏用
+    id: u32,
     origin: (f64, f64),
+    size: (f64, f64),
     scale: f64,
     /// `shot_frame` 的响应体：小端 `u32` 宽、高，接着是 RGBA。冻结时就拼好（在锁外），
     /// 遮罩取走时原样交出、不再拷贝几十 MB；取走后为空
@@ -85,7 +88,9 @@ impl From<Frame> for Screen {
         bytes.extend_from_slice(&f.px.1.to_le_bytes());
         bytes.extend_from_slice(&f.rgba);
         Self {
+            id: f.id,
             origin: f.origin,
+            size: f.size,
             scale: f.scale,
             bytes,
         }
@@ -171,6 +176,16 @@ impl Session {
     /// 第 `i` 块屏的位置与缩放；冻结图已释放时为 `None`。
     pub fn screen(&self, i: usize) -> Option<((f64, f64), f64)> {
         self.frames.get(i).map(|f| (f.origin, f.scale))
+    }
+
+    /// 第 `i` 块屏的显示器 id 与缩放（录屏）；冻结图已释放时为 `None`。
+    pub fn screen_target(&self, i: usize) -> Option<(u32, f64)> {
+        self.frames.get(i).map(|f| (f.id, f.scale))
+    }
+
+    /// 第 `i` 块屏的位置与尺寸（原生单位，同 `place`）：录屏边框铺满该屏。
+    pub fn screen_bounds(&self, i: usize) -> Option<((f64, f64), (f64, f64))> {
+        self.frames.get(i).map(|f| (f.origin, f.size))
     }
 
     /// 取走第 `i` 块屏的 `shot_frame` 响应体（只移动、不拷贝）；已取走或冻结图已释放时为 `None`。
@@ -297,6 +312,44 @@ pub struct BeginPayload {
     scale: f64,
     /// 设置“保存截图时同时复制”，工具栏提示用
     save_copy: bool,
+    /// `"shot"` 截图 / `"rec"` 录屏（M24）
+    mode: &'static str,
+    /// 设置“录制系统声音”，录屏工具栏开关的初值
+    system_audio: bool,
+    /// 设置“录制麦克风”；本机不支持（macOS 15 以下）为 `None`，开关不可用
+    microphone: Option<bool>,
+    /// 录屏输出缩放（按设置“录屏清晰度”与该屏缩放），尺寸标签按它显示输出像素（M24 规则 3）
+    rec_scale: f64,
+    /// 设置“录屏帧率”，尺寸标签后缀用
+    rec_fps: u32,
+}
+
+/// 遮罩用途：截图（M23）或选录屏区域（M24）。
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Mode {
+    Shot,
+    Rec,
+}
+
+impl Mode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Mode::Shot => "shot",
+            Mode::Rec => "rec",
+        }
+    }
+}
+
+/// 麦克风开关的载荷：只在 macOS 15 及以上可用（`captureMicrophone`），否则为 `None`（M24）。
+pub fn mic_option(macos_major: Option<u32>, setting: bool) -> Option<bool> {
+    macos_major.is_some_and(|v| v >= 15).then_some(setting)
+}
+
+/// `shot-need-permission` 的载荷，发给面板：系统设置那一页的名字与遮罩用途（权限框标题按它选）。
+#[derive(Serialize, Clone)]
+struct NeedPermission {
+    pane: &'static str,
+    mode: &'static str,
 }
 
 pub fn overlay_index(label: &str) -> Option<usize> {
@@ -325,7 +378,13 @@ pub fn screen_capture_pane(macos_major: Option<u32>) -> &'static str {
 }
 
 /// 快捷键入口。主线程调用。
-pub fn begin(app: &AppHandle) {
+pub fn begin(app: &AppHandle, mode: Mode) {
+    // 录制中不开遮罩（M24）：录屏快捷键在录制中已改为停止，到这里的只有截图快捷键
+    if crate::rec::is_recording(app) {
+        log::info!("{} 录屏中，不开始", mode.as_str());
+        crate::notify(app, "正在录屏，停止录制后再截图");
+        return;
+    }
     let granted = xpaste_platform::screen_capture_granted();
     let panel_shown = app
         .get_webview_window("panel")
@@ -361,13 +420,16 @@ pub fn begin(app: &AppHandle) {
             if was_active {
                 hide_overlays(app);
             }
-            log::info!("截图缺少屏幕录制权限，提示授权");
+            log::info!("{} 缺少屏幕录制权限，提示授权", mode.as_str());
             crate::panel::show(app, None, crate::panel::Trigger::Hotkey);
             events::emit_to(
                 app,
                 "panel",
                 events::SHOT_NEED_PERMISSION,
-                screen_capture_pane(xpaste_platform::macos_version()),
+                NeedPermission {
+                    pane: screen_capture_pane(xpaste_platform::macos_version()),
+                    mode: mode.as_str(),
+                },
             );
             return;
         }
@@ -395,9 +457,14 @@ pub fn begin(app: &AppHandle) {
     if panel_shown {
         crate::panel::hide(app);
     }
-    warm_ocr();
+    // 录屏用不到识别，不在开始采集时抢 CPU 加载模型
+    if mode == Mode::Shot {
+        warm_ocr();
+    }
     let app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || freeze(&app, generation, panel_shown || stale));
+    tauri::async_runtime::spawn_blocking(move || {
+        freeze(&app, generation, panel_shown || stale, mode)
+    });
 }
 
 /// 每个进程第一次截图时在后台预加载系统识别模型（首次加载要几秒），之后第一次按 O 不再等（M23 规则 7、12）。
@@ -431,7 +498,7 @@ fn warm_ocr() {
 }
 
 /// `settle`：刚隐藏过窗口（面板或上次的遮罩），冻结前先等它们撤下。
-fn freeze(app: &AppHandle, generation: u64, settle: bool) {
+fn freeze(app: &AppHandle, generation: u64, settle: bool, mode: Mode) {
     if settle {
         // ponytail: 固定等 50 ms 让窗口服务器撤下窗口；冻结图里仍出现面板时改为等隐藏生效的回调
         std::thread::sleep(Duration::from_millis(50));
@@ -461,7 +528,17 @@ fn freeze(app: &AppHandle, generation: u64, settle: bool) {
         .cursor_position()
         .ok()
         .and_then(|c| cursor_on(&frames, (c.x / k, c.y / k), points));
-    let save_copy = app.state::<AppState>().settings().shot_save_copy;
+    let (save_copy, system_audio, microphone, rec_quality, rec_fps) = {
+        let st = app.state::<AppState>();
+        let s = st.settings();
+        (
+            s.shot_save_copy,
+            s.rec_system_audio,
+            mic_option(xpaste_platform::macos_version(), s.rec_microphone),
+            s.rec_quality,
+            s.rec_fps,
+        )
+    };
     let payloads: Vec<BeginPayload> = frames
         .iter()
         .enumerate()
@@ -475,6 +552,11 @@ fn freeze(app: &AppHandle, generation: u64, settle: bool) {
             cursor: cursor.filter(|(j, _)| *j == i).map(|(_, p)| p),
             scale: f.scale,
             save_copy,
+            mode: mode.as_str(),
+            system_audio,
+            microphone,
+            rec_scale: xpaste_platform::record::output_scale(rec_quality, f.scale),
+            rec_fps,
         })
         .collect();
     // 显示器比遮罩多（启动后接了新屏）：补建，等页面加载完。新遮罩仍可能赶不上下面推送的事件
@@ -518,8 +600,8 @@ pub fn end_if_current(app: &AppHandle, generation: u64) {
     after_end(app, generation, previous);
 }
 
-/// 遮罩铺满整块屏（含菜单栏）。
-fn place(w: &WebviewWindow, origin: (f64, f64), size: (f64, f64)) -> tauri::Result<()> {
+/// 遮罩铺满整块屏（含菜单栏）。录屏边框也用。
+pub(crate) fn place(w: &WebviewWindow, origin: (f64, f64), size: (f64, f64)) -> tauri::Result<()> {
     // macOS 改内容尺寸时左下角不动，先改尺寸再定左上角
     #[cfg(target_os = "macos")]
     {
@@ -587,10 +669,10 @@ fn build_overlay(app: &AppHandle, i: usize, loaded: mpsc::Sender<()>) -> tauri::
     Ok(())
 }
 
-/// 不激活应用的 NSPanel，层级在菜单栏之上，进入任何空间与全屏应用。主线程调用；每个窗口只能调一次。
+/// 不激活应用的 NSPanel，层级在菜单栏之上（录屏边框同），进入任何空间与全屏应用。主线程调用；每个窗口只能调一次。
 #[cfg(target_os = "macos")]
 #[allow(deprecated)] // cocoa 已弃用，但 tauri-nspanel 公开的就是它的类型
-fn to_overlay_panel(w: &WebviewWindow) -> tauri::Result<()> {
+pub(crate) fn to_overlay_panel(w: &WebviewWindow) -> tauri::Result<()> {
     use tauri_nspanel::WebviewWindowExt;
     use tauri_nspanel::cocoa::{
         appkit::{NSWindow, NSWindowCollectionBehavior as B},
@@ -810,32 +892,40 @@ pub fn parse_rect(h: &str) -> Option<LRect> {
     }
 }
 
-/// `截图 <stamp>.png`，重名依次加 ` 2`、` 3`。
-pub fn shot_file_name(stamp: &str, exists: impl Fn(&str) -> bool) -> String {
+/// `<prefix> <stamp>.<ext>`，重名依次加 ` 2`、` 3`。截图与录屏共用。
+pub fn unique_file_name(
+    prefix: &str,
+    stamp: &str,
+    ext: &str,
+    exists: impl Fn(&str) -> bool,
+) -> String {
     (1..)
         .map(|k| match k {
-            1 => format!("截图 {stamp}.png"),
-            _ => format!("截图 {stamp} {k}.png"),
+            1 => format!("{prefix} {stamp}.{ext}"),
+            _ => format!("{prefix} {stamp} {k}.{ext}"),
         })
         .find(|n| !exists(n))
         .expect("总有不重名的序号")
 }
 
-/// 设置里截图文件夹为空时的默认：`<图片>/xPaste`，取不到图片目录时 `<数据目录>/shots`。
-pub fn default_shot_dir(picture: Option<PathBuf>, data_dir: &Path) -> PathBuf {
-    picture.map_or_else(|| data_dir.join("shots"), |p| p.join("xPaste"))
-}
-
-/// 设置里的截图文件夹：空或不是绝对路径（会落到进程工作目录）时用默认文件夹。
-pub fn resolve_shot_dir(setting: &str, picture: Option<PathBuf>, data_dir: &Path) -> PathBuf {
+/// 设置里的截图 / 录屏文件夹（M23 规则 7、M24 规则 9）：绝对路径照用；空或不是绝对路径（会落到进程工作目录）
+/// 时用默认的 `<base>/xPaste`（截图为“图片”、录屏为“影片”文件夹），取不到 `base` 时 `<数据目录>/<fallback>`。
+/// `what` 只用于日志。
+pub fn resolve_dir(
+    setting: &str,
+    base: Option<PathBuf>,
+    data_dir: &Path,
+    fallback: &str,
+    what: &str,
+) -> PathBuf {
     let p = Path::new(setting);
     if p.is_absolute() {
         return p.to_path_buf();
     }
     if !setting.is_empty() {
-        log::warn!("截图文件夹不是绝对路径，改用默认文件夹");
+        log::warn!("{what}文件夹不是绝对路径，改用默认文件夹");
     }
-    default_shot_dir(picture, data_dir)
+    base.map_or_else(|| data_dir.join(fallback), |b| b.join("xPaste"))
 }
 
 /// 在 `dir` 里新建不重名的截图文件并写入，返回文件名。用 `create_new`，
@@ -845,7 +935,9 @@ pub fn write_unique(dir: &Path, stamp: &str, png: &[u8]) -> std::io::Result<Stri
     let mut tries = 0;
     loop {
         // symlink_metadata：失效的符号链接也算占用，否则 create_new 会一直撞上它
-        let name = shot_file_name(stamp, |n| dir.join(n).symlink_metadata().is_ok());
+        let name = unique_file_name("截图", stamp, "png", |n| {
+            dir.join(n).symlink_metadata().is_ok()
+        });
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -999,7 +1091,13 @@ fn save(app: &AppHandle, png: Vec<u8>) -> Result<ShotOutcome, AppError> {
         let s = state.settings();
         (s.shot_dir.clone(), s.shot_save_copy)
     };
-    let dir = resolve_shot_dir(&dir, app.path().picture_dir().ok(), &state.data_dir);
+    let dir = resolve_dir(
+        &dir,
+        app.path().picture_dir().ok(),
+        &state.data_dir,
+        "shots",
+        "截图",
+    );
     std::fs::create_dir_all(&dir)?;
     let stamp = xpaste_core::capture::local_stamp(crate::clock::now_ms());
     let name = write_unique(&dir, &stamp, &png)?;
@@ -1251,8 +1349,24 @@ mod tests {
         assert_eq!(screen_capture_pane(None), "屏幕录制");
     }
 
+    #[test]
+    fn rec_payload_hides_mic_below_15() {
+        assert_eq!(mic_option(Some(14), true), None);
+        assert_eq!(mic_option(Some(15), true), Some(true));
+        assert_eq!(mic_option(Some(15), false), Some(false));
+        assert_eq!(mic_option(Some(26), true), Some(true));
+        assert_eq!(mic_option(None, true), None);
+    }
+
+    #[test]
+    fn mode_serializes_for_front_end() {
+        assert_eq!(Mode::Shot.as_str(), "shot");
+        assert_eq!(Mode::Rec.as_str(), "rec");
+    }
+
     fn frame(origin: (f64, f64), size: (f64, f64), scale: f64) -> Frame {
         Frame {
+            id: 0,
             origin,
             size,
             scale,
@@ -1530,9 +1644,22 @@ mod tests {
             cursor: None,
             scale,
             save_copy: true,
+            mode: "rec",
+            system_audio: true,
+            microphone: None,
+            rec_scale: 1.0,
+            rec_fps: 60,
         };
         s.set_payloads(vec![p(0, 1.0), p(1, 2.0)]);
         assert_eq!(s.payload(1), Some(p(1, 2.0)));
+        let json = serde_json::to_value(p(1, 2.0)).unwrap();
+        assert_eq!(json["mode"], "rec");
+        assert_eq!(json["systemAudio"], true);
+        assert!(json["microphone"].is_null(), "不支持麦克风时为 null");
+        assert_eq!(
+            (json["recScale"].as_f64(), json["recFps"].as_u64()),
+            (Some(1.0), Some(60))
+        );
         s.mark_ready(generation, 1);
         assert_eq!(s.payload(1), None, "已上屏不再给");
         assert_eq!(s.payload(0), Some(p(0, 1.0)));
@@ -1561,14 +1688,14 @@ mod tests {
     }
 
     #[test]
-    fn shot_file_name_appends_counter() {
+    fn unique_file_name_appends_counter() {
         let taken = ["截图 2026-10-28 14.32.png", "截图 2026-10-28 14.32 2.png"];
         assert_eq!(
-            shot_file_name("2026-10-28 14.32", |n| taken.contains(&n)),
+            unique_file_name("截图", "2026-10-28 14.32", "png", |n| taken.contains(&n)),
             "截图 2026-10-28 14.32 3.png"
         );
         assert_eq!(
-            shot_file_name("2026-10-28 14.32", |_| false),
+            unique_file_name("截图", "2026-10-28 14.32", "png", |_| false),
             "截图 2026-10-28 14.32.png"
         );
     }
@@ -1594,18 +1721,6 @@ mod tests {
         assert_eq!(parse_rect("1,2,3"), None);
         assert_eq!(parse_rect("1,2,3,x"), None);
         assert_eq!(parse_rect("1,2,0,4"), None, "空选区");
-    }
-
-    #[test]
-    fn default_shot_dir_falls_back() {
-        assert_eq!(
-            default_shot_dir(Some("/p".into()), Path::new("/d")),
-            PathBuf::from("/p/xPaste")
-        );
-        assert_eq!(
-            default_shot_dir(None, Path::new("/d")),
-            PathBuf::from("/d/shots")
-        );
     }
 
     #[test]
@@ -1727,15 +1842,21 @@ mod tests {
     }
 
     #[test]
-    fn relative_shot_dir_falls_back_to_default() {
+    fn save_dir_falls_back_to_default() {
         let d = Path::new("/d");
+        let shot = |s: &str, base: Option<&str>| {
+            resolve_dir(s, base.map(PathBuf::from), d, "shots", "截图")
+        };
         // Windows 上 `/mine` 不是绝对路径
         let mine = if cfg!(windows) { r"C:\mine" } else { "/mine" };
-        assert_eq!(resolve_shot_dir(mine, None, d), PathBuf::from(mine));
-        assert_eq!(resolve_shot_dir("", None, d), PathBuf::from("/d/shots"));
+        assert_eq!(shot(mine, Some("/p")), PathBuf::from(mine));
+        assert_eq!(shot("", Some("/p")), PathBuf::from("/p/xPaste"));
+        assert_eq!(shot("", None), PathBuf::from("/d/shots"));
+        assert_eq!(shot("shots", Some("/p")), PathBuf::from("/p/xPaste"));
+        // 录屏：影片文件夹取不到时落到 recordings
         assert_eq!(
-            resolve_shot_dir("shots", Some("/p".into()), d),
-            PathBuf::from("/p/xPaste")
+            resolve_dir("recs", None, d, "recordings", "录屏"),
+            PathBuf::from("/d/recordings")
         );
     }
 

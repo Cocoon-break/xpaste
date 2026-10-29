@@ -1,5 +1,5 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import type { RecordSummary } from './types';
+import type { RecordSummary, Settings } from './types';
 
 export const PANEL_SHOWN = 'panel-shown';
 
@@ -17,17 +17,19 @@ export const PANEL_HIDE_REQUESTED = 'panel-hide-requested';
 
 export const onPanelHideRequested = (cb: () => void): Promise<UnlistenFn> => listen(PANEL_HIDE_REQUESTED, () => cb());
 
-/** 引导或对话框打开时按下快捷键，面板保持显示：`panel` 唤起（引导据此推进），`shot` 截图（只在对话框开着且面板有焦点时发）。 */
+/** 引导或对话框打开时按下快捷键，面板保持显示：`panel` 唤起（引导据此推进），`shot` 截图、`rec` 录屏（只在对话框开着且面板有焦点时发）。 */
 export const HOTKEY_PRESSED = 'hotkey-pressed';
 
-export const onHotkeyPressed = (cb: (role: 'panel' | 'shot') => void): Promise<UnlistenFn> =>
-  listen<'panel' | 'shot'>(HOTKEY_PRESSED, (e) => cb(e.payload));
+export type HotkeyRole = 'panel' | 'shot' | 'rec';
+export const onHotkeyPressed = (cb: (role: HotkeyRole) => void): Promise<UnlistenFn> =>
+  listen<HotkeyRole>(HOTKEY_PRESSED, (e) => cb(e.payload));
 
-/** 截图缺少屏幕录制权限（后端已唤起面板）；载荷是系统设置里那一页的名字。 */
+/** 截图或录屏缺少屏幕录制权限（后端已唤起面板）；`pane` 是系统设置里那一页的名字。 */
 export const SHOT_NEED_PERMISSION = 'shot-need-permission';
 
-export const onShotNeedPermission = (cb: (pane: string) => void): Promise<UnlistenFn> =>
-  listen<string>(SHOT_NEED_PERMISSION, (e) => cb(e.payload));
+export type NeedPermission = { pane: string; mode: 'shot' | 'rec' };
+export const onShotNeedPermission = (cb: (p: NeedPermission) => void): Promise<UnlistenFn> =>
+  listen<NeedPermission>(SHOT_NEED_PERMISSION, (e) => cb(e.payload));
 
 export const RECORD_ADDED = 'record-added';
 export const RECORD_UPDATED = 'record-updated';
@@ -45,6 +47,12 @@ export const onRecordsRemoved = (cb: (ids: number[]) => void): Promise<UnlistenF
 
 export const onPausedChanged = (cb: (paused: boolean) => void): Promise<UnlistenFn> =>
   listen<boolean>(PAUSED_CHANGED, (e) => cb(e.payload));
+
+/** 后端改了设置（录屏遮罩的声音开关写回，M24）：载荷是完整设置。 */
+export const SETTINGS_CHANGED = 'settings-changed';
+
+export const onSettingsChanged = (cb: (s: Settings) => void): Promise<UnlistenFn> =>
+  listen<Settings>(SETTINGS_CHANGED, (e) => cb(e.payload));
 
 /** 托盘“设置…”：面板显示后打开设置弹窗。 */
 export const OPEN_SETTINGS = 'open-settings';

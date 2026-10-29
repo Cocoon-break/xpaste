@@ -2,12 +2,12 @@
 // 状态 S、update / place、指针与键盘处理。坐标为本块屏的逻辑像素，冻结帧与标注 canvas 为物理像素。
 import './shot.css';
 import {
-  onShotBegin, onShotClaim, onShotEnd, shotAlive, shotCancel, shotClaim, shotFinish, shotFrame, shotReady,
+  onShotBegin, onShotClaim, onShotEnd, recStart, shotAlive, shotCancel, shotClaim, shotFinish, shotFrame, shotReady,
   type BeginPayload, type ShotAction, type ShotOutcome,
 } from '../api/shot';
 import { error as logError, info } from '../api/log';
 import type { AppError } from '../api/types';
-import { badgePos, hit, loupePos, norm, placeBar, resize, type Handle, type Rect } from './geom';
+import { badgePos, hit, loupePos, norm, outputSize, placeBar, resize, type Handle, type Rect } from './geom';
 import { COLORS, drawObj, FONT, nextStep, type Obj, type Tool } from './ink';
 
 // 遮罩页出错时整个截图会静默失败：报错写进日志（只记消息，不含截图内容）
@@ -29,6 +29,10 @@ const ICON = {
   close: '<path d="M6 6l12 12M18 6 6 18"/>',
   pin: '<path d="M9 3.5h6l-.8 6.2 3.3 3.3h-11l3.3-3.3z"/><path d="M12 13v7.5"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  speaker: '<path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5z"/><path d="M15.5 9a4.2 4.2 0 0 1 0 6M18 6.5a7.8 7.8 0 0 1 0 11"/>',
+  speakerOff: '<path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5z"/><path d="m16 9.5 5 5M21 9.5l-5 5"/>',
+  mic: '<rect x="9" y="3.5" width="6" height="10.5" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/>',
+  micOff: '<rect x="9" y="3.5" width="6" height="10.5" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/><path d="M4 4l16 16"/>',
 };
 type Icon = keyof typeof ICON;
 const svg = (n: Icon) =>
@@ -46,7 +50,7 @@ const restart = (el: HTMLElement, cls: string) => { el.classList.remove(cls); vo
 const ov = $('#ov'), frozen = $<HTMLCanvasElement>('#frozen'), ink = $<HTMLCanvasElement>('#ink'), ic = ink.getContext('2d')!;
 const cut = $('#cut'), badge = $('#badge'), loupe = $('#loupe'), lc = $<HTMLCanvasElement>('#lc').getContext('2d')!, linfo = $('#linfo');
 const tb = $('#tb'), sub = $('#sub'), busy = $('#busy'), hint = $('#hint'), gx = $('#gx'), gy = $('#gy');
-const toastEl = $('#toast'), toastLead = $('#toastLead'), toastMsg = $('#toastMsg');
+const toastEl = $('#toast'), toastLead = $('#toastLead'), toastMsg = $('#toastMsg'), count = $('#count');
 
 const TOOLS: [Tool, string][] = [['rect', '矩形'], ['ellipse', '椭圆'], ['arrow', '箭头'], ['pen', '画笔'], ['mosaic', '马赛克'], ['text', '文字'], ['step', '序号']];
 const COLOR_NAMES = ['红', '橙', '绿', '蓝', '紫', '白'];
@@ -55,7 +59,8 @@ const SWEEP_MS = 300;
 /** 动作完成后提示条停留多久再退出截图 */
 const TOAST_MS = 1600;
 
-type Phase = 'off' | 'idle' | 'selected' | 'busy' | 'done';
+/** `countdown`：录屏倒计时（M24）；倒计时结束到后端结束会话之间为 `done` */
+type Phase = 'off' | 'idle' | 'selected' | 'countdown' | 'busy' | 'done';
 type Drag =
   | { k: 'new'; x0: number; y0: number; moved: boolean }
   | { k: 'move' | 'resize'; h?: Handle; s: Rect; x0: number; y0: number }
@@ -75,10 +80,16 @@ const S = {
   saveCopy: true,
   /** 另一块屏正在识别文字：这块屏不能再框选 */
   locked: false,
+  /** 截图（M23）或选录屏区域（M24） */
+  mode: 'shot' as 'shot' | 'rec',
+  /** 本次录屏的系统声音、麦克风开关；麦克风为 null 表示本机不支持（macOS 15 以下） */
+  sys: false, mic: null as boolean | null,
+  /** 录屏输出缩放与帧率（设置“录屏清晰度”“录屏帧率”），尺寸标签显示输出像素（M24 规则 3） */
+  recScale: 1, fps: 30,
 };
 let W = innerWidth, H = innerHeight, tc = '#FFB84D';
 let pix: HTMLCanvasElement | null = null; // 马赛克底图，第一次用马赛克时生成
-let thumbUrl = '', toastT = 0, endT = 0;
+let thumbUrl = '', toastT = 0, endT = 0, cdT = 0;
 /** 本屏已调用 shot_ready 的代数：只有已上屏的屏发心跳 */
 let readyGen = 0;
 
@@ -100,22 +111,25 @@ async function begin(p: BeginPayload) {
     void info(`shot 屏 ${p.index} 缩放不一致：载荷 ${p.scale}，帧 ${f.w}×${f.h} / 窗口 ${W}×${H}`);
   }
   Object.assign(S, {
-    index: p.index, scale, saveCopy: p.saveCopy, locked: false, rects: p.rects, phase: 'idle', here: !!p.cursor, sel: null, drag: null,
+    index: p.index, scale, saveCopy: p.saveCopy, mode: p.mode, sys: p.systemAudio, mic: p.microphone, recScale: p.recScale, fps: p.recFps, locked: false, rects: p.rects, phase: 'idle', here: !!p.cursor, sel: null, drag: null,
     tool: null, color: 0, size: 1, objs: [], redo: [], cur: null, editing: null,
     mx: p.cursor?.[0] ?? 0, my: p.cursor?.[1] ?? 0,
   });
   S.snap = S.here ? hit(S.rects, S.mx, S.my, W, H) : null;
-  clearTimeout(toastT); clearTimeout(endT);
+  clearTimeout(toastT); clearTimeout(endT); clearTimeout(cdT);
+  count.hidden = true;
   if (thumbUrl) URL.revokeObjectURL(thumbUrl);
   thumbUrl = '';
   toastEl.setAttribute('data-instant', ''); toastEl.dataset.open = 'false'; void toastEl.offsetWidth; toastEl.removeAttribute('data-instant');
   document.querySelectorAll('.txt, #cut .sweep').forEach((el) => el.remove());
   ic.clearRect(0, 0, ink.width, ink.height);
+  ov.dataset.mode = p.mode;
   ov.hidden = false;
   ov.classList.remove('out');
   tc = getComputedStyle(ov).getPropertyValue('--tc').trim() || tc;
   buildBar();
-  hint.innerHTML = '<span><b>单击</b>选中窗口</span><span><b>拖动</b>框选</span><span><kbd>F</kbd>全屏</span><span><kbd>Esc</kbd>退出</span>';
+  hint.innerHTML = (p.mode === 'rec' ? '<span><b>选择录制区域</b></span>' : '')
+    + '<span><b>单击</b>选中窗口</span><span><b>拖动</b>框选</span><span><kbd>F</kbd>全屏</span><span><kbd>Esc</kbd>退出</span>';
   restart(hint, 'hintbar');
   setCursor();
   update();
@@ -141,6 +155,8 @@ function closeOverlay() {
 /** 遮罩隐藏后留着复用：放掉冻结帧、标注与马赛克底图的像素（5K 屏每张一百多 MB），用户的屏幕画面不留在内存里。 */
 function release() {
   S.phase = 'off';
+  clearTimeout(cdT);
+  count.hidden = true;
   for (const c of [frozen, ink]) { c.width = 0; c.height = 0; }
   pix = null;
   lc.clearRect(0, 0, 122, 122);
@@ -178,10 +194,11 @@ function update() {
   hint.hidden = S.phase !== 'idle' || !live;
   const above = place();
 
-  // 尺寸标签（物理像素）
+  // 尺寸标签：截图为物理像素，录屏为按清晰度换算的输出像素
   badge.hidden = !rect || (S.phase !== 'idle' && S.phase !== 'selected');
   if (rect && !badge.hidden) {
-    badge.innerHTML = `<i></i>${Math.round(rect.w * r)}<span class="x">×</span>${Math.round(rect.h * r)}`;
+    const [bw, bh] = S.mode === 'rec' ? outputSize(rect.w, rect.h, S.recScale) : [Math.round(rect.w * r), Math.round(rect.h * r)];
+    badge.innerHTML = `<i></i>${bw}<span class="x">×</span>${bh}${S.mode === 'rec' ? `<span class="fps">· ${S.fps} fps</span>` : ''}`;
     const b = badgePos(rect, badge.offsetWidth, above, W);
     Object.assign(badge.style, { left: b.x + 'px', top: b.y + 'px' });
   }
@@ -206,6 +223,17 @@ function drawLoupe(rect: Rect | null) {
 
 /* —— 工具栏 —— */
 function buildBar() {
+  tb.setAttribute('aria-label', S.mode === 'rec' ? '录屏选项' : '截图工具');
+  if (S.mode === 'rec') {
+    // 录屏：两个声音开关只改本次（rec_start 时写回设置），麦克风在 macOS 15 以下不可用（M24）
+    const micOk = S.mic !== null;
+    tb.innerHTML = `<button type="button" data-act="sys" aria-pressed="${S.sys}" aria-label="录制系统声音" data-tip="录制系统声音：${S.sys ? '开' : '关'}">${svg(S.sys ? 'speaker' : 'speakerOff')}</button>`
+      + `<button type="button" data-act="mic" aria-pressed="${!!S.mic}" ${micOk ? '' : 'aria-disabled="true"'} aria-label="录制麦克风" data-tip="${micOk ? `录制麦克风：${S.mic ? '开' : '关'}` : '麦克风需要 macOS 15'}">${svg(S.mic ? 'mic' : 'micOff')}</button>`
+      + '<span class="sep"></span>'
+      + `<button type="button" data-act="close" aria-label="取消" data-tip="取消  Esc">${svg('close')}</button>`
+      + '<button type="button" class="go" data-act="start"><span class="rd"></span>开始录制<kbd>↩</kbd></button>';
+    return;
+  }
   tb.innerHTML = TOOLS.map(([t, n], i) => `<button type="button" data-tool="${t}" aria-pressed="false" aria-label="${n}" data-tip="${n}  ${i + 1}">${svg(t)}</button>`).join('')
     + '<span class="sep"></span>'
     + `<button type="button" data-act="undo" aria-label="撤销" data-tip="撤销  ${MODK} Z">${svg('undo')}</button>`
@@ -278,6 +306,9 @@ tb.addEventListener('click', (e) => {
   if (a === 'undo') undo();
   else if (a === 'redo') redo();
   else if (a === 'close') closeOverlay();
+  else if (a === 'sys') { S.sys = !S.sys; buildBar(); }
+  else if (a === 'mic') { S.mic = !S.mic; buildBar(); }
+  else if (a === 'start') startCountdown();
   else if (a) void act(a as ShotAction);
 });
 sub.addEventListener('click', (e) => {
@@ -365,7 +396,8 @@ document.documentElement.addEventListener('pointerleave', () => {
 
 ov.addEventListener('dblclick', (e) => {
   if (S.phase !== 'selected' || S.tool || !inside(e.clientX, e.clientY, S.sel) || (e.target as Element).closest('.bar')) return;
-  void act('copy');
+  if (S.mode === 'rec') startCountdown();
+  else void act('copy');
 });
 ov.addEventListener('contextmenu', (e) => { e.preventDefault(); escape(); });
 
@@ -536,6 +568,47 @@ async function act(a: ShotAction) {
   endT = window.setTimeout(() => { release(); void shotCancel(gen); }, TOAST_MS);
 }
 
+/* —— 录屏：倒计时 3、2、1，数到 0 开始录制（M24） —— */
+function startCountdown() {
+  if (S.phase !== 'selected' || !S.sel) return;
+  S.phase = 'countdown';
+  update();
+  const gen = S.gen, s = S.sel;
+  Object.assign(count.style, { left: s.x + s.w / 2 - 75 + 'px', top: s.y + s.h / 2 - 75 + 'px' });
+  count.hidden = false;
+  let n = 3;
+  const tick = () => {
+    if (S.phase !== 'countdown' || gen !== S.gen) return;
+    if (n === 0) { count.hidden = true; void startRecording(); return; }
+    count.innerHTML = `<svg viewBox="0 0 150 150" aria-hidden="true"><circle cx="75" cy="75" r="68"/><circle class="prg" cx="75" cy="75" r="68"/></svg><b>${n}</b><small>按 Esc 取消</small>`;
+    n--;
+    cdT = window.setTimeout(tick, 1000);
+  };
+  tick();
+}
+
+/** 后端开始录屏前就结束这次截图、隐藏遮罩；这里同时淡出。失败时只有会话仍在（错误出在结束会话之前）才回到选区并提示，
+ * 会话已被后端结束（开始期间按了停止、退出）时静默放掉像素。 */
+async function startRecording() {
+  const gen = S.gen, sel = { ...S.sel! };
+  S.phase = 'done';
+  ov.classList.add('out');
+  try {
+    await recStart({ generation: gen, index: S.index, rect: sel, systemAudio: S.sys, microphone: !!S.mic });
+  } catch {
+    if (!live(gen)) return;
+    if (!(await shotAlive(gen).catch(() => false))) { if (live(gen)) release(); return; }
+    if (!live(gen)) return;
+    ov.classList.remove('out');
+    S.phase = 'selected';
+    update();
+    toast('录屏没有开始', { icon: 'close', danger: true });
+    toastT = window.setTimeout(() => (toastEl.dataset.open = 'false'), 2800);
+    return;
+  }
+  if (live(gen)) release();
+}
+
 /* —— 提示条 —— */
 type Lead = { thumb?: string; icon?: Icon; danger?: boolean };
 function toast(msg: string, lead: Lead) {
@@ -556,7 +629,8 @@ function clearSelection() {
 function escape() {
   if (S.editing) return commitText();
   if (S.phase === 'selected') return clearSelection();
-  if (S.phase === 'idle' || S.phase === 'busy') closeOverlay();
+  // 倒计时中右键退出遮罩，不回到选区（对计划的裁定 2）
+  if (S.phase === 'idle' || S.phase === 'busy' || S.phase === 'countdown') closeOverlay();
 }
 
 /* —— 键盘（键位对照原型） —— */
@@ -568,9 +642,15 @@ addEventListener('keydown', (e) => {
   // Esc 直接退出，有选区也不先取消（M23 规则 8；取消选区用右键）
   if (e.key === 'Escape') { e.preventDefault(); closeOverlay(); return; }
   if (S.phase !== 'idle' && S.phase !== 'selected') return;
-  if (e.key === 'Enter') { e.preventDefault(); if (S.phase === 'selected') void act('copy'); return; }
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    if (S.phase === 'selected') { if (S.mode === 'rec') startCountdown(); else void act('copy'); }
+    return;
+  }
   if (e.code === 'KeyF' && !mod) { e.preventDefault(); selectAll(); return; }
   if (S.phase !== 'selected') return;
+  // 录屏没有标注与截图动作，只有方向键微调选区
+  if (S.mode === 'rec' && !e.key.startsWith('Arrow')) return;
   if (mod && e.code === 'KeyZ') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return; }
   if (mod && e.code === 'KeyS') { e.preventDefault(); void act('save'); return; }
   if (!mod && e.code === 'KeyO') { e.preventDefault(); void act('ocr'); return; }

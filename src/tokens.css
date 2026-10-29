@@ -18,7 +18,7 @@
   --fg: #EAF0FF; --muted: #9AA4CB; --faint: #646E94;
   --c-text: #8FE3FF; --c-link: #6F8BFF; --c-code: #4FE3C1; --c-accent: #FF6FD8;
   --c-image: #FFB84D; --c-video: #FF6B6B; --c-file: #B48CFF; --c-fav: #D9F26B;
-  --beam: #8FE3FF; --beam-hover: #B4EEFF; --on-beam: #06101C; --on-pill: #06101C; --danger: #FF6B81; --danger-hover: #FF8A9B; --on-danger: #06101C;
+  --beam: #8FE3FF; --beam-hover: #B4EEFF; --on-beam: #06101C; --on-rec: #1A0507; --on-pill: #06101C; --danger: #FF6B81; --danger-hover: #FF8A9B; --on-danger: #06101C;
   --well: rgb(0 0 0 / .22); --well-2: rgb(0 0 0 / .32);
   --pop: rgb(14 18 32 / .94); --pop-solid: #12162A;
   --hover: rgb(255 255 255 / .11);
@@ -53,7 +53,7 @@
     --fg: #111632; --muted: #545C7C; --faint: #7A83A1;
     --c-text: #0891B2; --c-link: #3B5BDB; --c-code: #0D9488; --c-accent: #C026D3;
     --c-image: #D97706; --c-video: #E03131; --c-file: #7C3AED; --c-fav: #4D7C0F;
-    --beam: #0E7FA3; --beam-hover: #0B6A88; --on-beam: #FFFFFF; --on-pill: #FFFFFF; --danger: #D6334F; --danger-hover: #B82640; --on-danger: #FFFFFF;
+    --beam: #0E7FA3; --beam-hover: #0B6A88; --on-beam: #FFFFFF; --on-rec: #FFFFFF; --on-pill: #FFFFFF; --danger: #D6334F; --danger-hover: #B82640; --on-danger: #FFFFFF;
     --well: rgb(20 30 80 / .04); --well-2: rgb(255 255 255 / .85);
     --pop: rgb(255 255 255 / .94); --pop-solid: #FFFFFF;
     --hover: rgb(20 30 80 / .07);
@@ -79,7 +79,7 @@
   --fg: #111632; --muted: #545C7C; --faint: #7A83A1;
   --c-text: #0891B2; --c-link: #3B5BDB; --c-code: #0D9488; --c-accent: #C026D3;
   --c-image: #D97706; --c-video: #E03131; --c-file: #7C3AED; --c-fav: #4D7C0F;
-  --beam: #0E7FA3; --beam-hover: #0B6A88; --on-beam: #FFFFFF; --on-pill: #FFFFFF; --danger: #D6334F; --danger-hover: #B82640; --on-danger: #FFFFFF;
+  --beam: #0E7FA3; --beam-hover: #0B6A88; --on-beam: #FFFFFF; --on-rec: #FFFFFF; --on-pill: #FFFFFF; --danger: #D6334F; --danger-hover: #B82640; --on-danger: #FFFFFF;
   --well: rgb(20 30 80 / .04); --well-2: rgb(255 255 255 / .85);
   --pop: rgb(255 255 255 / .94); --pop-solid: #FFFFFF;
   --hover: rgb(20 30 80 / .07);
