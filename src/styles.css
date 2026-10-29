@@ -324,6 +324,9 @@ kbd {
 }
 .qa button:hover { background: color-mix(in srgb, var(--tc) 20%, var(--pop-solid)); color: var(--tc); }
 .qa button:active { transform: scale(.9); }
+/* 多选时复制、编辑不可用（设计 §3.5）：快捷按钮不出现，悬停时序号与图钉照常显示 */
+.list.multi .qa { display: none; }
+.list.multi .row:hover .idx, .list.multi .row:hover .pin-mark { opacity: 1; }
 @media (hover: hover) and (pointer: fine) {
   .row:hover .qa { opacity: 1; transform: translate(0, -50%); pointer-events: auto; }
   .row:hover .idx, .row:hover .pin-mark { opacity: 0; }

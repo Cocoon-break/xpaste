@@ -12,6 +12,11 @@ test('escHint 按搜索框是否有字给出 Esc 提示', () => {
   assert.equal(escHint(false), '隐藏');
 });
 
+test('escHint 多选时 Esc 先取消选择（设计 §3.5）', () => {
+  assert.equal(escHint(false, true), '取消选择');
+  assert.equal(escHint(true, true), '取消选择');
+});
+
 test('openLabel 按类型与平台给出右键菜单的打开动作', () => {
   assert.equal(openLabel('link', false, 'macos'), '在浏览器中打开');
   assert.equal(openLabel('image', true, 'windows'), '在资源管理器中显示');

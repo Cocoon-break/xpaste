@@ -258,7 +258,13 @@ function paintBeam(row: HTMLElement | null) {
 }
 /** `glide`：已渲染的元素位置变了就用这条 transition 过去（插入 / 删除时下方的行补位）；transitionend 后清掉。
  *  `glideBusy`：元素正在补位途中（连续删除）时改用它，不再空停一段延迟 */
+// 多选时行尾快捷按钮收起、Esc 提示改成取消选择（设计 §3.5）；多选的每次变化都会走 paintRows 或空列表
+function paintMultiUi() {
+  list.classList.toggle('multi', S.multi.size >= 2);
+  escHintEl.textContent = escHint(!!S.q, S.multi.size >= 2);
+}
 function paintRows({ stagger = false, glide = '', glideBusy = '' } = {}) {
+  paintMultiUi();
   const [a, b] = range(S.cells, list.scrollTop - padTop(), list.clientHeight);
   const next = new Map<string, Painted>();
   const gone = goneOf();
@@ -342,6 +348,7 @@ function renderList({ scroll = false, stagger = false, base = 0, glide = '' } = 
     painted.clear();
     rowsEl.style.height = '';
     rowsEl.innerHTML = emptyHTML();
+    paintMultiUi();
     select(null);
     return;
   }
@@ -1003,7 +1010,7 @@ function runSearch(v: string, opts: { stagger?: boolean; base?: number; timed?: 
   typedSearch.cancel();
   S.q = v;
   clearQ.hidden = !v;
-  escHintEl.textContent = escHint(!!v);
+  escHintEl.textContent = escHint(!!v, S.multi.size >= 2);
   return new Promise((settled) =>
     fetchMatches(v, () => {
       list.scrollTop = 0;
@@ -2055,7 +2062,20 @@ async function submitSnippet() {
     else {
       // 存为片段复制原记录；内容改过再改一次
       const nid = await saveSnippet(id!, name);
-      if (changed !== null) await updateSnippet(nid, name, changed);
+      // 片段已建好：对话框改为编辑这一条，改内容失败后重试不会再建一条
+      snipFor = { mode: 'edit', id: nid, text: snipFor.text };
+      $('#snip-title').textContent = '编辑片段';
+      $('#snipSubmit').textContent = '保存修改';
+      if (changed !== null) {
+        try {
+          await updateSnippet(nid, name, changed);
+        } catch (e) {
+          const err = e as AppError;
+          snipErr(snipTextIn, snipTextErr, `片段已存好，但内容没有改成：${err.message}`);
+          snipTextIn.focus();
+          return;
+        }
+      }
     }
   } catch (e) {
     // 后端再校验一遍（名字为空、超长，内容为空）：写在对应输入框下方，其余错误走提示条
