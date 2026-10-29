@@ -40,7 +40,7 @@ import {
 import { addIgnored, formToSettings, optionFromRetention, parseFrequent, parseLimit, pickerOptions, removeIgnored } from './settings-form';
 import { errorControl, tabKeyTarget } from './settings-tabs';
 import {
-  armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, nextSelection, pruneMulti, rangeIds, UNDO_MS, visible, type UndoState,
+  armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, nextSelection, pruneMulti, rangeIds, snippetTextChange, UNDO_MS, visible, type UndoState,
 } from './view';
 import { layout, range, ROW_H, scrollTo, topOf, type Cell } from './virtual-list';
 
@@ -2005,7 +2005,8 @@ async function openSnippet(mode: SnipMode, id?: number) {
   snipTextIn.value = text;
   // ponytail: 预览只取到前 200 KB 的超长文字不让改内容，免得保存时截掉后半段；要改再加整段读取
   snipTextIn.readOnly = !!d?.truncated;
-  snipFor = { mode, id: r?.id ?? null, text };
+  // 基准取输入框实际的值（CRLF、单独的 CR 已归一成 LF），不然没动内容也算改过，富文本会被冲成纯文本（M25 规则 5）
+  snipFor = { mode, id: r?.id ?? null, text: snipTextIn.value };
   snipErr(snipNameIn, snipNameErr, '');
   snipErr(snipTextIn, snipTextErr, '');
   clearTimeout(snipTimer);
@@ -2054,7 +2055,7 @@ async function submitSnippet() {
   snipErr(snipNameIn, snipNameErr, nameMsg);
   snipErr(snipTextIn, snipTextErr, textMsg);
   if (nameMsg || textMsg) return (nameMsg ? snipNameIn : snipTextIn).focus();
-  const { mode, id } = snipFor, changed = textual && text !== snipFor.text ? text : null;
+  const { mode, id } = snipFor, changed = textual ? snippetTextChange(text, snipFor.text, snipTextIn.readOnly) : null;
   snipSaving = true;
   try {
     if (mode === 'new') await createSnippet(name, text);

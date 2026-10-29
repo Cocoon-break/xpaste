@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import type { RecordSummary } from './api/types.ts';
 import { rel, type Filter } from './format.ts';
 import {
-  armUndo, canUndo, counts, cycleFilter, ensureSelection, groupOf, groups, inFilter, isStale, nextSelection, pruneMulti, rangeIds, visible,
+  armUndo, canUndo, counts, cycleFilter, ensureSelection, groupOf, groups, inFilter, isStale, nextSelection, pruneMulti, rangeIds, snippetTextChange, visible,
 } from './view.ts';
 
 const mk = (id: number, over: Partial<RecordSummary>): RecordSummary => ({
@@ -127,4 +127,11 @@ test('rangeIds 包含两端且与方向无关', () => {
   const v = [1, 2, 3, 4].map((i) => mk(i, {}));
   assert.deepEqual(rangeIds(v, 2, 4), [2, 3, 4]);
   assert.deepEqual(rangeIds(v, 4, 2), [2, 3, 4]);
+});
+test('snippetTextChange：没动过的内容不算改（换行被输入框归一也不算），只读时一律不改', () => {
+  assert.equal(snippetTextChange('a\nb', 'a\r\nb', false), null);
+  assert.equal(snippetTextChange('a\nb', 'a\rb', false), null);
+  assert.equal(snippetTextChange('a\nb', 'a\nb', false), null);
+  assert.equal(snippetTextChange('改过', 'a\nb', true), null);
+  assert.equal(snippetTextChange('a\nbc', 'a\r\nb', false), 'a\nbc');
 });

@@ -101,3 +101,12 @@ export const rangeIds = (vis: RecordSummary[], from: number, to: number): number
   if (a < 0 || b < 0) return [];
   return vis.slice(Math.min(a, b), Math.max(a, b) + 1).map((r) => r.id);
 };
+
+/**
+ * 片段对话框要不要改内容（M25）：只读（超长文字只预览了前 200 KB）一律不改；
+ * 输入框会把 CRLF、单独的 CR 归一成 LF，比较前两边都归一，没动过就返回 null，免得改名也把富文本、链接摘要冲掉。
+ */
+export const snippetTextChange = (current: string, baseline: string, readOnly: boolean): string | null => {
+  const nl = (s: string) => s.replace(/\r\n?/g, '\n');
+  return readOnly || nl(current) === nl(baseline) ? null : current;
+};

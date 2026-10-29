@@ -94,9 +94,7 @@ pub fn set_pinned(
 pub fn delete(app: AppHandle, state: State<'_, AppState>, ids: Vec<i64>) -> Result<(), AppError> {
     let now = now_ms();
     state.store().soft_delete(&ids, now)?;
-    for &id in &ids {
-        crate::housekeeping::schedule_purge(&app, id, now);
-    }
+    crate::housekeeping::schedule_purge(&app, &ids, now);
     emit_removed(&app, &ids);
     log::info!("删除 n={}", ids.len());
     Ok(())

@@ -519,11 +519,15 @@ pub struct VideoInfo {
 /// 纯文本 flavor。
 pub fn text_flavor(text: &str) -> Flavor {
     if cfg!(windows) {
-        // 存储口径：UTF-16LE、不带结尾 NUL（写回时 winfmt::write_bytes 补上）
+        // 存储口径：UTF-16LE、不带结尾 NUL（写回时 winfmt::write_bytes 补上）。
+        // 输入框里的换行是 LF，CF_UNICODETEXT 约定 CRLF：记事本等老程序只认 CRLF
         Flavor {
             item: 0,
             format: "CF_UNICODETEXT".into(),
-            data: text.encode_utf16().flat_map(u16::to_le_bytes).collect(),
+            data: crlf(text)
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes)
+                .collect(),
         }
     } else {
         Flavor {
@@ -532,6 +536,13 @@ pub fn text_flavor(text: &str) -> Flavor {
             data: text.as_bytes().to_vec(),
         }
     }
+}
+
+/// 换行统一成 CRLF：单独的 LF、CR 都换成 CRLF，已有的 CRLF 不会叠成两个。
+fn crlf(text: &str) -> String {
+    text.replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .replace('\n', "\r\n")
 }
 
 /// 片段名字：去首尾空白，非空且不超过 100 个字符（M25 规则 10）。
@@ -549,6 +560,21 @@ pub fn snippet_name(raw: &str) -> Result<String, CoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn crlf_normalizes_line_breaks_without_doubling() {
+        for (a, b) in [
+            ("a\nb", "a\r\nb"),
+            ("a\r\nb", "a\r\nb"),
+            ("a\rb", "a\r\nb"),
+            ("a\n", "a\r\n"),
+            ("a\r", "a\r\n"),
+            ("\n\r\n\r", "\r\n\r\n\r\n"),
+            ("无换行", "无换行"),
+        ] {
+            assert_eq!(crlf(a), b, "{a:?}");
+        }
+    }
 
     #[test]
     fn snapshot_text_bytes_counts_utf8() {

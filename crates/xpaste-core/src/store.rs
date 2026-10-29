@@ -1088,6 +1088,13 @@ fn check_snippet_text(text: &str) -> Result<(), CoreError> {
     if text.trim().is_empty() {
         return Err(CoreError::InvalidSettings("请填写内容".into()));
     }
+    // 上限与采集一致（M01 规则 9、M25 规则 5）
+    if text.len() > capture::MAX_TEXT_BYTES {
+        return Err(CoreError::InvalidSettings(format!(
+            "内容不能超过 {} MB",
+            capture::MAX_TEXT_BYTES >> 20
+        )));
+    }
     Ok(())
 }
 
@@ -2637,6 +2644,27 @@ pub(crate) mod tests {
         let sid = s.create_snippet("b", "c", 3).unwrap();
         assert!(s.is_snippet(sid).unwrap());
         assert!(s.set_pinned(sid, true).is_err());
+    }
+
+    #[test]
+    fn snippet_text_size_limit_matches_capture() {
+        let mut s = mem();
+        let over = "x".repeat(capture::MAX_TEXT_BYTES + 1);
+        let err = |e: CoreError| match e {
+            CoreError::InvalidSettings(m) => m,
+            other => panic!("expected InvalidSettings, got {other:?}"),
+        };
+        assert_eq!(
+            err(s.create_snippet("a", &over, 1).unwrap_err()),
+            "内容不能超过 5 MB"
+        );
+        let id = s
+            .create_snippet("a", &over[..capture::MAX_TEXT_BYTES], 1)
+            .unwrap();
+        assert_eq!(
+            err(s.update_snippet(id, "a", Some(&over)).unwrap_err()),
+            "内容不能超过 5 MB"
+        );
     }
 
     #[test]
