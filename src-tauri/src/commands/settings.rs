@@ -199,6 +199,8 @@ pub fn commit_settings(
     mut settings: Settings,
     mut register: impl FnMut(&str, &str, &str) -> Result<(), AppError>,
 ) -> Result<Vec<&'static str>, AppError> {
+    // 先去空白再校验、比较：粘贴带空格的 Base URL 不该报错，也不该算作改动（设计 §3.5）
+    settings.normalize();
     settings.validate()?;
     let old = state.settings().clone();
     // 面板尺寸只由拖动记忆（panel::remember_size）写；这里只为 changed 不含 panelSize，落库时 save_settings_inner 持锁再取
@@ -423,6 +425,36 @@ mod tests {
         save_settings_inner(&state, Settings::default()).unwrap();
         assert_eq!(state.settings().panel_size, (1000.0, 700.0));
         assert_eq!(state.store().load_settings().panel_size, (1000.0, 700.0));
+    }
+
+    #[test]
+    fn commit_settings_trims_translate_fields_before_validate() {
+        let state = AppState::for_test();
+        let new = Settings {
+            translate_base_url: " https://x/v1/ ".into(),
+            translate_model: " m ".into(),
+            ..Settings::default()
+        };
+        let changed = commit_settings(&state, new, |_, _, _| Ok(())).unwrap();
+        assert_eq!(changed, ["translateBaseUrl", "translateModel"]);
+        let saved = state.store().load_settings();
+        assert_eq!(
+            (
+                saved.translate_base_url.as_str(),
+                saved.translate_model.as_str()
+            ),
+            ("https://x/v1", "m")
+        );
+        // 只差空白与末尾斜杠，不算改动
+        let same = Settings {
+            translate_base_url: "https://x/v1///".into(),
+            ..saved
+        };
+        assert!(
+            commit_settings(&state, same, |_, _, _| Ok(()))
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
