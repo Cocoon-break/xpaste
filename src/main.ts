@@ -3,7 +3,7 @@ import { attachConsole, info } from './api/log';
 import {
   accessibilityGranted, bootstrap, clearHistory, copy, copyTextPlain, countUnpinned, createSnippet, deleteRecords, finishOnboarding, frontendReady, getRecord, hidePanel, installedApps,
   ocrProgress, openUrl, overlayBegin, pickFolder, prunePreview, reocr, requestAccessibility, requestScreenCapture, revealFile, saveSettings, saveSnippet, screenCaptureGranted, search,
-  setDialogOpen, setPaused, setPinned, undoDelete, updateSnippet,
+  openTranslationSettings, setDialogOpen, setPaused, setPinned, translateStatus, translateTest, undoDelete, updateSnippet,
 } from './api/commands';
 import {
   onConfirmClear,
@@ -37,7 +37,7 @@ import {
   centerWin, clampWin, DAY, followNow, HOUR, layoutBars, miniWin, panWin, sameColumns, spanOf, spectrumStat, staggerIndex,
   ticks as winTicks, winLabel, xOf, zoomWin, type Layout, type Win,
 } from './spectrum';
-import { addIgnored, formToSettings, optionFromRetention, parseFrequent, parseLimit, pickerOptions, removeIgnored } from './settings-form';
+import { addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFrequent, parseLimit, pickerOptions, removeIgnored } from './settings-form';
 import { errorControl, revealsFocus, tabKeyTarget } from './settings-tabs';
 import {
   armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, nextSelection, pruneMulti, rangeIds, snippetTextChange, UNDO_MS, visible, type UndoState,
@@ -1585,6 +1585,125 @@ function dirField(id: string, placeholder: () => string) {
 }
 const shotDir = dirField('shotDir', () => (S.platform.os === 'macos' ? '~/Pictures/xPaste' : '图片\\xPaste'));
 const recDir = dirField('recDir', () => '~/Movies/xPaste');
+// 翻译标签（设计 §3.3）。翻译方式：stored 为空串（未选）时按系统翻译是否可用推断显示，用户没动就保存时原样写回
+const trEngineEl = $('#trEngine'), trEngineBtns = [...trEngineEl.querySelectorAll<HTMLButtonElement>('[data-engine]')];
+const trBaseIn = $<HTMLInputElement>('#trBaseUrl'), trKeyIn = $<HTMLInputElement>('#trApiKey'), trModelIn = $<HTMLInputElement>('#trModel');
+const trLangIn = $<HTMLSelectElement>('#trLang'), trBaseErr = $('#trBaseUrlErr'), trTestBtn = $<HTMLButtonElement>('#trTestBtn'), trResult = $('#trTestResult');
+const trPackRow = $('#trPackRow'), trPack = $('#trPack'), trPackBtn = $('#trPackBtn'), trEngineNote = $('#trEngineNote');
+let trSupported = false, trEngine: 'system' | 'openai' = 'openai', trTouched = false, trSeq = 0;
+const trEffective = () => (mac ? trEngine : 'openai');
+const trSave = () => (trTouched || !mac ? trEffective() : S.settings.translateEngine);
+function paintTrPack() {
+  const seq = ++trSeq;
+  const show = (t: string, btn = false) => {
+    trPackRow.hidden = !t;
+    trPack.textContent = t;
+    trPackBtn.hidden = !btn;
+  };
+  show('');
+  if (!mac || !trSupported || trEngine !== 'system') return;
+  const name = trLangIn.selectedOptions[0].text;
+  void translateStatus(trLangIn.value).then(
+    (r) => {
+      if (seq !== trSeq) return;
+      if (r.pack === 'installed') show(`英语 ↔ ${name}：已下载`);
+      else if (r.pack === 'download') show(`英语 ↔ ${name}：需要下载语言包`, true);
+      else if (r.pack === 'unsupported') show('系统翻译不支持这种语言');
+    },
+    (e: AppError) => void info(`读取翻译语言包状态失败 kind=${e.kind}`),
+  );
+}
+function paintTrEngine() {
+  const sys = trEngine === 'system';
+  trEngineEl.dataset.v = trEngine;
+  trEngineBtns.forEach((b) => {
+    const on = b.dataset.engine === trEngine;
+    b.setAttribute('aria-checked', String(on));
+    b.tabIndex = on ? 0 : -1;
+  });
+  trEngineBtns[0].disabled = !trSupported;
+  trEngineNote.hidden = trSupported;
+  trEngineNote.textContent = trSupported ? '' : '系统翻译需要 macOS 26';
+  for (const el of [trBaseIn, trKeyIn, trModelIn, $('#trKeyBtn')] as HTMLInputElement[]) {
+    el.disabled = mac && sys;
+    el.closest('.field')!.classList.toggle('is-disabled', mac && sys);
+  }
+  $('#trPrivacy').textContent = sys && mac
+    ? '在本机完成，不上传'
+    : '翻译时，只把你选中要翻译的那段文字发送到上面的接口；不按翻译就不会发送任何内容。请求按系统代理设置发出，可能经过你在系统里设置的代理';
+  paintTrPack();
+}
+function setTrEngine(e: 'system' | 'openai') {
+  trEngine = e;
+  trTouched = true;
+  paintTrEngine();
+}
+trEngineEl.addEventListener('click', (e) => {
+  const b = (e.target as Element).closest<HTMLButtonElement>('[data-engine]');
+  if (b && !b.disabled) setTrEngine(b.dataset.engine as 'system' | 'openai');
+});
+trEngineEl.addEventListener('keydown', (e) => {
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  e.preventDefault();
+  e.stopPropagation();
+  const n = trEngineBtns[trEngine === 'system' ? 1 : 0];
+  if (n.disabled) return;
+  setTrEngine(n.dataset.engine as 'system' | 'openai');
+  n.focus();
+});
+trLangIn.addEventListener('change', paintTrPack);
+trPackBtn.addEventListener('click', () => void openTranslationSettings().then(hide, (err: AppError) => toast(err.message)));
+$('#trKeyBtn').addEventListener('click', () => {
+  const show = trKeyIn.type === 'password';
+  trKeyIn.type = show ? 'text' : 'password';
+  $('#trKeyBtn').textContent = show ? '隐藏' : '显示';
+});
+function paintTrUrlErr(msg: string | null) {
+  trBaseErr.textContent = msg ?? '';
+  trBaseErr.hidden = !msg;
+  trBaseIn.setAttribute('aria-invalid', String(!!msg));
+  paintStErr();
+}
+trBaseIn.addEventListener('input', () => !trBaseErr.hidden && baseUrlError(trBaseIn.value) === null && paintTrUrlErr(null));
+const setTrResult = (t: string, cls = '') => {
+  trResult.textContent = t;
+  trResult.className = `help tr-result ${cls}`;
+};
+// 用当前表单（未保存）的值测试；期间按钮不可再点
+trTestBtn.addEventListener('click', () => {
+  trTestBtn.disabled = true;
+  setTrResult('测试中…');
+  void translateTest(trEffective(), trBaseIn.value.trim().replace(/\/+$/, ''), trKeyIn.value, trModelIn.value.trim(), trLangIn.value).then(
+    (t) => setTrResult(`✓ 连接正常：${t}`, 'is-ok'),
+    (e: AppError) => setTrResult(e.message, 'is-err'),
+  ).finally(() => (trTestBtn.disabled = false));
+});
+// 打开设置时回填并查系统翻译可用性
+function openTranslateTab(st: Settings) {
+  trBaseIn.value = st.translateBaseUrl;
+  trKeyIn.value = st.translateApiKey;
+  trKeyIn.type = 'password';
+  $('#trKeyBtn').textContent = '显示';
+  trModelIn.value = st.translateModel;
+  trLangIn.value = st.translateLang;
+  trTouched = false;
+  paintTrUrlErr(null);
+  setTrResult('');
+  trTestBtn.disabled = false;
+  trSupported = false;
+  trEngine = st.translateEngine === 'system' ? 'system' : 'openai';
+  paintTrEngine();
+  if (!mac) return;
+  void translateStatus(st.translateLang).then(
+    (r) => {
+      trSupported = r.supported;
+      trEngine = st.translateEngine === 'openai' || !r.supported ? 'openai' : 'system';
+      paintTrEngine();
+    },
+    (e: AppError) => void info(`读取翻译状态失败 kind=${e.kind}`),
+  );
+}
+
 $('#stTabs').addEventListener('click', (e) => {
   const t = (e.target as Element).closest<HTMLElement>('[role="tab"]');
   if (t) selectStTab(stTabs.indexOf(t), false);
@@ -1823,6 +1942,7 @@ function openSettings() {
   frequentIn.value = String(st.frequentMinUses);
   frequentErr.hidden = true;
   frequentIn.removeAttribute('aria-invalid');
+  openTranslateTab(st);
   paintStErr();
   draftIgnored = [...st.ignoredApps];
   ignoreIn.value = '';
@@ -1919,14 +2039,21 @@ async function submitSettings() {
   frequentErr.hidden = frequent !== null;
   frequentIn.setAttribute('aria-invalid', String(frequent === null));
   paintStErr();
-  // 切到第一个出错的标签（按标签顺序），聚焦其中出错的控件
-  if (limit === null || frequent === null) return showStControl(stPanes.map((p) => p.querySelector<HTMLElement>('[aria-invalid="true"]')).find(Boolean)!);
+  const urlErr = baseUrlError(trBaseIn.value);
+  paintTrUrlErr(urlErr);
+  // 切到第一个出错的标签（按标签顺序），聚焦其中出错的控件；翻译接口置灰时输入框聚焦不了，改聚焦翻译方式
+  if (urlErr && limit !== null && frequent !== null && trBaseIn.disabled) return showStControl(trEngineBtns.find((b) => b.tabIndex === 0)!);
+  if (limit === null || frequent === null || urlErr) return showStControl(stPanes.map((p) => p.querySelector<HTMLElement>('[aria-invalid="true"]')).find(Boolean)!);
   const s = formToSettings(S.settings, {
     hotkey: pendingHotkey, retain: retainIn.value, limit, frequent, ignored: addIgnored(draftIgnored, ignoreIn.value), skipSensitive: sensitiveIn.checked,
     moveToTop: moveTopIn.checked, launchAtLogin: autostartIn.checked, ocrEnabled: ocrOnIn.checked, ocrBackfill: ocrBackfillIn.checked, searchFileText: fileTextIn.checked,
     shotHotkey: shotKey.pending, shotDir: shotDir.pending, shotSaveCopy: shotSaveCopyIn.checked,
     recHotkey: recKey.pending, recDir: recDir.pending, recSystemAudio: recSystemAudioIn.checked, recMicrophone: recMicIn.checked, recCopy: recCopyIn.checked,
     recQuality: recQualityIn.value, recFps: recFpsIn.value,
+  });
+  // 翻译字段不经 SettingsForm；末尾的 / 由后端去掉。engine 没动过就原样写回（可能是空串）
+  Object.assign(s, {
+    translateEngine: trSave(), translateBaseUrl: trBaseIn.value.trim(), translateApiKey: trKeyIn.value, translateModel: trModelIn.value.trim(), translateLang: trLangIn.value,
   });
   saving = true;
   try {

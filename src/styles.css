@@ -606,6 +606,18 @@ dialog > form { display: contents; }
 /* 外观、自动粘贴权限（仅 macOS）：说明在左、控件在右 */
 .line { display: flex; justify-content: space-between; align-items: center; gap: 16px; min-height: 26px; }
 /* 截图文件夹：只读路径 + 更改按钮；开关列表里的权限行 */
+/* 翻译标签（设计 §3.3）：两段文字选择，滑块按 data-v 平移；接口三项置灰；测试结果行 */
+.field .lbl { font-size: 13px; font-weight: 500; }
+.seg.two { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
+.seg.two button { width: auto; padding: 0 12px; font: inherit; font-size: 13px; }
+.seg.two .pill { width: calc((100% - 6px) / 2); }
+.seg.two[data-v="openai"] .pill { transform: translateX(100%); }
+.seg button:disabled { opacity: .4; cursor: not-allowed; }
+.field.is-disabled > label, .field.is-disabled > .pick { opacity: .5; }
+.field input:disabled { opacity: .5; cursor: not-allowed; }
+.tr-result { min-width: 0; overflow-wrap: anywhere; }
+.tr-result.is-ok { color: var(--c-code); }
+.tr-result.is-err { color: var(--danger); }
 .pick { display: flex; gap: 8px; }
 .pick input { flex: 1; min-width: 0; }
 .pick .btn { height: 38px; }

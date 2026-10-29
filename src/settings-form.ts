@@ -88,3 +88,9 @@ export const formToSettings = (base: Settings, f: SettingsForm): Settings => ({
   recQuality: f.recQuality as RecQuality,
   recFps: Number(f.recFps),
 });
+
+/** 翻译接口地址（设计 §3.3）：空视为未填；否则必须以 http:// 或 https:// 开头。 */
+export const baseUrlError = (v: string): string | null => {
+  const t = v.trim();
+  return t === '' || /^https?:\/\//i.test(t) ? null : '请输入 http:// 或 https:// 开头的地址';
+};
