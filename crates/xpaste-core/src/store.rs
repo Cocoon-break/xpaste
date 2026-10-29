@@ -604,7 +604,7 @@ impl Store {
             params![r.kind.as_str(), name, r.text, r.lang, r.size as i64, now_ms, r.title],
         )?;
         let id = tx.last_insert_rowid();
-        let writes = insert_flavors(&tx, &self.dir, id, &r.flavors)?;
+        let writes = insert_flavors(&tx, &self.dir, id, &r.flavors, "")?;
         reindex_snippet(&tx, id)?;
         let written = write_all(&writes).and_then(|()| tx.commit().map_err(CoreError::from));
         if let Err(e) = written {
@@ -626,6 +626,7 @@ impl Store {
             return Err(CoreError::InvalidSettings("不是片段".into()));
         }
         let mut writes = Vec::new();
+        let mut old_files: Vec<String> = Vec::new();
         let tx = self.conn.transaction()?;
         let new = match text {
             None => None,
@@ -658,14 +659,28 @@ impl Store {
                    link_title = NULL WHERE id = ?6",
                 params![r.kind.as_str(), r.text, r.lang, r.size as i64, r.title, id],
             )?;
+            old_files = blob_files(&tx, id)?;
             tx.execute("DELETE FROM flavors WHERE record_id = ?1", [id])?;
-            // ponytail: 旧 blob 目录在写新文件前删，提交失败时旧大文件已丢；片段文字超 1 MB 且写盘失败极罕见
-            let _ = std::fs::remove_dir_all(self.dir.join("blobs").join(id.to_string()));
-            writes = insert_flavors(&tx, &self.dir, id, &r.flavors)?;
+            // 新 blob 用不会重名的后缀，写失败或提交失败时旧行仍指向原文件；成功后才删旧文件
+            let tag = format!(
+                "-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_nanos())
+            );
+            writes = insert_flavors(&tx, &self.dir, id, &r.flavors, &tag)?;
         }
         reindex_snippet(&tx, id)?;
-        write_all(&writes)?;
-        tx.commit()?;
+        let written = write_all(&writes).and_then(|()| tx.commit().map_err(CoreError::from));
+        if let Err(e) = written {
+            for (p, _) in &writes {
+                let _ = std::fs::remove_file(p);
+            }
+            return Err(e);
+        }
+        for f in old_files {
+            let _ = std::fs::remove_file(self.dir.join(f));
+        }
         Ok(())
     }
 
@@ -974,9 +989,19 @@ fn parse_meta(raw: Option<String>) -> Option<Value> {
 
 fn check_snippet_text(text: &str) -> Result<(), CoreError> {
     if text.trim().is_empty() {
-        return Err(CoreError::InvalidSettings("片段内容不能为空".into()));
+        return Err(CoreError::InvalidSettings("请填写内容".into()));
     }
     Ok(())
+}
+
+/// 记录现有 flavor 登记的 blob 相对路径。
+fn blob_files(tx: &Connection, id: i64) -> Result<Vec<String>, CoreError> {
+    let mut stmt =
+        tx.prepare("SELECT file FROM flavors WHERE record_id = ?1 AND file IS NOT NULL")?;
+    let v = stmt
+        .query_map([id], |r| r.get(0))?
+        .collect::<Result<Vec<String>, _>>()?;
+    Ok(v)
 }
 
 /// 写 flavor 行（≤ `INLINE_MAX` 内联，否则登记 `blobs/<id>/<n>`），返回待写的大文件。
@@ -985,13 +1010,14 @@ fn insert_flavors<'a>(
     dir: &Path,
     id: i64,
     flavors: &'a [Flavor],
+    tag: &str,
 ) -> Result<Vec<(PathBuf, &'a [u8])>, CoreError> {
     let mut writes = Vec::new();
     for (n, f) in flavors.iter().enumerate() {
         let (data, file) = if f.data.len() <= INLINE_MAX {
             (Some(&f.data[..]), None)
         } else {
-            let rel = format!("blobs/{id}/{n}");
+            let rel = format!("blobs/{id}/{n}{tag}");
             writes.push((dir.join(&rel), &f.data[..]));
             (None, Some(rel))
         };
@@ -2310,17 +2336,48 @@ pub(crate) mod tests {
 
     #[test]
     fn snippet_rules_reject_bad_input() {
-        assert!(snippet_name("   ").is_err());
-        assert!(snippet_name(&"字".repeat(101)).is_err());
+        let msg = |e: CoreError| match e {
+            CoreError::InvalidSettings(m) => m,
+            other => panic!("expected InvalidSettings, got {other:?}"),
+        };
+        assert_eq!(msg(snippet_name("   ").unwrap_err()), "请填写名字");
+        assert_eq!(
+            msg(snippet_name(&"字".repeat(101)).unwrap_err()),
+            "名字不能超过 100 个字"
+        );
         assert_eq!(snippet_name("  名字 ").unwrap(), "名字");
         let mut s = mem();
-        assert!(s.create_snippet("a", "  \n ", 1).is_err());
+        assert_eq!(
+            msg(s.create_snippet("a", "  \n ", 1).unwrap_err()),
+            "请填写内容"
+        );
         let hid = added(&mut s, &rec("历史"), 1);
         assert!(s.update_snippet(hid, "x", None).is_err());
         assert!(s.is_snippet(hid).is_ok_and(|b| !b));
         let sid = s.create_snippet("b", "c", 3).unwrap();
         assert!(s.is_snippet(sid).unwrap());
         assert!(s.set_pinned(sid, true).is_err());
+    }
+
+    #[test]
+    fn editing_blob_snippet_leaves_only_new_content() {
+        let mut s = mem();
+        let big = "x".repeat(INLINE_MAX + 1);
+        let id = s.create_snippet("大", &big, 1).unwrap();
+        let old: String = s
+            .conn
+            .query_row("SELECT file FROM flavors WHERE record_id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(s.dir.join(&old).exists());
+        s.update_snippet(id, "大", Some("新内容")).unwrap();
+        assert_eq!(s.flavors(id).unwrap(), vec![text_flavor("新内容")]);
+        assert!(!s.dir.join(&old).exists());
+        // 小改大：新 blob 可读，旧内容不再出现
+        let big2 = "y".repeat(INLINE_MAX + 1);
+        s.update_snippet(id, "大", Some(&big2)).unwrap();
+        assert_eq!(s.flavors(id).unwrap(), vec![text_flavor(&big2)]);
     }
 
     #[test]

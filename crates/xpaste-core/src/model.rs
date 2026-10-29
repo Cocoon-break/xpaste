@@ -538,12 +538,10 @@ pub fn text_flavor(text: &str) -> Flavor {
 pub fn snippet_name(raw: &str) -> Result<String, CoreError> {
     let name = raw.trim();
     if name.is_empty() {
-        return Err(CoreError::InvalidSettings("片段名字不能为空".into()));
+        return Err(CoreError::InvalidSettings("请填写名字".into()));
     }
     if name.chars().count() > 100 {
-        return Err(CoreError::InvalidSettings(
-            "片段名字不能超过 100 个字符".into(),
-        ));
+        return Err(CoreError::InvalidSettings("名字不能超过 100 个字".into()));
     }
     Ok(name.into())
 }
