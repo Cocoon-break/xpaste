@@ -1152,7 +1152,7 @@ fn ocr(app: &AppHandle, generation: u64, png: Vec<u8>) -> Result<ShotOutcome, Ap
     }
     if let Some(text) = &text {
         // 不经过 write_marked：同“复制截图”，要进历史
-        xpaste_platform::write(&[crate::commands::records::text_flavor(text)]).map_err(|e| {
+        xpaste_platform::write(&[xpaste_core::text_flavor(text)]).map_err(|e| {
             log::warn!("识别文字写剪切板失败 {chars} 字：{e}");
             AppError::ClipboardWrite
         })?;

@@ -9,7 +9,8 @@ use serde_json::Value;
 
 use crate::{
     AppSummary, CoreError, FileEntry, Flavor, ImageInfo, Kind, NewRecord, RecordDetail,
-    RecordSummary, SearchHit, Settings, VideoInfo, ocr_state, pinyin,
+    RecordSummary, SearchHit, Settings, Snapshot, VideoInfo, capture, detect, ocr_state, pinyin,
+    snippet_name, text_flavor,
 };
 
 /// 按版本排列的迁移脚本；第 i 项把 `user_version` 从 i 升到 i+1。
@@ -69,6 +70,8 @@ CREATE TRIGGER records_fts_py_au AFTER UPDATE OF py_text ON records BEGIN
 END;
 INSERT INTO fts_py(fts_py) VALUES ('rebuild');
 ",
+    // 阶段 14 片段：snippet_body 不为 NULL 即片段，库里按置顶存（旧版本也跳过置顶，不会清掉它），M25 规则 10
+    "ALTER TABLE records ADD COLUMN snippet_body TEXT;",
 ];
 
 const SUBDIRS: [&str; 4] = ["blobs", "images", "thumbs", "icons"];
@@ -79,10 +82,20 @@ const INLINE_MAX: usize = 1_048_576;
 const DETAIL_TEXT_MAX: usize = 200 * 1024;
 const DAY_MS: i64 = 86_400_000;
 
-const LIVE_UNPINNED: &str = "pinned = 0 AND deleted_at IS NULL";
+/// 片段在两层上豁免所有清理（M25 规则 10）：库里按置顶存（`pinned = 1`），
+/// 这里再显式排除 `snippet_body IS NOT NULL`。后者是纵深防御：用户降级后在旧版本里
+/// 取消“置顶历史行”，再升级回来，片段也绝不能被清掉。
+const LIVE_UNPINNED: &str = "pinned = 0 AND snippet_body IS NULL AND deleted_at IS NULL";
+
+/// `save_snippet` 的结果：后两项告诉调用方要不要给新 id 补投后台任务。
+pub struct SavedSnippet {
+    pub id: i64,
+    pub needs_thumb: bool,
+    pub needs_ocr: bool,
+}
 
 const SUMMARY_SQL: &str = "SELECT r.id, r.kind, r.title, a.name, a.icon_path, r.copied_at, r.uses,
-  r.pinned, r.size, r.lang, r.meta, r.ocr_state FROM records r LEFT JOIN apps a ON a.id = r.app_id";
+  r.pinned, r.size, r.lang, r.meta, r.ocr_state, r.snippet_body FROM records r LEFT JOIN apps a ON a.id = r.app_id";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Upsert {
@@ -566,7 +579,199 @@ impl Store {
         )?)
     }
 
+    pub fn is_snippet(&self, id: i64) -> Result<bool, CoreError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT snippet_body IS NOT NULL FROM records WHERE id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .unwrap_or(false))
+    }
+
+    /// 新建文字片段（M25 规则 10）：不去重、不挂来源应用、不做容量裁剪，库里按置顶存。
+    pub fn create_snippet(
+        &mut self,
+        name: &str,
+        text: &str,
+        now_ms: i64,
+    ) -> Result<i64, CoreError> {
+        let name = snippet_name(name)?;
+        check_snippet_text(text)?;
+        let snap = Snapshot {
+            text: Some(text.into()),
+            flavors: vec![text_flavor(text)],
+            ..Default::default()
+        };
+        let kind = detect::kind(&snap);
+        let r = capture::build_record(snap, kind, now_ms);
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT INTO records(hash, kind, title, text, lang, size, search_text, copied_at, pinned, snippet_body)
+             VALUES (randomblob(16), ?1, ?2, ?3, ?4, ?5, '', ?6, 1, ?7)",
+            params![r.kind.as_str(), name, r.text, r.lang, r.size as i64, now_ms, r.title],
+        )?;
+        let id = tx.last_insert_rowid();
+        let writes = insert_flavors(&tx, &self.dir, id, &r.flavors, "")?;
+        reindex_snippet(&tx, id)?;
+        let written = write_all(&writes).and_then(|()| tx.commit().map_err(CoreError::from));
+        if let Err(e) = written {
+            self.delete_files(id);
+            return Err(e);
+        }
+        Ok(id)
+    }
+
+    /// 把一条历史记录存为片段（M25 规则 10）：复制行、flavors 与图片/缩略图/大 blob 文件，之后与源记录互不相干。
+    pub fn save_snippet(
+        &mut self,
+        src: i64,
+        name: &str,
+        now_ms: i64,
+    ) -> Result<SavedSnippet, CoreError> {
+        let name = snippet_name(name)?;
+        let tx = self.conn.transaction()?;
+        let (kind, state, eligible): (String, i64, bool) = tx
+            .query_row(
+                &format!(
+                    "SELECT kind, ocr_state, {} FROM records
+                     WHERE id = ?1 AND snippet_body IS NULL AND deleted_at IS NULL",
+                    ocr_eligible_sql()
+                ),
+                [src],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?
+            .ok_or_else(|| CoreError::InvalidSettings("记录不存在".into()))?;
+        let is_image = kind == Kind::Image.as_str();
+        tx.execute(
+            "INSERT INTO records(hash, kind, title, text, paths, link_title, lang, size, meta, search_text,
+               app_id, copied_at, uses, pinned, ocr_text, ocr_state, snippet_body)
+             SELECT randomblob(16), kind, ?2, text, paths, link_title, lang, size, meta, '',
+               app_id, ?3, 0, 1, ocr_text, ocr_state, CASE WHEN kind = 'image' THEN '' ELSE title END
+             FROM records WHERE id = ?1",
+            params![src, name, now_ms],
+        )?;
+        let id = tx.last_insert_rowid();
+        reindex_snippet(&tx, id)?;
+        // flavors：内联数据原样复制，大 blob 的登记路径改指新 id 的目录
+        let mut copies: Vec<(PathBuf, PathBuf)> = Vec::new();
+        for f in blob_files(&tx, src)? {
+            debug_assert!(f.starts_with(&format!("blobs/{src}/")));
+            let new = f.replacen(&format!("blobs/{src}/"), &format!("blobs/{id}/"), 1);
+            copies.push((self.dir.join(&f), self.dir.join(new)));
+        }
+        // 一条语句按原顺序复制；大 blob 的登记路径改指新 id 的目录
+        tx.execute(
+            "INSERT INTO flavors(record_id, item, format, data, file)
+             SELECT ?2, item, format, data,
+               CASE WHEN file IS NULL THEN NULL ELSE ?4 || substr(file, length(?3) + 1) END
+             FROM flavors WHERE record_id = ?1 ORDER BY rowid",
+            params![src, id, format!("blobs/{src}/"), format!("blobs/{id}/")],
+        )?;
+        for sub in ["images", "thumbs"] {
+            let from = self.dir.join(sub).join(format!("{src}.png"));
+            if from.exists() {
+                copies.push((from, self.dir.join(sub).join(format!("{id}.png"))));
+            }
+        }
+        let thumb_missing = !self.dir.join("thumbs").join(format!("{src}.png")).exists();
+        let copied = copies.iter().try_for_each(|(from, to)| {
+            if let Some(d) = to.parent() {
+                std::fs::create_dir_all(d)?;
+            }
+            std::fs::copy(from, to).map(drop)
+        });
+        if let Err(e) = copied
+            .map_err(CoreError::from)
+            .and_then(|()| tx.commit().map_err(CoreError::from))
+        {
+            self.delete_files(id);
+            return Err(e);
+        }
+        Ok(SavedSnippet {
+            id,
+            needs_thumb: (is_image || kind == Kind::Video.as_str()) && thumb_missing,
+            needs_ocr: eligible && state == i64::from(ocr_state::PENDING),
+        })
+    }
+
+    /// 改片段的名字，`text` 为 Some 时同时改内容（只限文字类，M25 规则 10）。`uses`、`copied_at` 不变。
+    pub fn update_snippet(
+        &mut self,
+        id: i64,
+        name: &str,
+        text: Option<&str>,
+    ) -> Result<(), CoreError> {
+        let name = snippet_name(name)?;
+        if !self.is_snippet(id)? {
+            return Err(CoreError::InvalidSettings("不是片段".into()));
+        }
+        let mut writes = Vec::new();
+        let mut old_files: Vec<String> = Vec::new();
+        let tx = self.conn.transaction()?;
+        let new = match text {
+            None => None,
+            Some(t) => {
+                let kind: String =
+                    tx.query_row("SELECT kind FROM records WHERE id = ?1", [id], |r| r.get(0))?;
+                if matches!(
+                    Kind::parse(&kind),
+                    Some(Kind::Image | Kind::Video | Kind::File)
+                ) {
+                    return Err(CoreError::InvalidSettings("只能修改文字片段的内容".into()));
+                }
+                check_snippet_text(t)?;
+                let snap = Snapshot {
+                    text: Some(t.into()),
+                    flavors: vec![text_flavor(t)],
+                    ..Default::default()
+                };
+                let kind = detect::kind(&snap);
+                Some(capture::build_record(snap, kind, 0))
+            }
+        };
+        tx.execute(
+            "UPDATE records SET title = ?1 WHERE id = ?2",
+            params![name, id],
+        )?;
+        if let Some(r) = &new {
+            tx.execute(
+                "UPDATE records SET kind = ?1, text = ?2, lang = ?3, size = ?4, snippet_body = ?5,
+                   link_title = NULL WHERE id = ?6",
+                params![r.kind.as_str(), r.text, r.lang, r.size as i64, r.title, id],
+            )?;
+            old_files = blob_files(&tx, id)?;
+            tx.execute("DELETE FROM flavors WHERE record_id = ?1", [id])?;
+            // 新 blob 用不会重名的后缀，写失败或提交失败时旧行仍指向原文件；成功后才删旧文件
+            let tag = format!(
+                "-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_nanos())
+            );
+            writes = insert_flavors(&tx, &self.dir, id, &r.flavors, &tag)?;
+        }
+        reindex_snippet(&tx, id)?;
+        let written = write_all(&writes).and_then(|()| tx.commit().map_err(CoreError::from));
+        if let Err(e) = written {
+            for (p, _) in &writes {
+                let _ = std::fs::remove_file(p);
+            }
+            return Err(e);
+        }
+        for f in old_files {
+            let _ = std::fs::remove_file(self.dir.join(f));
+        }
+        Ok(())
+    }
+
     pub fn set_pinned(&self, id: i64, on: bool) -> Result<(), CoreError> {
+        if self.is_snippet(id)? {
+            return Err(CoreError::InvalidSettings("片段不能置顶".into()));
+        }
         self.conn.execute(
             "UPDATE records SET pinned = ?1 WHERE id = ?2",
             params![on, id],
@@ -574,30 +779,43 @@ impl Store {
         Ok(())
     }
 
-    /// 粘贴后计数；`move_to_top` 时非置顶记录移到最前。
+    /// 粘贴后计数；`move_to_top` 时非置顶记录移到最前；片段总是更新 `copied_at`（“上次使用”，M25 规则 10）。
     pub fn bump_use(&self, id: i64, move_to_top: bool, now_ms: i64) -> Result<(), CoreError> {
         self.conn.execute(
             "UPDATE records SET uses = uses + 1,
-               copied_at = CASE WHEN ?1 AND pinned = 0 THEN ?2 ELSE copied_at END WHERE id = ?3",
+               copied_at = CASE WHEN snippet_body IS NOT NULL OR (?1 AND pinned = 0) THEN ?2 ELSE copied_at END WHERE id = ?3",
             params![move_to_top, now_ms, id],
         )?;
         Ok(())
     }
 
-    pub fn soft_delete(&self, id: i64, now_ms: i64) -> Result<(), CoreError> {
-        self.conn.execute(
-            "UPDATE records SET deleted_at = ?1 WHERE id = ?2",
-            params![now_ms, id],
-        )?;
+    pub fn soft_delete(&mut self, ids: &[i64], now_ms: i64) -> Result<(), CoreError> {
+        let tx = self.conn.transaction()?;
+        for id in ids {
+            tx.execute(
+                "UPDATE records SET deleted_at = ?1 WHERE id = ?2",
+                params![now_ms, id],
+            )?;
+        }
+        tx.commit()?;
         Ok(())
     }
 
-    pub fn undo_delete(&self, id: i64) -> Result<bool, CoreError> {
-        let n = self.conn.execute(
-            "UPDATE records SET deleted_at = NULL WHERE id = ?1 AND deleted_at IS NOT NULL",
-            [id],
-        )?;
-        Ok(n > 0)
+    /// 返回实际恢复的 id（不存在或未被删除的忽略）。
+    pub fn undo_delete(&mut self, ids: &[i64]) -> Result<Vec<i64>, CoreError> {
+        let tx = self.conn.transaction()?;
+        let mut restored = Vec::new();
+        for &id in ids {
+            let n = tx.execute(
+                "UPDATE records SET deleted_at = NULL WHERE id = ?1 AND deleted_at IS NOT NULL",
+                [id],
+            )?;
+            if n > 0 {
+                restored.push(id);
+            }
+        }
+        tx.commit()?;
+        Ok(restored)
     }
 
     /// 仅当记录仍是那次软删除（`deleted_at` 相同）时彻底删除。
@@ -708,6 +926,17 @@ impl Store {
             .get::<_, Option<String>>(3)?
             .map(|name| AppSummary { name, icon });
         let meta = parse_meta(row.get(10)?);
+        let snippet_body = row.get::<_, Option<String>>(12)?.map(|b| {
+            // 图片片段存空串，尺寸由 meta 现拼：缩略图任务晚于存片段时也能显示对
+            if kind != Kind::Image || !b.is_empty() {
+                return b;
+            }
+            let dim = |k| meta.as_ref().and_then(|m| m.get(k)?.as_u64());
+            match (dim("w"), dim("h")) {
+                (Some(w), Some(h)) => format!("图片 {w} × {h}"),
+                _ => "图片".into(),
+            }
+        });
         Ok(RecordSummary {
             id,
             kind,
@@ -715,7 +944,8 @@ impl Store {
             app,
             copied_at: row.get(5)?,
             uses: row.get(6)?,
-            pinned: row.get(7)?,
+            // 片段库里按置顶存，对外不报置顶（M25 规则 10）
+            pinned: row.get::<_, bool>(7)? && snippet_body.is_none(),
             size: row.get::<_, i64>(8)? as u64,
             lang: row.get(9)?,
             thumb: existing(self.dir.join("thumbs").join(format!("{id}.png"))),
@@ -725,6 +955,7 @@ impl Store {
                 .and_then(|m| m.get("duration")?.as_f64())
                 .filter(|&d| d > 0.0),
             ocr_state: row.get(11)?,
+            snippet_body,
         })
     }
 
@@ -853,6 +1084,95 @@ fn parse_meta(raw: Option<String>) -> Option<Value> {
     raw.and_then(|m| serde_json::from_str(&m).ok())
 }
 
+fn check_snippet_text(text: &str) -> Result<(), CoreError> {
+    if text.trim().is_empty() {
+        return Err(CoreError::InvalidSettings("请填写内容".into()));
+    }
+    // 上限与采集一致（M01 规则 9、M25 规则 5）
+    if text.len() > capture::MAX_TEXT_BYTES {
+        return Err(CoreError::InvalidSettings(format!(
+            "内容不能超过 {} MB",
+            capture::MAX_TEXT_BYTES >> 20
+        )));
+    }
+    Ok(())
+}
+
+/// 记录现有 flavor 登记的 blob 相对路径。
+fn blob_files(tx: &Connection, id: i64) -> Result<Vec<String>, CoreError> {
+    let mut stmt =
+        tx.prepare("SELECT file FROM flavors WHERE record_id = ?1 AND file IS NOT NULL")?;
+    let v = stmt
+        .query_map([id], |r| r.get(0))?
+        .collect::<Result<Vec<String>, _>>()?;
+    Ok(v)
+}
+
+/// 写 flavor 行（≤ `INLINE_MAX` 内联，否则登记 `blobs/<id>/<n>`），返回待写的大文件。
+fn insert_flavors<'a>(
+    tx: &Connection,
+    dir: &Path,
+    id: i64,
+    flavors: &'a [Flavor],
+    tag: &str,
+) -> Result<Vec<(PathBuf, &'a [u8])>, CoreError> {
+    let mut writes = Vec::new();
+    for (n, f) in flavors.iter().enumerate() {
+        let (data, file) = if f.data.len() <= INLINE_MAX {
+            (Some(&f.data[..]), None)
+        } else {
+            let rel = format!("blobs/{id}/{n}{tag}");
+            writes.push((dir.join(&rel), &f.data[..]));
+            (None, Some(rel))
+        };
+        tx.execute(
+            "INSERT INTO flavors(record_id, item, format, data, file) VALUES (?1,?2,?3,?4,?5)",
+            params![id, i64::from(f.item), f.format, data, file],
+        )?;
+    }
+    Ok(writes)
+}
+
+/// 按行里的名字、内容和识别文字重算片段的 `search_text` 与 `py_text`（M25 规则 10）。
+/// 口径与采集一致：内容部分走 `capture::content_search_text`，识别文字与 `set_ocr` 的追加方式相同。
+fn reindex_snippet(tx: &Connection, id: i64) -> Result<(), CoreError> {
+    let (title, text, link_title, paths, ocr_text): (
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = tx.query_row(
+        "SELECT title, text, link_title, paths, ocr_text FROM records WHERE id = ?1",
+        [id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+    )?;
+    let paths: Vec<PathBuf> = paths
+        .and_then(|p| serde_json::from_str::<Vec<String>>(&p).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+    let content = capture::content_search_text(text.as_deref(), link_title.as_deref(), &paths);
+    let mut search = title.to_lowercase();
+    if !content.is_empty() {
+        search = format!("{search}\n{content}");
+    }
+    let mut py = pinyin::index_text(&format!("{title}\n{content}"));
+    if let Some(o) = ocr_text.filter(|o| !o.is_empty()) {
+        search = format!("{search}\n{}", o.to_lowercase());
+        let p = pinyin::index_text(&o);
+        if !p.is_empty() {
+            py = format!("{py}\n{p}");
+        }
+    }
+    tx.execute(
+        "UPDATE records SET search_text = ?1, py_text = ?2 WHERE id = ?3",
+        params![search, py, id],
+    )?;
+    Ok(())
+}
+
 fn existing(p: PathBuf) -> Option<String> {
     p.exists().then(|| p.display().to_string())
 }
@@ -929,7 +1249,7 @@ pub(crate) mod tests {
     fn open_creates_schema_and_dirs() {
         let dir = tmp();
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 6);
+        assert_eq!(s.schema_version().unwrap(), 7);
         for sub in ["blobs", "images", "thumbs", "icons"] {
             assert!(dir.join(sub).is_dir());
         }
@@ -971,7 +1291,7 @@ pub(crate) mod tests {
         .unwrap();
         drop(old);
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 6);
+        assert_eq!(s.schema_version().unwrap(), 7);
         let row: (String, String) = s
             .conn
             .query_row("SELECT kind, title FROM records", [], |r| {
@@ -996,7 +1316,7 @@ pub(crate) mod tests {
         .unwrap();
         drop(old);
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 6);
+        assert_eq!(s.schema_version().unwrap(), 7);
         let l = s.list_summaries().unwrap();
         assert_eq!(
             (l[0].kind, l[0].ocr_state),
@@ -1010,7 +1330,7 @@ pub(crate) mod tests {
         let dir = tmp();
         drop(Store::open(&dir).unwrap());
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 6);
+        assert_eq!(s.schema_version().unwrap(), 7);
     }
 
     #[test]
@@ -1049,7 +1369,7 @@ pub(crate) mod tests {
         assert_eq!(ids(&s, "季度预算"), [img]);
         assert_eq!(ids(&s, "2026"), [img]);
         // 软删除不改索引但被 deleted_at 过滤；硬删除后索引条目消失
-        s.soft_delete(img, 3).unwrap();
+        s.soft_delete(&[img], 3).unwrap();
         assert!(ids(&s, "季度预算").is_empty());
         assert!(s.purge_if_deleted_at(img, 3).unwrap());
         let n: i64 = s
@@ -1119,7 +1439,7 @@ pub(crate) mod tests {
     fn backfill_is_part_of_migration() {
         let dir = v5_db_with_old_record();
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 6);
+        assert_eq!(s.schema_version().unwrap(), 7);
         let nulls: i64 = s
             .conn
             .query_row(
@@ -1182,7 +1502,7 @@ pub(crate) mod tests {
         let mut s = mem();
         let id = added(&mut s, &rec("周四会议纪要"), 1);
         assert_eq!(fts_py_count(&s.conn, "\"'hui'yi\""), 1);
-        s.soft_delete(id, 2).unwrap();
+        s.soft_delete(&[id], 2).unwrap();
         assert!(s.purge_if_deleted_at(id, 2).unwrap());
         assert_eq!(fts_py_count(&s.conn, "\"'hui'yi\""), 0);
     }
@@ -1307,6 +1627,7 @@ pub(crate) mod tests {
     use crate::capture::build_record;
     use crate::{
         AppInfo, Flavor, Kind, NewRecord, Snapshot, VideoInfo, VideoMeta, detect, ocr_state,
+        snippet_name, text_flavor,
     };
 
     fn mem() -> Store {
@@ -1478,7 +1799,7 @@ pub(crate) mod tests {
         let (Upsert::Added(id), _) = s.insert_or_merge(&rec("a"), 1, 500).unwrap() else {
             panic!()
         };
-        s.soft_delete(id, 5).unwrap();
+        s.soft_delete(&[id], 5).unwrap();
         assert!(s.list_summaries().unwrap().is_empty());
         s.insert_or_merge(&rec("a"), 6, 500).unwrap();
         assert_eq!(s.list_summaries().unwrap().len(), 1);
@@ -1504,7 +1825,7 @@ pub(crate) mod tests {
             panic!()
         };
         assert_eq!(s.live_summary(id).unwrap().map(|r| r.id), Some(id));
-        s.soft_delete(id, 2).unwrap();
+        s.soft_delete(&[id], 2).unwrap();
         assert!(s.live_summary(id).unwrap().is_none());
         assert!(s.summary(id).unwrap().is_some());
     }
@@ -1546,7 +1867,7 @@ pub(crate) mod tests {
                 Upsert::Added(id) | Upsert::Merged(id) => id,
             })
             .collect();
-        s.soft_delete(ids[1], 2).unwrap();
+        s.soft_delete(&[ids[1]], 2).unwrap();
         assert_eq!(s.ids_for_app("x").unwrap(), [ids[0]]);
     }
     #[test]
@@ -1591,16 +1912,35 @@ pub(crate) mod tests {
         );
     }
     #[test]
+    fn soft_delete_many_and_undo_together() {
+        let mut s = mem();
+        let mut ids = Vec::new();
+        for (i, t) in ["a", "b", "c"].into_iter().enumerate() {
+            let (Upsert::Added(id), _) = s.insert_or_merge(&rec(t), 1 + i as i64, 500).unwrap()
+            else {
+                panic!()
+            };
+            ids.push(id);
+        }
+        let (a, b, c) = (ids[0], ids[1], ids[2]);
+        s.soft_delete(&[a, b], 9).unwrap();
+        assert!(s.live_summary(a).unwrap().is_none());
+        assert!(s.live_summary(b).unwrap().is_none());
+        assert!(s.live_summary(c).unwrap().is_some());
+        assert_eq!(s.undo_delete(&[a, b, 999]).unwrap(), vec![a, b]);
+        assert!(s.live_summary(a).unwrap().is_some());
+    }
+    #[test]
     fn soft_delete_undo_and_purge() {
         let mut s = mem();
         let (Upsert::Added(id), _) = s.insert_or_merge(&rec("a"), 1, 500).unwrap() else {
             panic!()
         };
         s.set_pinned(id, true).unwrap();
-        s.soft_delete(id, 100).unwrap();
-        assert!(s.undo_delete(id).unwrap());
+        s.soft_delete(&[id], 100).unwrap();
+        assert_eq!(s.undo_delete(&[id]).unwrap(), vec![id]);
         assert!(s.list_summaries().unwrap()[0].pinned);
-        s.soft_delete(id, 200).unwrap();
+        s.soft_delete(&[id], 200).unwrap();
         assert!(!s.purge_if_deleted_at(id, 199).unwrap());
         assert!(s.purge_if_deleted_at(id, 200).unwrap());
         assert!(s.summary(id).unwrap().is_none());
@@ -1611,7 +1951,7 @@ pub(crate) mod tests {
         let (Upsert::Added(id), _) = s.insert_or_merge(&rec("a"), 1, 500).unwrap() else {
             panic!()
         };
-        s.soft_delete(id, 1).unwrap();
+        s.soft_delete(&[id], 1).unwrap();
         assert_eq!(s.purge_all_soft_deleted().unwrap(), vec![id]);
     }
     #[test]
@@ -1694,7 +2034,7 @@ pub(crate) mod tests {
         };
         let img = s.dir.join("images").join(format!("{id}.png"));
         assert!(img.exists());
-        s.soft_delete(id, 1).unwrap();
+        s.soft_delete(&[id], 1).unwrap();
         s.purge_if_deleted_at(id, 1).unwrap();
         assert!(!img.exists());
     }
@@ -1726,7 +2066,7 @@ pub(crate) mod tests {
         let (Upsert::Added(a), _) = s.insert_or_merge(&rec("a"), 1, 500).unwrap() else {
             panic!()
         };
-        s.soft_delete(a, 1).unwrap();
+        s.soft_delete(&[a], 1).unwrap();
         s.purge_if_deleted_at(a, 1).unwrap();
         let (Upsert::Added(b), _) = s.insert_or_merge(&rec("b"), 2, 500).unwrap() else {
             panic!()
@@ -1803,7 +2143,7 @@ pub(crate) mod tests {
         let d = s.detail(other).unwrap().unwrap();
         assert_eq!((d.summary.ocr_state, d.ocr_text), (ocr_state::EMPTY, None));
 
-        s.soft_delete(other, 3).unwrap();
+        s.soft_delete(&[other], 3).unwrap();
         assert!(!s.set_ocr(other, ocr_state::TEXT, Some("x")).unwrap());
     }
 
@@ -1970,7 +2310,7 @@ pub(crate) mod tests {
         assert_eq!(s.ocr_pending_ids(&[p], 1).unwrap(), [c]);
         s.set_ocr(a, ocr_state::FAILED, None).unwrap();
         s.set_ocr(b, ocr_state::TEXT, Some("x")).unwrap();
-        s.soft_delete(c, 5).unwrap();
+        s.soft_delete(&[c], 5).unwrap();
         assert!(s.ocr_pending_ids(&[p], 10).unwrap().is_empty());
         assert_eq!(s.ocr_pending_ids(&[p, ocr_state::FAILED], 10).unwrap(), [a]);
         // a 失败、b 有文字：都算已处理
@@ -1997,7 +2337,7 @@ pub(crate) mod tests {
         let c = added(&mut s, &rec_image(3), 3);
         let d = added(&mut s, &rec_image(4), 4);
         s.set_ocr(b, ocr_state::TEXT, Some("x")).unwrap();
-        s.soft_delete(c, 5).unwrap();
+        s.soft_delete(&[c], 5).unwrap();
         assert!(s.set_ocr_many(&[], ocr_state::SKIPPED).unwrap().is_empty());
         let mut changed = s.set_ocr_many(&[a, b, c, d], ocr_state::SKIPPED).unwrap();
         changed.sort_unstable();
@@ -2014,8 +2354,346 @@ pub(crate) mod tests {
         assert_eq!(s.ocr_state(a).unwrap(), Some(ocr_state::PENDING));
         s.set_ocr(a, ocr_state::FAILED, None).unwrap();
         assert_eq!(s.ocr_state(a).unwrap(), Some(ocr_state::FAILED));
-        s.soft_delete(a, 2).unwrap();
+        s.soft_delete(&[a], 2).unwrap();
         assert_eq!(s.ocr_state(a).unwrap(), None);
         assert_eq!(s.ocr_state(a + 100).unwrap(), None);
+    }
+
+    // ---- 阶段 14：片段（M25 规则 10）----
+
+    fn text_snap(t: &str) -> Snapshot {
+        Snapshot {
+            text: Some(t.into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn migrates_v6_to_snippet_column() {
+        let dir = tmp();
+        make_dirs(&dir).unwrap();
+        let old = Connection::open(dir.join("xpaste.db")).unwrap();
+        for m in &MIGRATIONS[..6] {
+            old.execute_batch(m).unwrap();
+        }
+        old.pragma_update(None, "user_version", 6).unwrap();
+        old.execute(
+            "INSERT INTO records (hash, kind, title, text, copied_at, size, search_text, py_text) VALUES
+               (x'06', 'text', '旧记录', 'x', 1, 1, '旧记录', '')",
+            [],
+        )
+        .unwrap();
+        drop(old);
+        let s = Store::open(&dir).unwrap();
+        assert_eq!(s.schema_version().unwrap(), 7);
+        let id = s.list_summaries().unwrap()[0].id;
+        let nulls: i64 = s
+            .conn
+            .query_row(
+                "SELECT count(*) FROM records WHERE snippet_body IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(nulls, 1);
+        assert_eq!(s.summary(id).unwrap().unwrap().snippet_body, None);
+    }
+
+    /// 带真实 flavor 的图片记录：内联 flavor + 大 blob flavor。
+    fn rec_image_flavors(seed: u8) -> NewRecord {
+        let big = Flavor {
+            item: 1,
+            format: "big".into(),
+            data: vec![seed; INLINE_MAX + 1],
+        };
+        rec_of(Snapshot {
+            bitmap: Some(vec![0x89, b'P', b'N', b'G', seed]),
+            flavors: vec![text_flavor("hi"), big],
+            ..Default::default()
+        })
+    }
+    #[test]
+    fn save_snippet_copies_row_flavors_and_files() {
+        let mut s = Store::open(&tmp()).unwrap();
+        let src = added(&mut s, &rec_image_flavors(1), 1);
+        std::fs::write(s.dir.join("thumbs").join(format!("{src}.png")), b"t").unwrap();
+        let out = s.save_snippet(src, "收款码", 5).unwrap();
+        let id = out.id;
+        assert!(!out.needs_thumb);
+        assert!(s.dir.join("images").join(format!("{id}.png")).exists());
+        assert!(s.dir.join("thumbs").join(format!("{id}.png")).exists());
+        let f = s.flavors(id).unwrap();
+        assert_eq!(f.len(), 2);
+        assert_eq!(f, s.flavors(src).unwrap());
+        let sum = s.summary(id).unwrap().unwrap();
+        assert_eq!(
+            (sum.title.as_str(), sum.snippet_body.as_deref(), sum.uses),
+            ("收款码", Some("图片"), 0)
+        );
+    }
+    #[test]
+    fn save_snippet_copies_large_blobs() {
+        let mut s = Store::open(&tmp()).unwrap();
+        let big = "a".repeat(INLINE_MAX + 10);
+        let src = added(
+            &mut s,
+            &rec_of(Snapshot {
+                text: Some(big.clone()),
+                flavors: vec![
+                    text_flavor(&big),
+                    Flavor {
+                        item: 1,
+                        format: "x".into(),
+                        data: b"hi".to_vec(),
+                    },
+                ],
+                ..Default::default()
+            }),
+            1,
+        );
+        let id = s.save_snippet(src, "大", 2).unwrap().id;
+        assert!(s.dir.join("blobs").join(id.to_string()).join("0").exists());
+        let f = s.flavors(id).unwrap();
+        assert!(f.len() >= 2);
+        assert_eq!(f, s.flavors(src).unwrap());
+        let file: String = s
+            .conn
+            .query_row(
+                "SELECT file FROM flavors WHERE record_id = ?1 AND file IS NOT NULL",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(file, format!("blobs/{id}/0"));
+    }
+    #[test]
+    fn save_snippet_needs_ocr_only_for_eligible_pending() {
+        let mut s = mem();
+        let t = added(&mut s, &rec("文字"), 1);
+        assert!(!s.save_snippet(t, "a", 2).unwrap().needs_ocr);
+        let i = added(&mut s, &rec_image(3), 3);
+        assert!(s.save_snippet(i, "b", 4).unwrap().needs_ocr);
+    }
+    #[test]
+    fn snippet_survives_purge_of_source() {
+        let mut s = Store::open(&tmp()).unwrap();
+        let src = added(&mut s, &rec_image_flavors(1), 1);
+        std::fs::write(s.dir.join("thumbs").join(format!("{src}.png")), b"t").unwrap();
+        let id = s.save_snippet(src, "x", 2).unwrap().id;
+        s.soft_delete(&[src], 3).unwrap();
+        s.purge_all_soft_deleted().unwrap();
+        assert_eq!(s.flavors(id).unwrap().len(), 2);
+        assert!(s.dir.join("images").join(format!("{id}.png")).exists());
+        assert!(s.dir.join("thumbs").join(format!("{id}.png")).exists());
+        assert!(s.dir.join("blobs").join(id.to_string()).join("1").exists());
+    }
+    #[test]
+    fn snippet_search_excludes_app_and_source_title() {
+        let mut s = mem();
+        let src = added(
+            &mut s,
+            &rec_of(Snapshot {
+                text: Some("hello".into()),
+                source: Some(AppInfo {
+                    id: "wx".into(),
+                    name: "微信".into(),
+                }),
+                ..Default::default()
+            }),
+            1,
+        );
+        let sn = s.save_snippet(src, "签名", 2).unwrap().id;
+        assert_eq!(ids(&s, "微信"), vec![src]);
+        assert!(ids(&s, "签名").contains(&sn));
+        let shot = added(&mut s, &rec_image(2), 3);
+        let sn2 = s.save_snippet(shot, "收款码", 4).unwrap().id;
+        let hits = ids(&s, "截图");
+        assert!(hits.contains(&shot) && !hits.contains(&sn2));
+    }
+    #[test]
+    fn save_snippet_rejects_deleted_source() {
+        let mut s = mem();
+        let src = added(&mut s, &rec("x"), 1);
+        s.soft_delete(&[src], 2).unwrap();
+        assert!(s.save_snippet(src, "n", 3).is_err());
+    }
+    #[test]
+    fn cleanup_paths_skip_snippets() {
+        let mut s = mem();
+        let sid = s.create_snippet("a", "b", 0).unwrap();
+        for i in 0..3 {
+            added(&mut s, &rec(&format!("h{i}")), 1 + i);
+        }
+        assert_eq!(s.count_unpinned().unwrap(), 3);
+        assert_eq!(s.prune_preview(Some(7), 1, 30 * DAY_MS).unwrap(), 3);
+        assert!(
+            s.prune_retention(Some(7), 30 * DAY_MS)
+                .unwrap()
+                .iter()
+                .all(|&i| i != sid)
+        );
+        for i in 0..3 {
+            let r = rec(&format!("g{i}"));
+            s.insert_or_merge(&r, 40 * DAY_MS, 1).unwrap();
+        }
+        assert!(s.prune_capacity(1).unwrap().iter().all(|&i| i != sid));
+        assert!(s.clear_unpinned().unwrap().iter().all(|&i| i != sid));
+        assert!(s.live_summary(sid).unwrap().is_some());
+    }
+    #[test]
+    fn save_snippet_rejects_snippet_source() {
+        let mut s = mem();
+        let sid = s.create_snippet("a", "b", 0).unwrap();
+        assert!(s.save_snippet(sid, "n", 1).is_err());
+    }
+    #[test]
+    fn cleanup_skips_snippet_even_if_unpinned() {
+        let mut s = mem();
+        let sid = s.create_snippet("a", "b", 0).unwrap();
+        s.conn
+            .execute("UPDATE records SET pinned = 0 WHERE id = ?1", [sid])
+            .unwrap();
+        assert_eq!(s.count_unpinned().unwrap(), 0);
+        assert_eq!(s.prune_preview(Some(7), 0, 30 * DAY_MS).unwrap(), 0);
+        assert!(s.prune_retention(Some(7), 30 * DAY_MS).unwrap().is_empty());
+        assert!(s.prune_capacity(0).unwrap().is_empty());
+        let r = rec("h");
+        let (_, removed) = s.insert_or_merge(&r, 40 * DAY_MS, 0).unwrap();
+        assert!(removed.iter().all(|&i| i != sid));
+        assert!(s.clear_unpinned().unwrap().iter().all(|&i| i != sid));
+        assert!(s.live_summary(sid).unwrap().is_some());
+    }
+    #[test]
+    fn create_snippet_is_searchable_by_name_and_content_and_pinyin() {
+        let mut s = mem();
+        let text = "fmctl batch exec --hosts @h";
+        let id = s.create_snippet("fmctl 批量执行", text, 1).unwrap();
+        let sum = s.summary(id).unwrap().unwrap();
+        assert_eq!(sum.title, "fmctl 批量执行");
+        assert_eq!(sum.snippet_body.as_deref(), Some(text));
+        // 类型按内容识别
+        assert_eq!(sum.kind, detect::kind(&text_snap(text)));
+        assert!(!sum.pinned); // 库里是 1，对外报 false
+        for q in ["fmctl", "batch exec", "plzx", "piliang"] {
+            assert_eq!(ids(&s, q), vec![id], "{q}");
+        }
+        // 名字按拼音命中时 mark 落在名字的汉字上
+        assert_eq!(
+            s.search_hits("plzx").unwrap()[0].mark.as_deref(),
+            Some("批量执行")
+        );
+    }
+
+    #[test]
+    fn capture_never_merges_into_snippet() {
+        let mut s = mem();
+        let sid = s.create_snippet("签名", "此致", 1).unwrap();
+        let hid = added(&mut s, &rec("此致"), 2);
+        assert_ne!(sid, hid);
+        assert_eq!(s.summary(sid).unwrap().unwrap().uses, 0);
+    }
+
+    #[test]
+    fn rename_drops_old_name_from_search() {
+        let mut s = mem();
+        let id = s.create_snippet("旧名字", "内容甲", 1).unwrap();
+        s.update_snippet(id, "新名字", None).unwrap();
+        assert_eq!(ids(&s, "新名字"), vec![id]);
+        assert!(ids(&s, "旧名字").is_empty());
+        assert!(ids(&s, "jiuming").is_empty());
+        assert_eq!(ids(&s, "内容甲"), vec![id]);
+    }
+
+    #[test]
+    fn update_snippet_content_rebuilds_kind_and_flavors() {
+        let mut s = mem();
+        let id = s.create_snippet("a", "纯文字", 1).unwrap();
+        s.update_snippet(id, "a", Some("https://example.com"))
+            .unwrap();
+        let sum = s.summary(id).unwrap().unwrap();
+        assert_eq!(sum.kind, Kind::Link);
+        assert_eq!(sum.snippet_body.as_deref(), Some("https://example.com"));
+        assert_eq!(
+            s.flavors(id).unwrap(),
+            vec![text_flavor("https://example.com")]
+        );
+        assert_eq!(ids(&s, "example.com"), vec![id]);
+        assert!(ids(&s, "纯文字").is_empty());
+    }
+
+    #[test]
+    fn snippet_rules_reject_bad_input() {
+        let msg = |e: CoreError| match e {
+            CoreError::InvalidSettings(m) => m,
+            other => panic!("expected InvalidSettings, got {other:?}"),
+        };
+        assert_eq!(msg(snippet_name("   ").unwrap_err()), "请填写名字");
+        assert_eq!(
+            msg(snippet_name(&"字".repeat(101)).unwrap_err()),
+            "名字不能超过 100 个字"
+        );
+        assert_eq!(snippet_name("  名字 ").unwrap(), "名字");
+        let mut s = mem();
+        assert_eq!(
+            msg(s.create_snippet("a", "  \n ", 1).unwrap_err()),
+            "请填写内容"
+        );
+        let hid = added(&mut s, &rec("历史"), 1);
+        assert!(s.update_snippet(hid, "x", None).is_err());
+        assert!(s.is_snippet(hid).is_ok_and(|b| !b));
+        let sid = s.create_snippet("b", "c", 3).unwrap();
+        assert!(s.is_snippet(sid).unwrap());
+        assert!(s.set_pinned(sid, true).is_err());
+    }
+
+    #[test]
+    fn snippet_text_size_limit_matches_capture() {
+        let mut s = mem();
+        let over = "x".repeat(capture::MAX_TEXT_BYTES + 1);
+        let err = |e: CoreError| match e {
+            CoreError::InvalidSettings(m) => m,
+            other => panic!("expected InvalidSettings, got {other:?}"),
+        };
+        assert_eq!(
+            err(s.create_snippet("a", &over, 1).unwrap_err()),
+            "内容不能超过 5 MB"
+        );
+        let id = s
+            .create_snippet("a", &over[..capture::MAX_TEXT_BYTES], 1)
+            .unwrap();
+        assert_eq!(
+            err(s.update_snippet(id, "a", Some(&over)).unwrap_err()),
+            "内容不能超过 5 MB"
+        );
+    }
+
+    #[test]
+    fn editing_blob_snippet_leaves_only_new_content() {
+        let mut s = mem();
+        let big = "x".repeat(INLINE_MAX + 1);
+        let id = s.create_snippet("大", &big, 1).unwrap();
+        let old: String = s
+            .conn
+            .query_row("SELECT file FROM flavors WHERE record_id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(s.dir.join(&old).exists());
+        s.update_snippet(id, "大", Some("新内容")).unwrap();
+        assert_eq!(s.flavors(id).unwrap(), vec![text_flavor("新内容")]);
+        assert!(!s.dir.join(&old).exists());
+        // 小改大：新 blob 可读，旧内容不再出现
+        let big2 = "y".repeat(INLINE_MAX + 1);
+        s.update_snippet(id, "大", Some(&big2)).unwrap();
+        assert_eq!(s.flavors(id).unwrap(), vec![text_flavor(&big2)]);
+    }
+
+    #[test]
+    fn bump_use_always_moves_snippet() {
+        let mut s = mem();
+        let id = s.create_snippet("a", "b", 1).unwrap();
+        s.bump_use(id, false, 99).unwrap();
+        let sum = s.summary(id).unwrap().unwrap();
+        assert_eq!((sum.uses, sum.copied_at), (1, 99));
     }
 }

@@ -60,7 +60,7 @@ test('M20-2 快捷键唤起 90ms enter / 托盘单击 320ms spring / 隐藏 160m
 
 test('M20-3 选中项切换 130ms move，换类型色；按住方向键 0ms', () => {
   assert.match(ts, /function moveInd\(\{ instant = false, dur = 130, ease = EASE_MOVE \}/);
-  assert.match(ts, /ind\.dataset\.type = r\.kind;/);
+  assert.match(ts, /ind\.dataset\.type = typeOf\(r\);/);
   assert.match(ts, /const d = instant \|\| !indShown \|\| reduced\.matches \? 0 : dur;\s*ind\.style\.transition = `transform \$\{d\}ms \$\{ease\}, opacity 160ms ease`;/);
   assert.match(keymap, /if \(vert\) return \{ t: 'move', d: vert, instant: e\.repeat \};/);
   assert.match(ts, /case 'move': return move\(a\.d, a\.instant\);/);

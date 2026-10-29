@@ -48,6 +48,7 @@
 
       <div class="body">
         <div class="list" id="list" role="listbox" aria-label="剪切板历史">
+          <div class="ghead snip-bar" id="snipBar" hidden>片段<span id="snipCount"></span><button class="btn sm new-snip" type="button" id="newSnipBtn" data-act="new"><span data-icon="plus"></span>新建片段<kbd data-modk="N"></kbd></button></div>
           <div class="list-inner">
             <div class="sel-ind" id="ind" aria-hidden="true"></div>
             <div id="rows"></div>
@@ -60,6 +61,8 @@
               <button class="btn icon" type="button" id="pinBtn" aria-label="置顶" aria-pressed="false">
                 <span class="swap" data-state="a"><span data-s="a" data-icon="pin"></span><span data-s="b" data-icon="pinFill"></span></span>
               </button>
+              <button class="btn icon" type="button" id="saveSnipBtn" aria-label="存为片段" title="存为片段"><span data-icon="snip"></span></button>
+              <button class="btn icon" type="button" id="editSnipBtn" aria-label="编辑片段" title="编辑片段" hidden><span data-icon="pencil"></span></button>
               <button class="btn icon" type="button" id="delBtn" aria-label="删除"><span data-icon="trash"></span></button>
               <button class="btn primary" type="button" id="copyBtn">
                 <span class="swap" data-state="a"><span data-s="a" data-icon="copy"></span><span data-s="b" data-icon="check"></span></span><span data-verb>复制</span><kbd>Enter</kbd>
@@ -77,6 +80,7 @@
         <span class="k"><kbd class="mod"></kbd><kbd>1–9</kbd> <span data-verb="快速">快速复制</span></span>
         <span class="k"><kbd class="mod"></kbd><kbd>P</kbd> 置顶</span>
         <span class="k"><kbd class="mod"></kbd><kbd>←→</kbd> 切换分类</span>
+        <span class="k" id="multiHint" hidden><kbd class="mod"></kbd> 点击 多选</span>
         <span class="k"><kbd class="delmod" hidden>⌘</kbd><kbd class="del">Del</kbd> 删除</span>
         <span class="k" id="undoHint" hidden><kbd class="mod"></kbd><kbd>Z</kbd> 撤销</span>
         <span class="k"><kbd>Esc</kbd> <span id="escHint">隐藏</span></span>
@@ -85,9 +89,11 @@
       <div class="menu" id="menu" role="menu" aria-label="条目操作" data-open="false">
         <button type="button" role="menuitem" data-m="copy" style="--i:0"><span data-icon="copy"></span><span data-verb>复制</span><kbd>Enter</kbd></button>
         <button type="button" role="menuitem" data-m="pin" style="--i:1"><span data-icon="pin"></span><span id="mPin">置顶</span><kbd class="modp"></kbd></button>
-        <button type="button" role="menuitem" data-m="open" style="--i:2" hidden><span data-icon="link"></span><span id="mOpen"></span></button>
+        <button type="button" role="menuitem" data-m="editSnippet" style="--i:2" hidden><span data-icon="pencil"></span>编辑片段…<kbd data-modk="E"></kbd></button>
+        <button type="button" role="menuitem" data-m="open" style="--i:3" hidden><span data-icon="link"></span><span id="mOpen"></span></button>
+        <button type="button" role="menuitem" data-m="saveSnippet" style="--i:4"><span data-icon="snip"></span>存为片段…<kbd data-modk="S"></kbd></button>
         <div class="sep" role="separator"></div>
-        <button type="button" role="menuitem" data-m="del" class="danger" style="--i:3"><span data-icon="trash"></span>删除<kbd class="del">Del</kbd></button>
+        <button type="button" role="menuitem" data-m="del" class="danger" style="--i:5"><span data-icon="trash"></span><span id="mDel">删除</span><kbd class="del">Del</kbd></button>
       </div>
 
       <div class="toast" id="toast" data-open="false">
@@ -169,7 +175,11 @@
               <label class="switch"><span><b>跳过密码管理器与敏感内容</b><small>来自密码管理器或被标记为敏感的内容不会被记录</small></span><input type="checkbox" id="sensitive" name="sensitive" checked></label>
             </div>
             <div class="line" style="--i:3">
-              <span><b>历史记录</b><small id="clearNote" aria-live="polite">置顶记录会保留</small></span>
+              <span><b>片段</b><small id="snipNote" aria-live="polite">搜索名字就能粘贴出对应的内容；改名、改内容与删除在面板的“片段”分类里</small></span>
+              <button class="btn sm" type="button" id="stNewSnip"><span data-icon="plus"></span>新建片段…</button>
+            </div>
+            <div class="line" style="--i:4">
+              <span><b>历史记录</b><small id="clearNote" aria-live="polite">置顶记录与片段会保留</small></span>
               <button class="btn sm" type="button" id="clearBtn">清空历史…</button>
             </div>
           </section>
@@ -244,6 +254,37 @@
         <button class="btn" type="button" id="cfCancel">取消</button>
         <button class="btn primary" type="button" id="cfOk"></button>
       </footer>
+    </dialog>
+
+    <dialog id="snippet" aria-labelledby="snip-title">
+      <form id="snipForm" novalidate>
+        <header class="dlg-head">
+          <h2 id="snip-title">存为片段</h2>
+          <button class="btn icon ghost" type="button" data-close aria-label="关闭"><span data-icon="x"></span></button>
+        </header>
+        <div class="dlg-body">
+          <div class="field" style="--i:0">
+            <label for="snipName">名字</label>
+            <input id="snipName" maxlength="100" autocomplete="off" spellcheck="false" placeholder="例如：fmctl 批量执行" aria-describedby="snipNameHelp snipNameErr">
+            <p class="help" id="snipNameHelp">在面板里搜这个名字就能找到它，支持拼音与首字母</p>
+            <p class="err" id="snipNameErr" hidden>请填写名字</p>
+          </div>
+          <div class="field" style="--i:1" id="snipTextField">
+            <label for="snipText">内容</label>
+            <textarea id="snipText" rows="6" spellcheck="false" aria-describedby="snipTextErr"></textarea>
+            <p class="err" id="snipTextErr" hidden>请填写内容</p>
+          </div>
+          <div class="field" style="--i:1" id="snipFixedField" hidden>
+            <span class="lbl">内容</span>
+            <div class="snip-fixed" id="snipFixed"></div>
+            <p class="help">图片和文件的内容不能改，只能改名字</p>
+          </div>
+        </div>
+        <footer class="dlg-foot">
+          <button class="btn" type="button" data-close>取消</button>
+          <button class="btn primary" type="submit" id="snipSubmit">保存片段</button>
+        </footer>
+      </form>
     </dialog>
 
     <dialog id="onboard" aria-labelledby="ob-title" tabindex="-1">

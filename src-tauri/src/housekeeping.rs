@@ -26,17 +26,16 @@ pub fn start(app: AppHandle) {
     });
 }
 
-/// 撤销窗口过后，若记录仍是这次软删除则彻底删除。
-pub fn schedule_purge(app: &AppHandle, id: i64, deleted_at: i64) {
-    let app = app.clone();
+/// 撤销窗口过后，仍是这次软删除的记录彻底删除。一次删除只起一个线程，批量删除也一样（M25 规则 6）。
+pub fn schedule_purge(app: &AppHandle, ids: &[i64], deleted_at: i64) {
+    let (app, ids) = (app.clone(), ids.to_vec());
     spawn("xpaste-purge", move || {
         std::thread::sleep(UNDO_WINDOW);
-        let r = app
-            .state::<AppState>()
-            .store()
-            .purge_if_deleted_at(id, deleted_at);
-        if let Err(e) = r {
-            log::warn!("清除记录 {id} 失败：{e}");
+        let state = app.state::<AppState>();
+        for id in ids {
+            if let Err(e) = state.store().purge_if_deleted_at(id, deleted_at) {
+                log::warn!("清除记录 {id} 失败：{e}");
+            }
         }
     });
 }

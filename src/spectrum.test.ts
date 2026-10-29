@@ -7,7 +7,7 @@ import {
 } from './spectrum.ts';
 
 const R = (id: number, at: number, size = 100, kind: Kind = 'text'): RecordSummary =>
-  ({ id, kind, title: 't', app: null, copiedAt: at, uses: 0, pinned: false, size, lang: null, thumb: null, durationSec: null, ocrState: 0 });
+  ({ id, kind, title: 't', app: null, copiedAt: at, uses: 0, pinned: false, size, lang: null, thumb: null, durationSec: null, ocrState: 0, snippetBody: null });
 const now = new Date(2026, 9, 19, 12, 0).getTime();
 test('xPct_maps_24h_and_earlier_zone', () => {
   assert.equal(xPct(0), 99.4);

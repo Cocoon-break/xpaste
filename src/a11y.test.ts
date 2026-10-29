@@ -27,3 +27,26 @@ test('text_tokens_meet_contrast_in_both_themes', () => {
       for (const [fg, min] of [['--fg', 4.5], ['--muted', 4.5], ['--faint', 3]] as const)
         assert.ok(contrast(tok(b, fg), tok(b, bg)) >= min, `${theme} ${fg} 对 ${bg} 低于 ${min}`);
 });
+
+// 片段对话框与菜单项（M25 规则 5、6）
+test('snippet_dialog_is_labelled_and_fields_have_labels', () => {
+  assert.match(html, /<dialog id="snippet" aria-labelledby="snip-title">/);
+  assert.match(html, /<h2 id="snip-title">/);
+  for (const id of ['snipName', 'snipText']) {
+    assert.match(html, new RegExp(`<label for="${id}">`), `#${id} 缺少 <label for>`);
+    assert.match(html, new RegExp(`id="${id}"`), `缺少 #${id}`);
+  }
+});
+
+test('menu_has_save_and_edit_snippet_items', () => {
+  for (const m of ['saveSnippet', 'editSnippet']) assert.match(html, new RegExp(`<button[^>]*role="menuitem"[^>]*data-m="${m}"`), `菜单缺少 ${m}`);
+});
+
+// 片段色在文字上用（新建按钮、列表第二行），按正文标准 4.5 : 1 检查
+test('snippet_color_meets_contrast_in_both_themes', () => {
+  const dark = block(':root {'), lightMedia = block(':root:not([data-theme="dark"]) {'), light = block(':root[data-theme="light"] {');
+  assert.equal(tok(lightMedia, '--c-snip'), tok(light, '--c-snip'), '两个亮色块的 --c-snip 不一致');
+  for (const [theme, b] of [['暗色', dark], ['亮色', light]] as const)
+    for (const bg of ['--ink', '--pop-solid'])
+      assert.ok(contrast(tok(b, '--c-snip'), tok(b, bg)) >= 4.5, `${theme} --c-snip 对 ${bg} 低于 4.5`);
+});

@@ -1,9 +1,9 @@
 import './styles.css';
 import { attachConsole, info } from './api/log';
 import {
-  accessibilityGranted, bootstrap, clearHistory, copy, copyTextPlain, countUnpinned, deleteRecord, finishOnboarding, frontendReady, getRecord, hidePanel, installedApps, ocrProgress,
-  openUrl, overlayBegin, pickFolder, prunePreview, reocr, requestAccessibility, requestScreenCapture, revealFile, saveSettings, screenCaptureGranted, search, setDialogOpen, setPaused,
-  setPinned, undoDelete,
+  accessibilityGranted, bootstrap, clearHistory, copy, copyTextPlain, countUnpinned, createSnippet, deleteRecords, finishOnboarding, frontendReady, getRecord, hidePanel, installedApps,
+  ocrProgress, openUrl, overlayBegin, pickFolder, prunePreview, reocr, requestAccessibility, requestScreenCapture, revealFile, saveSettings, saveSnippet, screenCaptureGranted, search,
+  setDialogOpen, setPaused, setPinned, undoDelete, updateSnippet,
 } from './api/commands';
 import {
   onConfirmClear,
@@ -23,7 +23,7 @@ import {
 import type { AppError, Appearance, FileEntry, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
 import { copyToast, needsAccessibility } from './copy-status';
 import {
-  canInlinePlay, esc, FILTERS, FL, fmtBytes, fmtDateTime, fmtDur, fmtInt, hl, hlCode, host, isFav, isHttpUrl, LABEL, rel, truncate, videoChips,
+  canInlinePlay, esc, FILTERS, FL, fmtBytes, fmtDateTime, fmtDur, fmtInt, hl, hlCode, host, isFav, isHttpUrl, isSnip, LABEL, rel, truncate, videoChips,
   type Filter,
 } from './format';
 import { hotkeyFromEvent, hotkeyLabel } from './hotkey';
@@ -40,7 +40,7 @@ import {
 import { addIgnored, formToSettings, optionFromRetention, parseFrequent, parseLimit, pickerOptions, removeIgnored } from './settings-form';
 import { errorControl, revealsFocus, tabKeyTarget } from './settings-tabs';
 import {
-  armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, nextSelection, UNDO_MS, visible, type UndoState,
+  armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, nextSelection, pruneMulti, rangeIds, snippetTextChange, UNDO_MS, visible, type UndoState,
 } from './view';
 import { layout, range, ROW_H, scrollTo, topOf, type Cell } from './virtual-list';
 
@@ -69,6 +69,9 @@ const I = {
   moon: '<path d="M15.5 12.2A6 6 0 0 1 7.8 4.5a6 6 0 1 0 7.7 7.7z"/>',
   chevron: '<path d="m6 12 4-4 4 4"/>',
   monitor: '<rect x="3" y="4" width="14" height="9.5" rx="1.5"/><path d="M7.5 16.5h5M10 13.5v3"/>',
+  // 片段：书签与铅笔（M25 规则 2、6）
+  snip: '<path d="M6 3.5h8v13l-4-3-4 3z"/>',
+  pencil: '<path d="M4 16l1-4 8-8 3 3-8 8z"/><path d="M11.5 5.5l3 3"/>',
 };
 const svg = (n: keyof typeof I, cls = '') =>
   `<svg class="ic ${cls}" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n]}</svg>`;
@@ -100,7 +103,8 @@ const win = $('#win'), list = $('#list'), rowsEl = $('#rows'), ind = $('#ind'), 
 const tabs = $('#tabs'), tabsBase = $('#tabsBase'), tabsOver = $('#tabsOver');
 const ptype = $('#ptype'), pbody = $('#pbody'), pmeta = $('#pmeta'), countEl = $('#count');
 const pinBtn = $<HTMLButtonElement>('#pinBtn'), copyBtn = $<HTMLButtonElement>('#copyBtn');
-const delBtn = $<HTMLButtonElement>('#delBtn');
+const delBtn = $<HTMLButtonElement>('#delBtn'), saveSnipBtn = $<HTMLButtonElement>('#saveSnipBtn'), editSnipBtn = $<HTMLButtonElement>('#editSnipBtn');
+const snipBar = $('#snipBar');
 const menu = $('#menu'), mOpen = $<HTMLButtonElement>('[data-m="open"]'), toastEl = $('#toast'), toastMsg = $('#toastMsg'), undoBtn = $<HTMLButtonElement>('#undoBtn'), toastAct = $<HTMLButtonElement>('#toastAct'), pauseBtn = $('#pauseBtn');
 const spBars = $('#spBars'), spMirror = $('#spMirror'), spTrack = $('#spTrack'), spBeam = $('#spBeam'), spTip = $('#spTip');
 const spMini = $('#spMini'), spPresets = $('#spPresets');
@@ -116,6 +120,8 @@ const S = {
   // 拼音命中的原汉字：高亮用它代替查询词
   marks: new Map<number, string>(),
   sel: null as number | null,
+  /** 多选（只在“片段”分类，M25 规则 6）：空或至少 2 条 */
+  multi: new Set<number>(),
   detail: null as RecordDetail | null,
   undo: null as UndoState,
   removing: new Set<number>(),
@@ -148,9 +154,13 @@ async function paintVerb() {
 // —— 数据视图 ——
 const favMin = () => S.settings.frequentMinUses;
 const vis = () => visible(S.records, S.filter, S.matchIds, favMin());
-const matches = (r: RecordSummary) => inFilter(r, S.filter, favMin()) && (S.matchIds === null || S.matchIds.has(r.id));
+const matches = (r: RecordSummary) => inFilter(r, S.filter, favMin(), S.matchIds !== null) && (S.matchIds === null || S.matchIds.has(r.id));
 const rowEl = (id: number | null) => (id === null ? null : document.getElementById('opt-' + id));
 const source = (r: RecordSummary) => r.app?.name || '未知来源';
+/** 行、选中光标与预览标签的类型色：片段统一用片段色（M25 规则 2） */
+const typeOf = (r: RecordSummary) => (isSnip(r) ? 'snip' : r.kind);
+const modKey = () => (S.platform.os === 'macos' ? '⌘' : 'Ctrl');
+const newSnipHTML = () => `<button class="btn sm new-snip" type="button" data-act="new">${svg('plus')}新建片段<kbd>${modKey()} N</kbd></button>`;
 
 const thumb = (r: RecordSummary) =>
   r.kind === 'image' && r.thumb
@@ -159,7 +169,9 @@ const thumb = (r: RecordSummary) =>
   : `<span class="thumb">${svg(r.kind)}${r.kind === 'file' && r.ocrState === 1 ? '<span class="ocr-badge" aria-hidden="true">T</span>' : ''}</span>`;
 
 const metaLine = (r: RecordSummary) => {
-  const parts = [esc(source(r)), rel(r.copiedAt), r.kind === 'video' && r.durationSec !== null ? fmtDur(r.durationSec) : fmtBytes(r.size)];
+  // 片段：内容摘要 + 用过 N 次，不显示来源与时间（M25 规则 2）
+  const parts = r.snippetBody !== null ? [`<span class="snip-of">${hl(r.snippetBody, S.q)}</span>`, `用过 ${fmtInt(r.uses)} 次`]
+    : [esc(source(r)), rel(r.copiedAt), r.kind === 'video' && r.durationSec !== null ? fmtDur(r.durationSec) : fmtBytes(r.size)];
   if (isFav(r, favMin())) parts.push(`<span class="uses">用过 ${fmtInt(r.uses)} 次</span>`);
   // 命中来自图中文字时片段放最前：它是这一行出现在结果里的原因，放末尾在常见宽度下关键词会被省略号截掉
   const snip = S.snippets.get(r.id);
@@ -168,18 +180,19 @@ const metaLine = (r: RecordSummary) => {
 };
 
 const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id === S.newId) => `
-    <div class="item${isNew ? ' is-new' : ''}${S.removing.has(r.id) ? ' is-removing' : ''}${stagger && i < 12 ? ' stg' : ''}" data-id="${r.id}" style="--i:${i}">
-      <div class="row" role="option" id="opt-${r.id}" aria-selected="false" aria-posinset="${i + 1}" aria-label="${esc(r.title)}，${LABEL[r.kind]}${S.snippets.has(r.id) ? `，识别文字中含“${esc(S.snippets.get(r.id))}”` : ''}" data-type="${r.kind}">
+    <div class="item${isNew ? ' is-new' : ''}${S.removing.has(r.id) ? ' is-removing' : ''}${S.multi.has(r.id) ? ' is-multi' : ''}${stagger && i < 12 ? ' stg' : ''}" data-id="${r.id}" style="--i:${i}">
+      <div class="row" role="option" id="opt-${r.id}" aria-selected="false" aria-posinset="${i + 1}" aria-label="${esc(r.title)}，${isSnip(r) ? '片段，' : ''}${LABEL[r.kind]}${S.snippets.has(r.id) ? `，识别文字中含“${esc(S.snippets.get(r.id))}”` : ''}" data-type="${typeOf(r)}">
         <div class="row-in">
           ${thumb(r)}
           <div class="main">
-            <div class="title${r.kind === 'code' ? ' mono' : ''}">${hl(r.title, S.marks.get(r.id) ?? S.q)}</div>
+            <div class="title${r.kind === 'code' && !isSnip(r) ? ' mono' : ''}">${hl(r.title, S.marks.get(r.id) ?? S.q)}</div>
             <div class="meta">${metaLine(r)}</div>
           </div>
           <div class="tail">
             ${r.pinned ? `<span class="pin-mark">${svg('pinFill')}</span>` : ''}${i < 9 ? `<kbd class="idx">${i + 1}</kbd>` : ''}
             <span class="qa" aria-hidden="true">
-              <button type="button" tabindex="-1" data-qa="pin" title="${r.pinned ? '取消置顶' : '置顶'}">${svg(r.pinned ? 'pinFill' : 'pin')}</button>
+              ${isSnip(r) ? `<button type="button" tabindex="-1" data-qa="edit" title="编辑片段">${svg('pencil')}</button>`
+                : `<button type="button" tabindex="-1" data-qa="pin" title="${r.pinned ? '取消置顶' : '置顶'}">${svg(r.pinned ? 'pinFill' : 'pin')}</button>`}
               <button type="button" tabindex="-1" data-qa="copy" title="${copyVerb(S.canPaste)}">${svg('copy')}</button>
             </span>
           </div>
@@ -187,7 +200,10 @@ const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id ===
       </div>
     </div>`;
 
-function setCount(n: number, total: number) {
+/** 总数（M25 规则 2）：“片段”分类是片段数，“全部”搜索时是历史数加片段数，其余是历史数 */
+function setCount(n: number) {
+  const c = counts(S.records, favMin());
+  const total = S.filter === 'snip' ? c.snip : S.filter === 'all' && S.matchIds ? c.all + c.snip : c.all;
   const html = `${fmtInt(n)}<small>/ ${fmtInt(total)}</small>`;
   if (countEl.innerHTML === html) return;
   countEl.innerHTML = html;
@@ -200,9 +216,10 @@ function emptyHTML() {
   const qq = S.q.trim(), f = S.filter;
   const msg = qq ? `没有匹配“${esc(qq)}”的${f === 'all' ? '' : FL[f]}记录`
     : f === 'fav' ? `还没有常用记录。同一条内容复制 ${favMin()} 次以上就会出现在这里`
+    : f === 'snip' ? '还没有片段。在历史记录上右键“存为片段…”，或在设置里新建'
     : `还没有${f === 'all' ? '' : FL[f]}记录，复制一次就会出现在这里`;
   return `<div class="empty"><span class="ring">${svg(qq ? 'search' : f === 'fav' ? 'star' : 'inbox')}</span><p>${msg}</p>
-      ${qq || f !== 'all' ? '<button class="btn sm" type="button" data-act="reset">清除搜索与筛选</button>' : ''}</div>`;
+      ${f === 'snip' && !qq ? newSnipHTML() : qq || f !== 'all' ? '<button class="btn sm" type="button" data-act="reset">清除搜索与筛选</button>' : ''}</div>`;
 }
 
 // —— 虚拟列表 ——
@@ -210,8 +227,10 @@ function emptyHTML() {
 // 一次性的入场类（stg、is-new）不计入比较，之后的重绘不会打断动画
 type Painted = { el: HTMLElement; h: string; top: number };
 let painted = new Map<string, Painted>();
-// cell 的 top 相对 .list-inner，滚动容器还有上内边距
-const padTop = () => parseFloat(getComputedStyle(list).paddingTop) || 0;
+// cell 的 top 相对 .list-inner，滚动容器还有上内边距；“片段”分类的吸顶栏在 .list-inner 之前，也算进去。
+// 吸顶后它盖住视口顶部 barH() 高，选中行滚动时按缩小后的视口算（select）
+const barH = () => (snipBar.hidden ? 0 : snipBar.offsetHeight);
+const padTop = () => (parseFloat(getComputedStyle(list).paddingTop) || 0) + barH();
 // 正在删除的行收起后，它下方的 cell 显示位置上移一行（设计 9.4）。原型靠 grid 收起把邻居推上去，
 // 这里 .vrow 绝对定位，位置显式算：S.cells 不变，删除计时器到点重排时 layout 给出的 top 与这里一致。
 // 滚到底时重排会把 scrollTop 夹紧到新的最大值（原型是收起过程中逐渐夹紧）：超出的 over 让所有 cell
@@ -239,7 +258,13 @@ function paintBeam(row: HTMLElement | null) {
 }
 /** `glide`：已渲染的元素位置变了就用这条 transition 过去（插入 / 删除时下方的行补位）；transitionend 后清掉。
  *  `glideBusy`：元素正在补位途中（连续删除）时改用它，不再空停一段延迟 */
+// 多选时行尾快捷按钮收起、Esc 提示改成取消选择（M25 规则 6）；多选的每次变化都会走 paintRows 或空列表
+function paintMultiUi() {
+  list.classList.toggle('multi', S.multi.size >= 2);
+  escHintEl.textContent = escHint(!!S.q, S.multi.size >= 2);
+}
 function paintRows({ stagger = false, glide = '', glideBusy = '' } = {}) {
+  paintMultiUi();
   const [a, b] = range(S.cells, list.scrollTop - padTop(), list.clientHeight);
   const next = new Map<string, Painted>();
   const gone = goneOf();
@@ -309,7 +334,13 @@ const schedulePaint = () => {
 function renderList({ scroll = false, stagger = false, base = 0, glide = '' } = {}) {
   const v = vis();
   S.count = v.length;
-  setCount(v.length, S.records.size);
+  setCount(v.length);
+  // 多选只留可见的（搜索、删除之后）；“片段”分类只有一个分组，组名换成吸顶栏（M25 规则 2）
+  if (S.multi.size) S.multi = pruneMulti(S.multi, new Map(v.map((r) => [r.id, r])));
+  const snip = S.filter === 'snip';
+  snipBar.hidden = !snip || !v.length;
+  $('#snipCount').textContent = String(v.length);
+  $('#multiHint').hidden = !snip;
   rowsEl.style.setProperty('--base', base + 'ms');
   if (!v.length) {
     S.cells = [];
@@ -317,10 +348,11 @@ function renderList({ scroll = false, stagger = false, base = 0, glide = '' } = 
     painted.clear();
     rowsEl.style.height = '';
     rowsEl.innerHTML = emptyHTML();
+    paintMultiUi();
     select(null);
     return;
   }
-  ({ cells: S.cells, total: S.total } = layout(groups(v, S.filter)));
+  ({ cells: S.cells, total: S.total } = layout(groups(v, S.filter), !snip));
   rowsEl.querySelector('.empty')?.remove();
   rowsEl.style.height = S.total + 'px';
   paintRows({ stagger, glide });
@@ -340,7 +372,7 @@ function moveInd({ instant = false, dur = 130, ease = EASE_MOVE }: { instant?: b
     indShown = false;
     return;
   }
-  ind.dataset.type = r.kind;
+  ind.dataset.type = typeOf(r);
   const d = instant || !indShown || reduced.matches ? 0 : dur;
   ind.style.transition = `transform ${d}ms ${ease}, opacity 160ms ease`;
   ind.style.transform = `translateY(${t}px)`;
@@ -355,7 +387,7 @@ function select(id: number | null, { scroll = false, glide = true, instant = fal
   S.sel = id;
   const top = id === null ? undefined : shownTop(id);
   if (scroll && top !== undefined) {
-    const st = scrollTo(top + padTop(), ROW_H, list.scrollTop, list.clientHeight);
+    const st = scrollTo(top + padTop() - barH(), ROW_H, list.scrollTop, list.clientHeight - barH());
     // 先同步滚动并重绘，保证 aria-activedescendant 指向的行已在 DOM 中
     if (st !== list.scrollTop) {
       list.scrollTop = st;
@@ -366,17 +398,42 @@ function select(id: number | null, { scroll = false, glide = true, instant = fal
   moveInd({ instant: !glide || instant, dur: indDur, ease: indEase });
   renderPreview(changed && fade && !instant);
   const r = id === null ? undefined : S.records.get(id);
-  // 24 小时外的记录不移窗口，光束隐藏。setWin 的重绘已按 smooth 摆好光束：再画一次会让同一帧里先 0ms 后 360ms，键盘出窗也滑
-  if (pan && spWin && r && r.copiedAt >= spNow - DAY && xOf(spWin, r.copiedAt, spNow) === null) setWin(centerWin(r.copiedAt, spanOf(spWin), spNow), pan === 'smooth');
+  // 片段不在频谱上（M25 规则 8），不移窗口。24 小时外的记录不移窗口，光束隐藏。setWin 的重绘已按 smooth 摆好光束：再画一次会让同一帧里先 0ms 后 360ms，键盘出窗也滑
+  if (pan && spWin && r && !isSnip(r) && r.copiedAt >= spNow - DAY && xOf(spWin, r.copiedAt, spNow) === null) setWin(centerWin(r.copiedAt, spanOf(spWin), spNow), pan === 'smooth');
   else paintSpectrumSel(!instant);
 }
 
-// 键盘上下移动
-function move(d: 1 | -1, instant: boolean) {
+// 多选变了：不到 2 条不算多选；重绘行上的勾与预览（批量预览或单条）
+function setMulti() {
+  if (S.multi.size < 2) S.multi.clear();
+  paintRows();
+  renderPreview();
+}
+// 鼠标多选（“片段”分类，M25 规则 6）：Mod 点击切换，Shift 点击从选中行连选到这一行；之后选中跟到这一行
+function multiTo(id: number, range: boolean) {
+  const v = vis().filter((r) => !S.removing.has(r.id));
+  if (range && S.sel !== null) rangeIds(v, S.sel, id).forEach((x) => S.multi.add(x));
+  else {
+    if (!S.multi.size && S.sel !== null) S.multi.add(S.sel);
+    if (!S.multi.delete(id)) S.multi.add(id);
+  }
+  if (S.multi.size < 2) S.multi.clear();
+  paintRows();
+  select(id, { indDur: 180 });
+}
+// 键盘上下移动；extend（“片段”分类里 Shift + ↑ / ↓）把当前行和移到的那行加进多选，不带 Shift 的移动退出多选（M25 规则 6）
+function move(d: 1 | -1, instant: boolean, extend = false) {
   const v = vis().filter((r) => !S.removing.has(r.id));
   if (!v.length) return;
   const i = v.findIndex((r) => r.id === S.sel);
   const n = Math.max(0, Math.min(v.length - 1, i + d));
+  const had = S.multi.size;
+  if (extend) {
+    if (S.sel !== null) S.multi.add(S.sel);
+    S.multi.add(v[n].id);
+    if (S.multi.size < 2) S.multi.clear();
+  } else S.multi.clear();
+  if (extend || had) paintRows();
   select(v[n].id, { scroll: true, instant, pan: 'instant' });
 }
 
@@ -461,7 +518,9 @@ function bodyHTML(d: RecordDetail): string {
 }
 
 function metaHTML(r: RecordSummary, d: RecordDetail | null) {
-  const meta: [string, string][] = [['来源', source(r)], ['复制于', fmtDateTime(r.copiedAt)], ['大小', fmtBytes(r.size)], ['使用', `${fmtInt(r.uses)} 次`]];
+  // 片段没有来源与复制时间，换成上次使用（M25 规则 4）
+  const meta: [string, string][] = isSnip(r) ? [['上次使用', fmtDateTime(r.copiedAt)]] : [['来源', source(r)], ['复制于', fmtDateTime(r.copiedAt)]];
+  meta.push(['大小', fmtBytes(r.size)], ['使用', `${fmtInt(r.uses)} 次`]);
   if (r.kind === 'video' && r.durationSec !== null) meta.push(['时长', fmtDur(r.durationSec)]);
   if (d) {
     const t = d.text ?? '', more = d.truncated ? '+' : '';
@@ -483,18 +542,39 @@ function metaHTML(r: RecordSummary, d: RecordDetail | null) {
 // 最近 20 条详情缓存，命中时同步渲染；记录更新、删除、面板隐藏时作废
 let detailSeq = 0, bodyFor: number | null = null;
 const details = new Map<number, RecordDetail>();
+// 片段的名字大字放在正文最上方，高亮与列表标题一致（M25 规则 4）
+const snipNameHTML = (r: RecordSummary) => `<h3 class="p-snip-name">${hl(r.title, S.marks.get(r.id) ?? S.q)}</h3>`;
 function showBody(d: RecordDetail | null, fade: boolean) {
   S.detail = d;
   pbody.style.opacity = pbody.style.filter = '';
-  pbody.innerHTML = d ? bodyHTML(d) : '';
-  pbody.scrollTop = 0;
   const cur = d && S.records.get(d.id);
+  pbody.innerHTML = d ? (cur && isSnip(cur) ? snipNameHTML(cur) : '') + bodyHTML(d) : '';
+  pbody.scrollTop = 0;
   if (cur) pmeta.innerHTML = metaHTML(cur, d);
   if (fade) fx(pbody, [{ opacity: 0.35, transform: 'translateY(4px)', filter: 'blur(2px)' }, { opacity: 1, transform: 'none', filter: 'blur(0)' }], { duration: 180, easing: EASE_ENTER });
 }
 function renderPreview(fade = false) {
   const r = S.sel === null ? undefined : S.records.get(S.sel);
-  [pinBtn, copyBtn, delBtn].forEach((b) => (b.disabled = !r));
+  // 头部按钮（M25 规则 4）：历史是置顶、存为片段、删除、复制；片段是编辑、删除、复制。多选时只剩删除（规则 6）
+  const bulk = S.multi.size >= 2, snip = !!r && isSnip(r);
+  [pinBtn, copyBtn, delBtn, saveSnipBtn, editSnipBtn].forEach((b) => (b.disabled = !r || (bulk && b !== delBtn)));
+  pinBtn.hidden = saveSnipBtn.hidden = snip;
+  editSnipBtn.hidden = !snip;
+  if (bulk) {
+    // 批量预览：列出名字，删除与取消选择；离开多选时重取正文
+    ++detailSeq;
+    bodyFor = null;
+    S.detail = null;
+    const its = vis().filter((x) => S.multi.has(x.id)), n = its.length;
+    $('#selHint').textContent = `已选 ${n} 个片段`;
+    ptype.innerHTML = `<span class="tchip" data-type="snip">${svg('snip')}已选 ${n} 个片段</span>`;
+    pbody.style.opacity = pbody.style.filter = '';
+    pbody.innerHTML = `<div class="bulk"><ul>${its.map((x) => `<li>${esc(x.title)}</li>`).join('')}</ul>
+      <div class="row-act"><button class="btn danger" type="button" data-bulk="del">${svg('trash')}删除 ${n} 个片段</button><button class="btn" type="button" data-bulk="clear">取消选择</button></div>
+      <p class="help">删除后 5 秒内可以撤销。片段只能在这里删除，“清空历史”不会动它们。</p></div>`;
+    pmeta.innerHTML = '';
+    return;
+  }
   $('#selHint').textContent = r ? `已选中：${truncate(r.title, 18)}` : '没有选中的记录';
   if (!r) {
     ++detailSeq;
@@ -506,12 +586,18 @@ function renderPreview(fade = false) {
     pbody.innerHTML = '<div class="p-empty">在左侧选择一条记录查看完整内容</div>';
     return;
   }
-  ptype.innerHTML = `<span class="tchip" data-type="${r.kind}">${svg(r.kind)}${LABEL[r.kind]}</span>`
+  ptype.innerHTML = (snip ? `<span class="tchip" data-type="snip">${svg('snip')}片段</span>` : '')
+    + `<span class="tchip" data-type="${r.kind}">${svg(r.kind)}${LABEL[r.kind]}</span>`
     + (isFav(r, favMin()) ? `<span class="tchip" data-type="fav">${svg('star')}常用</span>` : '')
     + (r.lang ? `<span class="chip">${esc(r.lang)}</span>` : '');
   setPin(r.pinned, true);
   pmeta.innerHTML = metaHTML(r, S.detail?.id === r.id ? S.detail : null);
-  if (bodyFor === r.id) return;
+  if (bodyFor === r.id) {
+    // 搜索词变了、选中没变：只换名字的高亮
+    const nm = pbody.querySelector('.p-snip-name');
+    if (nm && snip) nm.outerHTML = snipNameHTML(r);
+    return;
+  }
   bodyFor = r.id;
   const seq = ++detailSeq;
   const hit = details.get(r.id);
@@ -591,7 +677,7 @@ function renderSpectrum(freshId?: number, stat = true) {
   if (spWin) spWin = spWin.pinned ? followNow(spWin, spNow) : clampWin(spWin.start, spWin.end, spNow);
   // 统计不依赖轨道宽度，收起时照常更新
   if (stat) {
-    const { count, peak } = spectrumStat(S.records.values(), spNow);
+    const { count, peak } = spectrumStat([...S.records.values()].filter((r) => !isSnip(r)), spNow);
     $('#spStat').textContent = `24 小时内复制 ${fmtInt(count)} 次${peak ? ` · 最忙 ${peak.hour} 点（${peak.n} 次）` : ''}`;
   }
   $('#spDesc').textContent = spWin ? winLabel(spWin, hf.format) : SP_DESC;
@@ -599,7 +685,8 @@ function renderSpectrum(freshId?: number, stat = true) {
   for (const b of spPresets.querySelectorAll<HTMLElement>('[data-span]')) b.classList.toggle('on', +b.dataset.span! === span);
   if (spCollapsed()) return;
   // 删除中的记录不参与布局，否则重绘会把正在收起的光柱拉回来
-  const recs = [...S.records.values()].filter((r) => !S.removing.has(r.id));
+  // 片段不画（M25 规则 8）
+  const recs = [...S.records.values()].filter((r) => !S.removing.has(r.id) && !isSnip(r));
   const next = layoutBars(recs, spNow, spTrack.clientWidth, matches, freshId, spWin);
   // 倒影不带 .on / .fresh
   const base = (b: Layout['bars'][number]) => `bar${b.ids.length > 1 ? ' multi' : ''}${b.dim ? ' dim' : ''}`;
@@ -669,7 +756,8 @@ function paintMiniDots(recs: RecordSummary[]) {
 // 只换上一根和这一根的 .on；变暗由布局决定，筛选变化时重绘
 function paintSpectrumSel(animate = true) {
   if (spCollapsed()) return;
-  const r = S.sel === null ? undefined : S.records.get(S.sel);
+  // 片段不画在频谱上（M25 规则 8）：选中片段时光束隐藏
+  const sel = S.sel === null ? undefined : S.records.get(S.sel), r = sel && !isSnip(sel) ? sel : undefined;
   const col = r && sp.colOf.get(r.id);
   const b = col === undefined ? null : spBars.children[col] ?? null;
   if (b !== spOn) {
@@ -830,9 +918,9 @@ const tabColor = (k: string) => (k === 'all' ? 'var(--beam)' : `var(--c-${k})`);
 function renderTabs(instant: boolean) {
   const c = counts(S.records, favMin());
   const html = (real: boolean) => FILTERS.map(([k, l]) => {
-    const mark = k === 'fav' ? svg('star', 'star') : '<i class="dot"></i>';
+    const mark = k === 'fav' ? svg('star', 'star') : k === 'snip' ? svg('snip', 'star') : '<i class="dot"></i>';
     const tag = real ? `button type="button" class="tab" data-f="${k}" aria-pressed="${S.filter === k}"` : 'span class="tab"';
-    return `<${tag} data-type="${k}">${mark}${l}<span class="n">${c[k]}</span></${real ? 'button' : 'span'}>${k === 'fav' ? '<span class="tabs-sep"></span>' : ''}`;
+    return `<${tag} data-type="${k}">${mark}${l}<span class="n">${c[k]}</span></${real ? 'button' : 'span'}>${k === 'snip' ? '<span class="tabs-sep"></span>' : ''}`;
   }).join('');
   const ae = document.activeElement as HTMLElement | null;
   const refocus = ae?.classList.contains('tab') ? ae.dataset.f : undefined;
@@ -870,6 +958,7 @@ function persistFilter() { persistUi({ lastFilter: S.filter }); }
 function setFilter(k: Filter, instant: boolean) {
   if (S.filter === k) return;
   S.filter = k;
+  S.multi.clear();
   persistFilter();
   renderTabs(instant);
   // M06 规则 6：切换分类后回到顶部并选中第一条
@@ -921,7 +1010,7 @@ function runSearch(v: string, opts: { stagger?: boolean; base?: number; timed?: 
   typedSearch.cancel();
   S.q = v;
   clearQ.hidden = !v;
-  escHintEl.textContent = escHint(!!v);
+  escHintEl.textContent = escHint(!!v, S.multi.size >= 2);
   return new Promise((settled) =>
     fetchMatches(v, () => {
       list.scrollTop = 0;
@@ -970,14 +1059,15 @@ function toast(msg: string, { undo = false, icon = 'check' as keyof typeof I, ac
 let copyTimer = 0;
 function copyRecord(id: number) {
   const before = S.records.get(id);
-  if (!before || S.removing.has(id)) return;
+  // 多选时复制不可用（M25 规则 6）
+  if (!before || S.removing.has(id) || S.multi.size >= 2) return;
   // 粘贴成功由后端直接隐藏面板（无淡出）；只复制或失败时面板不动
   copy(id, true).then(
     (res) => {
       const cur = S.records.get(id);
       // 事件可能还没到；并发的置顶、补全更新也不会让次数变少
       const uses = Math.max(cur?.uses ?? 0, before.uses + 1);
-      const fav = !isFav(before, favMin()) && isFav({ uses }, favMin());
+      const fav = !isFav(before, favMin()) && isFav({ uses, snippetBody: before.snippetBody }, favMin());
       const msg = copyToast(res, S.platform.os, fav ? uses : null);
       if (msg) {
         toast(msg, {
@@ -1007,7 +1097,8 @@ function copyRecord(id: number) {
 // 乐观更新，失败回滚；鼠标操作时 FLIP 平移到新分组，起点或终点没渲染就直接到位
 function togglePin(id: number, animate: boolean) {
   const r = S.records.get(id);
-  if (!r || S.removing.has(id)) return;
+  // 片段不能置顶（M25 规则 8）
+  if (!r || isSnip(r) || S.removing.has(id)) return;
   const on = !r.pinned;
   const setLocal = (pinned: boolean) => {
     const cur = S.records.get(id);
@@ -1049,50 +1140,64 @@ function togglePin(id: number, animate: boolean) {
   );
 }
 
-// 先播放滑出，后端确认后再从列表移除；records-removed 对 S.removing 中的 id 不做处理
-function remove(id: number) {
-  const r = S.records.get(id);
-  if (!r || S.removing.has(id)) return;
-  const next = nextSelection(vis().filter((x) => !S.removing.has(x.id)), id);
-  const p = painted.get('r' + id), c = S.cells.find((c) => c.kind === 'row' && c.id === id);
-  S.removing.add(id);
-  ownEcho.add(id);
-  if (p && c?.kind === 'row') {
-    // 直接加类让过渡播放；同步 p.h，避免下一次重绘整行替换
-    p.el.querySelector('.item')?.classList.add('is-removing');
-    p.h = rowHTML(r, c.index, false, false);
+// 先播放滑出，后端确认后再从列表移除；records-removed 对 S.removing 中的 id 不做处理。
+// 批量删除（片段多选，M25 规则 6）一次调用、一次撤销，各行同时收起
+function remove(ids: number[]) {
+  ids = ids.filter((id) => S.records.has(id) && !S.removing.has(id));
+  if (!ids.length) return;
+  const rs = ids.map((id) => S.records.get(id)!);
+  // 下一个选中：最后一条被删行之后第一条留下的，否则之前最近的一条
+  const v = vis().filter((x) => !S.removing.has(x.id));
+  const at = new Map(v.map((x, i) => [x.id, i]));
+  const last = ids.reduce((a, id) => ((at.get(id) ?? -1) > (at.get(a) ?? -1) ? id : a));
+  const next = nextSelection(v.filter((x) => x.id === last || !ids.includes(x.id)), last);
+  // 先退出多选再同步 p.h：之后的重绘与之相同，不会整行替换打断滑出
+  S.multi.clear();
+  for (const [i, id] of ids.entries()) {
+    const p = painted.get('r' + id), c = S.cells.find((c) => c.kind === 'row' && c.id === id);
+    S.removing.add(id);
+    ownEcho.add(id);
+    if (p && c?.kind === 'row') {
+      // 直接加类让过渡播放；同步 p.h，避免下一次重绘整行替换
+      p.el.querySelector('.item')?.classList.add('is-removing');
+      p.h = rowHTML(rs[i], c.index, false, false);
+    }
+    // 光柱只代表这一条时才收起；同列还有别的记录就等删除后的重绘（片段没有光柱）
+    const col = sp.colOf.get(id);
+    const one = col !== undefined && sp.bars[col].ids.length === 1;
+    // 倒影随正像一起收起
+    for (const layer of [spBars, spMirror])
+      fx(one ? layer.children[col] ?? null : null, [{ transform: 'scaleY(1)', opacity: 1 }, { transform: 'scaleY(0)', opacity: 0 }], { duration: 260, easing: EASE_MOVE, fill: 'forwards' });
   }
-  // 下方的行与 .item.is-removing 的收起同步上移一行（滚到底时整体按夹紧量修正，见 goneOf）
+  // 下方的行与 .item.is-removing 的收起同步上移（滚到底时整体按夹紧量修正，见 goneOf）
   paintRows({ glide: `transform 240ms ${EASE_MOVE} 100ms`, glideBusy: `transform 240ms ${EASE_MOVE}` });
-  // 光柱只代表这一条时才收起；同列还有别的记录就等删除后的重绘
-  const col = sp.colOf.get(id);
-  const one = col !== undefined && sp.bars[col].ids.length === 1;
-  // 倒影随正像一起收起
-  for (const layer of [spBars, spMirror])
-    fx(one ? layer.children[col] ?? null : null, [{ transform: 'scaleY(1)', opacity: 1 }, { transform: 'scaleY(0)', opacity: 0 }], { duration: 260, easing: EASE_MOVE, fill: 'forwards' });
   // 光标目标是下一条补位后的位置：同组时就是被删行的位置，光标停住、下一条滑进来（原型 1384–1393）
   select(next, { scroll: true, indDur: 340 });
-  deleteRecord(id).then(
+  deleteRecords(ids).then(
     () => {
       setTimeout(() => {
-        if (!S.removing.delete(id)) return;
-        S.records.delete(id);
+        const done = ids.filter((id) => S.removing.delete(id));
+        if (!done.length) return;
+        done.forEach((id) => S.records.delete(id));
         renderTabs(true);
         renderList();
         renderSpectrum();
       }, reduced.matches ? 0 : 360);
-      toast(`已删除“${truncate(r.title, 14)}”`, { undo: true, icon: 'trash' });
-      S.undo = armUndo(S.undo, id, r.title, Date.now());
+      const r = rs[0];
+      toast(ids.length > 1 ? `已删除 ${ids.length} 个片段` : `已删除${isSnip(r) ? '片段' : ''}“${truncate(r.title, 14)}”`, { undo: true, icon: 'trash' });
+      S.undo = armUndo(S.undo, ids, r.title, Date.now());
       paintUndoHint();
       setTimeout(paintUndoHint, UNDO_MS);
     },
     (err: AppError) => {
-      S.removing.delete(id);
-      ownEcho.delete(id);
+      ids.forEach((id) => {
+        S.removing.delete(id);
+        ownEcho.delete(id);
+      });
       // 重绘把光柱补回来：没重建过时原地路径取消收起动画，删除途中重建过时按新布局补上
       renderSpectrum();
       paintRows({ glide: ENTER_GLIDE });
-      select(id, { scroll: true, pan: 'smooth' });
+      select(ids[0], { scroll: true, pan: 'smooth' });
       toast(err.message);
     },
   );
@@ -1101,21 +1206,23 @@ function remove(id: number) {
 // 自己删除后后端回发的 records-removed，收到一次就消掉
 const ownEcho = new Set<number>();
 
-// 恢复后后端发 record-added，由 handlers.added 插入并选中
-let restoring: number | null = null;
+// 恢复后后端为每条发一次 record-added，由 handlers.added 插入；批量撤销时第一条到达的被选中并滚到可见（M12）
+let restoring = new Set<number>(), restoredSel = false;
 function undo() {
   const u = S.undo;
   if (!u || !canUndo(u, Date.now())) return;
   S.undo = null;
   paintUndoHint();
-  restoring = u.id;
-  undoDelete(u.id).then(
-    (ok) => {
-      if (!ok) restoring = null;
+  restoring = new Set(u.ids);
+  restoredSel = false;
+  undoDelete(u.ids).then(
+    (n) => {
+      const ok = n > 0;
+      if (!ok) restoring.clear();
       toast(ok ? '已恢复' : '已无法恢复');
     },
     (err: AppError) => {
-      restoring = null;
+      restoring.clear();
       toast(err.message);
     },
   );
@@ -1126,16 +1233,25 @@ let menuReturn: HTMLElement | null = null;
 function openMenu(id: number, x: number, y: number, viaKb: boolean, detail = details.get(id)) {
   const r = S.records.get(id);
   if (!r) return;
+  // 在多选中的某一条上右键：只剩“删除 N 个片段”（M25 规则 6）
+  const bulk = S.multi.size >= 2 && S.multi.has(id), snip = isSnip(r);
   // 图片是否来自文件只有详情知道：没缓存时先取（本地调用，几毫秒），回来时已隐藏、换了选中或菜单已开就作罢
-  if (r.kind === 'image' && !detail) {
+  if (r.kind === 'image' && !detail && !bulk) {
     getRecord(id).then((d) => d && S.shown && S.sel === id && !menuOpen() && openMenu(id, x, y, viaKb, d), (err: AppError) => toast(err.message));
     return;
   }
   S.menuFor = id;
   $('#mPin').textContent = r.pinned ? '取消置顶' : '置顶';
   const open = openLabel(r.kind, !!detail?.files.length, S.platform.os);
-  mOpen.hidden = !open;
+  mOpen.hidden = !open || bulk;
   $('#mOpen').textContent = open ?? '';
+  // 历史：粘贴、置顶、按类型的动作、存为片段…；片段：粘贴、编辑片段…、按类型的动作（M25 规则 6）
+  $('[data-m="copy"]').hidden = bulk;
+  $('[data-m="pin"]').hidden = bulk || snip;
+  $('[data-m="editSnippet"]').hidden = bulk || !snip;
+  $('[data-m="saveSnippet"]').hidden = bulk || snip;
+  $('#menu .sep').hidden = bulk;
+  $('#mDel').textContent = bulk ? `删除 ${S.multi.size} 个片段` : '删除';
   // stagger 序号按可见项重排，隐藏的项不留空拍
   menu.querySelectorAll<HTMLElement>('button:not([hidden])').forEach((b, i) => b.style.setProperty('--i', String(i)));
   menuReturn = document.activeElement as HTMLElement | null;
@@ -1154,7 +1270,7 @@ function openMenu(id: number, x: number, y: number, viaKb: boolean, detail = det
   menu.style.transformOrigin = `${ox} ${oy}`;
   menu.toggleAttribute('data-instant', viaKb);
   menu.dataset.open = 'true';
-  menu.querySelector('button')!.focus({ preventScroll: true });
+  menu.querySelector<HTMLElement>('button:not([hidden])')!.focus({ preventScroll: true });
 }
 function closeMenu(restore: boolean) {
   if (!menuOpen()) return;
@@ -1214,8 +1330,8 @@ const handlers = {
   added: (s: RecordSummary) => {
     applyAdded(S.records, s);
     S.removing.delete(s.id);
-    const restored = s.id === restoring;
-    if (restored) restoring = null;
+    const restored = restoring.delete(s.id) && !restoredSel;
+    if (restored) restoredSel = true;
     const paint = () => {
       // newId 只在插入这一次渲染时有效，之后的重绘不重播动画
       if (S.shown) S.newId = s.id;
@@ -1239,17 +1355,20 @@ const handlers = {
     if (s.id === bodyFor && s.kind === 'video' && !pbody.querySelector('video')
       && (prev?.durationSec !== s.durationSec || prev?.thumb !== s.thumb)) bodyFor = null;
     if (s.id === bodyFor && (s.kind === 'image' || s.kind === 'file') && prev?.ocrState !== s.ocrState) refreshOcr(s.id);
+    // 片段改了名字或内容（M25 规则 5）：正文重取；搜索中重取命中集合，新名字立即可搜、旧名字搜不到
+    const snipEdited = isSnip(s) && (prev?.title !== s.title || prev?.snippetBody !== s.snippetBody || prev?.kind !== s.kind || prev?.size !== s.size);
+    if (s.id === bodyFor && snipEdited) bodyFor = null;
     // 去重命中会改 copiedAt，需要重新排序；选中项的头部与信息栏随 select 刷新，不重取详情
     scheduleUpdatedPaint(
       prev && prev.copiedAt !== s.copiedAt ? s.id : undefined,
-      s.ocrState === 1 && prev?.ocrState !== 1,
+      (s.ocrState === 1 && prev?.ocrState !== 1) || snipEdited,
     );
   },
   removed: (ids: number[]) => {
     // 别处的删除（保留时长清理、清空历史）清掉了待撤销的记录：撤销已无意义
     const foreign = ids.filter((id) => !ownEcho.delete(id));
     ids.forEach((id) => details.delete(id));
-    if (S.undo && foreign.includes(S.undo.id)) {
+    if (S.undo && S.undo.ids.some((id) => foreign.includes(id))) {
       S.undo = null;
       paintUndoHint();
       // 提示条已换成别的提示时不收起它
@@ -1267,6 +1386,8 @@ const handlers = {
     // 与 remove() 一致：正在删除的行不作为下一个选中
     const before = vis().filter((r) => !S.removing.has(r.id));
     applyRemoved(S.records, gone);
+    // 别处删掉了多选里的片段：不留已不存在的 id（M25 规则 6）
+    S.multi = pruneMulti(S.multi, S.records);
     if (S.sel !== null && gone.includes(S.sel)) S.sel = nextSelection(before, S.sel);
     renderTabs(true);
     renderList();
@@ -1283,9 +1404,9 @@ const handlers = {
 // 结果在点击时就交出去（调用方不必等收起动画），面板隐藏时直接 close 也按 false 结算。
 // 同一时间只有一个确认框：已有一个在等待时，新的请求直接得到 false
 const cfDlg = $<HTMLDialogElement>('#confirm'), cfOk = $<HTMLButtonElement>('#cfOk');
-// 设置或确认框打开时后端不因失焦或快捷键隐藏面板：每次 showModal 之后与每个 close 事件里按 DOM 实际状态同步。
+// 设置、确认框或片段对话框（M25 规则 5）打开时后端不因失焦或快捷键隐藏面板：每次 showModal 之后与每个 close 事件里按 DOM 实际状态同步。
 // 引导不算：其中“授权”要切去系统设置，面板浮在最上层会盖住它，照旧失焦隐藏
-const keepDlgs = [...document.querySelectorAll<HTMLDialogElement>('#settings, #confirm')];
+const keepDlgs = [...document.querySelectorAll<HTMLDialogElement>('#settings, #confirm, #snippet')];
 const syncDialogOpen = () =>
   void setDialogOpen(keepDlgs.some((d) => d.open)).catch((e: AppError) => void info(`同步对话框状态失败 kind=${e.kind}`));
 keepDlgs.forEach((d) => d.addEventListener('close', syncDialogOpen));
@@ -1343,7 +1464,7 @@ async function confirmClear(): Promise<string | null> {
   try {
     const n = await countUnpinned();
     if (n === 0) msg = '没有可删除的记录';
-    else if (!(await confirm({ title: '清空历史', body: `将删除 ${n} 条未置顶的记录，置顶记录会保留`, ok: `删除 ${n} 条记录`, danger: true }))) return null;
+    else if (!(await confirm({ title: '清空历史', body: `将删除 ${n} 条未置顶的记录，置顶记录与片段会保留`, ok: `删除 ${n} 条记录`, danger: true }))) return null;
     else [msg, icon] = [`已删除 ${await clearHistory()} 条记录`, 'trash'];
   } catch (e) {
     msg = (e as AppError).message;
@@ -1677,7 +1798,8 @@ function openSettings() {
   if (!S.settings.hotkey || dlg.classList.contains('is-shown')) return;
   clearTimeout(closeTimer);
   if (!dlg.open) dlgReturn = document.activeElement as HTMLElement | null;
-  clearNote.textContent = '置顶记录会保留';
+  clearNote.textContent = '置顶记录与片段会保留';
+  snipNote.textContent = SNIP_NOTE;
   const st = S.settings;
   pendingHotkey = st.hotkey;
   hotkeyIn.value = hotkeyLabel(st.hotkey, S.platform.os);
@@ -1843,6 +1965,142 @@ async function submitSettings() {
 }
 $('#settingsBtn').addEventListener('click', openSettings);
 
+// —— 片段对话框（M25 规则 5） ——
+// 存为片段、编辑、新建共用一个对话框，与设置对话框同一套弹入 / 150ms 收起；Esc、点遮罩、取消都关闭且不保存。
+// 从设置里新建时叠在设置上方，设置不关闭，结果写进设置“片段”一行的说明（提示条被对话框盖住）
+type SnipMode = 'save' | 'edit' | 'new';
+const snipDlg = $<HTMLDialogElement>('#snippet'), snipNameIn = $<HTMLInputElement>('#snipName'), snipTextIn = $<HTMLTextAreaElement>('#snipText');
+const snipNameErr = $('#snipNameErr'), snipTextErr = $('#snipTextErr'), snipTextField = $('#snipTextField'), snipNote = $('#snipNote');
+const SNIP_NOTE = '搜索名字就能粘贴出对应的内容；改名、改内容与删除在面板的“片段”分类里';
+// text：打开时的内容，提交时没改就不发（改内容会重新识别类型并清掉链接标题）
+let snipFor: { mode: SnipMode; id: number | null; text: string } = { mode: 'new', id: null, text: '' };
+let snipReturn: HTMLElement | null = null, snipTimer = 0, snipSaving = false;
+function snipErr(el: HTMLInputElement | HTMLTextAreaElement, err: HTMLElement, msg: string) {
+  if (msg) err.textContent = msg;
+  err.hidden = !msg;
+  el.setAttribute('aria-invalid', String(!!msg));
+}
+async function openSnippet(mode: SnipMode, id?: number) {
+  if (snipDlg.classList.contains('is-shown')) return;
+  const r = id === undefined ? undefined : S.records.get(id);
+  if (mode !== 'new' && (!r || S.removing.has(r.id) || isSnip(r) !== (mode === 'edit'))) return;
+  // 文字内容、文件名与尺寸来自详情：没缓存时先取（本地调用，几毫秒），回来时已隐藏或对话框已开就作罢
+  let d: RecordDetail | null = null;
+  if (r) {
+    try {
+      d = details.get(r.id) ?? (await getRecord(r.id));
+    } catch (e) {
+      return toast((e as AppError).message);
+    }
+    if (!d || !S.shown || snipDlg.classList.contains('is-shown')) return;
+  }
+  // 图片、视频、文件只能改名字：显示缩略图加文件名
+  const fixed = !!r && (r.kind === 'image' || r.kind === 'video' || r.kind === 'file');
+  $('#snip-title').textContent = mode === 'edit' ? '编辑片段' : mode === 'new' ? '新建片段' : '存为片段';
+  $('#snipSubmit').textContent = mode === 'edit' ? '保存修改' : '保存片段';
+  snipTextField.hidden = fixed;
+  $('#snipFixedField').hidden = !fixed;
+  if (r && d && fixed) {
+    // 截图等位图没有文件名：历史记录用标题，片段的标题是名字，用类型名代替
+    const label = [d.files[0]?.name ?? (isSnip(r) ? LABEL[r.kind] : r.title), d.image?.w ? `${d.image.w} × ${d.image.h}` : ''].filter(Boolean).join(' · ');
+    $('#snipFixed').innerHTML = (r.kind !== 'file' && r.thumb ? `<img src="${esc(r.thumb)}" alt="">` : svg(r.kind)) + esc(label);
+  }
+  // 名字预填并全选：存为片段取记录标题前 40 个字符，编辑取当前名字，新建为空
+  snipNameIn.value = !r ? '' : mode === 'edit' ? r.title : [...r.title].slice(0, 40).join('');
+  const text = !fixed && d ? (d.text ?? '') : '';
+  snipTextIn.value = text;
+  // ponytail: 预览只取到前 200 KB 的超长文字不让改内容，免得保存时截掉后半段；要改再加整段读取
+  snipTextIn.readOnly = !!d?.truncated;
+  // 基准取输入框实际的值（CRLF、单独的 CR 已归一成 LF），不然没动内容也算改过，富文本会被冲成纯文本（M25 规则 5）
+  snipFor = { mode, id: r?.id ?? null, text: snipTextIn.value };
+  snipErr(snipNameIn, snipNameErr, '');
+  snipErr(snipTextIn, snipTextErr, '');
+  clearTimeout(snipTimer);
+  if (!snipDlg.open) {
+    snipReturn = document.activeElement as HTMLElement | null;
+    snipDlg.showModal();
+  }
+  syncDialogOpen();
+  void snipDlg.offsetWidth;
+  snipDlg.classList.add('is-shown');
+  snipNameIn.focus();
+  snipNameIn.select();
+}
+function closeSnippet() {
+  snipDlg.classList.remove('is-shown');
+  clearTimeout(snipTimer);
+  snipTimer = window.setTimeout(() => snipDlg.close(), reduced.matches ? 0 : 150);
+}
+snipDlg.addEventListener('close', () => {
+  snipDlg.classList.remove('is-shown');
+  if (S.shown && snipReturn?.isConnected) snipReturn.focus({ preventScroll: true });
+  snipReturn = null;
+});
+snipDlg.addEventListener('cancel', (e) => {
+  e.preventDefault();
+  closeSnippet();
+});
+let snipDownOnBackdrop = false;
+snipDlg.addEventListener('pointerdown', (e) => (snipDownOnBackdrop = e.target === snipDlg));
+snipDlg.addEventListener('click', (e) => {
+  if ((e.target as Element).closest('[data-close]') || (e.target === snipDlg && snipDownOnBackdrop)) closeSnippet();
+});
+// 改正后行内错误随即消失（只清不报，报错仍在提交时）
+for (const [el, err] of [[snipNameIn, snipNameErr], [snipTextIn, snipTextErr]] as const)
+  el.addEventListener('input', () => {
+    if (!err.hidden && el.value.trim()) snipErr(el, err, '');
+  });
+$('#snipForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  void submitSnippet();
+});
+async function submitSnippet() {
+  if (snipSaving) return;
+  const name = snipNameIn.value.trim(), text = snipTextIn.value, textual = !snipTextField.hidden;
+  const nameMsg = name ? '' : '请填写名字', textMsg = textual && !text.trim() ? '请填写内容' : '';
+  snipErr(snipNameIn, snipNameErr, nameMsg);
+  snipErr(snipTextIn, snipTextErr, textMsg);
+  if (nameMsg || textMsg) return (nameMsg ? snipNameIn : snipTextIn).focus();
+  const { mode, id } = snipFor, changed = textual ? snippetTextChange(text, snipFor.text, snipTextIn.readOnly) : null;
+  snipSaving = true;
+  try {
+    if (mode === 'new') await createSnippet(name, text);
+    else if (mode === 'edit') await updateSnippet(id!, name, changed);
+    else {
+      // 存为片段复制原记录；内容改过再改一次
+      const nid = await saveSnippet(id!, name);
+      // 片段已建好：对话框改为编辑这一条，改内容失败后重试不会再建一条
+      snipFor = { mode: 'edit', id: nid, text: snipFor.text };
+      $('#snip-title').textContent = '编辑片段';
+      $('#snipSubmit').textContent = '保存修改';
+      if (changed !== null) {
+        try {
+          await updateSnippet(nid, name, changed);
+        } catch (e) {
+          const err = e as AppError;
+          snipErr(snipTextIn, snipTextErr, `片段已存好，但内容没有改成：${err.message}`);
+          snipTextIn.focus();
+          return;
+        }
+      }
+    }
+  } catch (e) {
+    // 后端再校验一遍（名字为空、超长，内容为空）：写在对应输入框下方，其余错误走提示条
+    const err = e as AppError, at = err.message.includes('名字') ? 'name' : err.message.includes('内容') ? 'text' : null;
+    if (at === 'name') snipErr(snipNameIn, snipNameErr, err.message);
+    if (at === 'text') snipErr(snipTextIn, snipTextErr, err.message);
+    if (at) (at === 'name' ? snipNameIn : snipTextIn).focus();
+    else toast(err.message);
+    return;
+  } finally {
+    snipSaving = false;
+  }
+  closeSnippet();
+  if (dlg.open) snipNote.textContent = `已新建片段“${name}”，在面板的“片段”分类里`;
+  else toast(mode === 'edit' ? '片段已更新' : mode === 'new' ? `已新建片段“${name}”，搜索这个名字就能找到` : `已存为片段“${name}”，搜索这个名字就能找到`, { icon: 'snip' });
+}
+$('#stNewSnip').addEventListener('click', () => void openSnippet('new'));
+
 // —— 首次启动引导（M18） ——
 // 与设置对话框同一套弹入 / 150ms 收起。每步一个 .dlg-body，切步时新显示的那个重放 rowIn。
 // 关闭按钮、Esc、“完成”都算结束（不再显示）；点遮罩不关，免得首次使用误点丢掉引导；
@@ -1990,6 +2248,7 @@ const hidden = () => {
   // 概览条直接消失，不带 200ms 淡出，下次唤起不残影
   instantly(spMini, true, () => spMini.classList.remove('show'));
   win.dataset.shown = 'false';
+  S.multi.clear();
   // 跨隐藏不复用详情（例如文件是否还在）
   bodyFor = null;
   details.clear();
@@ -2034,6 +2293,9 @@ document.addEventListener('keydown', (e) => {
       hasSel: S.sel !== null,
       canUndo: canUndo(S.undo, Date.now()),
       dialogOpen: !!document.querySelector('dialog[open]'),
+      selIsSnip: S.sel !== null && S.records.get(S.sel)?.snippetBody != null,
+      inSnip: S.filter === 'snip',
+      multi: S.multi.size,
     },
   );
   if (!a) return;
@@ -2049,7 +2311,8 @@ document.addEventListener('keydown', (e) => {
     case 'move': return move(a.d, a.instant);
     case 'copy': return void (sel !== null && copyRecord(sel));
     case 'copyIndex': {
-      const r = vis()[a.i];
+      // 多选时复制不可用（M25 规则 6）
+      const r = S.multi.size >= 2 ? undefined : vis()[a.i];
       if (r && !S.removing.has(r.id)) {
         select(r.id, { pan: 'instant' });
         copyRecord(r.id);
@@ -2059,12 +2322,24 @@ document.addEventListener('keydown', (e) => {
     case 'pin': return void (sel !== null && togglePin(sel, false));
     case 'filter': return setFilter(cycleFilter(S.filter, a.d), true);
     case 'undo': return undo();
-    case 'delete': return void (sel !== null && remove(sel));
+    case 'delete': return remove(S.multi.size >= 2 ? [...S.multi] : sel !== null ? [sel] : []);
     case 'clearSearch':
       q.value = '';
       return runSearch('');
     case 'hide': return hide();
     case 'settings': return openSettings();
+    // 片段（M25 规则 5、6）
+    case 'saveSnippet': return void (sel !== null && openSnippet('save', sel));
+    case 'editSnippet': return void (sel !== null && openSnippet('edit', sel));
+    case 'newSnippet': return void openSnippet('new');
+    case 'selectAll': {
+      S.multi = new Set(vis().filter((r) => !S.removing.has(r.id)).map((r) => r.id));
+      return setMulti();
+    }
+    case 'extend': return move(a.d, e.repeat, true);
+    case 'clearMulti':
+      S.multi.clear();
+      return setMulti();
     case 'menu': {
       // ponytail: 选中行滚出视口未渲染时不弹菜单；键盘移动总会把选中行滚回视口
       const r = rowEl(sel)?.getBoundingClientRect();
@@ -2147,6 +2422,7 @@ root.toggleAttribute('data-native-fade', nativeFade());
 const MOD = b.platform.os === 'macos' ? '⌘' : 'Ctrl';
 document.querySelectorAll('.mod').forEach((k) => (k.textContent = MOD));
 $('.modp').textContent = `${MOD} P`;
+document.querySelectorAll<HTMLElement>('[data-modk]').forEach((k) => (k.textContent = `${MOD} ${k.dataset.modk}`));
 const mac = b.platform.os === 'macos';
 // 录屏只在 macOS 上做（M24）；麦克风要 macOS 15 起
 document.querySelectorAll<HTMLElement>('.os-mac').forEach((el) => (el.hidden = !mac));
@@ -2217,12 +2493,21 @@ list.addEventListener('click', (e) => {
     q.focus();
     return;
   }
+  if (t.closest('[data-act="new"]')) return void openSnippet('new');
   const id = itemOf(e);
   if (id === null) return;
   const qa = t.closest<HTMLElement>('[data-qa]')?.dataset.qa;
+  const mod = S.platform.os === 'macos' ? e.metaKey : e.ctrlKey;
+  if (!qa && S.filter === 'snip' && (mod || e.shiftKey)) return multiTo(id, e.shiftKey);
+  // 不带修饰键的单击退出多选（M25 规则 6）
+  if (S.multi.size) {
+    S.multi.clear();
+    paintRows();
+  }
   select(id, { indDur: 180, pan: 'smooth' });
   if (qa === 'copy') copyRecord(id);
   if (qa === 'pin') togglePin(id, true);
+  if (qa === 'edit') void openSnippet('edit', id);
 });
 list.addEventListener('dblclick', (e) => {
   const id = itemOf(e);
@@ -2232,7 +2517,12 @@ list.addEventListener('contextmenu', (e) => {
   const id = itemOf(e);
   if (id === null) return;
   e.preventDefault();
-  select(id, { indDur: 180, pan: 'smooth' });
+  // 在多选之外的行上右键：先退出多选；在多选之中的行上右键保持多选（菜单只剩批量删除）
+  if (S.multi.size && !S.multi.has(id)) {
+    S.multi.clear();
+    paintRows();
+  }
+  if (!S.multi.size) select(id, { indDur: 180, pan: 'smooth' });
   openMenu(id, e.clientX, e.clientY, false);
 });
 
@@ -2240,7 +2530,9 @@ pinBtn.addEventListener('click', (e) => S.sel !== null && togglePin(S.sel, e.det
 copyBtn.addEventListener('click', () => S.sel !== null && copyRecord(S.sel));
 // 设置对话框留在确认框下面；列表与频谱由 records-removed 刷新
 $('#clearBtn').addEventListener('click', () => void confirmClear().then((m) => m && (clearNote.textContent = m)));
-delBtn.addEventListener('click', () => S.sel !== null && remove(S.sel));
+delBtn.addEventListener('click', () => (S.multi.size >= 2 ? remove([...S.multi]) : S.sel !== null && remove([S.sel])));
+saveSnipBtn.addEventListener('click', () => S.sel !== null && void openSnippet('save', S.sel));
+editSnipBtn.addEventListener('click', () => S.sel !== null && void openSnippet('edit', S.sel));
 menu.addEventListener('click', (e) => {
   if (!menuOpen()) return;
   const m = (e.target as Element).closest<HTMLElement>('[data-m]')?.dataset.m;
@@ -2250,7 +2542,9 @@ menu.addEventListener('click', (e) => {
   if (m === 'copy') copyRecord(id);
   if (m === 'pin') togglePin(id, mouse);
   if (m === 'open') openFromMenu(id);
-  if (m === 'del') remove(id);
+  if (m === 'saveSnippet') void openSnippet('save', id);
+  if (m === 'editSnippet') void openSnippet('edit', id);
+  if (m === 'del') remove(S.multi.size >= 2 && S.multi.has(id) ? [...S.multi] : [id]);
 });
 document.addEventListener('pointerdown', (e) => {
   const t = e.target as Node;
@@ -2267,6 +2561,17 @@ pauseBtn.addEventListener('click', () => setPaused(!S.paused).catch((err: AppErr
 
 pbody.addEventListener('click', (e) => {
   const t = e.target as Element;
+  // 批量预览的两个按钮：按钮随即消失，焦点交还搜索框
+  const bk = t.closest<HTMLElement>('[data-bulk]');
+  if (bk) {
+    if (bk.dataset.bulk === 'del') remove([...S.multi]);
+    else {
+      S.multi.clear();
+      setMulti();
+    }
+    q.focus({ preventScroll: true });
+    return;
+  }
   const a = t.closest('a');
   if (a) {
     // 链接只交给系统浏览器打开，WebView 不导航

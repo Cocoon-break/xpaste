@@ -7,6 +7,7 @@
 [data-type="video"] { --tc: var(--c-video); }
 [data-type="file"]  { --tc: var(--c-file); }
 [data-type="fav"]   { --tc: var(--c-fav); }
+[data-type="snip"]  { --tc: var(--c-snip); }
 [data-type="all"]   { --tc: var(--beam); }
 
 /* 主题切换期间关闭所有过渡，避免每个属性各自渐变 */
@@ -254,8 +255,14 @@ kbd {
 .list-inner { position: relative; }
 .vrow { position: absolute; left: 0; right: 0; }
 .ghead { height: 34px; box-sizing: border-box; display: flex; gap: 8px; align-items: center; padding: 12px 10px 5px; font-size: 11.5px; color: var(--faint); letter-spacing: .06em; }
-.ghead span { font: 10.5px var(--font-mono); font-variant-numeric: tabular-nums; padding: 0 5px; border-radius: 4px; background: var(--glass-2); border: 1px solid var(--line); }
+.ghead > span { font: 10.5px var(--font-mono); font-variant-numeric: tabular-nums; padding: 0 5px; border-radius: 4px; background: var(--glass-2); border: 1px solid var(--line); }
 .ghead::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, var(--line-2), transparent); }
+/* “片段”分类：分组标题吸顶，新建按钮固定在右侧，片段再多也不用滚到底找（M25 规则 2）。
+   top: -4px 抵掉列表的上内边距，贴住滚动区顶边；不加动画（M25 规则 2） */
+.snip-bar { position: sticky; top: -4px; z-index: 3; height: auto; margin: 0 -8px; padding: 10px 18px 7px; background: color-mix(in srgb, var(--pop-solid) 97%, transparent); box-shadow: 0 8px 12px -10px rgb(0 0 0 / .25); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+.snip-bar::after { order: 1; }
+.new-snip { order: 2; letter-spacing: 0; color: var(--c-snip); border-color: color-mix(in srgb, var(--c-snip) 40%, transparent); background: color-mix(in srgb, var(--c-snip) 10%, transparent); }
+.new-snip kbd { height: 16px; font-size: 10px; }
 
 /* 选中光标：独立一层平滑滑动，列表内容本身即时切换 */
 .sel-ind {
@@ -289,6 +296,10 @@ kbd {
 .row[aria-selected="true"] .title { color: var(--fg); }
 .meta { font-size: 11.5px; color: var(--faint); margin-top: 1px; }
 .meta .uses { color: var(--c-fav); }
+.meta .snip-of { color: color-mix(in srgb, var(--c-snip) 80%, var(--faint)); }
+/* 多选（只在“片段”分类）：行底色与描边，缩略图盖上勾；勾直接出现，不加动画（M25 规则 6） */
+.item.is-multi .row { background: color-mix(in srgb, var(--c-snip) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c-snip) 40%, transparent); }
+.item.is-multi .thumb::after { content: "✓"; position: absolute; inset: 0; display: grid; place-items: center; font: 700 16px var(--font-ui); color: var(--on-pill); background: var(--c-snip); }
 /* 命中来自图中文字：片段放在元信息行首，同一行省略号截断，不改行高 */
 .meta .snip { color: var(--muted); }
 /* 已识别出文字：缩略图右下角 10px 角标，内缩 3px 避开圆角裁切 */
@@ -313,6 +324,9 @@ kbd {
 }
 .qa button:hover { background: color-mix(in srgb, var(--tc) 20%, var(--pop-solid)); color: var(--tc); }
 .qa button:active { transform: scale(.9); }
+/* 多选时复制、编辑不可用（M25 规则 6）：快捷按钮不出现，悬停时序号与图钉照常显示 */
+.list.multi .qa { display: none; }
+.list.multi .row:hover .idx, .list.multi .row:hover .pin-mark { opacity: 1; }
 @media (hover: hover) and (pointer: fine) {
   .row:hover .qa { opacity: 1; transform: translate(0, -50%); pointer-events: auto; }
   .row:hover .idx, .row:hover .pin-mark { opacity: 0; }
@@ -358,6 +372,12 @@ mark { background: var(--mark-bg); color: var(--mark-fg); border-radius: 3px; pa
 .pact { display: flex; gap: 6px; }
 .pbody { overflow: auto; overscroll-behavior: contain; padding: 14px 16px; min-width: 0; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
 .p-empty { color: var(--faint); padding-top: 40px; text-align: center; }
+/* 片段：正文上方的名字大字；多选时的批量预览（M25 规则 4、6） */
+.p-snip-name { font: 600 18px var(--font-ui); margin: 0 0 14px; color: var(--fg); overflow-wrap: anywhere; }
+.bulk { display: grid; gap: 14px; }
+.bulk ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.bulk li { padding: 8px 12px; border-radius: 9px; background: var(--glass-2); border: 1px solid var(--line); font-size: 13px; overflow-wrap: anywhere; }
+.bulk .row-act { display: flex; gap: 8px; }
 .p-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: 1.7; }
 .p-link { display: grid; gap: 14px; }
 .lk-card { display: flex; gap: 14px; align-items: center; padding: 14px; border-radius: 14px; background: var(--glass-2); border: 1px solid var(--line-2); }
@@ -538,7 +558,17 @@ dialog > form { display: contents; }
 .apps-list li[aria-selected="true"] { background: color-mix(in srgb, var(--beam) 12%, transparent); }
 .help { margin: 0; font-size: 12px; color: var(--faint); }
 .err { margin: 0; font-size: 12px; color: var(--danger); }
-.field input[aria-invalid="true"] { border-color: var(--danger); }
+.field input[aria-invalid="true"], .field textarea[aria-invalid="true"] { border-color: var(--danger); }
+/* 片段对话框：内容框等宽、可拉高；图片与文件只读，显示缩略图加文件名（M25 规则 5） */
+.field textarea {
+  min-height: 132px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line-2); resize: vertical;
+  background: var(--well); color: var(--fg); font: 12.5px/1.6 var(--font-mono); width: 100%;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+.field textarea:focus-visible { outline: none; border-color: var(--beam); box-shadow: 0 0 0 3px color-mix(in srgb, var(--beam) 18%, transparent); }
+.field .lbl { font-size: 13px; font-weight: 500; }
+.snip-fixed { display: flex; gap: 12px; align-items: center; min-width: 0; padding: 10px 12px; border-radius: 10px; border: 1px dashed var(--line-2); color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.snip-fixed img { width: 56px; height: 36px; object-fit: cover; border-radius: 6px; flex: none; }
 .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; }
 .suffix { position: relative; }
 .suffix span { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); color: var(--faint); font-size: 13px; pointer-events: none; }

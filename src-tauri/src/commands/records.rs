@@ -5,7 +5,9 @@ use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
-use xpaste_core::{Flavor, ImageInfo, Kind, RecordDetail, SearchHit, ocr_state};
+use xpaste_core::{
+    Flavor, ImageInfo, Kind, RecordDetail, SearchHit, ocr_state, snippet_name, text_flavor,
+};
 use xpaste_platform::{PasteBlock, PlatformError};
 
 use crate::clock::now_ms;
@@ -89,21 +91,95 @@ pub fn set_pinned(
 
 /// 软删除，5 秒内可撤销，之后彻底删除。
 #[tauri::command(async)]
-pub fn delete(app: AppHandle, state: State<'_, AppState>, id: i64) -> Result<(), AppError> {
+pub fn delete(app: AppHandle, state: State<'_, AppState>, ids: Vec<i64>) -> Result<(), AppError> {
     let now = now_ms();
-    state.store().soft_delete(id, now)?;
-    crate::housekeeping::schedule_purge(&app, id, now);
-    emit_removed(&app, &[id]);
+    state.store().soft_delete(&ids, now)?;
+    crate::housekeeping::schedule_purge(&app, &ids, now);
+    emit_removed(&app, &ids);
+    log::info!("删除 n={}", ids.len());
     Ok(())
 }
 
+/// 返回实际恢复的条数。
 #[tauri::command(async)]
-pub fn undo_delete(app: AppHandle, state: State<'_, AppState>, id: i64) -> Result<bool, AppError> {
-    let restored = state.store().undo_delete(id)?;
-    if restored {
+pub fn undo_delete(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    ids: Vec<i64>,
+) -> Result<u32, AppError> {
+    let restored = state.store().undo_delete(&ids)?;
+    for &id in &restored {
         emit_summary(&app, RECORD_ADDED, id);
     }
-    Ok(restored)
+    Ok(restored.len() as u32)
+}
+
+/// 把历史记录存为片段（M25 规则 10）。
+#[tauri::command(async)]
+pub fn save_snippet(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+    name: String,
+) -> Result<i64, AppError> {
+    let name = snippet_name(&name)?;
+    let (saved, kind, first_path) = {
+        let mut store = state.store();
+        let saved = store.save_snippet(id, &name, now_ms())?;
+        let d = store.detail(saved.id)?;
+        let kind = d.as_ref().map_or(Kind::Text, |d| d.summary.kind);
+        let first = d.and_then(|d| d.files.first().map(|f| std::path::PathBuf::from(&f.path)));
+        (saved, kind, first)
+    };
+    emit_summary(&app, RECORD_ADDED, saved.id);
+    if saved.needs_thumb {
+        crate::clipboard::enqueue_followups(&app, saved.id, kind, first_path, false);
+    }
+    if saved.needs_ocr {
+        state.ocr.push_front(saved.id);
+    }
+    log::info!("片段 存入 id={} 源={id} kind={kind:?}", saved.id);
+    Ok(saved.id)
+}
+
+#[tauri::command(async)]
+pub fn create_snippet(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    text: String,
+) -> Result<i64, AppError> {
+    let name = snippet_name(&name)?;
+    let (id, kind) = {
+        let mut store = state.store();
+        let id = store.create_snippet(&name, &text, now_ms())?;
+        (id, store.summary(id)?.map(|s| s.kind))
+    };
+    emit_summary(&app, RECORD_ADDED, id);
+    log::info!("片段 新建 id={id} kind={kind:?} bytes={}", text.len());
+    Ok(id)
+}
+
+#[tauri::command(async)]
+pub fn update_snippet(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+    name: String,
+    text: Option<String>,
+) -> Result<(), AppError> {
+    let name = snippet_name(&name)?;
+    let kind = {
+        let mut store = state.store();
+        store.update_snippet(id, &name, text.as_deref())?;
+        store.summary(id)?.map(|s| s.kind)
+    };
+    emit_summary(&app, RECORD_UPDATED, id);
+    log::info!(
+        "片段 修改 id={id} kind={kind:?} bytes={}",
+        text.as_ref().map_or(0, String::len)
+    );
+    Ok(())
 }
 
 /// 清空非置顶记录，返回删除条数。
@@ -227,24 +303,6 @@ fn write_text_plain_via(
     write: impl FnOnce(&[Flavor]) -> Result<u64, PlatformError>,
 ) -> Result<(), AppError> {
     write_marked(state, || write(&[text_flavor(text)]))
-}
-
-/// 纯文本 flavor。
-pub(crate) fn text_flavor(text: &str) -> Flavor {
-    if cfg!(windows) {
-        // 存储口径：UTF-16LE、不带结尾 NUL（写回时 winfmt::write_bytes 补上）
-        Flavor {
-            item: 0,
-            format: "CF_UNICODETEXT".into(),
-            data: text.encode_utf16().flat_map(u16::to_le_bytes).collect(),
-        }
-    } else {
-        Flavor {
-            item: 0,
-            format: "public.utf8-plain-text".into(),
-            data: text.as_bytes().to_vec(),
-        }
-    }
 }
 
 /// 设计 8.5 第 1–2 步：记录存在、文件都在、有可写回的 flavor。任何一步不满足都不碰剪切板。

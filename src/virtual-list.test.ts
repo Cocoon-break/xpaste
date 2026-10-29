@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { layout, range, scrollTo, topOf } from './virtual-list.ts';
+import { layout, ROW_H, range, scrollTo, topOf } from './virtual-list.ts';
 
 test('layout 累加标题与行高', () => {
   const { cells, total } = layout([{ name: '置顶', rows: [{ id: 1 }] }, { name: '今天', rows: [{ id: 2 }, { id: 3 }] }]);
@@ -24,4 +24,10 @@ test('scrollTo 最小滚动', () => {
   assert.equal(scrollTo(1000, 56, 0, 560), 1056 - 560);
   assert.equal(scrollTo(100, 56, 500, 560), 100);
   assert.equal(scrollTo(600, 56, 500, 560), 500);
+});
+
+test('layout(groups, false) 不产生 head cell', () => {
+  const { cells, total } = layout([{ name: 'a', rows: [{ id: 1 }, { id: 2 }] }], false);
+  assert.deepEqual(cells.map((c) => c.kind), ['row', 'row']);
+  assert.equal(total, 2 * ROW_H);
 });

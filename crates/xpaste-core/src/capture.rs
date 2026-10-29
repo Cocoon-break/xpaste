@@ -88,18 +88,22 @@ pub fn build_record_with(
         bitmap.as_ref().map_or(0, |b| b.len() as u64)
     };
 
+    let content = content_search_text(text.as_deref(), link_title.as_deref(), &paths);
     let mut parts: Vec<String> = Vec::new();
-    parts.extend(text.clone());
-    parts.extend(link_title.clone());
-    parts.extend(paths.iter().map(|p| file_name(p)));
-    parts.extend(paths.iter().map(|p| p.display().to_string()));
-    parts.extend(app.as_ref().map(|a| a.name.clone()));
-    // 标题也要能搜到：位图截图没有文本与路径，否则只剩来源应用名可搜
-    parts.push(title.clone());
-    if file_text && kind == Kind::File {
-        parts.extend(files_text(&paths, FILE_TEXT_BYTES));
+    if !content.is_empty() {
+        parts.push(content);
     }
-    let search_text = parts.join("\n").to_lowercase();
+    parts.extend(app.as_ref().map(|a| a.name.to_lowercase()));
+    // 标题也要能搜到：位图截图没有文本与路径，否则只剩来源应用名可搜
+    parts.push(title.to_lowercase());
+    if file_text && kind == Kind::File {
+        parts.extend(
+            files_text(&paths, FILE_TEXT_BYTES)
+                .iter()
+                .map(|t| t.to_lowercase()),
+        );
+    }
+    let search_text = parts.join("\n");
 
     NewRecord {
         hash,
@@ -116,6 +120,21 @@ pub fn build_record_with(
         flavors,
         bitmap,
     }
+}
+
+/// 内容部分的搜索文本（已小写）：正文、链接标题、各文件名、各路径，以换行连接。
+/// 采集与片段重建索引共用，口径只此一处（M25 规则 10）。
+pub fn content_search_text(
+    text: Option<&str>,
+    link_title: Option<&str>,
+    paths: &[std::path::PathBuf],
+) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    parts.extend(text.map(Into::into));
+    parts.extend(link_title.map(Into::into));
+    parts.extend(paths.iter().map(|p| file_name(p)));
+    parts.extend(paths.iter().map(|p| p.display().to_string()));
+    parts.join("\n").to_lowercase()
 }
 
 #[cfg(feature = "store")]
