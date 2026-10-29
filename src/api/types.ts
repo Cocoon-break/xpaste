@@ -197,6 +197,6 @@ export type BeginPayload = {
   /** 设置“录屏帧率” */
   recFps: number;
 };
-export type ShotAction = 'copy' | 'save' | 'ocr' | 'pin';
-/** 对应 `shot::ShotOutcome`。 */
-export type ShotOutcome = { action: ShotAction; chars: number | null; file: string | null; copied: boolean };
+export type ShotAction = 'copy' | 'save' | 'ocr' | 'pin' | 'translate';
+/** 对应 `shot::ShotOutcome`；`text` 为完整译文，只有翻译动作有值。 */
+export type ShotOutcome = { action: ShotAction; chars: number | null; file: string | null; copied: boolean; text: string | null };

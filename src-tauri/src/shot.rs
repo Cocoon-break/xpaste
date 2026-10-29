@@ -18,6 +18,7 @@ use crate::error::AppError;
 use crate::events;
 use crate::panel::on_main;
 use crate::state::AppState;
+use crate::translate::{self, Coalescer, Delta, Lang};
 
 const LABEL_PREFIX: &str = "shot-";
 /// 按下快捷键后这么久还没全部上屏，视为卡住（某块屏的遮罩出错或没收到载荷），下次快捷键重新开始
@@ -873,13 +874,14 @@ fn hide_overlays(app: &AppHandle) {
     });
 }
 
-/// 遮罩的四种输出（M23 规则 7）。
+/// 遮罩的输出（M23 规则 7）；翻译见设计 §3.2。
 #[derive(Debug, Clone, Copy)]
 pub enum Action {
     Copy,
     Save,
     Ocr,
     Pin,
+    Translate,
 }
 
 pub fn parse_action(h: &str) -> Option<Action> {
@@ -888,6 +890,7 @@ pub fn parse_action(h: &str) -> Option<Action> {
         "save" => Action::Save,
         "ocr" => Action::Ocr,
         "pin" => Action::Pin,
+        "translate" => Action::Translate,
         _ => return None,
     })
 }
@@ -984,6 +987,8 @@ pub struct ShotOutcome {
     pub file: Option<String>,
     /// 是否写了剪切板（保存时看“保存截图时同时复制”，识别没有文字时为 false）
     pub copied: bool,
+    /// 完整译文，只有翻译动作有值（设计 §4.5）
+    pub text: Option<String>,
 }
 
 /// 贴图图片目录；启动时清空（贴图只在本次运行内有效）。
@@ -1021,11 +1026,13 @@ pub fn pin_bounds(
     ((origin.0 + r.x * k, origin.1 + r.y * k), (r.w * k, r.h * k))
 }
 
-/// `shot_finish`：在后台线程执行。成功后遮罩进入提示条模式，前端显示提示条后调 `shot_cancel`。
+/// `shot_finish`：在后台线程执行。成功后遮罩进入提示条模式，前端显示提示条后调 `shot_cancel`；
+/// 翻译例外，成功后停在译文卡片，复制译文时（`copy_text`）才进入（设计 §4.5）。`label` 为发起的遮罩窗口。
 pub fn finish(
     app: &AppHandle,
     action: Action,
     i: usize,
+    label: &str,
     rect: Option<LRect>,
     png: Vec<u8>,
 ) -> Result<ShotOutcome, AppError> {
@@ -1038,19 +1045,20 @@ pub fn finish(
         }
     };
     log::info!("shot 输出 {action:?} 屏 {i} {} 字节", png.len());
-    match run_action(app, generation, action, origin, scale, rect, png) {
-        Ok(outcome) => {
-            enter_toast(app, generation);
-            Ok(outcome)
-        }
-        Err(e) => {
-            let mut s = session(app);
-            if s.is_current(generation) {
-                s.release_finish();
-            }
-            Err(e)
+    let r = match action {
+        Action::Translate => run_translate(app, generation, label, &png),
+        _ => run_action(app, generation, action, origin, scale, rect, png)
+            .inspect(|_| enter_toast(app, generation)),
+    };
+    // 失败一律交还输出：卡片还没出现的遮罩回到选区可以重试；已出现的卡片上只能关闭，由遮罩自己挡住第二个动作
+    // （增量与失败返回到达遮罩的先后不定，后端判断不了卡片是否已出现）
+    if r.is_err() {
+        let mut s = session(app);
+        if s.is_current(generation) {
+            s.release_finish();
         }
     }
+    r
 }
 
 fn run_action(
@@ -1070,10 +1078,12 @@ fn run_action(
                 chars: None,
                 file: None,
                 copied: true,
+                text: None,
             }
         }
         Action::Save => save(app, png)?,
         Action::Ocr => ocr(app, generation, png)?,
+        Action::Translate => unreachable!("翻译在 finish 里单独处理"),
         Action::Pin => {
             let r = rect.ok_or_else(|| AppError::Invalid("贴图缺少选区".into()))?;
             open_pin(app, origin, scale, r, &png)?;
@@ -1082,6 +1092,7 @@ fn run_action(
                 chars: None,
                 file: None,
                 copied: false,
+                text: None,
             }
         }
     })
@@ -1122,18 +1133,19 @@ fn save(app: &AppHandle, png: Vec<u8>) -> Result<ShotOutcome, AppError> {
         chars: None,
         file: Some(name),
         copied,
+        text: None,
     })
 }
 
-/// 识别文字：PNG 字节直接交给系统识别（不落盘）；有文字就按普通写入写纯文本，由监听器作为文字记录入库（M23 规则 7）。
-fn ocr(app: &AppHandle, generation: u64, png: Vec<u8>) -> Result<ShotOutcome, AppError> {
+/// 识别选区文字：PNG 字节直接交给系统识别（不落盘），长边缩到 `SHOT_OCR_SIDE`；没有文字为 `None`。
+pub fn ocr_text(png: &[u8]) -> Result<Option<String>, AppError> {
     let t = Instant::now();
-    let text = match xpaste_platform::ocr_png_bytes(&png, SHOT_OCR_SIDE) {
+    let text = match xpaste_platform::ocr_png_bytes(png, SHOT_OCR_SIDE) {
         Ok(Some(t)) if !t.text.trim().is_empty() => Some(t.text),
         Ok(_) => None,
         Err(e) => {
             // 真机偶发 CRImageReaderError（读图阶段），没能复现：记下选区尺寸供排查
-            let dims = image::ImageReader::new(std::io::Cursor::new(&png))
+            let dims = image::ImageReader::new(std::io::Cursor::new(png))
                 .with_guessed_format()
                 .ok()
                 .and_then(|r| r.into_dimensions().ok());
@@ -1146,6 +1158,13 @@ fn ocr(app: &AppHandle, generation: u64, png: Vec<u8>) -> Result<ShotOutcome, Ap
     };
     let chars = text.as_ref().map_or(0, |t| t.chars().count());
     log::info!("shot 识别 {chars} 字 {}ms", t.elapsed().as_millis());
+    Ok(text)
+}
+
+/// 识别文字：有文字就按普通写入写纯文本，由监听器作为文字记录入库（M23 规则 7）。
+fn ocr(app: &AppHandle, generation: u64, png: Vec<u8>) -> Result<ShotOutcome, AppError> {
+    let text = ocr_text(&png)?;
+    let chars = text.as_ref().map_or(0, |t| t.chars().count());
     // 识别期间用户已按 Esc 关掉遮罩：不再写剪切板
     if !session(app).is_current(generation) {
         return Err(AppError::Invalid("截图已结束".into()));
@@ -1162,7 +1181,88 @@ fn ocr(app: &AppHandle, generation: u64, png: Vec<u8>) -> Result<ShotOutcome, Ap
         chars: Some(chars),
         file: None,
         copied: text.is_some(),
+        text: None,
     })
+}
+
+/// 截图翻译（设计 §3.2、§4.5）：识别 → 翻译，增量合并后只发给发起的遮罩 `label`。不写剪切板、不进提示条模式。
+/// 识别后与每段增量发出前都看一次截图是否已结束（Esc、快捷键），已结束就中止请求、不再发事件。
+fn run_translate(
+    app: &AppHandle,
+    generation: u64,
+    label: &str,
+    png: &[u8],
+) -> Result<ShotOutcome, AppError> {
+    let Some(text) = ocr_text(png)? else {
+        return Err(AppError::Invalid("选区里没有识别到文字".into()));
+    };
+    if !session(app).is_current(generation) {
+        return Err(AppError::Invalid("截图已结束".into()));
+    }
+    let cfg = translate::cfg(&app.state::<AppState>().settings());
+    let t0 = Instant::now();
+    let mut co = Coalescer::default();
+    let mut lang = None;
+    let send = |l: Lang, text: String| {
+        let p = Delta {
+            id: None,
+            lang: l.code().into(),
+            text,
+        };
+        events::emit_to(app, label, events::TRANSLATE_DELTA, p);
+    };
+    let r = tauri::async_runtime::block_on(translate::exec(&cfg, &text, None, |l, d| {
+        if !session(app).is_current(generation) {
+            return false;
+        }
+        lang = Some(l);
+        if let Some(s) = co.push(d, Instant::now()) {
+            send(l, s);
+        }
+        true
+    }));
+    // 剩下的发完（失败时也发：卡片保留已收到的部分）
+    if let (Some(l), Some(s)) = (lang, co.flush())
+        && session(app).is_current(generation)
+    {
+        send(l, s);
+    }
+    let ms = t0.elapsed().as_millis();
+    let chars = text.chars().count();
+    match r {
+        Ok((_, out)) => {
+            log::info!(
+                "translate shot engine={} chars={chars} ms={ms} ok",
+                cfg.engine.name()
+            );
+            Ok(ShotOutcome {
+                action: "translate",
+                chars: Some(out.chars().count()),
+                file: None,
+                copied: false,
+                text: Some(out),
+            })
+        }
+        Err(f) => {
+            log::info!("translate shot 失败 {} chars={chars} ms={ms}", f.tag());
+            Err(f.into())
+        }
+    }
+}
+
+/// 译文卡片“复制译文”：按普通写入写纯文本，进历史（同识别文字，设计 §3.2），然后进入提示条模式。
+pub fn copy_text(app: &AppHandle, generation: u64, text: &str) -> Result<(), AppError> {
+    if !session(app).is_current(generation) {
+        return Err(AppError::Invalid("截图已结束".into()));
+    }
+    let chars = text.chars().count();
+    xpaste_platform::write(&[xpaste_core::text_flavor(text)]).map_err(|e| {
+        log::warn!("译文写剪切板失败 {chars} 字：{e}");
+        AppError::ClipboardWrite
+    })?;
+    log::info!("shot 复制译文 {chars} 字");
+    enter_toast(app, generation);
+    Ok(())
 }
 
 /// 提示条模式：遮罩鼠标穿透、交出键盘焦点，提示条照常显示；`shot_cancel` 时撤销。
@@ -1341,6 +1441,7 @@ pub fn pin_copy(app: &AppHandle, w: &WebviewWindow) -> Result<ShotOutcome, AppEr
         chars: None,
         file: None,
         copied: true,
+        text: None,
     })
 }
 
@@ -1718,6 +1819,7 @@ mod tests {
     fn parse_action_rejects_unknown() {
         assert!(matches!(parse_action("copy"), Some(Action::Copy)));
         assert!(matches!(parse_action("pin"), Some(Action::Pin)));
+        assert!(matches!(parse_action("translate"), Some(Action::Translate)));
         assert!(parse_action("rm").is_none());
     }
 

@@ -68,3 +68,17 @@ export function loupePos(mx: number, my: number, W: number, H: number) {
   if (y + 160 > H - 4) y = my - 22 - 152;
   return { x, y };
 }
+
+/**
+ * 译文卡片位置（设计 §3.2）：依次试选区右侧、左侧、下方、上方（间距 8，离屏边至少 8），
+ * 都放不下时放在选区内右上角，离边 8。只在第一段译文到达时定一次。
+ */
+export function placeCard(sel: Rect, card: { w: number; h: number }, W: number, H: number): { x: number; y: number } {
+  const g = 8, { w, h } = card;
+  const cx = clamp(sel.x, g, W - w - g), cy = clamp(sel.y, g, H - h - g);
+  if (sel.x + sel.w + g + w + g <= W) return { x: sel.x + sel.w + g, y: cy };
+  if (sel.x - g - w >= g) return { x: sel.x - g - w, y: cy };
+  if (sel.y + sel.h + g + h + g <= H) return { x: cx, y: sel.y + sel.h + g };
+  if (sel.y - g - h >= g) return { x: cx, y: sel.y - g - h };
+  return { x: clamp(sel.x + sel.w - g - w, g, W - w - g), y: clamp(sel.y + g, g, H - h - g) };
+}

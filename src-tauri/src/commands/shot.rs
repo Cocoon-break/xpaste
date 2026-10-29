@@ -63,7 +63,7 @@ pub fn shot_cancel(app: AppHandle, generation: u64) {
     shot::end_if_current(&app, generation);
 }
 
-/// 遮罩合成好的 PNG（请求体原始字节）。请求头：`x-action`（copy / save / ocr / pin）、
+/// 遮罩合成好的 PNG（请求体原始字节）。请求头：`x-action`（copy / save / ocr / pin / translate）、
 /// `x-index`（显示器序号，须与调用方遮罩一致）、`x-rect`（`x,y,w,h`，显示器内逻辑像素，贴图用）。
 /// 成功后遮罩进入提示条模式（鼠标穿透、键盘已还给原应用），前端显示提示条后调 `shot_cancel`。
 #[tauri::command]
@@ -87,10 +87,19 @@ pub async fn shot_finish(
         return Err(invalid("请求体应为 PNG 字节"));
     };
     let png = png.clone();
-    // 编码、写文件、识别文字都是阻塞调用
-    tauri::async_runtime::spawn_blocking(move || shot::finish(&app, action, index, rect, png))
-        .await
-        .map_err(|_| invalid("截图处理中断"))?
+    let label = window.label().to_string();
+    // 编码、写文件、识别文字、等翻译都是阻塞调用
+    tauri::async_runtime::spawn_blocking(move || {
+        shot::finish(&app, action, index, &label, rect, png)
+    })
+    .await
+    .map_err(|_| invalid("截图处理中断"))?
+}
+
+/// 译文卡片“复制译文”（设计 §3.2）：写剪切板（进历史）后进入提示条模式；不是当前这次截图时报“截图已结束”。
+#[tauri::command(async)]
+pub fn shot_copy_text(app: AppHandle, generation: u64, text: String) -> Result<(), AppError> {
+    shot::copy_text(&app, generation, &text)
 }
 
 /// 倒计时结束，开始录屏（M24）。`generation` 与 `index` 取自 `shot-begin` 载荷：只接受当前这一次截图、
