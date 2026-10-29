@@ -191,11 +191,8 @@ pub fn setup(app: &App) -> tauri::Result<()> {
             }
             "settings" => open_settings(app),
             "rec-stop" => crate::rec::stop(app),
-            // 录制中退出：先把文件写完，不然 mp4 缺 moov 打不开（M24）
-            "quit" => {
-                crate::rec::stop_blocking(app);
-                app.exit(0);
-            }
+            // 录制中退出由 ExitRequested 里的 rec::hold_exit 先停止、写完文件再退出（M24 规则 8）
+            "quit" => app.exit(0),
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {

@@ -100,35 +100,17 @@ fn overlay_pressed(app: &AppHandle, mode: crate::shot::Mode) {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub enum RecRoute {
-    Stop,
-    /// 正在写文件：等它结束，不开新的遮罩
-    Ignore,
-    /// 走截图的规则开遮罩（`overlay_pressed`）
-    Overlay,
-}
-
-/// 录屏快捷键（M24）：录制中停止，停止中忽略，其余开录屏遮罩。
-pub fn rec_route(recording: bool, stopping: bool) -> RecRoute {
-    match (recording, stopping) {
-        (true, _) => RecRoute::Stop,
-        (false, true) => RecRoute::Ignore,
-        (false, false) => RecRoute::Overlay,
-    }
-}
-
-/// 录屏快捷键按下。主线程调用。
+/// 录屏快捷键按下（M24 规则 1）：录制中（含开始中）停止，停止写文件期间忽略，空闲时按截图的规则开遮罩。主线程调用。
 pub fn rec_pressed(app: &AppHandle) {
-    let recording = crate::rec::is_recording(app);
-    let route = rec_route(recording, !recording && crate::rec::is_busy(app));
-    match route {
-        RecRoute::Stop => {
+    use crate::rec::Phase;
+    match crate::rec::phase(app) {
+        Phase::Recording => {
             log::info!("rec 快捷键按下，停止录制");
             crate::rec::stop(app);
         }
-        RecRoute::Ignore => log::info!("rec 快捷键按下，正在停止，忽略"),
-        RecRoute::Overlay => overlay_pressed(app, crate::shot::Mode::Rec),
+        Phase::Stopping => log::info!("rec 快捷键按下，正在停止，忽略"),
+        // 遮罩已上屏时再按退出、冻结中忽略，交给 shot_route 与 Session::try_begin_at
+        Phase::Idle => overlay_pressed(app, crate::shot::Mode::Rec),
     }
 }
 
@@ -182,7 +164,7 @@ pub fn label(shortcut: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{RecRoute, Role, ShotRoute, failure_notice, label, rec_route, role_of, shot_route};
+    use super::{Role, ShotRoute, failure_notice, label, role_of, shot_route};
 
     #[test]
     fn shot_never_begins_while_dialog_open_and_panel_visible() {
@@ -195,14 +177,6 @@ mod tests {
         assert_eq!(shot_route(false, false, false), Begin);
         assert_eq!(shot_route(true, false, false), Begin);
         assert_eq!(shot_route(true, false, true), Begin);
-    }
-
-    #[test]
-    fn rec_route_stops_ignores_or_opens_overlay() {
-        assert_eq!(rec_route(true, false), RecRoute::Stop);
-        assert_eq!(rec_route(false, true), RecRoute::Ignore);
-        // 遮罩已上屏时再按退出、冻结中忽略，交给 shot_route 与 Session::try_begin_at
-        assert_eq!(rec_route(false, false), RecRoute::Overlay);
     }
 
     #[test]

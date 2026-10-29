@@ -16,7 +16,7 @@ mod tray;
 
 use state::AppState;
 use std::path::PathBuf;
-use tauri::{Manager, WindowEvent};
+use tauri::{AppHandle, Manager, WindowEvent};
 use tauri_plugin_global_shortcut::ShortcutState;
 use tauri_plugin_log::{Target, TargetKind};
 use tauri_plugin_notification::NotificationExt;
@@ -122,15 +122,8 @@ pub fn run() {
                 let panel_failed = matches!(e, error::AppError::HotkeyTaken);
                 let (shot_failed, rec_failed) =
                     hotkey::unregistered(app.handle(), &shot_hotkey, &rec_hotkey);
-                if let Some(body) = hotkey::failure_notice(panel_failed, shot_failed, rec_failed)
-                    && let Err(e) = app
-                        .notification()
-                        .builder()
-                        .title("xPaste")
-                        .body(body)
-                        .show()
-                {
-                    log::warn!("发送快捷键注册失败通知失败：{e}");
+                if let Some(body) = hotkey::failure_notice(panel_failed, shot_failed, rec_failed) {
+                    notify(app.handle(), &body);
                 }
                 if panel_failed {
                     tray::mark_hotkey_failed();
@@ -256,11 +249,24 @@ pub fn run() {
             // macOS 重开已运行的 .app（Finder / Spotlight）不起第二个进程，而是发 Reopen
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => panel::toggle(app, None, panel::Trigger::Relaunch),
-            // 托盘“退出”已先停；兜住其他退出途径：录制中先把文件写完，不然 mp4 打不开（M24）。
-            // 另一个线程上的开始或停止还没完时先拦下，等它结束后 rec 再退出（守卫里的 hold_exit 每次都会执行）
+            // 录制、开始或停止进行中时拦下这次退出（托盘“退出”也走这里）：rec 先停止、把文件写完再退出，
+            // 不然 mp4 打不开（M24 规则 8）。守卫里的 hold_exit 每次都会执行
             tauri::RunEvent::ExitRequested { api, .. } if rec::hold_exit(app) => api.prevent_exit(),
             _ => {}
         });
+}
+
+/// 系统通知，标题“xPaste”；发送失败只记日志。
+pub(crate) fn notify(app: &AppHandle, body: &str) {
+    if let Err(e) = app
+        .notification()
+        .builder()
+        .title("xPaste")
+        .body(body)
+        .show()
+    {
+        log::warn!("发送系统通知失败：{e}");
+    }
 }
 
 /// 环境变量非空（去首尾空白后）时用它作数据目录，否则用默认目录；开发版隔离真实数据用。

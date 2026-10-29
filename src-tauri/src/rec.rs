@@ -2,10 +2,10 @@
 //!
 //! 线程：`rec_start` 在阻塞线程里跑 `start`（取屏幕、问麦克风权限、`start_recording` 都会阻塞）；
 //! 录制中一个 `rec-tick` 线程每秒更新菜单栏标题、轮询中断；`stop` 把 `Recorder::stop`（阻塞到文件写完）
-//! 与收尾放到后台线程；`stop_blocking` 在当前线程做完，退出前用。
+//! 与收尾放到后台线程。
 //!
-//! 主线程从不等别的线程（开始线程要切主线程建窗口、改菜单栏）：退出时别的线程上的开始或停止还没完，
-//! 由 `hold_exit` 拦下这次退出，在等待线程里等它结束再退出。
+//! 主线程从不等别的线程（开始线程与收尾都要切主线程建窗口、改菜单栏）：退出时还在录制、开始或停止，
+//! 由 `hold_exit` 拦下这次退出、发起停止，在等待线程里等它结束再退出。
 //!
 //! 锁：`state(app)` 的结果一律先 `let` 绑定再用。edition 2024 里 `if let` 判别式的临时锁活到分支结束，
 //! 分支里再加锁（如 `wrap_up` 的 `done()`）会在同一线程上死锁。
@@ -17,12 +17,12 @@ use std::time::{Duration, Instant};
 
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
-use tauri_plugin_notification::NotificationExt;
 use xpaste_platform::Recorder;
 use xpaste_platform::record::{MicAccess, RecordOptions, RecordOutcome};
 
 use crate::error::AppError;
 use crate::events;
+use crate::notify;
 use crate::panel::on_main;
 use crate::shot::{self, LRect};
 use crate::state::AppState;
@@ -32,8 +32,12 @@ use crate::tray;
 const FRAME: &str = "rec-frame";
 /// 边框淡出时长（同 `src/rec-frame.css`），淡出后再隐藏窗口
 const FADE: Duration = Duration::from_millis(200);
-/// 退出时最多等另一个线程上进行中的开始或停止这么久，超时照常退出
-const EXIT_WAIT: Duration = Duration::from_secs(10);
+/// 退出时最多等录屏回到空闲这么久，超时照常退出。要盖住停止的最坏情况：停止采集等回调 10 s
+/// （平台层 `CALLBACK_WAIT`）加写完文件 30 s（`FINISH_WAIT`），再加 `EXIT_GRACE`。开始中还在等麦克风
+/// 授权框（最多 60 s）时盖不住，但那时还没开始录，到点退出不丢东西
+const EXIT_WAIT: Duration = Duration::from_secs(45);
+/// 回到空闲后再等这么久才退出：收尾随后写剪切板，监听器（300 ms 查一次）要来得及把视频记录入库（M24 规则 9）
+const EXIT_GRACE: Duration = Duration::from_secs(1);
 
 /// 录制阶段。开始录制期间（`begin` 之后、录屏器到手之前）也算 `Recording`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -109,6 +113,10 @@ impl<R> RecState<R> {
         *self = Self::default();
     }
 
+    pub fn phase(&self) -> Phase {
+        self.phase
+    }
+
     pub fn is_recording(&self) -> bool {
         self.phase == Phase::Recording
     }
@@ -136,6 +144,10 @@ fn state(app: &AppHandle) -> MutexGuard<'_, RecState> {
         .unwrap_or_else(PoisonError::into_inner)
 }
 
+pub fn phase(app: &AppHandle) -> Phase {
+    state(app).phase()
+}
+
 pub fn is_recording(app: &AppHandle) -> bool {
     state(app).is_recording()
 }
@@ -147,18 +159,6 @@ pub fn is_busy(app: &AppHandle) -> bool {
 /// 当前边框位置；不在录制时为 `None`。
 pub fn frame_rect(app: &AppHandle) -> Option<LRect> {
     state(app).frame
-}
-
-pub fn notify(app: &AppHandle, body: &str) {
-    if let Err(e) = app
-        .notification()
-        .builder()
-        .title("xPaste")
-        .body(body)
-        .show()
-    {
-        log::warn!("发送录屏通知失败：{e}");
-    }
 }
 
 /// `rec_start`：遮罩倒计时结束后调用，阻塞线程里执行。只接受当前这一次截图会话发起的调用。
@@ -233,7 +233,13 @@ fn launch(
         return Err(cancelled());
     }
 
-    let dir = resolve_rec_dir(&cur.rec_dir, app.path().video_dir().ok(), &st.data_dir);
+    let dir = shot::resolve_dir(
+        &cur.rec_dir,
+        app.path().video_dir().ok(),
+        &st.data_dir,
+        "recordings",
+        "录屏",
+    );
     // 遮罩已撤下，此后的失败都要通知，不能静默（M24 规则 9）；io::Error 的描述不带路径
     if let Err(e) = std::fs::create_dir_all(&dir) {
         log::warn!("rec 创建录屏文件夹失败：{e}");
@@ -356,30 +362,22 @@ fn stop_with(app: &AppHandle, interrupted: bool) {
     tauri::async_runtime::spawn_blocking(move || wrap_up(&app, taken, interrupted));
 }
 
-/// 退出前调用（托盘“退出”）：录制中在当前线程停止并写完文件。不等别的线程（见模块注释与 `hold_exit`）。
-pub fn stop_blocking(app: &AppHandle) {
-    // 先绑定：判别式里的临时锁会活到分支结束，wrap_up 再加锁就死锁
-    let taken = state(app).take_for_stop();
-    if let Some(taken) = taken {
-        wrap_up(app, taken, false);
-    }
-}
-
 /// 已拦下过一次退出：等待线程超时后的 `exit` 不再拦
 static EXIT_DEFERRED: AtomicBool = AtomicBool::new(false);
 
-/// 忙（开始或停止进行中）且还没拦过时拦下这次退出。
+/// 忙（录制、开始或停止进行中）且还没拦过时拦下这次退出。
 fn defer_exit(busy: bool, deferred: &AtomicBool) -> bool {
     busy && !deferred.swap(true, Ordering::SeqCst)
 }
 
-/// `RunEvent::ExitRequested`（主线程）：先 `stop_blocking`；另一个线程上的开始或停止还没完时返回 true，
-/// 调用方 `prevent_exit`，等待线程等它结束（最多 `EXIT_WAIT`）后再 `exit`。主线程不阻塞，开始线程的主线程调用照常执行。
+/// `RunEvent::ExitRequested`（主线程）：录制、开始或停止进行中时返回 true（只拦一次），调用方 `prevent_exit`。
+/// 这里只发起停止（同菜单“停止录制”，写文件在后台），等待线程等回到空闲、再过 `EXIT_GRACE` 后 `exit`，
+/// 最多等 `EXIT_WAIT`（M24 规则 8）。主线程不阻塞：收尾与开始线程都要切主线程。再次退出不拦，立即退出。
 pub fn hold_exit(app: &AppHandle) -> bool {
-    stop_blocking(app);
     if !defer_exit(is_busy(app), &EXIT_DEFERRED) {
         return false;
     }
+    stop(app);
     let waiter = app.clone();
     let spawned = std::thread::Builder::new()
         .name("rec-exit".into())
@@ -391,12 +389,14 @@ pub fn hold_exit(app: &AppHandle) -> bool {
             }
             if is_busy(&waiter) {
                 log::warn!("rec 退出时等待超时，照常退出");
+            } else {
+                std::thread::sleep(EXIT_GRACE);
             }
             waiter.exit(0);
         });
     match spawned {
         Ok(_) => {
-            log::info!("rec 退出前等待录屏开始或停止完成");
+            log::info!("rec 退出前先停止录屏、写完文件");
             true
         }
         Err(e) => {
@@ -409,12 +409,15 @@ pub fn hold_exit(app: &AppHandle) -> bool {
 /// 停止并收尾：写完文件、撤边框、清菜单栏、按设置写剪切板、发通知。
 fn wrap_up(app: &AppHandle, (recorder, path, copy): Taken<Recorder>, interrupted: bool) {
     let result = recorder.stop();
-    // 文件已写完就回到空闲：退出时的等待不依赖下面那些要切到主线程的步骤
-    state(app).done();
+    // 先撤掉本次的边框与菜单栏，再回到空闲：done() 之后马上就能开始新的一次，迟到的清理会落到新录制上。
+    // 隐藏边框经主线程排队，排在新一次显示边框之前
     frame_out(app);
     let faded = Instant::now();
     tray::set_recording(app, None);
     tray::show_stop_item(app, false);
+    hide_frame_after_fade(app, faded);
+    state(app).done();
+    // 写剪切板与通知不碰新一次的界面，放在回到空闲之后
     let notice = match result {
         Ok(outcome @ RecordOutcome::Saved { duration_ms, bytes }) => {
             log::info!("rec 结束 {duration_ms}ms {bytes} 字节");
@@ -431,7 +434,6 @@ fn wrap_up(app: &AppHandle, (recorder, path, copy): Taken<Recorder>, interrupted
         }
     };
     notify(app, &notice);
-    hide_frame_after_fade(app, faded);
 }
 
 /// 文件引用写剪切板，不标记为自身写入：监听器照常把它作为视频记录入库（M01 规则 5 的例外，同截图复制）。
@@ -489,7 +491,7 @@ fn show_frame(app: &AppHandle, (origin, size): ((f64, f64), (f64, f64))) -> Opti
             None
         }));
     });
-    // 主线程正忙着退出（stop_blocking 在等）时不能一直等它
+    // 主线程卡住时不能一直等它
     let n = rx.recv_timeout(Duration::from_secs(2)).ok().flatten();
     if n.is_none() {
         log::warn!("rec 取不到边框窗口编号，边框会被录进去");
@@ -561,10 +563,15 @@ pub fn tray_title(elapsed: Duration) -> String {
     format!("● {}", clock(elapsed))
 }
 
-/// 录完的系统通知正文。
+/// 录完的系统通知正文（M24 规则 9）。
 pub fn outcome_notice(outcome: &RecordOutcome, copied: bool, interrupted: bool) -> String {
     let RecordOutcome::Saved { duration_ms, .. } = *outcome else {
-        return "录屏太短，没有保存".into();
+        return if interrupted {
+            "录屏中断，没有录到画面"
+        } else {
+            "录屏太短，没有保存"
+        }
+        .into();
     };
     let t = clock(Duration::from_millis(duration_ms));
     if interrupted {
@@ -574,23 +581,6 @@ pub fn outcome_notice(outcome: &RecordOutcome, copied: bool, interrupted: bool) 
     } else {
         format!("录屏已保存 · {t}")
     }
-}
-
-/// 设置里录屏文件夹为空时的默认：`<影片>/xPaste`，取不到影片目录时 `<数据目录>/recordings`。
-pub fn default_rec_dir(movies: Option<PathBuf>, data_dir: &Path) -> PathBuf {
-    movies.map_or_else(|| data_dir.join("recordings"), |m| m.join("xPaste"))
-}
-
-/// 设置里的录屏文件夹：空或不是绝对路径时用默认文件夹（同 `shot::resolve_shot_dir`）。
-pub fn resolve_rec_dir(setting: &str, movies: Option<PathBuf>, data_dir: &Path) -> PathBuf {
-    let p = Path::new(setting);
-    if p.is_absolute() {
-        return p.to_path_buf();
-    }
-    if !setting.is_empty() {
-        log::warn!("录屏文件夹不是绝对路径，改用默认文件夹");
-    }
-    default_rec_dir(movies, data_dir)
 }
 
 #[cfg(test)]
@@ -625,29 +615,11 @@ mod tests {
         );
         assert_eq!(
             outcome_notice(&RecordOutcome::Empty, false, true),
-            "录屏太短，没有保存"
+            "录屏中断，没有录到画面"
         );
         assert_eq!(
             outcome_notice(&saved(65_000), true, true),
             "录屏中断，已保存录到的部分 · 01:05"
-        );
-    }
-
-    #[test]
-    fn rec_dir_defaults_and_falls_back() {
-        let d = Path::new("/d");
-        assert_eq!(
-            default_rec_dir(Some("/m".into()), d),
-            PathBuf::from("/m/xPaste")
-        );
-        assert_eq!(default_rec_dir(None, d), PathBuf::from("/d/recordings"));
-        // Windows 上 `/mine` 不是绝对路径
-        let mine = if cfg!(windows) { r"C:\mine" } else { "/mine" };
-        assert_eq!(resolve_rec_dir(mine, None, d), PathBuf::from(mine));
-        assert_eq!(resolve_rec_dir("", None, d), PathBuf::from("/d/recordings"));
-        assert_eq!(
-            resolve_rec_dir("recs", Some("/m".into()), d),
-            PathBuf::from("/m/xPaste")
         );
     }
 
@@ -679,6 +651,7 @@ mod tests {
         assert_eq!((path, copy), (PathBuf::from("/a.mp4"), true));
         assert!(s.take_for_stop().is_none(), "不能重复停止");
         assert!(!s.is_recording() && s.is_busy());
+        assert_eq!(s.phase(), Phase::Stopping);
         assert!(!s.begin(), "停止期间不能开始");
         s.done();
         assert!(!s.is_busy());

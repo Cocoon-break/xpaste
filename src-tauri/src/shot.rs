@@ -378,7 +378,7 @@ pub fn begin(app: &AppHandle, mode: Mode) {
     // 录制中不开遮罩（M24）：录屏快捷键在录制中已改为停止，到这里的只有截图快捷键
     if crate::rec::is_recording(app) {
         log::info!("{} 录屏中，不开始", mode.as_str());
-        crate::rec::notify(app, "正在录屏，停止录制后再截图");
+        crate::notify(app, "正在录屏，停止录制后再截图");
         return;
     }
     let granted = xpaste_platform::screen_capture_granted();
@@ -900,21 +900,24 @@ pub fn unique_file_name(
         .expect("总有不重名的序号")
 }
 
-/// 设置里截图文件夹为空时的默认：`<图片>/xPaste`，取不到图片目录时 `<数据目录>/shots`。
-pub fn default_shot_dir(picture: Option<PathBuf>, data_dir: &Path) -> PathBuf {
-    picture.map_or_else(|| data_dir.join("shots"), |p| p.join("xPaste"))
-}
-
-/// 设置里的截图文件夹：空或不是绝对路径（会落到进程工作目录）时用默认文件夹。
-pub fn resolve_shot_dir(setting: &str, picture: Option<PathBuf>, data_dir: &Path) -> PathBuf {
+/// 设置里的截图 / 录屏文件夹（M23 规则 7、M24 规则 9）：绝对路径照用；空或不是绝对路径（会落到进程工作目录）
+/// 时用默认的 `<base>/xPaste`（截图为“图片”、录屏为“影片”文件夹），取不到 `base` 时 `<数据目录>/<fallback>`。
+/// `what` 只用于日志。
+pub fn resolve_dir(
+    setting: &str,
+    base: Option<PathBuf>,
+    data_dir: &Path,
+    fallback: &str,
+    what: &str,
+) -> PathBuf {
     let p = Path::new(setting);
     if p.is_absolute() {
         return p.to_path_buf();
     }
     if !setting.is_empty() {
-        log::warn!("截图文件夹不是绝对路径，改用默认文件夹");
+        log::warn!("{what}文件夹不是绝对路径，改用默认文件夹");
     }
-    default_shot_dir(picture, data_dir)
+    base.map_or_else(|| data_dir.join(fallback), |b| b.join("xPaste"))
 }
 
 /// 在 `dir` 里新建不重名的截图文件并写入，返回文件名。用 `create_new`，
@@ -1080,7 +1083,13 @@ fn save(app: &AppHandle, png: Vec<u8>) -> Result<ShotOutcome, AppError> {
         let s = state.settings();
         (s.shot_dir.clone(), s.shot_save_copy)
     };
-    let dir = resolve_shot_dir(&dir, app.path().picture_dir().ok(), &state.data_dir);
+    let dir = resolve_dir(
+        &dir,
+        app.path().picture_dir().ok(),
+        &state.data_dir,
+        "shots",
+        "截图",
+    );
     std::fs::create_dir_all(&dir)?;
     let stamp = xpaste_core::capture::local_stamp(crate::clock::now_ms());
     let name = write_unique(&dir, &stamp, &png)?;
@@ -1701,18 +1710,6 @@ mod tests {
     }
 
     #[test]
-    fn default_shot_dir_falls_back() {
-        assert_eq!(
-            default_shot_dir(Some("/p".into()), Path::new("/d")),
-            PathBuf::from("/p/xPaste")
-        );
-        assert_eq!(
-            default_shot_dir(None, Path::new("/d")),
-            PathBuf::from("/d/shots")
-        );
-    }
-
-    #[test]
     fn pins_dir_cleared_on_start() {
         let dir = std::env::temp_dir().join(format!("xpaste-pins-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -1831,15 +1828,21 @@ mod tests {
     }
 
     #[test]
-    fn relative_shot_dir_falls_back_to_default() {
+    fn save_dir_falls_back_to_default() {
         let d = Path::new("/d");
+        let shot = |s: &str, base: Option<&str>| {
+            resolve_dir(s, base.map(PathBuf::from), d, "shots", "截图")
+        };
         // Windows 上 `/mine` 不是绝对路径
         let mine = if cfg!(windows) { r"C:\mine" } else { "/mine" };
-        assert_eq!(resolve_shot_dir(mine, None, d), PathBuf::from(mine));
-        assert_eq!(resolve_shot_dir("", None, d), PathBuf::from("/d/shots"));
+        assert_eq!(shot(mine, Some("/p")), PathBuf::from(mine));
+        assert_eq!(shot("", Some("/p")), PathBuf::from("/p/xPaste"));
+        assert_eq!(shot("", None), PathBuf::from("/d/shots"));
+        assert_eq!(shot("shots", Some("/p")), PathBuf::from("/p/xPaste"));
+        // 录屏：影片文件夹取不到时落到 recordings
         assert_eq!(
-            resolve_shot_dir("shots", Some("/p".into()), d),
-            PathBuf::from("/p/xPaste")
+            resolve_dir("recs", None, d, "recordings", "录屏"),
+            PathBuf::from("/d/recordings")
         );
     }
 
