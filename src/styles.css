@@ -485,6 +485,8 @@ dialog > form { display: contents; }
 }
 .st-tabs [aria-selected="true"] { color: var(--fg); font-weight: 500; }
 .st-tabs [role="tab"]:focus-visible { outline-offset: -2px; }
+/* 打开设置时程序聚焦的标签不画焦点环，按键后恢复（见 main.ts openSettings） */
+.st-tabs [data-quiet-focus]:focus-visible { outline: none; }
 @media (hover: hover) and (pointer: fine) { .st-tabs [aria-selected="false"]:hover { color: var(--fg); background: var(--glass-3); } }
 /* 出错项所在标签：右上角红点，改正后消失 */
 .st-tabs [data-err]::after {

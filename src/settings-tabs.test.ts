@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { errorControl, tabKeyTarget } from './settings-tabs.ts';
+import { errorControl, revealsFocus, tabKeyTarget } from './settings-tabs.ts';
 
 test('←/→ 切到相邻标签，首尾循环', () => {
   assert.equal(tabKeyTarget('ArrowRight', 0, 4), 1);
@@ -12,6 +12,23 @@ test('←/→ 切到相邻标签，首尾循环', () => {
 test('Home / End 到第一个、最后一个', () => {
   assert.equal(tabKeyTarget('Home', 2, 4), 0);
   assert.equal(tabKeyTarget('End', 1, 4), 3);
+});
+
+test('带 Mod、Ctrl、Alt 的方向键不切标签（⌘ ←/→ 是面板的切换分类）', () => {
+  for (const m of [{ meta: true }, { ctrl: true }, { alt: true }]) {
+    assert.equal(tabKeyTarget('ArrowRight', 0, 4, m), null);
+    assert.equal(tabKeyTarget('Home', 2, 4, m), null);
+  }
+  assert.equal(tabKeyTarget('ArrowRight', 0, 4, { shift: true }), 1);
+});
+
+test('只有导航类按键才显示打开时压住的焦点环', () => {
+  for (const k of ['Meta', 'Control', 'Alt', 'Shift']) assert.equal(revealsFocus({ key: k }), false);
+  assert.equal(revealsFocus({ key: ',', meta: true }), false);
+  assert.equal(revealsFocus({ key: 'ArrowRight', meta: true }), false);
+  assert.equal(revealsFocus({ key: 'ArrowRight' }), true);
+  assert.equal(revealsFocus({ key: 'Tab', shift: true }), true);
+  assert.equal(revealsFocus({ key: 'a' }), true);
 });
 
 test('其他键不处理', () => {
