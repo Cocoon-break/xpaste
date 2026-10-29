@@ -7,6 +7,7 @@ pub mod model;
 pub mod pinyin;
 #[cfg(feature = "store")]
 pub mod store;
+pub mod translate;
 
 pub use error::CoreError;
 pub use model::*;
