@@ -207,7 +207,13 @@
               <div class="pick"><input id="recDir" readonly autocomplete="off" spellcheck="false"><button class="btn" type="button" id="recDirBtn" aria-describedby="recDirErr">更改…</button></div>
               <p class="err" id="recDirErr" hidden></p>
             </div>
-            <div class="switches" style="--i:4">
+            <div class="field os-mac" style="--i:4">
+              <div class="line"><span><label for="recQuality"><b>录屏清晰度</b></label><small id="recQualityHelp">高：按屏幕实际像素录，Retina 屏最清楚，文件最大；标准：按窗口大小录，文字清楚，文件小很多；小文件：再压低码率，适合发聊天软件</small></span><select id="recQuality" aria-describedby="recQualityHelp"><option value="high">高</option><option value="standard" selected>标准</option><option value="small">小文件</option></select></div>
+            </div>
+            <div class="field os-mac" style="--i:5">
+              <div class="line"><span><label for="recFps"><b>录屏帧率</b></label><small id="recFpsHelp">60 fps 更流畅，文件也更大</small></span><select id="recFps" aria-describedby="recFpsHelp"><option value="30" selected>30 fps</option><option value="60">60 fps</option></select></div>
+            </div>
+            <div class="switches" style="--i:6">
               <label class="switch"><span><b>保存截图时同时复制</b><small>按 <span class="mod"></span> S 保存的截图也进入历史</small></span><input type="checkbox" id="shotSaveCopy" checked></label>
               <label class="switch os-mac"><span><b>录制系统声音</b><small>录进视频里的是电脑播放的声音</small></span><input type="checkbox" id="recSystemAudio"></label>
               <label class="switch os-mac" id="recMicRow"><span><b>录制麦克风</b><small id="recMicNote">同时录下麦克风的声音</small></span><input type="checkbox" id="recMicrophone"></label>

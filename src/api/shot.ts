@@ -146,6 +146,7 @@ const dev = {
     return {
       index: 0, generation: ++this.gen, rects: this.wins(), cursor: [innerWidth / 2, innerHeight / 2], scale: devicePixelRatio || 1, saveCopy: true,
       mode: this.q.has('rec') ? 'rec' : 'shot', systemAudio: false, microphone: this.q.get('mic') === 'none' ? null : false,
+      recScale: 1, recFps: 30,
     };
   },
   frame(): Frame {

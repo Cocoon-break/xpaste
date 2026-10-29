@@ -1,7 +1,7 @@
 // 截图遮罩的选区几何（原型 docs/specs/2026-10-28-截图与录屏-原型.html 的 norm / resize / hitWin / place / update / drawLoupe）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { badgePos, hit, loupePos, norm, placeBar, resize } from './geom.ts';
+import { badgePos, hit, loupePos, norm, outputSize, placeBar, resize } from './geom.ts';
 
 const W = 1440, H = 900;
 
@@ -63,4 +63,14 @@ test('badgePos 的 x 不超出屏幕右边', () => {
 test('loupePos 默认在光标右下，靠右下边缘时翻到左上', () => {
   assert.deepEqual(loupePos(100, 100, W, H), { x: 122, y: 122 });
   assert.deepEqual(loupePos(1400, 850, W, H), { x: 1400 - 22 - 124, y: 850 - 22 - 152 });
+});
+
+test('outputSize 与 record::output_size 同口径：× 缩放、长边不超过 3840、向下取偶、至少 2', () => {
+  assert.deepEqual(outputSize(801, 451, 2), [1602, 902]);
+  assert.deepEqual(outputSize(801, 451, 1), [800, 450]);
+  assert.deepEqual(outputSize(100.5, 33.3, 1), [100, 32]);
+  assert.deepEqual(outputSize(2560, 1440, 2), [3840, 2160]);
+  assert.deepEqual(outputSize(1440, 2560, 2), [2160, 3840]);
+  assert.deepEqual(outputSize(5120, 2880, 1), [3840, 2160]);
+  assert.deepEqual(outputSize(0.4, 0.4, 1), [2, 2]);
 });

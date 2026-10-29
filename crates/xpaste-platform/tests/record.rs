@@ -3,10 +3,12 @@
 use std::thread;
 use std::time::Duration;
 
-use xpaste_platform::record::{RecordOptions, RecordOutcome, output_size};
+use xpaste_platform::record::{
+    RecQuality, RecordOptions, RecordOutcome, output_scale, output_size,
+};
 use xpaste_platform::{freeze_displays, start_recording, video_meta};
 
-fn options(name: &str) -> (RecordOptions, f64) {
+fn options(name: &str, quality: RecQuality, fps: u32) -> (RecordOptions, f64) {
     let main = &freeze_displays().unwrap()[0];
     let dir = std::env::temp_dir().join(format!("xpaste-record-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -16,6 +18,8 @@ fn options(name: &str) -> (RecordOptions, f64) {
         display: main.id,
         rect: (0.0, 0.0, 320.0, 200.0),
         scale: main.scale,
+        quality,
+        fps,
         system_audio: false,
         microphone: false,
         exclude_window: None,
@@ -27,25 +31,35 @@ fn options(name: &str) -> (RecordOptions, f64) {
 #[test]
 #[ignore = "需要屏幕录制权限"]
 fn records_two_seconds() {
-    let (opts, scale) = options("two.mp4");
-    let path = opts.path.clone();
-    let rec = start_recording(opts).unwrap();
-    thread::sleep(Duration::from_secs(2));
-    assert!(!rec.failed());
-    let RecordOutcome::Saved { bytes, .. } = rec.stop().unwrap() else {
-        panic!("2 s 录制不应为空");
-    };
-    assert!(bytes > 0);
-    let meta = video_meta(&path).unwrap();
-    assert!(
-        (1.5..=3.0).contains(&meta.duration_sec),
-        "{}",
-        meta.duration_sec
-    );
-    assert_eq!((meta.w, meta.h), output_size(320.0, 200.0, scale));
+    // 高 @ 30 按屏幕实际像素，小文件 @ 60 按逻辑尺寸（M24 规则 6）
+    for (name, quality, fps) in [
+        ("two-high.mp4", RecQuality::High, 30),
+        ("two-small.mp4", RecQuality::Small, 60),
+    ] {
+        let (opts, scale) = options(name, quality, fps);
+        let path = opts.path.clone();
+        let rec = start_recording(opts).unwrap();
+        thread::sleep(Duration::from_secs(2));
+        assert!(!rec.failed());
+        let RecordOutcome::Saved { bytes, .. } = rec.stop().unwrap() else {
+            panic!("2 s 录制不应为空");
+        };
+        assert!(bytes > 0);
+        let meta = video_meta(&path).unwrap();
+        assert!(
+            (1.5..=3.0).contains(&meta.duration_sec),
+            "{}",
+            meta.duration_sec
+        );
+        assert_eq!(
+            (meta.w, meta.h),
+            output_size(320.0, 200.0, output_scale(quality, scale)),
+            "{name}"
+        );
+    }
 
     // 立即停止：可能一帧都没有
-    let (opts, _) = options("instant.mp4");
+    let (opts, _) = options("instant.mp4", RecQuality::Standard, 30);
     let path = opts.path.clone();
     match start_recording(opts).unwrap().stop().unwrap() {
         RecordOutcome::Empty => assert!(!path.exists()),

@@ -17,8 +17,8 @@ use objc2::runtime::{AnyObject, Bool, NSObject, NSObjectProtocol, ProtocolObject
 use objc2::{AllocAnyThread, DefinedClass, define_class, msg_send};
 use objc2_av_foundation::{
     AVAssetWriter, AVAssetWriterInput, AVAssetWriterStatus, AVAuthorizationStatus, AVCaptureDevice,
-    AVFileTypeMPEG4, AVMediaTypeAudio, AVMediaTypeVideo, AVVideoCodecKey, AVVideoCodecTypeH264,
-    AVVideoHeightKey, AVVideoWidthKey,
+    AVFileTypeMPEG4, AVMediaTypeAudio, AVMediaTypeVideo, AVVideoAverageBitRateKey, AVVideoCodecKey,
+    AVVideoCodecTypeH264, AVVideoCompressionPropertiesKey, AVVideoHeightKey, AVVideoWidthKey,
 };
 use objc2_core_foundation::{CFRetained, CGPoint, CGRect, CGSize};
 use objc2_core_media::{CMClock, CMSampleBuffer, CMSampleTimingInfo, CMTime, kCMTimeInvalid};
@@ -30,7 +30,9 @@ use objc2_screen_capture_kit::{
 use xpaste_core::Flavor;
 
 use crate::PlatformError;
-use crate::record::{MicAccess, RecordOptions, RecordOutcome, output_size};
+use crate::record::{
+    MicAccess, RecQuality, RecordOptions, RecordOutcome, output_scale, output_size, small_bitrate,
+};
 
 #[link(name = "CoreMedia", kind = "framework")]
 unsafe extern "C" {
@@ -416,7 +418,9 @@ fn start(opts: RecordOptions) -> Result<Recorder, PlatformError> {
         (display, exclude)
     };
     let (x, y, w, h) = opts.rect;
-    let (pw, ph) = output_size(w, h, opts.scale);
+    // 清晰度与帧率（M24 规则 6）：只有小文件指定码率，其余用编码器默认
+    let (pw, ph) = output_size(w, h, output_scale(opts.quality, opts.scale));
+    let bitrate = (opts.quality == RecQuality::Small).then(|| small_bitrate(pw, ph, opts.fps));
     let mic = opts.microphone && crate::macos_version().is_some_and(|v| v >= 15);
 
     // SAFETY: 以下设置都是 macOS 12.3 / 13 起就有的属性；captureMicrophone 只在 15 起设置
@@ -430,7 +434,7 @@ fn start(opts: RecordOptions) -> Result<Recorder, PlatformError> {
         config.setSourceRect(CGRect::new(CGPoint::new(x, y), CGSize::new(w, h)));
         config.setWidth(pw as usize);
         config.setHeight(ph as usize);
-        config.setMinimumFrameInterval(CMTime::new(1, 30));
+        config.setMinimumFrameInterval(CMTime::new(1, opts.fps as i32));
         config.setShowsCursor(true);
         config.setCapturesAudio(opts.system_audio);
         config.setSampleRate(AUDIO_RATE as isize);
@@ -441,7 +445,7 @@ fn start(opts: RecordOptions) -> Result<Recorder, PlatformError> {
         (filter, config)
     };
 
-    let state = writer_state(&opts.path, pw, ph, opts.system_audio, mic)?;
+    let state = writer_state(&opts.path, (pw, ph), bitrate, opts.system_audio, mic)?;
     let output = Output::new(Ivars {
         failed: AtomicBool::new(false),
         state: Mutex::new(state),
@@ -501,8 +505,8 @@ fn start(opts: RecordOptions) -> Result<Recorder, PlatformError> {
 
 fn writer_state(
     path: &Path,
-    w: u32,
-    h: u32,
+    (w, h): (u32, u32),
+    bitrate: Option<u32>,
     system_audio: bool,
     mic: bool,
 ) -> Result<State, PlatformError> {
@@ -515,19 +519,29 @@ fn writer_state(
         };
         let writer = AVAssetWriter::assetWriterWithURL_fileType_error(&url, file_type)
             .map_err(|e| record_err(format!("创建写入器失败：{}", ns_err(&e))))?;
-        let (Some(codec_key), Some(h264), Some(w_key), Some(h_key)) = (
+        let (Some(codec_key), Some(h264), Some(w_key), Some(h_key), Some(comp_key), Some(br_key)) = (
             AVVideoCodecKey,
             AVVideoCodecTypeH264,
             AVVideoWidthKey,
             AVVideoHeightKey,
+            AVVideoCompressionPropertiesKey,
+            AVVideoAverageBitRateKey,
         ) else {
             return Err(record_err("缺少视频设置键"));
         };
         let (wn, hn) = (NSNumber::new_u32(w), NSNumber::new_u32(h));
-        let video_settings: Retained<NSDictionary<NSString, AnyObject>> = NSDictionary::from_slices(
-            &[codec_key, w_key, h_key],
-            &[h264.as_ref(), wn.as_ref(), hn.as_ref()],
-        );
+        let compression: Option<Retained<NSDictionary<NSString, AnyObject>>> = bitrate.map(|b| {
+            let bn = NSNumber::new_u32(b);
+            NSDictionary::from_slices(&[br_key], &[bn.as_ref()])
+        });
+        let mut keys = vec![codec_key, w_key, h_key];
+        let mut values: Vec<&AnyObject> = vec![h264.as_ref(), wn.as_ref(), hn.as_ref()];
+        if let Some(c) = &compression {
+            keys.push(comp_key);
+            values.push(c.as_ref());
+        }
+        let video_settings: Retained<NSDictionary<NSString, AnyObject>> =
+            NSDictionary::from_slices(&keys, &values);
         let video = AVAssetWriterInput::assetWriterInputWithMediaType_outputSettings(
             video_type,
             Some(&video_settings),

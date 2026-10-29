@@ -1366,6 +1366,7 @@ const themeSeg = $('#themeSeg'), themePill = themeSeg.querySelector<HTMLElement>
 const themeOpts = [...themeSeg.querySelectorAll<HTMLElement>('[data-theme-opt]')];
 const shotSaveCopyIn = $<HTMLInputElement>('#shotSaveCopy'), shotPermRow = $('#shotPermRow');
 const recSystemAudioIn = $<HTMLInputElement>('#recSystemAudio'), recMicIn = $<HTMLInputElement>('#recMicrophone'), recCopyIn = $<HTMLInputElement>('#recCopy');
+const recQualityIn = $<HTMLSelectElement>('#recQuality'), recFpsIn = $<HTMLSelectElement>('#recFps');
 const HOTKEY_IDLE = '点击输入框，然后按下新的组合键', OPT_IDLE = '点击输入框后按下新的组合键；按 ⌫ 清空表示不启用';
 let pendingHotkey = '', dlgReturn: HTMLElement | null = null, closeTimer = 0, saving = false;
 
@@ -1691,6 +1692,8 @@ function openSettings() {
   recSystemAudioIn.checked = st.recSystemAudio;
   recMicIn.checked = st.recMicrophone;
   recCopyIn.checked = st.recCopy;
+  recQualityIn.value = st.recQuality;
+  recFpsIn.value = String(st.recFps);
   retainIn.value = optionFromRetention(st.retentionDays);
   limitIn.value = String(st.maxRecords);
   limitErr.hidden = true;
@@ -1795,6 +1798,7 @@ async function submitSettings() {
     moveToTop: moveTopIn.checked, launchAtLogin: autostartIn.checked, ocrEnabled: ocrOnIn.checked, ocrBackfill: ocrBackfillIn.checked, searchFileText: fileTextIn.checked,
     shotHotkey: shotKey.pending, shotDir: shotDir.pending, shotSaveCopy: shotSaveCopyIn.checked,
     recHotkey: recKey.pending, recDir: recDir.pending, recSystemAudio: recSystemAudioIn.checked, recMicrophone: recMicIn.checked, recCopy: recCopyIn.checked,
+    recQuality: recQualityIn.value, recFps: recFpsIn.value,
   });
   saving = true;
   try {

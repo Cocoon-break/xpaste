@@ -52,6 +52,7 @@ test('formToSettings 只改表单字段，其余（含外观：点选即保存�
     frequentMinUses: 3, ocrEnabled: true, ocrBackfill: true, searchFileText: false,
     shotHotkey: 'Alt+Shift+A', shotDir: '', shotSaveCopy: true,
     recHotkey: 'Alt+Shift+R', recDir: '', recSystemAudio: false, recMicrophone: false, recCopy: true,
+    recQuality: 'standard', recFps: 30,
   };
   assert.deepEqual(
     formToSettings(base, {
@@ -59,6 +60,7 @@ test('formToSettings 只改表单字段，其余（含外观：点选即保存�
       launchAtLogin: false, frequent: 5, ocrEnabled: false, ocrBackfill: false, searchFileText: true,
       shotHotkey: 'Alt+Shift+S', shotDir: '/x', shotSaveCopy: false,
       recHotkey: 'Alt+Shift+T', recDir: '/y', recSystemAudio: true, recMicrophone: true, recCopy: false,
+      recQuality: 'small', recFps: '60',
     }),
     {
       hotkey: 'CommandOrControl+Alt+C', retentionDays: null, maxRecords: 1000, ignoredApps: ['a', 'b'], skipSensitive: false,
@@ -66,6 +68,7 @@ test('formToSettings 只改表单字段，其余（含外观：点选即保存�
       frequentMinUses: 5, ocrEnabled: false, ocrBackfill: false, searchFileText: true,
       shotHotkey: 'Alt+Shift+S', shotDir: '/x', shotSaveCopy: false,
       recHotkey: 'Alt+Shift+T', recDir: '/y', recSystemAudio: true, recMicrophone: true, recCopy: false,
+      recQuality: 'small', recFps: 60,
     },
   );
 });

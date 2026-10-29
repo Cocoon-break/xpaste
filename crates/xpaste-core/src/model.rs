@@ -45,6 +45,16 @@ pub enum Appearance {
     Dark,
 }
 
+/// 录屏清晰度（M24 规则 6）：高按屏幕实际像素，标准按逻辑尺寸，小文件在标准上再压低码率。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RecQuality {
+    High,
+    #[default]
+    Standard,
+    Small,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -88,6 +98,10 @@ pub struct Settings {
     pub rec_microphone: bool,
     /// 录完把视频文件复制到剪切板
     pub rec_copy: bool,
+    /// 录屏清晰度（M24 规则 6）
+    pub rec_quality: RecQuality,
+    /// 录屏帧率，30 | 60（M24 规则 6）
+    pub rec_fps: u32,
 }
 
 impl Default for Settings {
@@ -123,6 +137,8 @@ impl Default for Settings {
             rec_system_audio: false,
             rec_microphone: false,
             rec_copy: true,
+            rec_quality: RecQuality::Standard,
+            rec_fps: 30,
         }
     }
 }
@@ -222,6 +238,9 @@ impl Settings {
             if !self.shot_hotkey.is_empty() && rec == hotkey_key(&self.shot_hotkey) {
                 return fail("录屏快捷键不能与截图快捷键相同");
             }
+        }
+        if !matches!(self.rec_fps, 30 | 60) {
+            return fail("录屏帧率只能是 30 或 60");
         }
         if !matches!(self.retention_days, None | Some(7 | 30 | 90)) {
             return fail("历史保留只能是 7 天、30 天、90 天或永久");
@@ -721,6 +740,35 @@ mod tests {
         assert_eq!(s.rec_system_audio, d.rec_system_audio);
         assert_eq!(s.rec_microphone, d.rec_microphone);
         assert_eq!(s.rec_copy, d.rec_copy);
+        assert_eq!(s.rec_quality, d.rec_quality);
+        assert_eq!(s.rec_fps, d.rec_fps);
+    }
+
+    #[test]
+    fn rec_quality_and_fps_defaults_and_serde() {
+        let d = Settings::default();
+        assert_eq!(d.rec_quality, RecQuality::Standard);
+        assert_eq!(d.rec_fps, 30);
+        let json = serde_json::to_string(&d).unwrap();
+        assert!(json.contains(r#""recQuality":"standard""#), "{json}");
+        assert!(json.contains(r#""recFps":30"#), "{json}");
+        let s: Settings = serde_json::from_str(r#"{"recQuality":"small","recFps":60}"#).unwrap();
+        assert_eq!((s.rec_quality, s.rec_fps), (RecQuality::Small, 60));
+        let s: Settings = serde_json::from_str(r#"{"recQuality":"high"}"#).unwrap();
+        assert_eq!(s.rec_quality, RecQuality::High);
+    }
+
+    #[test]
+    fn validate_rec_fps() {
+        let with = |fps| Settings {
+            rec_fps: fps,
+            ..Default::default()
+        };
+        assert!(with(30).validate().is_ok());
+        assert!(with(60).validate().is_ok());
+        for fps in [0, 24, 59, 120] {
+            assert_eq!(invalid(&with(fps)), "录屏帧率只能是 30 或 60", "{fps}");
+        }
     }
 
     #[cfg(target_os = "macos")]

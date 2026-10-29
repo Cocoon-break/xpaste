@@ -4,6 +4,9 @@ export type Kind = 'text' | 'link' | 'code' | 'image' | 'video' | 'file';
 
 export type Appearance = 'system' | 'light' | 'dark';
 
+/** 录屏清晰度（M24 规则 6） */
+export type RecQuality = 'high' | 'standard' | 'small';
+
 export interface Settings {
   hotkey: string;
   retentionDays: number | null;
@@ -28,6 +31,9 @@ export interface Settings {
   recSystemAudio: boolean;
   recMicrophone: boolean;
   recCopy: boolean;
+  recQuality: RecQuality;
+  /** 30 | 60 */
+  recFps: number;
 }
 
 export interface PlatformInfo {
@@ -143,6 +149,10 @@ export type BeginPayload = {
   systemAudio: boolean;
   /** 设置“录制麦克风”；本机不支持（macOS 15 以下）为 null */
   microphone: boolean | null;
+  /** 录屏输出缩放（按清晰度与该屏缩放），尺寸标签显示输出像素 */
+  recScale: number;
+  /** 设置“录屏帧率” */
+  recFps: number;
 };
 export type ShotAction = 'copy' | 'save' | 'ocr' | 'pin';
 /** 对应 `shot::ShotOutcome`。 */

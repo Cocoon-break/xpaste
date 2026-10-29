@@ -126,6 +126,8 @@ pub fn changed_fields(old: &Settings, new: &Settings) -> Vec<&'static str> {
         ),
         ("recMicrophone", old.rec_microphone != new.rec_microphone),
         ("recCopy", old.rec_copy != new.rec_copy),
+        ("recQuality", old.rec_quality != new.rec_quality),
+        ("recFps", old.rec_fps != new.rec_fps),
     ]
     .into_iter()
     .filter_map(|(name, changed)| changed.then_some(name))
@@ -429,6 +431,8 @@ mod tests {
             rec_system_audio: true,
             rec_microphone: true,
             rec_copy: false,
+            rec_quality: xpaste_core::RecQuality::High,
+            rec_fps: 60,
             ..Settings::default()
         };
         assert_eq!(
@@ -449,7 +453,9 @@ mod tests {
                 "recDir",
                 "recSystemAudio",
                 "recMicrophone",
-                "recCopy"
+                "recCopy",
+                "recQuality",
+                "recFps"
             ]
         );
     }

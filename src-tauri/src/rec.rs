@@ -265,6 +265,8 @@ fn launch(
         display,
         rect: (rect.x, rect.y, rect.w, rect.h),
         scale,
+        quality: cur.rec_quality,
+        fps: cur.rec_fps,
         system_audio,
         microphone,
         exclude_window: exclude,
@@ -296,9 +298,11 @@ fn launch(
         return Ok(None);
     }
     log::info!(
-        "rec 开始 屏 {index} {}x{} 系统声音={system_audio} 麦克风={microphone}",
+        "rec 开始 屏 {index} {}x{} 清晰度={:?} 帧率={} 系统声音={system_audio} 麦克风={microphone}",
         rect.w,
-        rect.h
+        rect.h,
+        cur.rec_quality,
+        cur.rec_fps
     );
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || tick(&app, t0));

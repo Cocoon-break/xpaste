@@ -318,6 +318,10 @@ pub struct BeginPayload {
     system_audio: bool,
     /// 设置“录制麦克风”；本机不支持（macOS 15 以下）为 `None`，开关不可用
     microphone: Option<bool>,
+    /// 录屏输出缩放（按设置“录屏清晰度”与该屏缩放），尺寸标签按它显示输出像素（M24 规则 3）
+    rec_scale: f64,
+    /// 设置“录屏帧率”，尺寸标签后缀用
+    rec_fps: u32,
 }
 
 /// 遮罩用途：截图（M23）或选录屏区域（M24）。
@@ -524,13 +528,15 @@ fn freeze(app: &AppHandle, generation: u64, settle: bool, mode: Mode) {
         .cursor_position()
         .ok()
         .and_then(|c| cursor_on(&frames, (c.x / k, c.y / k), points));
-    let (save_copy, system_audio, microphone) = {
+    let (save_copy, system_audio, microphone, rec_quality, rec_fps) = {
         let st = app.state::<AppState>();
         let s = st.settings();
         (
             s.shot_save_copy,
             s.rec_system_audio,
             mic_option(xpaste_platform::macos_version(), s.rec_microphone),
+            s.rec_quality,
+            s.rec_fps,
         )
     };
     let payloads: Vec<BeginPayload> = frames
@@ -549,6 +555,8 @@ fn freeze(app: &AppHandle, generation: u64, settle: bool, mode: Mode) {
             mode: mode.as_str(),
             system_audio,
             microphone,
+            rec_scale: xpaste_platform::record::output_scale(rec_quality, f.scale),
+            rec_fps,
         })
         .collect();
     // 显示器比遮罩多（启动后接了新屏）：补建，等页面加载完。新遮罩仍可能赶不上下面推送的事件
@@ -1639,6 +1647,8 @@ mod tests {
             mode: "rec",
             system_audio: true,
             microphone: None,
+            rec_scale: 1.0,
+            rec_fps: 60,
         };
         s.set_payloads(vec![p(0, 1.0), p(1, 2.0)]);
         assert_eq!(s.payload(1), Some(p(1, 2.0)));
@@ -1646,6 +1656,10 @@ mod tests {
         assert_eq!(json["mode"], "rec");
         assert_eq!(json["systemAudio"], true);
         assert!(json["microphone"].is_null(), "不支持麦克风时为 null");
+        assert_eq!(
+            (json["recScale"].as_f64(), json["recFps"].as_u64()),
+            (Some(1.0), Some(60))
+        );
         s.mark_ready(generation, 1);
         assert_eq!(s.payload(1), None, "已上屏不再给");
         assert_eq!(s.payload(0), Some(p(0, 1.0)));

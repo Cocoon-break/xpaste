@@ -7,7 +7,7 @@ import {
 } from '../api/shot';
 import { error as logError, info } from '../api/log';
 import type { AppError } from '../api/types';
-import { badgePos, hit, loupePos, norm, placeBar, resize, type Handle, type Rect } from './geom';
+import { badgePos, hit, loupePos, norm, outputSize, placeBar, resize, type Handle, type Rect } from './geom';
 import { COLORS, drawObj, FONT, nextStep, type Obj, type Tool } from './ink';
 
 // 遮罩页出错时整个截图会静默失败：报错写进日志（只记消息，不含截图内容）
@@ -84,6 +84,8 @@ const S = {
   mode: 'shot' as 'shot' | 'rec',
   /** 本次录屏的系统声音、麦克风开关；麦克风为 null 表示本机不支持（macOS 15 以下） */
   sys: false, mic: null as boolean | null,
+  /** 录屏输出缩放与帧率（设置“录屏清晰度”“录屏帧率”），尺寸标签显示输出像素（M24 规则 3） */
+  recScale: 1, fps: 30,
 };
 let W = innerWidth, H = innerHeight, tc = '#FFB84D';
 let pix: HTMLCanvasElement | null = null; // 马赛克底图，第一次用马赛克时生成
@@ -109,7 +111,7 @@ async function begin(p: BeginPayload) {
     void info(`shot 屏 ${p.index} 缩放不一致：载荷 ${p.scale}，帧 ${f.w}×${f.h} / 窗口 ${W}×${H}`);
   }
   Object.assign(S, {
-    index: p.index, scale, saveCopy: p.saveCopy, mode: p.mode, sys: p.systemAudio, mic: p.microphone, locked: false, rects: p.rects, phase: 'idle', here: !!p.cursor, sel: null, drag: null,
+    index: p.index, scale, saveCopy: p.saveCopy, mode: p.mode, sys: p.systemAudio, mic: p.microphone, recScale: p.recScale, fps: p.recFps, locked: false, rects: p.rects, phase: 'idle', here: !!p.cursor, sel: null, drag: null,
     tool: null, color: 0, size: 1, objs: [], redo: [], cur: null, editing: null,
     mx: p.cursor?.[0] ?? 0, my: p.cursor?.[1] ?? 0,
   });
@@ -192,10 +194,11 @@ function update() {
   hint.hidden = S.phase !== 'idle' || !live;
   const above = place();
 
-  // 尺寸标签（物理像素）
+  // 尺寸标签：截图为物理像素，录屏为按清晰度换算的输出像素
   badge.hidden = !rect || (S.phase !== 'idle' && S.phase !== 'selected');
   if (rect && !badge.hidden) {
-    badge.innerHTML = `<i></i>${Math.round(rect.w * r)}<span class="x">×</span>${Math.round(rect.h * r)}${S.mode === 'rec' ? '<span class="fps">· 30 fps</span>' : ''}`;
+    const [bw, bh] = S.mode === 'rec' ? outputSize(rect.w, rect.h, S.recScale) : [Math.round(rect.w * r), Math.round(rect.h * r)];
+    badge.innerHTML = `<i></i>${bw}<span class="x">×</span>${bh}${S.mode === 'rec' ? `<span class="fps">· ${S.fps} fps</span>` : ''}`;
     const b = badgePos(rect, badge.offsetWidth, above, W);
     Object.assign(badge.style, { left: b.x + 'px', top: b.y + 'px' });
   }
