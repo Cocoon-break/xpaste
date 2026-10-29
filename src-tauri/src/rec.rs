@@ -33,7 +33,8 @@ const FRAME: &str = "rec-frame";
 /// 边框淡出时长（同 `src/rec-frame.css`），淡出后再隐藏窗口
 const FADE: Duration = Duration::from_millis(200);
 /// 退出时最多等录屏回到空闲这么久，超时照常退出。要盖住停止的最坏情况：停止采集等回调 10 s
-/// （平台层 `CALLBACK_WAIT`）加写完文件 30 s（`FINISH_WAIT`），再加 `EXIT_GRACE`。开始中还在等麦克风
+/// （平台层 `CALLBACK_WAIT`）加写完文件 30 s（`FINISH_WAIT`）；回到空闲后另等 `EXIT_GRACE`，最坏约 46 s。
+/// 开始阶段的回调（最多 20 s）再叠上停止时盖不住，可能留下没写完的文件（设计 §8 第 16 条）。开始中还在等麦克风
 /// 授权框（最多 60 s）时盖不住，但那时还没开始录，到点退出不丢东西
 const EXIT_WAIT: Duration = Duration::from_secs(45);
 /// 回到空闲后再等这么久才退出：收尾随后写剪切板，监听器（300 ms 查一次）要来得及把视频记录入库（M24 规则 9）
