@@ -631,11 +631,14 @@ impl Store {
     ) -> Result<SavedSnippet, CoreError> {
         let name = snippet_name(name)?;
         let tx = self.conn.transaction()?;
-        let (kind, state): (String, i64) = tx
+        let (kind, state, eligible): (String, i64, bool) = tx
             .query_row(
-                "SELECT kind, ocr_state FROM records WHERE id = ?1 AND deleted_at IS NULL",
+                &format!(
+                    "SELECT kind, ocr_state, {} FROM records WHERE id = ?1 AND deleted_at IS NULL",
+                    ocr_eligible_sql()
+                ),
                 [src],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .optional()?
             .ok_or_else(|| CoreError::InvalidSettings("记录不存在".into()))?;
@@ -653,18 +656,17 @@ impl Store {
         // flavors：内联数据原样复制，大 blob 的登记路径改指新 id 的目录
         let mut copies: Vec<(PathBuf, PathBuf)> = Vec::new();
         for f in blob_files(&tx, src)? {
+            debug_assert!(f.starts_with(&format!("blobs/{src}/")));
             let new = f.replacen(&format!("blobs/{src}/"), &format!("blobs/{id}/"), 1);
-            copies.push((self.dir.join(&f), self.dir.join(&new)));
-            tx.execute(
-                "INSERT INTO flavors(record_id, item, format, data, file)
-                 SELECT ?2, item, format, data, ?4 FROM flavors WHERE record_id = ?1 AND file = ?3",
-                params![src, id, f, new],
-            )?;
+            copies.push((self.dir.join(&f), self.dir.join(new)));
         }
+        // 一条语句按原顺序复制；大 blob 的登记路径改指新 id 的目录
         tx.execute(
             "INSERT INTO flavors(record_id, item, format, data, file)
-             SELECT ?2, item, format, data, NULL FROM flavors WHERE record_id = ?1 AND file IS NULL",
-            params![src, id],
+             SELECT ?2, item, format, data,
+               CASE WHEN file IS NULL THEN NULL ELSE ?4 || substr(file, length(?3) + 1) END
+             FROM flavors WHERE record_id = ?1 ORDER BY rowid",
+            params![src, id, format!("blobs/{src}/"), format!("blobs/{id}/")],
         )?;
         for sub in ["images", "thumbs"] {
             let from = self.dir.join(sub).join(format!("{src}.png"));
@@ -689,7 +691,7 @@ impl Store {
         Ok(SavedSnippet {
             id,
             needs_thumb: (is_image || kind == Kind::Video.as_str()) && thumb_missing,
-            needs_ocr: state == i64::from(ocr_state::PENDING),
+            needs_ocr: eligible && state == i64::from(ocr_state::PENDING),
         })
     }
 
@@ -2355,17 +2357,32 @@ pub(crate) mod tests {
         assert_eq!(s.summary(id).unwrap().unwrap().snippet_body, None);
     }
 
+    /// 带真实 flavor 的图片记录：内联 flavor + 大 blob flavor。
+    fn rec_image_flavors(seed: u8) -> NewRecord {
+        let big = Flavor {
+            item: 1,
+            format: "big".into(),
+            data: vec![seed; INLINE_MAX + 1],
+        };
+        rec_of(Snapshot {
+            bitmap: Some(vec![0x89, b'P', b'N', b'G', seed]),
+            flavors: vec![text_flavor("hi"), big],
+            ..Default::default()
+        })
+    }
     #[test]
     fn save_snippet_copies_row_flavors_and_files() {
         let mut s = Store::open(&tmp()).unwrap();
-        let src = added(&mut s, &rec_image(1), 1);
+        let src = added(&mut s, &rec_image_flavors(1), 1);
         std::fs::write(s.dir.join("thumbs").join(format!("{src}.png")), b"t").unwrap();
         let out = s.save_snippet(src, "收款码", 5).unwrap();
         let id = out.id;
         assert!(!out.needs_thumb);
         assert!(s.dir.join("images").join(format!("{id}.png")).exists());
         assert!(s.dir.join("thumbs").join(format!("{id}.png")).exists());
-        assert_eq!(s.flavors(id).unwrap(), s.flavors(src).unwrap());
+        let f = s.flavors(id).unwrap();
+        assert_eq!(f.len(), 2);
+        assert_eq!(f, s.flavors(src).unwrap());
         let sum = s.summary(id).unwrap().unwrap();
         assert_eq!(
             (sum.title.as_str(), sum.snippet_body.as_deref(), sum.uses),
@@ -2380,14 +2397,23 @@ pub(crate) mod tests {
             &mut s,
             &rec_of(Snapshot {
                 text: Some(big.clone()),
-                flavors: vec![text_flavor(&big)],
+                flavors: vec![
+                    text_flavor(&big),
+                    Flavor {
+                        item: 1,
+                        format: "x".into(),
+                        data: b"hi".to_vec(),
+                    },
+                ],
                 ..Default::default()
             }),
             1,
         );
         let id = s.save_snippet(src, "大", 2).unwrap().id;
         assert!(s.dir.join("blobs").join(id.to_string()).join("0").exists());
-        assert_eq!(s.flavors(id).unwrap(), s.flavors(src).unwrap());
+        let f = s.flavors(id).unwrap();
+        assert!(f.len() >= 2);
+        assert_eq!(f, s.flavors(src).unwrap());
         let file: String = s
             .conn
             .query_row(
@@ -2399,29 +2425,55 @@ pub(crate) mod tests {
         assert_eq!(file, format!("blobs/{id}/0"));
     }
     #[test]
+    fn save_snippet_needs_ocr_only_for_eligible_pending() {
+        let mut s = mem();
+        let t = added(&mut s, &rec("文字"), 1);
+        assert!(!s.save_snippet(t, "a", 2).unwrap().needs_ocr);
+        let i = added(&mut s, &rec_image(3), 3);
+        assert!(s.save_snippet(i, "b", 4).unwrap().needs_ocr);
+    }
+    #[test]
     fn snippet_survives_purge_of_source() {
         let mut s = Store::open(&tmp()).unwrap();
-        let src = added(&mut s, &rec_image(1), 1);
+        let src = added(&mut s, &rec_image_flavors(1), 1);
+        std::fs::write(s.dir.join("thumbs").join(format!("{src}.png")), b"t").unwrap();
         let id = s.save_snippet(src, "x", 2).unwrap().id;
         s.soft_delete(src, 3).unwrap();
         s.purge_all_soft_deleted().unwrap();
+        assert_eq!(s.flavors(id).unwrap().len(), 2);
         assert!(s.dir.join("images").join(format!("{id}.png")).exists());
+        assert!(s.dir.join("thumbs").join(format!("{id}.png")).exists());
+        assert!(s.dir.join("blobs").join(id.to_string()).join("1").exists());
     }
     #[test]
     fn snippet_search_excludes_app_and_source_title() {
         let mut s = mem();
-        let mut r = rec("hello");
-        r.app = Some(AppInfo {
-            id: "wx".into(),
-            name: "微信".into(),
-        });
-        let src = added(&mut s, &r, 1);
+        let src = added(
+            &mut s,
+            &rec_of(Snapshot {
+                text: Some("hello".into()),
+                source: Some(AppInfo {
+                    id: "wx".into(),
+                    name: "微信".into(),
+                }),
+                ..Default::default()
+            }),
+            1,
+        );
         let sn = s.save_snippet(src, "签名", 2).unwrap().id;
+        assert_eq!(ids(&s, "微信"), vec![src]);
         assert!(ids(&s, "签名").contains(&sn));
         let shot = added(&mut s, &rec_image(2), 3);
         let sn2 = s.save_snippet(shot, "收款码", 4).unwrap().id;
-        assert!(!ids(&s, "截图").contains(&sn2));
-        assert!(!ids(&s, "微信").contains(&sn));
+        let hits = ids(&s, "截图");
+        assert!(hits.contains(&shot) && !hits.contains(&sn2));
+    }
+    #[test]
+    fn save_snippet_rejects_deleted_source() {
+        let mut s = mem();
+        let src = added(&mut s, &rec("x"), 1);
+        s.soft_delete(src, 2).unwrap();
+        assert!(s.save_snippet(src, "n", 3).is_err());
     }
     #[test]
     fn cleanup_paths_skip_snippets() {
@@ -2446,14 +2498,6 @@ pub(crate) mod tests {
         assert!(s.clear_unpinned().unwrap().iter().all(|&i| i != sid));
         assert!(s.live_summary(sid).unwrap().is_some());
     }
-    #[test]
-    fn save_snippet_rejects_deleted_source() {
-        let mut s = mem();
-        let src = added(&mut s, &rec("x"), 1);
-        s.soft_delete(src, 2).unwrap();
-        assert!(s.save_snippet(src, "n", 3).is_err());
-    }
-
     #[test]
     fn create_snippet_is_searchable_by_name_and_content_and_pinyin() {
         let mut s = mem();
