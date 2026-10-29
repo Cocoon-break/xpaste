@@ -33,6 +33,9 @@ pub const SHOT_NEED_PERMISSION: &str = "shot-need-permission";
 /// 录屏边框，发给 `rec-frame` 窗口：`{ x, y, w, h }`（该屏内逻辑像素）或 `null`（淡出）。
 pub const REC_FRAME: &str = "rec-frame";
 
+/// 翻译增量（设计 §4.5），载荷 `translate::Delta`：面板翻译时广播，截图翻译时只发给发起的遮罩窗口。
+pub const TRANSLATE_DELTA: &str = "translate-delta";
+
 pub fn emit<S: Serialize + Clone>(app: &AppHandle, event: &str, payload: S) {
     if let Err(e) = app.emit(event, payload) {
         log::warn!("发送 {event} 失败：{e}");

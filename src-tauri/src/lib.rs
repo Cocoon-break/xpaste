@@ -12,6 +12,7 @@ mod panel;
 mod rec;
 mod shot;
 pub mod state;
+mod translate;
 mod tray;
 
 use state::AppState;
@@ -245,7 +246,11 @@ pub fn run() {
             commands::shot::pin_set_bounds,
             commands::shot::pin_button_down,
             commands::shot::rec_start,
-            commands::shot::rec_frame
+            commands::shot::rec_frame,
+            commands::translate::translate_record,
+            commands::translate::translate_test,
+            commands::translate::translate_status,
+            commands::translate::open_translation_settings
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

@@ -7,6 +7,8 @@ import type {
   RecordDetail,
   SearchHit,
   Settings,
+  TranslateStatus,
+  Translated,
 } from './types';
 
 export const bootstrap = () => invoke<Bootstrap>('bootstrap');
@@ -50,3 +52,10 @@ export const saveSettings = (settings: Settings) => invoke<void>('save_settings'
 export const setPaused = (on: boolean) => invoke<void>('set_paused', { on });
 export const finishOnboarding = () => invoke<void>('finish_onboarding');
 export const installedApps = () => invoke<string[]>('installed_apps');
+
+export const translateRecord = (id: number) => invoke<Translated>('translate_record', { id });
+/** 测试连接：用表单里（未保存）的值翻译固定短句，返回译文。 */
+export const translateTest = (engine: string, baseUrl: string, apiKey: string, model: string, lang: string) =>
+  invoke<string>('translate_test', { engine, baseUrl, apiKey, model, lang });
+export const translateStatus = (lang: string) => invoke<TranslateStatus>('translate_status', { lang });
+export const openTranslationSettings = () => invoke<void>('open_translation_settings');

@@ -36,6 +36,7 @@ tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
 window-vibrancy = "0.8"
 tauri-plugin-dialog = "2"
+reqwest = { version = "0.13", default-features = false, features = ["native-tls", "system-proxy", "json"] }
 
 [dev-dependencies]
 rusqlite.workspace = true

@@ -1,5 +1,5 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import type { RecordSummary, Settings } from './types';
+import type { RecordSummary, Settings, TranslateDelta } from './types';
 
 export const PANEL_SHOWN = 'panel-shown';
 
@@ -63,3 +63,9 @@ export const onOpenSettings = (cb: () => void): Promise<UnlistenFn> => listen(OP
 export const CONFIRM_CLEAR = 'confirm-clear';
 
 export const onConfirmClear = (cb: () => void): Promise<UnlistenFn> => listen(CONFIRM_CLEAR, () => cb());
+
+/** 翻译增量（后端约每 50 ms 合并一次）：面板翻译时广播，截图翻译时只发给发起的遮罩窗口。 */
+export const TRANSLATE_DELTA = 'translate-delta';
+
+export const onTranslateDelta = (cb: (d: TranslateDelta) => void): Promise<UnlistenFn> =>
+  listen<TranslateDelta>(TRANSLATE_DELTA, (e) => cb(e.payload));

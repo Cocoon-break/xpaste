@@ -17,6 +17,17 @@ pub enum AppError {
     /// 参数不合法（非 http 链接、记录不存在等）
     #[error("{0}")]
     Invalid(String),
+    /// 翻译接口未配置（设计 §3.4）
+    #[error("请先在设置的“翻译”里配置接口")]
+    TranslateConfig,
+    /// 系统翻译缺语言包，消息为拼好的提示（设计 §3.4）
+    #[error("{0}")]
+    TranslatePack(String),
+    #[error("系统翻译需要 macOS 26，请在设置里改用 OpenAI 兼容接口")]
+    TranslateOs,
+    /// 其余翻译错误，消息见设计 §3.4
+    #[error("{0}")]
+    Translate(String),
     #[error(transparent)]
     Core(#[from] CoreError),
     #[error(transparent)]
@@ -37,6 +48,10 @@ impl AppError {
             Self::ShotHotkeyTaken => "shotHotkeyTaken",
             Self::RecHotkeyTaken => "recHotkeyTaken",
             Self::Invalid(_) => "invalid",
+            Self::TranslateConfig => "translateConfig",
+            Self::TranslatePack(_) => "translatePack",
+            Self::TranslateOs => "translateOs",
+            Self::Translate(_) => "translate",
             Self::Core(CoreError::InvalidSettings(_)) => "invalidSettings",
             Self::Core(_) | Self::Tauri(_) | Self::Opener(_) | Self::Io(_) => "internal",
         }

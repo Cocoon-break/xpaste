@@ -133,8 +133,39 @@ export interface RecordDetail extends RecordSummary {
 }
 
 export interface AppError {
-  kind: 'fileMissing' | 'clipboardWrite' | 'hotkeyTaken' | 'shotHotkeyTaken' | 'recHotkeyTaken' | 'invalidSettings' | 'invalid' | 'internal';
+  kind:
+    | 'fileMissing'
+    | 'clipboardWrite'
+    | 'hotkeyTaken'
+    | 'shotHotkeyTaken'
+    | 'recHotkeyTaken'
+    | 'invalidSettings'
+    | 'invalid'
+    | 'internal'
+    | 'translateConfig'
+    | 'translatePack'
+    | 'translateOs'
+    | 'translate';
   message: string;
+}
+
+/** `translate_record` 的结果：去掉首尾空白的译文与实际翻成的语言代码（设计 §4.5）。 */
+export interface Translated {
+  text: string;
+  lang: string;
+}
+
+/** 系统翻译可用性；`pack` 为英语 ↔ 目标语言的语言包状态，不支持系统翻译时为 null。 */
+export interface TranslateStatus {
+  supported: boolean;
+  pack: 'installed' | 'download' | 'unsupported' | null;
+}
+
+/** `translate-delta` 载荷：`id` 为记录 id，截图翻译时为 null；`text` 是本次新增的部分。 */
+export interface TranslateDelta {
+  id: number | null;
+  lang: string;
+  text: string;
 }
 
 export type CopyResult =

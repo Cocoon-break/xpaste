@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64};
 use std::sync::{Mutex, MutexGuard, PoisonError, mpsc};
@@ -30,6 +31,8 @@ pub struct AppState {
     pub shot: Mutex<shot::Session>,
     /// 进行中的录屏（M24）
     pub rec: Mutex<rec::RecState>,
+    /// 正在翻译的记录 id：同一条记录不发第二个请求（设计 §4.5）
+    pub translating: Mutex<HashSet<i64>>,
 }
 
 impl AppState {
@@ -56,6 +59,7 @@ impl AppState {
             dialog_open: AtomicBool::new(false),
             shot: Mutex::default(),
             rec: Mutex::default(),
+            translating: Mutex::default(),
         }
     }
 
