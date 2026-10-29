@@ -29,7 +29,8 @@ export async function onShotBegin(cb: (p: BeginPayload) => void): Promise<void> 
     setTimeout(() => cb(dev.payload()));
     return;
   }
-  await listen<BeginPayload>(SHOT_BEGIN, (e) => cb(e.payload));
+  // 只收发给本遮罩的：不带 target 的 listen 会收到发给每块屏的载荷，先到的别屏载荷会占了这次的代数
+  await listen<BeginPayload>(SHOT_BEGIN, (e) => cb(e.payload), { target: getCurrentWindow().label });
   const p = await invoke<BeginPayload | null>('shot_begin_payload');
   if (p) cb(p);
 }
