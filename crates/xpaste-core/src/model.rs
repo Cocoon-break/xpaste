@@ -102,6 +102,14 @@ pub struct Settings {
     pub rec_quality: RecQuality,
     /// 录屏帧率，30 | 60（M24 规则 6）
     pub rec_fps: u32,
+    /// 翻译引擎：`""`（还没选，由应用层按平台决定）| `"system"` | `"openai"`（设计 §3.5、§6）
+    pub translate_engine: String,
+    /// OpenAI 兼容接口的 Base URL
+    pub translate_base_url: String,
+    pub translate_api_key: String,
+    pub translate_model: String,
+    /// 目标语言代码，见 `translate::Lang`
+    pub translate_lang: String,
 }
 
 impl Default for Settings {
@@ -139,6 +147,11 @@ impl Default for Settings {
             rec_copy: true,
             rec_quality: RecQuality::Standard,
             rec_fps: 30,
+            translate_engine: String::new(),
+            translate_base_url: "https://api.openai.com/v1".into(),
+            translate_api_key: String::new(),
+            translate_model: String::new(),
+            translate_lang: "zh-Hans".into(),
         }
     }
 }
@@ -243,6 +256,18 @@ impl Settings {
         }
     }
 
+    /// 翻译的三个文本字段去首尾空白，Base URL 再去掉末尾的 `/`（设计 §3.5）；保存设置时在 `validate` 之前调用。
+    pub fn normalize(&mut self) {
+        for f in [
+            &mut self.translate_base_url,
+            &mut self.translate_api_key,
+            &mut self.translate_model,
+        ] {
+            *f = f.trim().to_owned();
+        }
+        self.translate_base_url = self.translate_base_url.trim_end_matches('/').to_owned();
+    }
+
     /// 按顺序检查，返回第一条不满足的规则。
     pub fn validate(&self) -> Result<(), CoreError> {
         let fail = |m: &str| Err(CoreError::InvalidSettings(m.into()));
@@ -270,6 +295,16 @@ impl Settings {
             if !self.shot_hotkey.is_empty() && rec == hotkey_key(&self.shot_hotkey) {
                 return fail("录屏快捷键不能与截图快捷键相同");
             }
+        }
+        if !matches!(self.translate_engine.as_str(), "" | "system" | "openai") {
+            return fail("翻译引擎只能是系统翻译或 OpenAI 兼容接口");
+        }
+        if crate::translate::Lang::from_code(&self.translate_lang).is_none() {
+            return fail("不支持这种翻译目标语言");
+        }
+        let url = &self.translate_base_url;
+        if !url.is_empty() && !url.starts_with("http://") && !url.starts_with("https://") {
+            return fail("请输入 http:// 或 https:// 开头的地址");
         }
         if !matches!(self.rec_fps, 30 | 60) {
             return fail("录屏帧率只能是 30 或 60");
@@ -467,6 +502,9 @@ pub struct RecordDetail {
     pub video: Option<VideoInfo>,
     /// 识别出的原文（未小写）
     pub ocr_text: Option<String>,
+    /// 最新一份译文及其目标语言代码（设计 §3.5）
+    pub translation: Option<String>,
+    pub translation_lang: Option<String>,
 }
 
 impl fmt::Debug for RecordDetail {
@@ -622,6 +660,58 @@ mod tests {
             Err(CoreError::InvalidSettings(m)) => m,
             other => panic!("expected InvalidSettings, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn translate_settings_are_trimmed_and_validated() {
+        let mut s = Settings {
+            translate_api_key: " sk-1\n".into(),
+            translate_model: " gpt ".into(),
+            translate_base_url: " http://localhost:11434/v1/ ".into(),
+            ..Default::default()
+        };
+        s.normalize();
+        assert_eq!(
+            (
+                s.translate_api_key.as_str(),
+                s.translate_model.as_str(),
+                s.translate_base_url.as_str()
+            ),
+            ("sk-1", "gpt", "http://localhost:11434/v1")
+        );
+        assert!(s.validate().is_ok());
+        assert_eq!(
+            invalid(&Settings {
+                translate_base_url: "api.openai.com".into(),
+                ..Default::default()
+            }),
+            "请输入 http:// 或 https:// 开头的地址"
+        );
+        // 空 = 未配置，不报错
+        assert!(
+            Settings {
+                translate_base_url: String::new(),
+                ..Default::default()
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            Settings {
+                translate_lang: "fr".into(),
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            Settings {
+                translate_engine: "deepl".into(),
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
     }
 
     #[test]
@@ -1032,6 +1122,8 @@ mod tests {
             image: None,
             video: None,
             ocr_text: Some("secret-ocr".into()),
+            translation: None,
+            translation_lang: None,
         };
         let out = format!("{d:?} {:?}", d.summary);
         assert!(!out.contains("secret"), "{out}");

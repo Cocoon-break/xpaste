@@ -34,6 +34,13 @@ export interface Settings {
   recQuality: RecQuality;
   /** 30 | 60 */
   recFps: number;
+  /** '' 表示还没选 | 'system' | 'openai' */
+  translateEngine: string;
+  translateBaseUrl: string;
+  translateApiKey: string;
+  translateModel: string;
+  /** zh-Hans | zh-Hant | en | ja | ko */
+  translateLang: string;
 }
 
 export interface PlatformInfo {
@@ -120,6 +127,9 @@ export interface RecordDetail extends RecordSummary {
   image: ImageInfo | null;
   video: VideoInfo | null;
   ocrText: string | null;
+  /** 最新一份译文及其目标语言代码 */
+  translation: string | null;
+  translationLang: string | null;
 }
 
 export interface AppError {

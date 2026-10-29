@@ -61,6 +61,7 @@ pub fn bootstrap(state: State<'_, AppState>) -> Result<Bootstrap, AppError> {
 
 /// 校验、持久化并生效新设置。不处理快捷键、不清理、不发事件。
 pub fn save_settings_inner(state: &AppState, mut s: Settings) -> Result<(), AppError> {
+    s.normalize();
     s.validate()?;
     let mut cur = state.settings();
     // 面板尺寸只由 panel::remember_size 写：持锁取当前值，不用调用方早先的快照
@@ -128,6 +129,20 @@ pub fn changed_fields(old: &Settings, new: &Settings) -> Vec<&'static str> {
         ("recCopy", old.rec_copy != new.rec_copy),
         ("recQuality", old.rec_quality != new.rec_quality),
         ("recFps", old.rec_fps != new.rec_fps),
+        (
+            "translateEngine",
+            old.translate_engine != new.translate_engine,
+        ),
+        (
+            "translateBaseUrl",
+            old.translate_base_url != new.translate_base_url,
+        ),
+        (
+            "translateApiKey",
+            old.translate_api_key != new.translate_api_key,
+        ),
+        ("translateModel", old.translate_model != new.translate_model),
+        ("translateLang", old.translate_lang != new.translate_lang),
     ]
     .into_iter()
     .filter_map(|(name, changed)| changed.then_some(name))
