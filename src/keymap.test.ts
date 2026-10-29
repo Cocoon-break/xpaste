@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { keyAction, type KeyCtx, type KeyEv } from './keymap.ts';
 
 const ctx = (o: Partial<KeyCtx> = {}): KeyCtx => ({
-  inSearch: true, onControl: false, searchHasText: false, menuOpen: false, hasSel: true, canUndo: false, dialogOpen: false, ...o,
+  inSearch: true, onControl: false, searchHasText: false, menuOpen: false, hasSel: true, canUndo: false, dialogOpen: false, selIsSnip: false, inSnip: false, multi: 0, ...o,
 });
 const ev = (o: Partial<KeyEv>): KeyEv => ({ key: '', code: '', mod: false, alt: false, shift: false, repeat: false, ...o });
 
@@ -79,9 +79,25 @@ test('Mod+, 打开设置', () => assert.deepEqual(keyAction(ev({ key: ',', mod: 
 
 test('⌃ + 字母不进搜索框，⌃ + Enter 不复制（macOS 上 ⌃ 不是 Mod）', () => {
   const base = { key: '', code: '', mod: false, alt: false, shift: false, repeat: false };
-  const ctx = { inSearch: false, onControl: false, searchHasText: false, menuOpen: false, hasSel: true, canUndo: false, dialogOpen: false };
+  const ctx = { inSearch: false, onControl: false, searchHasText: false, menuOpen: false, hasSel: true, canUndo: false, dialogOpen: false, selIsSnip: false, inSnip: false, multi: 0 };
   assert.equal(keyAction({ ...base, key: 'a', code: 'KeyA', ctrl: true }, ctx), null);
   assert.deepEqual(keyAction({ ...base, key: 'a', code: 'KeyA' }, ctx), { t: 'focusSearch' });
   assert.equal(keyAction({ ...base, key: 'Enter', code: 'Enter', ctrl: true }, ctx), null);
   assert.deepEqual(keyAction({ ...base, key: 'Enter', code: 'Enter' }, ctx), { t: 'copy' });
+});
+
+test('片段键位', () => {
+  const k = (o: Partial<KeyEv>, c: Partial<KeyCtx> = {}) => keyAction(ev(o), ctx(c));
+  assert.deepEqual(k({ key: 's', mod: true }), { t: 'saveSnippet' });
+  assert.equal(k({ key: 's', mod: true }, { selIsSnip: true }), null);
+  assert.deepEqual(k({ key: 'e', mod: true }, { selIsSnip: true }), { t: 'editSnippet' });
+  assert.equal(k({ key: 'e', mod: true }, { selIsSnip: true, multi: 2 }), null);
+  assert.deepEqual(k({ key: 'n', mod: true }), { t: 'newSnippet' });
+  assert.deepEqual(k({ key: 'a', mod: true }, { inSnip: true }), { t: 'selectAll' });
+  assert.equal(k({ key: 'a', mod: true }, { inSnip: true, searchHasText: true }), null);
+  assert.deepEqual(k({ key: 'ArrowDown', shift: true }, { inSnip: true }), { t: 'extend', d: 1 });
+  assert.deepEqual(k({ key: 'ArrowDown', shift: true }), { t: 'move', d: 1, instant: false });
+  assert.deepEqual(k({ key: 'Escape' }, { multi: 2, searchHasText: true }), { t: 'clearMulti' });
+  for (const o of [{ key: 's', mod: true }, { key: 'n', mod: true }, { key: 'Escape' }])
+    assert.equal(k(o, { dialogOpen: true, multi: 2 }), null);
 });

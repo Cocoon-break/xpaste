@@ -41,10 +41,10 @@ test('isHttpUrl 区分大小写、拒绝伪协议', () => {
   assert.ok(!isHttpUrl('HTTPS://a.b'));
 });
 
-test('FILTERS 为 全部、常用 加 6 种类型', () =>
+test('FILTERS 为 全部、常用、片段 加 6 种类型', () =>
   assert.deepEqual(
     FILTERS.map(([k]) => k),
-    ['all', 'fav', 'text', 'link', 'code', 'image', 'video', 'file'],
+    ['all', 'fav', 'snip', 'text', 'link', 'code', 'image', 'video', 'file'],
   ));
 
 test('videoChips_skips_unknown', () => {
@@ -57,3 +57,6 @@ test('canInlinePlay_only_webview_containers', () => {
   for (const e of ['mkv', 'avi', 'wmv', 'flv', '']) assert.equal(canInlinePlay(e), false);
 });
 test('fmtFps 去掉多余的小数', () => assert.equal(fmtFps(30), '30 fps'));
+
+test('FILTERS 顺序：片段在常用之后', () =>
+  assert.deepEqual(FILTERS.map((f) => f[0]).slice(0, 3), ['all', 'fav', 'snip']));

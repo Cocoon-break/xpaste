@@ -11,12 +11,14 @@ export type Cell =
 
 const height = (c: Cell) => (c.kind === 'head' ? HEAD_H : ROW_H);
 
-export const layout = (groups: { name: string; rows: { id: number }[] }[]): { cells: Cell[]; total: number } => {
+export const layout = (groups: { name: string; rows: { id: number }[] }[], heads = true): { cells: Cell[]; total: number } => {
   const cells: Cell[] = [];
   let top = 0, index = 0;
   groups.forEach((g, gi) => {
-    cells.push({ kind: 'head', name: g.name, count: g.rows.length, top, gi });
-    top += HEAD_H;
+    if (heads) {
+      cells.push({ kind: 'head', name: g.name, count: g.rows.length, top, gi });
+      top += HEAD_H;
+    }
     for (const r of g.rows) {
       cells.push({ kind: 'row', id: r.id, index: index++, top, gi });
       top += ROW_H;

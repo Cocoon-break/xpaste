@@ -148,7 +148,7 @@ async function paintVerb() {
 // —— 数据视图 ——
 const favMin = () => S.settings.frequentMinUses;
 const vis = () => visible(S.records, S.filter, S.matchIds, favMin());
-const matches = (r: RecordSummary) => inFilter(r, S.filter, favMin()) && (S.matchIds === null || S.matchIds.has(r.id));
+const matches = (r: RecordSummary) => inFilter(r, S.filter, favMin(), S.matchIds !== null) && (S.matchIds === null || S.matchIds.has(r.id));
 const rowEl = (id: number | null) => (id === null ? null : document.getElementById('opt-' + id));
 const source = (r: RecordSummary) => r.app?.name || '未知来源';
 
@@ -1082,7 +1082,7 @@ function remove(id: number) {
         renderSpectrum();
       }, reduced.matches ? 0 : 360);
       toast(`已删除“${truncate(r.title, 14)}”`, { undo: true, icon: 'trash' });
-      S.undo = armUndo(S.undo, id, r.title, Date.now());
+      S.undo = armUndo(S.undo, [id], r.title, Date.now());
       paintUndoHint();
       setTimeout(paintUndoHint, UNDO_MS);
     },
@@ -1108,8 +1108,8 @@ function undo() {
   if (!u || !canUndo(u, Date.now())) return;
   S.undo = null;
   paintUndoHint();
-  restoring = u.id;
-  undoDelete([u.id]).then(
+  restoring = u.ids[0];
+  undoDelete(u.ids).then(
     (n) => {
       const ok = n > 0;
       if (!ok) restoring = null;
@@ -1250,7 +1250,7 @@ const handlers = {
     // 别处的删除（保留时长清理、清空历史）清掉了待撤销的记录：撤销已无意义
     const foreign = ids.filter((id) => !ownEcho.delete(id));
     ids.forEach((id) => details.delete(id));
-    if (S.undo && foreign.includes(S.undo.id)) {
+    if (S.undo && S.undo.ids.some((id) => foreign.includes(id))) {
       S.undo = null;
       paintUndoHint();
       // 提示条已换成别的提示时不收起它
@@ -2029,6 +2029,9 @@ document.addEventListener('keydown', (e) => {
       hasSel: S.sel !== null,
       canUndo: canUndo(S.undo, Date.now()),
       dialogOpen: !!document.querySelector('dialog[open]'),
+      selIsSnip: S.sel !== null && S.records.get(S.sel)?.snippetBody != null,
+      inSnip: S.filter === 'snip',
+      multi: 0,
     },
   );
   if (!a) return;
