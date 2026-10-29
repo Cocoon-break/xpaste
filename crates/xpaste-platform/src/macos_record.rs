@@ -47,6 +47,9 @@ const AUDIO_BITRATE: i32 = 128_000;
 const CALLBACK_WAIT: Duration = Duration::from_secs(10);
 /// 等写完文件的上限；正常不到一秒，留足慢盘的余量
 const FINISH_WAIT: Duration = Duration::from_secs(30);
+/// 等用户回答麦克风授权框的上限。要留时间给人读框、做决定，不能用 `CALLBACK_WAIT`；
+/// 不设上限的话没人理会这个框时开始线程一直卡住，录制状态停在开始中，快捷键与退出都受影响
+const MIC_WAIT: Duration = Duration::from_secs(60);
 
 fn record_err(what: impl Into<String>) -> PlatformError {
     PlatformError::Record(what.into())
@@ -239,7 +242,7 @@ impl Recorder {
         self.output.ivars().failed.load(Ordering::Relaxed)
     }
 
-    /// 停止采集并写完文件。阻塞到 finishWriting 回调。一帧画面都没收到时返回 `Empty`，不留文件。
+    /// 停止采集并写完文件。阻塞到 finishWriting 回调。一帧画面都没写进去时返回 `Empty`，不留文件。
     pub fn stop(self) -> Result<RecordOutcome, PlatformError> {
         // 流已被系统停掉时这里会报错，照样收尾
         if let Err(e) = wait_done(|b| {
@@ -287,6 +290,11 @@ fn finish(st: &mut State, path: &Path) -> Result<RecordOutcome, PlatformError> {
     if unsafe { st.writer.status() } != AVAssetWriterStatus::Writing {
         discard(st, path);
         return Err(record_err("写入器已出错"));
+    }
+    // 开始写了，但一帧画面都没追加成功（首帧就没写进去）：文件里没有画面，同没收到画面，不留文件（M24 规则 9）
+    if st.last.is_none() {
+        discard(st, path);
+        return Ok(RecordOutcome::Empty);
     }
     let end = st.last.as_ref().map_or(first, |l| l.1);
     // SAFETY: 写入器在写；markAsFinished 之后不再追加（closed 已置）
@@ -476,6 +484,9 @@ fn start(opts: RecordOptions) -> Result<Recorder, PlatformError> {
         // SAFETY: 完成回调由 wait_done 持有到调用结束
         unsafe { rec.stream.startCaptureWithCompletionHandler(Some(b)) }
     }) {
+        // 超时后开始可能迟到，流照样采集、系统录屏指示一直亮：发一次停止，不等回调
+        // SAFETY: 不带完成回调
+        unsafe { rec.stream.stopCaptureWithCompletionHandler(None) };
         // 万一已收到首帧开始写了文件，一并清掉
         rec.queue.exec_sync(|| ());
         let mut st = rec.output.state();
@@ -583,7 +594,7 @@ pub fn microphone_access() -> MicAccess {
     }
 }
 
-/// 申请麦克风权限：未决定时弹系统框，阻塞到用户选择；已决定时直接返回结果。
+/// 申请麦克风权限：未决定时弹系统框，阻塞到用户选择（最多 `MIC_WAIT`，超时按拒绝）；已决定时直接返回结果。
 /// 应用的 Info.plist 必须有 `NSMicrophoneUsageDescription`，否则系统直接终止进程。
 pub fn request_microphone() -> bool {
     // SAFETY: AVFoundation 导出的常量
@@ -596,7 +607,8 @@ pub fn request_microphone() -> bool {
     });
     // SAFETY: block 在回调前一直存活（系统复制并持有）
     unsafe { AVCaptureDevice::requestAccessForMediaType_completionHandler(audio, &block) };
-    rx.recv().unwrap_or(false)
+    // 超时按拒绝：本次不录麦克风、照常录制（M24 规则 6）；系统框留着，用户之后选的结果下次生效
+    rx.recv_timeout(MIC_WAIT).unwrap_or(false)
 }
 
 /// NSWindow 的窗口编号（即 SCWindow.windowID / CGWindowID）。未上屏的窗口为 0 或负数，返回 None。
