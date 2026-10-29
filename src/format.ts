@@ -65,7 +65,7 @@ export const FL = Object.fromEntries(FILTERS) as Record<Filter, string>;
 // “常用”不是内容类型，而是按使用次数聚合的视图；阈值 `min` 来自设置 frequentMinUses
 export const isSnip = (r: { snippetBody: string | null }): boolean => r.snippetBody !== null;
 // 片段不进“常用”（设计 §3.1）
-export const isFav = (r: { uses: number; snippetBody?: string | null }, min: number): boolean => !isSnip({ snippetBody: r.snippetBody ?? null }) && r.uses >= min;
+export const isFav = (r: { uses: number; snippetBody: string | null }, min: number): boolean => !isSnip(r) && r.uses >= min;
 
 export const truncate = (s: string, n: number): string => {
   const cs = [...s];

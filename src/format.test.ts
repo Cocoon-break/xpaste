@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { canInlinePlay, esc, FILTERS, fmtBytes, fmtDur, fmtFps, hl, isHttpUrl, rel, truncate, videoChips } from './format.ts';
+import { canInlinePlay, esc, FILTERS, fmtBytes, fmtDur, fmtFps, hl, isFav, isHttpUrl, rel, truncate, videoChips } from './format.ts';
 
 test('hl 转义正则元字符并高亮', () => {
   assert.equal(hl('a.b c++ (x)', 'c++'), 'a.b <mark>c++</mark> (x)');
@@ -60,3 +60,8 @@ test('fmtFps 去掉多余的小数', () => assert.equal(fmtFps(30), '30 fps'));
 
 test('FILTERS 顺序：片段在常用之后', () =>
   assert.deepEqual(FILTERS.map((f) => f[0]).slice(0, 3), ['all', 'fav', 'snip']));
+
+test('isFav 对片段恒为 false', () => {
+  assert.equal(isFav({ uses: 99, snippetBody: 'x' }, 3), false);
+  assert.equal(isFav({ uses: 3, snippetBody: null }, 3), true);
+});

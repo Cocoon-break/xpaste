@@ -977,7 +977,7 @@ function copyRecord(id: number) {
       const cur = S.records.get(id);
       // 事件可能还没到；并发的置顶、补全更新也不会让次数变少
       const uses = Math.max(cur?.uses ?? 0, before.uses + 1);
-      const fav = !isFav(before, favMin()) && isFav({ uses }, favMin());
+      const fav = !isFav(before, favMin()) && isFav({ uses, snippetBody: before.snippetBody }, favMin());
       const msg = copyToast(res, S.platform.os, fav ? uses : null);
       if (msg) {
         toast(msg, {
