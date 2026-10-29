@@ -82,7 +82,15 @@ const INLINE_MAX: usize = 1_048_576;
 const DETAIL_TEXT_MAX: usize = 200 * 1024;
 const DAY_MS: i64 = 86_400_000;
 
+/// 片段按置顶存，因此也在这里豁免所有清理（设计 §4.1）。
 const LIVE_UNPINNED: &str = "pinned = 0 AND deleted_at IS NULL";
+
+/// `save_snippet` 的结果：后两项告诉调用方要不要给新 id 补投后台任务。
+pub struct SavedSnippet {
+    pub id: i64,
+    pub needs_thumb: bool,
+    pub needs_ocr: bool,
+}
 
 const SUMMARY_SQL: &str = "SELECT r.id, r.kind, r.title, a.name, a.icon_path, r.copied_at, r.uses,
   r.pinned, r.size, r.lang, r.meta, r.ocr_state, r.snippet_body FROM records r LEFT JOIN apps a ON a.id = r.app_id";
@@ -612,6 +620,77 @@ impl Store {
             return Err(e);
         }
         Ok(id)
+    }
+
+    /// 把一条历史记录存为片段（设计 §4.2 第 1 条）：复制行、flavors 与图片/缩略图/大 blob 文件，之后与源记录互不相干。
+    pub fn save_snippet(
+        &mut self,
+        src: i64,
+        name: &str,
+        now_ms: i64,
+    ) -> Result<SavedSnippet, CoreError> {
+        let name = snippet_name(name)?;
+        let tx = self.conn.transaction()?;
+        let (kind, state): (String, i64) = tx
+            .query_row(
+                "SELECT kind, ocr_state FROM records WHERE id = ?1 AND deleted_at IS NULL",
+                [src],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?
+            .ok_or_else(|| CoreError::InvalidSettings("记录不存在".into()))?;
+        let is_image = kind == Kind::Image.as_str();
+        tx.execute(
+            "INSERT INTO records(hash, kind, title, text, paths, link_title, lang, size, meta, search_text,
+               app_id, copied_at, uses, pinned, ocr_text, ocr_state, snippet_body)
+             SELECT randomblob(16), kind, ?2, text, paths, link_title, lang, size, meta, '',
+               app_id, ?3, 0, 1, ocr_text, ocr_state, CASE WHEN kind = 'image' THEN '' ELSE title END
+             FROM records WHERE id = ?1",
+            params![src, name, now_ms],
+        )?;
+        let id = tx.last_insert_rowid();
+        reindex_snippet(&tx, id)?;
+        // flavors：内联数据原样复制，大 blob 的登记路径改指新 id 的目录
+        let mut copies: Vec<(PathBuf, PathBuf)> = Vec::new();
+        for f in blob_files(&tx, src)? {
+            let new = f.replacen(&format!("blobs/{src}/"), &format!("blobs/{id}/"), 1);
+            copies.push((self.dir.join(&f), self.dir.join(&new)));
+            tx.execute(
+                "INSERT INTO flavors(record_id, item, format, data, file)
+                 SELECT ?2, item, format, data, ?4 FROM flavors WHERE record_id = ?1 AND file = ?3",
+                params![src, id, f, new],
+            )?;
+        }
+        tx.execute(
+            "INSERT INTO flavors(record_id, item, format, data, file)
+             SELECT ?2, item, format, data, NULL FROM flavors WHERE record_id = ?1 AND file IS NULL",
+            params![src, id],
+        )?;
+        for sub in ["images", "thumbs"] {
+            let from = self.dir.join(sub).join(format!("{src}.png"));
+            if from.exists() {
+                copies.push((from, self.dir.join(sub).join(format!("{id}.png"))));
+            }
+        }
+        let thumb_missing = !self.dir.join("thumbs").join(format!("{src}.png")).exists();
+        let copied = copies.iter().try_for_each(|(from, to)| {
+            if let Some(d) = to.parent() {
+                std::fs::create_dir_all(d)?;
+            }
+            std::fs::copy(from, to).map(drop)
+        });
+        if let Err(e) = copied
+            .map_err(CoreError::from)
+            .and_then(|()| tx.commit().map_err(CoreError::from))
+        {
+            self.delete_files(id);
+            return Err(e);
+        }
+        Ok(SavedSnippet {
+            id,
+            needs_thumb: (is_image || kind == Kind::Video.as_str()) && thumb_missing,
+            needs_ocr: state == i64::from(ocr_state::PENDING),
+        })
     }
 
     /// 改片段的名字，`text` 为 Some 时同时改内容（只限文字类，设计 §4.2）。`uses`、`copied_at` 不变。
@@ -2274,6 +2353,105 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(nulls, 1);
         assert_eq!(s.summary(id).unwrap().unwrap().snippet_body, None);
+    }
+
+    #[test]
+    fn save_snippet_copies_row_flavors_and_files() {
+        let mut s = Store::open(&tmp()).unwrap();
+        let src = added(&mut s, &rec_image(1), 1);
+        std::fs::write(s.dir.join("thumbs").join(format!("{src}.png")), b"t").unwrap();
+        let out = s.save_snippet(src, "收款码", 5).unwrap();
+        let id = out.id;
+        assert!(!out.needs_thumb);
+        assert!(s.dir.join("images").join(format!("{id}.png")).exists());
+        assert!(s.dir.join("thumbs").join(format!("{id}.png")).exists());
+        assert_eq!(s.flavors(id).unwrap(), s.flavors(src).unwrap());
+        let sum = s.summary(id).unwrap().unwrap();
+        assert_eq!(
+            (sum.title.as_str(), sum.snippet_body.as_deref(), sum.uses),
+            ("收款码", Some("图片"), 0)
+        );
+    }
+    #[test]
+    fn save_snippet_copies_large_blobs() {
+        let mut s = Store::open(&tmp()).unwrap();
+        let big = "a".repeat(INLINE_MAX + 10);
+        let src = added(
+            &mut s,
+            &rec_of(Snapshot {
+                text: Some(big.clone()),
+                flavors: vec![text_flavor(&big)],
+                ..Default::default()
+            }),
+            1,
+        );
+        let id = s.save_snippet(src, "大", 2).unwrap().id;
+        assert!(s.dir.join("blobs").join(id.to_string()).join("0").exists());
+        assert_eq!(s.flavors(id).unwrap(), s.flavors(src).unwrap());
+        let file: String = s
+            .conn
+            .query_row(
+                "SELECT file FROM flavors WHERE record_id = ?1 AND file IS NOT NULL",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(file, format!("blobs/{id}/0"));
+    }
+    #[test]
+    fn snippet_survives_purge_of_source() {
+        let mut s = Store::open(&tmp()).unwrap();
+        let src = added(&mut s, &rec_image(1), 1);
+        let id = s.save_snippet(src, "x", 2).unwrap().id;
+        s.soft_delete(src, 3).unwrap();
+        s.purge_all_soft_deleted().unwrap();
+        assert!(s.dir.join("images").join(format!("{id}.png")).exists());
+    }
+    #[test]
+    fn snippet_search_excludes_app_and_source_title() {
+        let mut s = mem();
+        let mut r = rec("hello");
+        r.app = Some(AppInfo {
+            id: "wx".into(),
+            name: "微信".into(),
+        });
+        let src = added(&mut s, &r, 1);
+        let sn = s.save_snippet(src, "签名", 2).unwrap().id;
+        assert!(ids(&s, "签名").contains(&sn));
+        let shot = added(&mut s, &rec_image(2), 3);
+        let sn2 = s.save_snippet(shot, "收款码", 4).unwrap().id;
+        assert!(!ids(&s, "截图").contains(&sn2));
+        assert!(!ids(&s, "微信").contains(&sn));
+    }
+    #[test]
+    fn cleanup_paths_skip_snippets() {
+        let mut s = mem();
+        let sid = s.create_snippet("a", "b", 0).unwrap();
+        for i in 0..3 {
+            added(&mut s, &rec(&format!("h{i}")), 1 + i);
+        }
+        assert_eq!(s.count_unpinned().unwrap(), 3);
+        assert_eq!(s.prune_preview(Some(7), 1, 30 * DAY_MS).unwrap(), 3);
+        assert!(
+            s.prune_retention(Some(7), 30 * DAY_MS)
+                .unwrap()
+                .iter()
+                .all(|&i| i != sid)
+        );
+        for i in 0..3 {
+            let r = rec(&format!("g{i}"));
+            s.insert_or_merge(&r, 40 * DAY_MS, 1).unwrap();
+        }
+        assert!(s.prune_capacity(1).unwrap().iter().all(|&i| i != sid));
+        assert!(s.clear_unpinned().unwrap().iter().all(|&i| i != sid));
+        assert!(s.live_summary(sid).unwrap().is_some());
+    }
+    #[test]
+    fn save_snippet_rejects_deleted_source() {
+        let mut s = mem();
+        let src = added(&mut s, &rec("x"), 1);
+        s.soft_delete(src, 2).unwrap();
+        assert!(s.save_snippet(src, "n", 3).is_err());
     }
 
     #[test]
