@@ -23,6 +23,8 @@ export const requestAccessibility = () => invoke<void>('request_accessibility');
 export const accessibilityGranted = () => invoke<boolean>('accessibility_granted');
 export const requestScreenCapture = () => invoke<void>('request_screen_capture');
 export const screenCaptureGranted = () => invoke<boolean>('screen_capture_granted');
+/** 设置开着时按截图或录屏快捷键、焦点不在录制框里：开始截图或录屏（面板与对话框保留）。 */
+export const overlayBegin = (rec: boolean) => invoke<void>('overlay_begin', { rec });
 /** 系统的选择文件夹对话框；取消返回 null。 */
 export const pickFolder = (defaultPath?: string) => open({ directory: true, defaultPath }) as Promise<string | null>;
 export const openUrl = (url: string) => invoke<void>('open_url', { url });

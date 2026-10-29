@@ -389,6 +389,8 @@ pub fn begin(app: &AppHandle, mode: Mode) {
     let panel_shown = app
         .get_webview_window("panel")
         .is_some_and(|w| w.is_visible().unwrap_or(false));
+    // 设置或确认框开着：面板不隐藏，跟屏上其他内容一样截进去，截完回到对话框（M15 交互规则 4）
+    let hide_panel = panel_shown && !keeps_panel(app);
     // 已全部上屏的遮罩被关掉或隐藏了（Windows 上 Alt+F4 已拦下，这里兜底）：会话不会再结束，重新开始
     let shown = session(app).shown_overlays();
     let lost = (0..shown).any(|i| {
@@ -454,7 +456,7 @@ pub fn begin(app: &AppHandle, mode: Mode) {
         hide_overlays(app);
     }
     // 面板不能被截进去
-    if panel_shown {
+    if hide_panel {
         crate::panel::hide(app);
     }
     // 录屏用不到识别，不在开始采集时抢 CPU 加载模型
@@ -463,7 +465,7 @@ pub fn begin(app: &AppHandle, mode: Mode) {
     }
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        freeze(&app, generation, panel_shown || stale, mode)
+        freeze(&app, generation, hide_panel || stale, mode)
     });
 }
 
@@ -829,7 +831,14 @@ pub fn overlay_crashed(w: &tauri::Webview) {
 /// `generation`：刚结束的那一次截图，在结束它的同一次加锁里取，不会误报给之后开始的新一次。
 fn after_end(app: &AppHandle, generation: u64, previous: Option<isize>) {
     hide_overlays(app);
-    if let Some(h) = previous {
+    let panel_kept = keeps_panel(app)
+        && app
+            .get_webview_window("panel")
+            .is_some_and(|w| w.is_visible().unwrap_or(false));
+    if panel_kept {
+        // 截图时没隐藏的面板（开着对话框）：键盘回到对话框，不还给原来的应用
+        crate::panel::refocus(app);
+    } else if let Some(h) = previous {
         // 排在 hide_overlays 之后：遮罩还拿着前台，本进程此刻是前台进程，系统允许切
         on_main(app, move |_| xpaste_platform::activate_window(h));
     }
@@ -840,6 +849,11 @@ fn after_end(app: &AppHandle, generation: u64, previous: Option<isize>) {
             events::emit_to(app, &l, events::SHOT_END, generation);
         }
     }
+}
+
+/// 面板上开着设置或确认框：截图不隐藏面板。
+fn keeps_panel(app: &AppHandle) -> bool {
+    app.state::<AppState>().dialog_open.load(Ordering::SeqCst)
 }
 
 /// 隐藏全部遮罩，并撤销提示条模式的鼠标穿透，下次截图能点。

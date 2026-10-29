@@ -2,7 +2,7 @@ import './styles.css';
 import { attachConsole, info } from './api/log';
 import {
   accessibilityGranted, bootstrap, clearHistory, copy, copyTextPlain, countUnpinned, deleteRecord, finishOnboarding, frontendReady, getRecord, hidePanel, installedApps, ocrProgress,
-  openUrl, pickFolder, prunePreview, reocr, requestAccessibility, requestScreenCapture, revealFile, saveSettings, screenCaptureGranted, search, setDialogOpen, setPaused,
+  openUrl, overlayBegin, pickFolder, prunePreview, reocr, requestAccessibility, requestScreenCapture, revealFile, saveSettings, screenCaptureGranted, search, setDialogOpen, setPaused,
   setPinned, undoDelete,
 } from './api/commands';
 import {
@@ -1732,8 +1732,8 @@ function openSettings() {
   stPanes.forEach((p) => (p.scrollTop = 0));
   void dlg.offsetWidth;
   dlg.classList.add('is-shown');
-  // “通用”照旧聚焦唤起快捷键录制框；其他标签聚焦标签本身，不让截图录制框或下拉框一打开就接按键
-  (stTab === 0 ? hotkeyIn : stTabs[stTab]).focus();
+  // 聚焦标签本身：不让快捷键录制框或下拉框一打开就接按键（否则按截图快捷键会被当成在录制）
+  stTabs[stTab].focus();
 }
 function closeSettings() {
   dlg.classList.remove('is-shown');
@@ -2098,15 +2098,16 @@ await onShotNeedPermission(({ pane, mode }) =>
 );
 // 引导中按唤起快捷键：可见时面板不隐藏，隐藏时先 panel-shown 再到这里；只在“试按快捷键”这一步算成功
 // 设置对话框打开时按唤起快捷键：面板同样不隐藏；录制框有焦点就当作按下了当前快捷键（网页收不到被全局注册拦下的按键）
-// 截图、录屏快捷键同理：对话框开着且面板有焦点时后端不开遮罩，只发到这里（role = shot / rec）
+// 截图、录屏快捷键同理：对话框开着且面板有焦点时后端先发到这里（role = shot / rec），焦点不在录制框里就照常开始
 await onHotkeyPressed((role) => {
-  // 只认面板有焦点时的按键：失焦时后端只把面板拉回焦点，这里再防一道
+  // 只认面板有焦点时的按键：失焦时后端不发到这里，这里再防一道
   const on = (el: Element) => document.activeElement === el && document.hasFocus();
   if (role !== 'panel') {
     const [self, other, name, otherName] = role === 'shot' ? [shotKey, recKey, '截图', '录屏'] : [recKey, shotKey, '录屏', '截图'];
     if (on(self.input)) self.record(role === 'shot' ? S.settings.shotHotkey : S.settings.recHotkey);
     else if (on(hotkeyIn)) setHotkeyHelp(`不能与${name}快捷键相同`, true);
     else if (on(other.input)) other.setHelp(`${otherName}快捷键不能与${name}快捷键相同`, true);
+    else void overlayBegin(role === 'rec').catch((err: AppError) => toast(err.message));
     return;
   }
   if (on(hotkeyIn)) return recordHotkey(S.settings.hotkey);

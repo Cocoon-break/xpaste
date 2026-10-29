@@ -59,28 +59,27 @@ pub fn role_of(pressed: &Shortcut, panel: &str, shot: &str, rec: &str) -> Option
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ShotRoute {
-    /// 交给录制框（`hotkey-pressed`，载荷 `"shot"` / `"rec"`）
+    /// 交给面板（`hotkey-pressed`，载荷 `"shot"` / `"rec"`）：录制框聚焦时写入录制框，否则由面板调 `overlay_begin` 开始
     Recorder,
-    /// 只把面板拉回焦点：开始截图会隐藏面板、关掉对话框，未保存的修改就丢了（M15 规则 4）
-    Refocus,
     Begin,
 }
 
-/// 设置或确认框开着且面板可见时从不开始截图：有焦点交给录制框（同 M15 规则 3），失焦只取回焦点（同 M15 规则 4）。
+/// 设置或确认框开着、面板可见且有焦点时先交给面板（M15 规则 3）：网页收不到被全局注册拦下的按键，录制框只能这样拿到。
+/// 其余情况直接开始；对话框开着时面板不隐藏（M15 规则 4，见 `shot::begin`）。
 pub fn shot_route(dialog_open: bool, panel_visible: bool, panel_focused: bool) -> ShotRoute {
-    match (dialog_open && panel_visible, panel_focused) {
-        (false, _) => ShotRoute::Begin,
-        (true, true) => ShotRoute::Recorder,
-        (true, false) => ShotRoute::Refocus,
+    if dialog_open && panel_visible && panel_focused {
+        ShotRoute::Recorder
+    } else {
+        ShotRoute::Begin
     }
 }
 
-/// 截图快捷键按下：按 `shot_route` 通知面板、取回面板焦点或开始截图。主线程调用。
+/// 截图快捷键按下：按 `shot_route` 通知面板或开始截图。主线程调用。
 pub fn shot_pressed(app: &AppHandle) {
     overlay_pressed(app, crate::shot::Mode::Shot);
 }
 
-/// 截图或录屏快捷键要开遮罩时：按 `shot_route` 通知面板、取回面板焦点或开始（遮罩已上屏时退出、冻结中忽略，见 `shot::begin`）。
+/// 截图或录屏快捷键要开遮罩时：按 `shot_route` 通知面板或开始（遮罩已上屏时退出、冻结中忽略，见 `shot::begin`）。
 fn overlay_pressed(app: &AppHandle, mode: crate::shot::Mode) {
     let (visible, focused) = app.get_webview_window("panel").map_or((false, false), |w| {
         (
@@ -95,7 +94,6 @@ fn overlay_pressed(app: &AppHandle, mode: crate::shot::Mode) {
         ShotRoute::Recorder => {
             crate::events::emit_to(app, "panel", crate::events::HOTKEY_PRESSED, mode.as_str())
         }
-        ShotRoute::Refocus => crate::panel::refocus(app),
         ShotRoute::Begin => crate::shot::begin(app, mode),
     }
 }
@@ -167,11 +165,11 @@ mod tests {
     use super::{Role, ShotRoute, failure_notice, label, role_of, shot_route};
 
     #[test]
-    fn shot_never_begins_while_dialog_open_and_panel_visible() {
+    fn shot_goes_to_panel_only_while_dialog_open_and_panel_focused() {
         use ShotRoute::*;
         assert_eq!(shot_route(true, true, true), Recorder);
-        assert_eq!(shot_route(true, true, false), Refocus);
-        // 对话框没开或面板不可见：照常截图
+        // 面板失焦（切去了别的应用）、对话框没开或面板不可见：照常截图
+        assert_eq!(shot_route(true, true, false), Begin);
         assert_eq!(shot_route(false, true, true), Begin);
         assert_eq!(shot_route(false, true, false), Begin);
         assert_eq!(shot_route(false, false, false), Begin);
