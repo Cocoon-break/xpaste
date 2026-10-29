@@ -38,7 +38,7 @@ import {
   ticks as winTicks, winLabel, xOf, zoomWin, type Layout, type Win,
 } from './spectrum';
 import { addIgnored, formToSettings, optionFromRetention, parseFrequent, parseLimit, pickerOptions, removeIgnored } from './settings-form';
-import { errorControl, tabKeyTarget } from './settings-tabs';
+import { errorControl, revealsFocus, tabKeyTarget } from './settings-tabs';
 import {
   armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, nextSelection, UNDO_MS, visible, type UndoState,
 } from './view';
@@ -1470,7 +1470,7 @@ $('#stTabs').addEventListener('click', (e) => {
 });
 // WAI-ARIA Tabs：←/→ 循环、Home / End，选中跟随焦点
 $('#stTabs').addEventListener('keydown', (e) => {
-  const i = tabKeyTarget(e.key, stTab, stTabs.length);
+  const i = tabKeyTarget(e.key, stTab, stTabs.length, { meta: e.metaKey, ctrl: e.ctrlKey, alt: e.altKey });
   if (i === null) return;
   e.preventDefault();
   e.stopPropagation();
@@ -1732,9 +1732,15 @@ function openSettings() {
   stPanes.forEach((p) => (p.scrollTop = 0));
   void dlg.offsetWidth;
   dlg.classList.add('is-shown');
-  // 聚焦标签本身：不让快捷键录制框或下拉框一打开就接按键（否则按截图快捷键会被当成在录制）
-  stTabs[stTab].focus();
+  // 聚焦标签本身：不让快捷键录制框或下拉框一打开就接按键（否则按截图快捷键会被当成在录制）。
+  // 用 ⌘ , 或托盘打开时上一次输入是键盘，WebKit 会给这次程序聚焦画焦点环，看着像选中了什么：先压住，按键后照常显示
+  const t = stTabs[stTab];
+  t.dataset.quietFocus = '';
+  t.focus();
 }
+const unquietFocus = () => stTabs.forEach((t) => delete t.dataset.quietFocus);
+dlg.addEventListener('keydown', (e) => revealsFocus({ key: e.key, meta: e.metaKey, ctrl: e.ctrlKey }) && unquietFocus(), true);
+dlg.addEventListener('pointerdown', unquietFocus, true);
 function closeSettings() {
   dlg.classList.remove('is-shown');
   clearTimeout(closeTimer);
