@@ -257,8 +257,8 @@ kbd {
 .ghead { height: 34px; box-sizing: border-box; display: flex; gap: 8px; align-items: center; padding: 12px 10px 5px; font-size: 11.5px; color: var(--faint); letter-spacing: .06em; }
 .ghead > span { font: 10.5px var(--font-mono); font-variant-numeric: tabular-nums; padding: 0 5px; border-radius: 4px; background: var(--glass-2); border: 1px solid var(--line); }
 .ghead::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, var(--line-2), transparent); }
-/* “片段”分类：分组标题吸顶，新建按钮固定在右侧，片段再多也不用滚到底找（设计 §3.1）。
-   top: -4px 抵掉列表的上内边距，贴住滚动区顶边；不加动画（设计 §6） */
+/* “片段”分类：分组标题吸顶，新建按钮固定在右侧，片段再多也不用滚到底找（M25 规则 2）。
+   top: -4px 抵掉列表的上内边距，贴住滚动区顶边；不加动画（M25 规则 2） */
 .snip-bar { position: sticky; top: -4px; z-index: 3; height: auto; margin: 0 -8px; padding: 10px 18px 7px; background: color-mix(in srgb, var(--pop-solid) 97%, transparent); box-shadow: 0 8px 12px -10px rgb(0 0 0 / .25); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
 .snip-bar::after { order: 1; }
 .new-snip { order: 2; letter-spacing: 0; color: var(--c-snip); border-color: color-mix(in srgb, var(--c-snip) 40%, transparent); background: color-mix(in srgb, var(--c-snip) 10%, transparent); }
@@ -297,7 +297,7 @@ kbd {
 .meta { font-size: 11.5px; color: var(--faint); margin-top: 1px; }
 .meta .uses { color: var(--c-fav); }
 .meta .snip-of { color: color-mix(in srgb, var(--c-snip) 80%, var(--faint)); }
-/* 多选（只在“片段”分类）：行底色与描边，缩略图盖上勾；勾直接出现，不加动画（设计 §6） */
+/* 多选（只在“片段”分类）：行底色与描边，缩略图盖上勾；勾直接出现，不加动画（M25 规则 6） */
 .item.is-multi .row { background: color-mix(in srgb, var(--c-snip) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c-snip) 40%, transparent); }
 .item.is-multi .thumb::after { content: "✓"; position: absolute; inset: 0; display: grid; place-items: center; font: 700 16px var(--font-ui); color: var(--on-pill); background: var(--c-snip); }
 /* 命中来自图中文字：片段放在元信息行首，同一行省略号截断，不改行高 */
@@ -324,7 +324,7 @@ kbd {
 }
 .qa button:hover { background: color-mix(in srgb, var(--tc) 20%, var(--pop-solid)); color: var(--tc); }
 .qa button:active { transform: scale(.9); }
-/* 多选时复制、编辑不可用（设计 §3.5）：快捷按钮不出现，悬停时序号与图钉照常显示 */
+/* 多选时复制、编辑不可用（M25 规则 6）：快捷按钮不出现，悬停时序号与图钉照常显示 */
 .list.multi .qa { display: none; }
 .list.multi .row:hover .idx, .list.multi .row:hover .pin-mark { opacity: 1; }
 @media (hover: hover) and (pointer: fine) {
@@ -372,7 +372,7 @@ mark { background: var(--mark-bg); color: var(--mark-fg); border-radius: 3px; pa
 .pact { display: flex; gap: 6px; }
 .pbody { overflow: auto; overscroll-behavior: contain; padding: 14px 16px; min-width: 0; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
 .p-empty { color: var(--faint); padding-top: 40px; text-align: center; }
-/* 片段：正文上方的名字大字；多选时的批量预览（设计 §3.3、§3.5） */
+/* 片段：正文上方的名字大字；多选时的批量预览（M25 规则 4、6） */
 .p-snip-name { font: 600 18px var(--font-ui); margin: 0 0 14px; color: var(--fg); overflow-wrap: anywhere; }
 .bulk { display: grid; gap: 14px; }
 .bulk ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
@@ -557,7 +557,7 @@ dialog > form { display: contents; }
 .help { margin: 0; font-size: 12px; color: var(--faint); }
 .err { margin: 0; font-size: 12px; color: var(--danger); }
 .field input[aria-invalid="true"], .field textarea[aria-invalid="true"] { border-color: var(--danger); }
-/* 片段对话框：内容框等宽、可拉高；图片与文件只读，显示缩略图加文件名（设计 §3.4、§6） */
+/* 片段对话框：内容框等宽、可拉高；图片与文件只读，显示缩略图加文件名（M25 规则 5） */
 .field textarea {
   min-height: 132px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line-2); resize: vertical;
   background: var(--well); color: var(--fg); font: 12.5px/1.6 var(--font-mono); width: 100%;

@@ -429,7 +429,7 @@ pub struct RecordSummary {
     pub duration_sec: Option<f64>,
     /// 见 [`ocr_state`]；非图片记录恒为 0，不被消费
     pub ocr_state: u8,
-    /// 不为 None 即片段，值是列表第二行的摘要（设计 §4.1）；前端按它判断，不看 pinned
+    /// 不为 None 即片段，值是列表第二行的摘要（M25 规则 10）；前端按它判断，不看 pinned
     pub snippet_body: Option<String>,
 }
 
@@ -534,7 +534,7 @@ pub fn text_flavor(text: &str) -> Flavor {
     }
 }
 
-/// 片段名字：去首尾空白，非空且不超过 100 个字符（设计 §4.2）。
+/// 片段名字：去首尾空白，非空且不超过 100 个字符（M25 规则 10）。
 pub fn snippet_name(raw: &str) -> Result<String, CoreError> {
     let name = raw.trim();
     if name.is_empty() {

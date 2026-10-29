@@ -72,7 +72,7 @@ export interface RecordSummary {
   durationSec: number | null;
   /** 0 待识别 1 有文字 2 无文字 3 失败 4 跳过 5 本机不支持（crates/xpaste-core `ocr_state`） */
   ocrState: number;
-  /** 不为 null 即片段，值是列表第二行的摘要（设计 §4.1） */
+  /** 不为 null 即片段，值是列表第二行的摘要（M25 规则 10） */
   snippetBody: string | null;
 }
 

@@ -28,7 +28,7 @@ test('text_tokens_meet_contrast_in_both_themes', () => {
         assert.ok(contrast(tok(b, fg), tok(b, bg)) >= min, `${theme} ${fg} 对 ${bg} 低于 ${min}`);
 });
 
-// 片段对话框与菜单项（设计 §3.4、§3.5）
+// 片段对话框与菜单项（M25 规则 5、6）
 test('snippet_dialog_is_labelled_and_fields_have_labels', () => {
   assert.match(html, /<dialog id="snippet" aria-labelledby="snip-title">/);
   assert.match(html, /<h2 id="snip-title">/);

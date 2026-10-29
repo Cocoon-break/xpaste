@@ -70,7 +70,7 @@ CREATE TRIGGER records_fts_py_au AFTER UPDATE OF py_text ON records BEGIN
 END;
 INSERT INTO fts_py(fts_py) VALUES ('rebuild');
 ",
-    // 阶段 14 片段：snippet_body 不为 NULL 即片段，库里按置顶存（旧版本也跳过置顶，不会清掉它），见设计 §4.1
+    // 阶段 14 片段：snippet_body 不为 NULL 即片段，库里按置顶存（旧版本也跳过置顶，不会清掉它），M25 规则 10
     "ALTER TABLE records ADD COLUMN snippet_body TEXT;",
 ];
 
@@ -82,7 +82,7 @@ const INLINE_MAX: usize = 1_048_576;
 const DETAIL_TEXT_MAX: usize = 200 * 1024;
 const DAY_MS: i64 = 86_400_000;
 
-/// 片段按置顶存，因此也在这里豁免所有清理（设计 §4.1）。
+/// 片段按置顶存，因此也在这里豁免所有清理（M25 规则 10）。
 const LIVE_UNPINNED: &str = "pinned = 0 AND deleted_at IS NULL";
 
 /// `save_snippet` 的结果：后两项告诉调用方要不要给新 id 补投后台任务。
@@ -589,7 +589,7 @@ impl Store {
             .unwrap_or(false))
     }
 
-    /// 新建文字片段（设计 §4.2）：不去重、不挂来源应用、不做容量裁剪，库里按置顶存。
+    /// 新建文字片段（M25 规则 10）：不去重、不挂来源应用、不做容量裁剪，库里按置顶存。
     pub fn create_snippet(
         &mut self,
         name: &str,
@@ -622,7 +622,7 @@ impl Store {
         Ok(id)
     }
 
-    /// 把一条历史记录存为片段（设计 §4.2 第 1 条）：复制行、flavors 与图片/缩略图/大 blob 文件，之后与源记录互不相干。
+    /// 把一条历史记录存为片段（M25 规则 10）：复制行、flavors 与图片/缩略图/大 blob 文件，之后与源记录互不相干。
     pub fn save_snippet(
         &mut self,
         src: i64,
@@ -695,7 +695,7 @@ impl Store {
         })
     }
 
-    /// 改片段的名字，`text` 为 Some 时同时改内容（只限文字类，设计 §4.2）。`uses`、`copied_at` 不变。
+    /// 改片段的名字，`text` 为 Some 时同时改内容（只限文字类，M25 规则 10）。`uses`、`copied_at` 不变。
     pub fn update_snippet(
         &mut self,
         id: i64,
@@ -776,7 +776,7 @@ impl Store {
         Ok(())
     }
 
-    /// 粘贴后计数；`move_to_top` 时非置顶记录移到最前；片段总是更新 `copied_at`（“上次使用”，设计 §4.2）。
+    /// 粘贴后计数；`move_to_top` 时非置顶记录移到最前；片段总是更新 `copied_at`（“上次使用”，M25 规则 10）。
     pub fn bump_use(&self, id: i64, move_to_top: bool, now_ms: i64) -> Result<(), CoreError> {
         self.conn.execute(
             "UPDATE records SET uses = uses + 1,
@@ -941,7 +941,7 @@ impl Store {
             app,
             copied_at: row.get(5)?,
             uses: row.get(6)?,
-            // 片段库里按置顶存，对外不报置顶（设计 §4.1）
+            // 片段库里按置顶存，对外不报置顶（M25 规则 10）
             pinned: row.get::<_, bool>(7)? && snippet_body.is_none(),
             size: row.get::<_, i64>(8)? as u64,
             lang: row.get(9)?,
@@ -1123,7 +1123,7 @@ fn insert_flavors<'a>(
     Ok(writes)
 }
 
-/// 按行里的名字、内容和识别文字重算片段的 `search_text` 与 `py_text`（设计 §4.1）。
+/// 按行里的名字、内容和识别文字重算片段的 `search_text` 与 `py_text`（M25 规则 10）。
 /// 口径与采集一致：内容部分走 `capture::content_search_text`，识别文字与 `set_ocr` 的追加方式相同。
 fn reindex_snippet(tx: &Connection, id: i64) -> Result<(), CoreError> {
     let (title, text, link_title, paths, ocr_text): (
@@ -2349,7 +2349,7 @@ pub(crate) mod tests {
         assert_eq!(s.ocr_state(a + 100).unwrap(), None);
     }
 
-    // ---- 阶段 14：片段（设计 §4.1、§4.2）----
+    // ---- 阶段 14：片段（M25 规则 10）----
 
     fn text_snap(t: &str) -> Snapshot {
         Snapshot {

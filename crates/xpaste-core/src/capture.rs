@@ -123,7 +123,7 @@ pub fn build_record_with(
 }
 
 /// 内容部分的搜索文本（已小写）：正文、链接标题、各文件名、各路径，以换行连接。
-/// 采集与片段重建索引共用，口径只此一处（设计 §4.1）。
+/// 采集与片段重建索引共用，口径只此一处（M25 规则 10）。
 pub fn content_search_text(
     text: Option<&str>,
     link_title: Option<&str>,

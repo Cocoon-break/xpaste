@@ -53,7 +53,7 @@ export const keyAction = (e: KeyEv, c: KeyCtx): Action => {
     return vert ? { t: 'menuMove', d: vert } : null;
   }
   if (e.mod && k === ',') return e.repeat ? null : { t: 'settings' };
-  // 片段（设计 §3.4、§3.5）
+  // 片段（M25 规则 5、6）
   if (e.mod && !e.shift && !e.alt && !e.repeat) {
     if (lk === 's' && c.hasSel && !c.selIsSnip) return { t: 'saveSnippet' };
     if (lk === 'e' && c.selIsSnip && c.multi < 2) return { t: 'editSnippet' };

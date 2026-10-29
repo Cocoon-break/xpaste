@@ -116,7 +116,7 @@ pub fn undo_delete(
     Ok(restored.len() as u32)
 }
 
-/// 把历史记录存为片段（设计 §4.3）。
+/// 把历史记录存为片段（M25 规则 10）。
 #[tauri::command(async)]
 pub fn save_snippet(
     app: AppHandle,

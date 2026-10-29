@@ -2,7 +2,7 @@
 import type { RecordSummary } from './api/types';
 import { FILTERS, isFav, isSnip, type Filter } from './format.ts';
 
-/** `min`：进入“常用”的使用次数（设置 frequentMinUses）。`searching`：有搜索词时“全部”才包含片段（设计 §3.1）。 */
+/** `min`：进入“常用”的使用次数（设置 frequentMinUses）。`searching`：有搜索词时“全部”才包含片段（M25 规则 2）。 */
 export const inFilter = (r: RecordSummary, f: Filter, min: number, searching: boolean): boolean =>
   f === 'snip' ? isSnip(r) : f === 'all' ? !isSnip(r) || searching : f === 'fav' ? isFav(r, min) : !isSnip(r) && r.kind === f;
 

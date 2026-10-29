@@ -18,7 +18,7 @@
   --fg: #EAF0FF; --muted: #9AA4CB; --faint: #646E94;
   --c-text: #8FE3FF; --c-link: #6F8BFF; --c-code: #4FE3C1; --c-accent: #FF6FD8;
   --c-image: #FFB84D; --c-video: #FF6B6B; --c-file: #B48CFF; --c-fav: #D9F26B;
-  /* 片段：沿用已删掉的颜色类型那一档品红（设计 §3.1）；按钮与列表第二行拿它当文字色，亮暗都过 4.5 : 1 */
+  /* 片段：沿用已删掉的颜色类型那一档品红（M25 规则 2）；按钮与列表第二行拿它当文字色，亮暗都过 4.5 : 1 */
   --c-snip: #FF6FD8;
   --beam: #8FE3FF; --beam-hover: #B4EEFF; --on-beam: #06101C; --on-rec: #1A0507; --on-pill: #06101C; --danger: #FF6B81; --danger-hover: #FF8A9B; --on-danger: #06101C;
   --well: rgb(0 0 0 / .22); --well-2: rgb(0 0 0 / .32);

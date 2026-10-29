@@ -12,7 +12,7 @@ test('escHint 按搜索框是否有字给出 Esc 提示', () => {
   assert.equal(escHint(false), '隐藏');
 });
 
-test('escHint 多选时 Esc 先取消选择（设计 §3.5）', () => {
+test('escHint 多选时 Esc 先取消选择（M25 规则 6）', () => {
   assert.equal(escHint(false, true), '取消选择');
   assert.equal(escHint(true, true), '取消选择');
 });
