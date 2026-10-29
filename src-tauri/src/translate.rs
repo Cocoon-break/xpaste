@@ -1,4 +1,4 @@
-//! 翻译分发：OpenAI 兼容接口流式请求与系统翻译（设计 §4.1、§4.2）。
+//! 翻译分发：OpenAI 兼容接口流式请求与系统翻译（M26 规则 7、8）。
 //! 日志只记 id、字数、耗时、状态码与错误类别，不写原文、译文、API Key、Base URL。
 
 use std::sync::OnceLock;
@@ -38,7 +38,7 @@ pub struct Cfg {
     pub lang: Lang,
 }
 
-/// 读设置；引擎还没选（`""`）时本机支持系统翻译就用系统翻译，否则用 OpenAI 兼容接口（设计 §3.3）。
+/// 读设置；引擎还没选（`""`）时本机支持系统翻译就用系统翻译，否则用 OpenAI 兼容接口（M26 规则 6）。
 pub fn cfg(s: &Settings) -> Cfg {
     let engine = match s.translate_engine.as_str() {
         "system" => Engine::System,
@@ -55,7 +55,7 @@ pub fn cfg(s: &Settings) -> Cfg {
     }
 }
 
-/// `translate-delta` 的载荷（设计 §4.5）。
+/// `translate-delta` 的载荷（M26 规则 3、5）。
 #[derive(Debug, Clone, Serialize)]
 pub struct Delta {
     pub id: Option<i64>,
@@ -63,7 +63,7 @@ pub struct Delta {
     pub text: String,
 }
 
-/// 增量合并：距上次吐出满 50 ms 才吐一次，结束时 `flush` 发完剩下的（设计 §4.1）。
+/// 增量合并：距上次吐出满 50 ms 才吐一次，结束时 `flush` 发完剩下的（M26 规则 3）。
 /// ponytail: 只在新增量到来时检查时间，流停顿期间攒着的部分要等下一段或 flush；本机慢模型一段间隔也远超 50 ms，够用。
 #[derive(Debug, Default)]
 pub struct Coalescer {
@@ -155,7 +155,7 @@ pub async fn run(
     Ok(exec(cfg, text, None, on_delta).await?)
 }
 
-/// OpenAI 兼容接口的超时：连接 10 秒；读空闲 30 秒，首段与段间都算，没有总时长上限（设计 §4.1）。
+/// OpenAI 兼容接口的超时：连接 10 秒；读空闲 30 秒，首段与段间都算，没有总时长上限（M26 规则 10）。
 #[derive(Debug, Clone, Copy)]
 pub struct Timeouts {
     pub connect: Duration,
@@ -201,7 +201,7 @@ pub async fn exec(
 }
 
 /// 系统翻译（整段返回）。macOS Translation 靠主队列回调：不能在主线程上等（会卡死到超时），
-/// 也不占 tokio 工作线程，所以放到阻塞线程池（设计 §4.2）。
+/// 也不占 tokio 工作线程，所以放到阻塞线程池（M26 规则 7）。
 async fn system(text: &str, target: Lang) -> Result<String, Fail> {
     use xpaste_platform::SysTranslateError as E;
     let src = text.to_string();
@@ -226,7 +226,7 @@ fn build_client(loopback: bool, t: Timeouts) -> Result<reqwest::Client, Fail> {
     let b = reqwest::Client::builder()
         .connect_timeout(t.connect)
         .read_timeout(t.read);
-    // 本机地址始终直连；其余跟随系统代理（`system-proxy` feature，设计 §4.1）
+    // 本机地址始终直连；其余跟随系统代理（`system-proxy` feature，M26 规则 11）
     let b = if loopback { b.no_proxy() } else { b };
     b.build().map_err(|e| {
         log::warn!("翻译 HTTP 客户端创建失败：{e}");
@@ -235,7 +235,7 @@ fn build_client(loopback: bool, t: Timeouts) -> Result<reqwest::Client, Fail> {
 }
 
 /// 正式客户端。reqwest 只在 build 时读一次系统代理，所以非本机地址每次现建，
-/// 用户中途开关代理也能跟上（设计 §4.1）；翻译由用户触发，建客户端的开销可以忽略。本机地址不走代理，缓存一个。
+/// 用户中途开关代理也能跟上（M26 规则 11）；翻译由用户触发，建客户端的开销可以忽略。本机地址不走代理，缓存一个。
 fn client(loopback: bool) -> Result<reqwest::Client, Fail> {
     static LOOPBACK: OnceLock<reqwest::Client> = OnceLock::new();
     if !loopback {

@@ -149,7 +149,7 @@ export interface AppError {
   message: string;
 }
 
-/** `translate_record` 的结果：去掉首尾空白的译文与实际翻成的语言代码（设计 §4.5）。 */
+/** `translate_record` 的结果：去掉首尾空白的译文与实际翻成的语言代码（M26 规则 8、9）。 */
 export interface Translated {
   text: string;
   lang: string;

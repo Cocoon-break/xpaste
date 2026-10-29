@@ -1,4 +1,4 @@
-//! 翻译命令（设计 §4.5）。
+//! 翻译命令（M26）。
 //! 系统翻译与语言包查询靠主队列回调，不能在主线程上等；同步命令跑在主线程，所以这几个命令都是 async，
 //! 平台调用经 `spawn_blocking`（见 `translate::system`）。
 
@@ -83,7 +83,7 @@ pub async fn translate_record(app: AppHandle, id: i64) -> Result<Translated, App
     })
 }
 
-/// 设置页“测试连接”：用表单里（未保存）的值翻译固定短句，不存任何东西（设计 §3.3）。
+/// 设置页“测试连接”：用表单里（未保存）的值翻译固定短句，不存任何东西（M26 规则 6）。
 #[tauri::command]
 pub async fn translate_test(
     engine: String,

@@ -74,7 +74,7 @@ const I = {
   // 片段：书签与铅笔（M25 规则 2、6）
   snip: '<path d="M6 3.5h8v13l-4-3-4 3z"/>',
   pencil: '<path d="M4 16l1-4 8-8 3 3-8 8z"/><path d="M11.5 5.5l3 3"/>',
-  // 翻译：“文”与“A”（设计 §3.1）
+  // 翻译：“文”与“A”（M26 规则 2）
   translate: '<path d="M3 5h7M6.5 3.5V5M8.7 5c-.7 3-2.5 5.2-5.2 6.5M5.2 7.6c.9 1.7 2.3 2.9 4 3.6"/><path d="m10.5 16.5 3-7.5 3 7.5M11.6 14h3.8"/>',
 };
 const svg = (n: keyof typeof I, cls = '') =>
@@ -553,7 +553,7 @@ function showBody(d: RecordDetail | null, fade: boolean) {
   S.detail = d;
   pbody.style.opacity = pbody.style.filter = '';
   const cur = d && S.records.get(d.id);
-  // 译文区块挂在正文最后：文本、代码在原文之后，图片、文件在图中文字之后（设计 §3.1）
+  // 译文区块挂在正文最后：文本、代码在原文之后，图片、文件在图中文字之后（M26 规则 3）
   pbody.innerHTML = d ? (cur && isSnip(cur) ? snipNameHTML(cur) : '') + bodyHTML(d) + `<div class="tr-slot">${trSlotHTML(d)}</div>` : '';
   pbody.scrollTop = 0;
   if (cur) pmeta.innerHTML = metaHTML(cur, d);
@@ -565,7 +565,7 @@ function renderPreview(fade = false) {
   const bulk = S.multi.size >= 2, snip = !!r && isSnip(r);
   [pinBtn, copyBtn, delBtn, saveSnipBtn, editSnipBtn].forEach((b) => (b.disabled = !r || (bulk && b !== delBtn)));
   pinBtn.hidden = saveSnipBtn.hidden = snip;
-  // 翻译入口只对可翻译的单条记录出现（设计 §3.1）
+  // 翻译入口只对可翻译的单条记录出现（M26 规则 1）
   trBtn.hidden = $('#trHint').hidden = !r || bulk || !translatable(r);
   editSnipBtn.hidden = !snip;
   if (bulk) {
@@ -664,7 +664,7 @@ function refreshOcr(id: number) {
   );
 }
 
-// —— 翻译（设计 §3.1）——
+// —— 翻译（M26 规则 2–4）——
 // 进行中与本次会话的结果按记录 id 存着：切走不取消请求，回来时照常显示；没有时用详情里存库的译文
 const trs = new Map<number, Tr>();
 const trOf = (id: number, d = S.detail?.id === id ? S.detail : details.get(id)): Tr | undefined =>
@@ -716,7 +716,7 @@ function doTranslate(id: number, again = false) {
       // 别处已在翻译这条（同一条只跑一个请求）：增量照样会到
       if (err.kind === 'invalid' && err.message === '正在翻译') return;
       end({ ok: false, error: err.message });
-      // 未配置、系统太旧：去设置的“翻译”标签；缺语言包：打开系统设置（设计 §3.4）
+      // 未配置、系统太旧：去设置的“翻译”标签；缺语言包：打开系统设置（M26 规则 13）
       const action = err.kind === 'translateConfig' || err.kind === 'translateOs' ? { label: '去设置', run: openTrSettings }
         : err.kind === 'translatePack' ? { label: '打开系统设置', run: () => void openTranslationSettings().catch((e: AppError) => toast(e.message)) }
           : undefined;
@@ -1430,7 +1430,7 @@ const handlers = {
     // 片段改了名字或内容（M25 规则 5）：正文重取；搜索中重取命中集合，新名字立即可搜、旧名字搜不到
     const snipEdited = isSnip(s) && (prev?.title !== s.title || prev?.snippetBody !== s.snippetBody || prev?.kind !== s.kind || prev?.size !== s.size);
     if (s.id === bodyFor && snipEdited) bodyFor = null;
-    // 识别文字或片段内容变了，库里的译文已清掉（设计 §3.5）；进行中的请求留着，结果回来照常显示
+    // 识别文字或片段内容变了，库里的译文已清掉（M26 规则 12）；进行中的请求留着，结果回来照常显示
     if ((snipEdited || prev?.ocrState !== s.ocrState) && trs.get(s.id)?.state !== 'busy') trs.delete(s.id);
     // 去重命中会改 copiedAt，需要重新排序；选中项的头部与信息栏随 select 刷新，不重取详情
     scheduleUpdatedPaint(
@@ -1662,7 +1662,7 @@ function dirField(id: string, placeholder: () => string) {
 }
 const shotDir = dirField('shotDir', () => (S.platform.os === 'macos' ? '~/Pictures/xPaste' : '图片\\xPaste'));
 const recDir = dirField('recDir', () => '~/Movies/xPaste');
-// 翻译标签（设计 §3.3）。翻译方式：stored 为空串（未选）时按系统翻译是否可用推断显示，用户没动就保存时原样写回
+// 翻译标签（M26 规则 6）。翻译方式：stored 为空串（未选）时按系统翻译是否可用推断显示，用户没动就保存时原样写回
 const trEngineEl = $('#trEngine'), trEngineBtns = [...trEngineEl.querySelectorAll<HTMLButtonElement>('[data-engine]')];
 const trBaseIn = $<HTMLInputElement>('#trBaseUrl'), trKeyIn = $<HTMLInputElement>('#trApiKey'), trModelIn = $<HTMLInputElement>('#trModel');
 const trLangIn = $<HTMLSelectElement>('#trLang'), trBaseErr = $('#trBaseUrlErr'), trTestBtn = $<HTMLButtonElement>('#trTestBtn'), trResult = $('#trTestResult');
@@ -2825,7 +2825,7 @@ pbody.addEventListener('click', (e) => {
     });
     return;
   }
-  // 译文区块：复制译文不进历史（同“复制文字”）；重新翻译丢掉旧译文再请求（设计 §3.1）
+  // 译文区块：复制译文不进历史（同“复制文字”）；重新翻译丢掉旧译文再请求（M26 规则 4）
   const tb = t.closest<HTMLElement>('[data-tr]'), tid = S.detail?.id;
   if (tb && tid !== undefined) {
     if (tb.dataset.tr === 'again') return doTranslate(tid, true);

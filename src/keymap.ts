@@ -15,7 +15,7 @@ export type KeyCtx = {
   inSnip: boolean;
   /** 多选条数 */
   multi: number;
-  /** 选中的记录可翻译（设计 §3.1） */
+  /** 选中的记录可翻译（M26 规则 1） */
   selTranslatable: boolean;
 };
 
@@ -56,7 +56,7 @@ export const keyAction = (e: KeyEv, c: KeyCtx): Action => {
     return vert ? { t: 'menuMove', d: vert } : null;
   }
   if (e.mod && k === ',') return e.repeat ? null : { t: 'settings' };
-  // 片段（M25 规则 5、6）；翻译（设计 §3.1，多选时不可翻译）
+  // 片段（M25 规则 5、6）；翻译（M26 规则 2，多选时不可翻译）
   if (e.mod && !e.shift && !e.alt && !e.repeat) {
     if (lk === 't' && c.selTranslatable && c.multi < 2) return { t: 'translate' };
     if (lk === 's' && c.hasSel && !c.selIsSnip) return { t: 'saveSnippet' };

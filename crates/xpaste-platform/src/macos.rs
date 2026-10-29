@@ -59,7 +59,7 @@ unsafe extern "C" {
 /// 可能在任意线程上调用，`out` 只在回调期间有效。
 type TrCallback = extern "C" fn(ctx: *mut c_void, code: i32, out: *const c_char);
 
-// swift/translate.swift 编成的静态库，由 build.rs 链接（设计 §4.2）
+// swift/translate.swift 编成的静态库，由 build.rs 链接（M26 规则 7）
 unsafe extern "C" {
     fn xp_tr_pack(target: *const c_char) -> i32;
     fn xp_tr_translate(
@@ -652,7 +652,7 @@ pub fn ocr_png_bytes(png: &[u8], max_side_px: u32) -> Result<Option<OcrText>, Oc
     })
 }
 
-/// 系统翻译（`TranslationSession(installedSource:target:)`）需要 macOS 26（设计 §4.2）。
+/// 系统翻译（`TranslationSession(installedSource:target:)`）需要 macOS 26（M26 规则 7）。
 pub fn translate_supported() -> bool {
     NSProcessInfo::processInfo().isOperatingSystemAtLeastVersion(NSOperatingSystemVersion {
         majorVersion: 26,
@@ -678,7 +678,7 @@ pub fn translate_pack(target: &str) -> PackStatus {
     }
 }
 
-/// 系统翻译超时（设计 §4.2）
+/// 系统翻译超时（M26 规则 10）
 const TRANSLATE_TIMEOUT: Duration = Duration::from_secs(30);
 
 type TrSender = mpsc::Sender<Result<String, SysTranslateError>>;

@@ -72,7 +72,7 @@ INSERT INTO fts_py(fts_py) VALUES ('rebuild');
 ",
     // 阶段 14 片段：snippet_body 不为 NULL 即片段，库里按置顶存（旧版本也跳过置顶，不会清掉它），M25 规则 10
     "ALTER TABLE records ADD COLUMN snippet_body TEXT;",
-    // 阶段 15 翻译：每条记录只存最新一份译文，见设计 §3.5
+    // 阶段 15 翻译：每条记录只存最新一份译文，见 M26 规则 12
     "ALTER TABLE records ADD COLUMN translation TEXT;\nALTER TABLE records ADD COLUMN translation_lang TEXT;",
 ];
 
@@ -422,7 +422,7 @@ impl Store {
         }))
     }
 
-    /// 写最新一份译文（设计 §3.5）；只写未删除的记录，返回是否写入。
+    /// 写最新一份译文（M26 规则 12）；只写未删除的记录，返回是否写入。
     pub fn set_translation(&self, id: i64, text: &str, lang: &str) -> Result<bool, CoreError> {
         let n = self.conn.execute(
             "UPDATE records SET translation = ?1, translation_lang = ?2 WHERE id = ?3 AND deleted_at IS NULL",
@@ -431,7 +431,7 @@ impl Store {
         Ok(n > 0)
     }
 
-    /// 可翻译的原文（设计 §4.3）：文本、代码取全文，图片、文件在识别出文字时取识别结果；其余、已删除、不存在为 None。
+    /// 可翻译的原文（M26 规则 1）：文本、代码取全文，图片、文件在识别出文字时取识别结果；其余、已删除、不存在为 None。
     pub fn translate_source(&self, id: i64) -> Result<Option<String>, CoreError> {
         let row: Option<(String, Option<String>, Option<String>, u8)> = self
             .conn

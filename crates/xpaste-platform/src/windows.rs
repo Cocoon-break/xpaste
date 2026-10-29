@@ -928,7 +928,7 @@ pub fn ocr_png_bytes(png: &[u8], max_side_px: u32) -> Result<Option<OcrText>, Oc
     Ok(Some(crate::ocr_text(lines)))
 }
 
-/// 系统翻译只在 macOS 26 及以上提供（设计 §4.2）。
+/// 系统翻译只在 macOS 26 及以上提供（M26 规则 7）。
 pub fn translate_supported() -> bool {
     false
 }

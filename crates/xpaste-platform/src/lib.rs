@@ -110,7 +110,7 @@ fn ocr_text(lines: Vec<(String, f32)>) -> OcrText {
     OcrText { text, confidence }
 }
 
-/// 系统翻译语言包状态（设计 §4.2）。
+/// 系统翻译语言包状态（M26 规则 7）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PackStatus {
     /// 已下载
@@ -121,7 +121,7 @@ pub enum PackStatus {
     Unsupported,
 }
 
-/// 系统翻译失败原因（设计 §4.2）。
+/// 系统翻译失败原因（M26 规则 7、13）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SysTranslateError {
     /// 系统低于 macOS 26

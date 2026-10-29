@@ -59,7 +59,7 @@ export function shotFinish(png: Uint8Array, action: ShotAction, index: number, r
   return invoke<ShotOutcome>('shot_finish', png, { headers: { 'x-action': action, 'x-index': String(index), 'x-rect': r } });
 }
 
-/** 截图翻译的增量（设计 §4.5）：后端只发给发起的遮罩；面板翻译的广播（`id` 不为 null）不收。 */
+/** 截图翻译的增量（M26 规则 5）：后端只发给发起的遮罩；面板翻译的广播（`id` 不为 null）不收。 */
 export async function onShotTranslateDelta(cb: (lang: string, text: string) => void): Promise<void> {
   if (stub) { dev.delta = cb; return; }
   await listen<TranslateDelta>(TRANSLATE_DELTA, (e) => { if (e.payload.id === null) cb(e.payload.lang, e.payload.text); }, { target: getCurrentWindow().label });

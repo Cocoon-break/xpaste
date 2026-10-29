@@ -874,7 +874,7 @@ fn hide_overlays(app: &AppHandle) {
     });
 }
 
-/// 遮罩的输出（M23 规则 7）；翻译见设计 §3.2。
+/// 遮罩的输出（M23 规则 7）；翻译见 M26 规则 5。
 #[derive(Debug, Clone, Copy)]
 pub enum Action {
     Copy,
@@ -987,7 +987,7 @@ pub struct ShotOutcome {
     pub file: Option<String>,
     /// 是否写了剪切板（保存时看“保存截图时同时复制”，识别没有文字时为 false）
     pub copied: bool,
-    /// 完整译文，只有翻译动作有值（设计 §4.5）
+    /// 完整译文，只有翻译动作有值（M26 规则 5）
     pub text: Option<String>,
 }
 
@@ -1027,7 +1027,7 @@ pub fn pin_bounds(
 }
 
 /// `shot_finish`：在后台线程执行。成功后遮罩进入提示条模式，前端显示提示条后调 `shot_cancel`；
-/// 翻译例外，成功后停在译文卡片，复制译文时（`copy_text`）才进入（设计 §4.5）。`label` 为发起的遮罩窗口。
+/// 翻译例外，成功后停在译文卡片，复制译文时（`copy_text`）才进入（M26 规则 5）。`label` 为发起的遮罩窗口。
 pub fn finish(
     app: &AppHandle,
     action: Action,
@@ -1185,7 +1185,7 @@ fn ocr(app: &AppHandle, generation: u64, png: Vec<u8>) -> Result<ShotOutcome, Ap
     })
 }
 
-/// 截图翻译（设计 §3.2、§4.5）：识别 → 翻译，增量合并后只发给发起的遮罩 `label`。不写剪切板、不进提示条模式。
+/// 截图翻译（M26 规则 5）：识别 → 翻译，增量合并后只发给发起的遮罩 `label`。不写剪切板、不进提示条模式。
 /// 识别后与每段增量发出前都看一次截图是否已结束（Esc、快捷键），已结束就中止请求、不再发事件。
 fn run_translate(
     app: &AppHandle,
@@ -1250,7 +1250,7 @@ fn run_translate(
     }
 }
 
-/// 译文卡片“复制译文”：按普通写入写纯文本，进历史（同识别文字，设计 §3.2），然后进入提示条模式。
+/// 译文卡片“复制译文”：按普通写入写纯文本，进历史（同识别文字，M26 规则 5），然后进入提示条模式。
 pub fn copy_text(app: &AppHandle, generation: u64, text: &str) -> Result<(), AppError> {
     if !session(app).is_current(generation) {
         return Err(AppError::Invalid("截图已结束".into()));

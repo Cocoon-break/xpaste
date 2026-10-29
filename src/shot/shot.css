@@ -145,7 +145,7 @@ kbd {
 .spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--beam) 25%, transparent); border-top-color: var(--beam); animation: spin 700ms linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* 译文卡片（设计 §3.2）：宽度与位置由脚本在出现时定一次，之后只变高，超出最高时卡片内滚动 */
+/* 译文卡片（M26 规则 5）：宽度与位置由脚本在出现时定一次，之后只变高，超出最高时卡片内滚动 */
 .card {
   position: absolute; left: 0; top: 0; display: flex; flex-direction: column; min-height: 0;
   border-radius: 12px; background: var(--pop); border: 1px solid var(--line-2); box-shadow: var(--shadow-pop);

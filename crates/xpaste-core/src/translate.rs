@@ -1,9 +1,9 @@
 //! 翻译的纯逻辑：语言、方向判断、请求体、SSE 解析、错误文案。
-//! 不发请求（网络在 `src-tauri`），设计 §3.5、§4.1。
+//! 不发请求（网络在 `src-tauri`），M26 规则 8、9。
 
 use serde_json::{Value, json};
 
-/// 原文最多翻译的字符数，设计 §3.5。
+/// 原文最多翻译的字符数，M26 规则 9。
 pub const MAX_CHARS: usize = 10_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,7 +60,7 @@ impl Lang {
     }
 }
 
-/// 设计 §3.5：按原文语言决定实际翻成什么语言。
+/// M26 规则 9：按原文语言决定实际翻成什么语言。
 pub fn resolve_target(text: &str, target: Lang) -> Lang {
     let (mut kana, mut hangul, mut han, mut latin) = (false, false, 0usize, 0usize);
     for c in text.chars() {
@@ -104,7 +104,7 @@ pub fn endpoint(base_url: &str) -> String {
     format!("{}/chat/completions", s.trim_end_matches('/'))
 }
 
-/// 主机是否 localhost / 127.* / ::1（这类地址始终直连，设计 §4.1）。
+/// 主机是否 localhost / 127.* / ::1（这类地址始终直连，M26 规则 11）。
 pub fn is_loopback(base_url: &str) -> bool {
     let rest = base_url.trim().split_once("://").map_or("", |(_, r)| r);
     let auth = rest.split('/').next().unwrap_or("");

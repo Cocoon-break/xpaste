@@ -1,4 +1,4 @@
-// 面板译文区块（设计 §3.1）。纯函数，状态由 main.ts 按记录 id 保存。
+// 面板译文区块（M26 规则 3）。纯函数，状态由 main.ts 按记录 id 保存。
 import type { RecordSummary } from './api/types';
 import { esc } from './format.ts';
 
@@ -12,7 +12,7 @@ export const LANG_LABEL: Record<string, string> = {
   ko: '한국어',
 };
 
-/** 文本、代码（含片段）可翻译；图片、文件在「图中文字」有文字时翻译识别文字（设计 §3.1） */
+/** 文本、代码（含片段）可翻译；图片、文件在「图中文字」有文字时翻译识别文字（M26 规则 1） */
 export const translatable = (r: Pick<RecordSummary, 'kind' | 'ocrState'>): boolean =>
   r.kind === 'text' || r.kind === 'code' || ((r.kind === 'image' || r.kind === 'file') && r.ocrState === 1);
 

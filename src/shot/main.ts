@@ -60,7 +60,7 @@ const SWEEP_MS = 300;
 /** 动作完成后提示条停留多久再退出截图 */
 const TOAST_MS = 1600;
 
-/** `countdown`：录屏倒计时（M24）；倒计时结束到后端结束会话之间为 `done`；`card`：译文卡片（设计 §3.2） */
+/** `countdown`：录屏倒计时（M24）；倒计时结束到后端结束会话之间为 `done`；`card`：译文卡片（M26 规则 5） */
 type Phase = 'off' | 'idle' | 'selected' | 'countdown' | 'busy' | 'card' | 'done';
 type Drag =
   | { k: 'new'; x0: number; y0: number; moved: boolean }
@@ -96,7 +96,7 @@ let readyGen = 0;
 /** 进行中的截图翻译：`done` 收完（可复制）；回到选区或开始新的一次时为 null */
 let tr: { gen: number; text: string; done: boolean } | null = null;
 
-/* 译文卡片（设计 §3.2）：第一段译文到达时出现，定一次位置后只变高 */
+/* 译文卡片（M26 规则 5）：第一段译文到达时出现，定一次位置后只变高 */
 const card = document.createElement('div');
 card.className = 'card';
 card.hidden = true;
@@ -564,7 +564,7 @@ async function act(a: ShotAction) {
     const msg = (e as AppError)?.message || '截图处理失败';
     // 期间已按 Esc 退出；截图结束时后端中止翻译，结果丢弃
     if (!live(gen) || msg === '翻译已取消') return;
-    // 译文卡片已出现：保留已收到的部分并显示原因，复制不可用，只能关闭（设计 §3.2）
+    // 译文卡片已出现：保留已收到的部分并显示原因，复制不可用，只能关闭（M26 规则 5）
     if ((S.phase as Phase) === 'card') { cardErr.textContent = msg; cardErr.hidden = false; return; }
     // 失败：回到选区，可以重试或换个动作
     tr = null;

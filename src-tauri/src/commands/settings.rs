@@ -199,7 +199,7 @@ pub fn commit_settings(
     mut settings: Settings,
     mut register: impl FnMut(&str, &str, &str) -> Result<(), AppError>,
 ) -> Result<Vec<&'static str>, AppError> {
-    // 先去空白再校验、比较：粘贴带空格的 Base URL 不该报错，也不该算作改动（设计 §3.5）
+    // 先去空白再校验、比较：粘贴带空格的 Base URL 不该报错，也不该算作改动（M26 规则 6）
     settings.normalize();
     settings.validate()?;
     let old = state.settings().clone();

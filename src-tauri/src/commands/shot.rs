@@ -96,7 +96,7 @@ pub async fn shot_finish(
     .map_err(|_| invalid("截图处理中断"))?
 }
 
-/// 译文卡片“复制译文”（设计 §3.2）：写剪切板（进历史）后进入提示条模式；不是当前这次截图时报“截图已结束”。
+/// 译文卡片“复制译文”（M26 规则 5）：写剪切板（进历史）后进入提示条模式；不是当前这次截图时报“截图已结束”。
 #[tauri::command(async)]
 pub fn shot_copy_text(app: AppHandle, generation: u64, text: String) -> Result<(), AppError> {
     shot::copy_text(&app, generation, &text)

@@ -1,4 +1,4 @@
-//! 系统翻译桥接（设计 §4.2）。两端都跑。
+//! 系统翻译桥接（M26 规则 7）。两端都跑。
 
 #[test]
 fn unsupported_input_does_not_panic() {

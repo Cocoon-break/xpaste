@@ -70,7 +70,7 @@ export function loupePos(mx: number, my: number, W: number, H: number) {
 }
 
 /**
- * 译文卡片位置（设计 §3.2）：依次试选区右侧、左侧、下方、上方（间距 8，离屏边至少 8），
+ * 译文卡片位置（M26 规则 5）：依次试选区右侧、左侧、下方、上方（间距 8，离屏边至少 8），
  * 都放不下时放在选区内右上角，离边 8。只在第一段译文到达时定一次。
  */
 export function placeCard(sel: Rect, card: { w: number; h: number }, W: number, H: number): { x: number; y: number } {

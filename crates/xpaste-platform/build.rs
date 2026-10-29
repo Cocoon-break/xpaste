@@ -1,4 +1,4 @@
-//! macOS 上把 `swift/translate.swift` 编成静态库并链接（设计 §4.2）。其他目标什么都不做，Windows 交叉 clippy 不受影响。
+//! macOS 上把 `swift/translate.swift` 编成静态库并链接（M26 规则 7）。其他目标什么都不做，Windows 交叉 clippy 不受影响。
 
 use std::env;
 use std::path::Path;

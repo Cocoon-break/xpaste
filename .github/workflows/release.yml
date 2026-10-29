@@ -27,7 +27,7 @@ jobs:
       - uses: swatinem/rust-cache@v2
       - if: runner.os == 'Windows'
         run: command -v make || choco install make -y
-      # 系统翻译的 Swift 桥接要 Xcode 26 及以上的 SDK（设计 §4.2）：默认 Xcode 低于 26 时切到 runner 上装的新版
+      # 系统翻译的 Swift 桥接要 Xcode 26 及以上的 SDK（M26 规则 7）：默认 Xcode 低于 26 时切到 runner 上装的新版
       - if: runner.os == 'macOS'
         name: Xcode 26 及以上
         run: |

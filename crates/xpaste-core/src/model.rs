@@ -102,7 +102,7 @@ pub struct Settings {
     pub rec_quality: RecQuality,
     /// 录屏帧率，30 | 60（M24 规则 6）
     pub rec_fps: u32,
-    /// 翻译引擎：`""`（还没选，由应用层按平台决定）| `"system"` | `"openai"`（设计 §3.5、§6）
+    /// 翻译引擎：`""`（还没选，由应用层按平台决定）| `"system"` | `"openai"`（M26 规则 6）
     pub translate_engine: String,
     /// OpenAI 兼容接口的 Base URL
     pub translate_base_url: String,
@@ -256,7 +256,7 @@ impl Settings {
         }
     }
 
-    /// 翻译的三个文本字段去首尾空白，Base URL 再去掉末尾的 `/`（设计 §3.5）；保存设置时在 `validate` 之前调用。
+    /// 翻译的三个文本字段去首尾空白，Base URL 再去掉末尾的 `/`（M26 规则 6）；保存设置时在 `validate` 之前调用。
     pub fn normalize(&mut self) {
         for f in [
             &mut self.translate_base_url,
@@ -502,7 +502,7 @@ pub struct RecordDetail {
     pub video: Option<VideoInfo>,
     /// 识别出的原文（未小写）
     pub ocr_text: Option<String>,
-    /// 最新一份译文及其目标语言代码（设计 §3.5）
+    /// 最新一份译文及其目标语言代码（M26 规则 12）
     pub translation: Option<String>,
     pub translation_lang: Option<String>,
 }

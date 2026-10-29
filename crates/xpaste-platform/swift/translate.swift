@@ -1,4 +1,4 @@
-// 系统翻译桥接（设计 §4.2）：Translation 框架只有 Swift 接口，这里用 @_cdecl 导出 C 函数给 Rust 调用。
+// 系统翻译桥接（M26 规则 7）：Translation 框架只有 Swift 接口，这里用 @_cdecl 导出 C 函数给 Rust 调用。
 // 以 macOS 13 为部署目标编译、弱链接 Translation，所有入口先判断 macOS 26。
 
 import Foundation
