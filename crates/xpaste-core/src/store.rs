@@ -786,20 +786,33 @@ impl Store {
         Ok(())
     }
 
-    pub fn soft_delete(&self, id: i64, now_ms: i64) -> Result<(), CoreError> {
-        self.conn.execute(
-            "UPDATE records SET deleted_at = ?1 WHERE id = ?2",
-            params![now_ms, id],
-        )?;
+    pub fn soft_delete(&mut self, ids: &[i64], now_ms: i64) -> Result<(), CoreError> {
+        let tx = self.conn.transaction()?;
+        for id in ids {
+            tx.execute(
+                "UPDATE records SET deleted_at = ?1 WHERE id = ?2",
+                params![now_ms, id],
+            )?;
+        }
+        tx.commit()?;
         Ok(())
     }
 
-    pub fn undo_delete(&self, id: i64) -> Result<bool, CoreError> {
-        let n = self.conn.execute(
-            "UPDATE records SET deleted_at = NULL WHERE id = ?1 AND deleted_at IS NOT NULL",
-            [id],
-        )?;
-        Ok(n > 0)
+    /// 返回实际恢复的 id（不存在或未被删除的忽略）。
+    pub fn undo_delete(&mut self, ids: &[i64]) -> Result<Vec<i64>, CoreError> {
+        let tx = self.conn.transaction()?;
+        let mut restored = Vec::new();
+        for &id in ids {
+            let n = tx.execute(
+                "UPDATE records SET deleted_at = NULL WHERE id = ?1 AND deleted_at IS NOT NULL",
+                [id],
+            )?;
+            if n > 0 {
+                restored.push(id);
+            }
+        }
+        tx.commit()?;
+        Ok(restored)
     }
 
     /// 仅当记录仍是那次软删除（`deleted_at` 相同）时彻底删除。
@@ -1346,7 +1359,7 @@ pub(crate) mod tests {
         assert_eq!(ids(&s, "季度预算"), [img]);
         assert_eq!(ids(&s, "2026"), [img]);
         // 软删除不改索引但被 deleted_at 过滤；硬删除后索引条目消失
-        s.soft_delete(img, 3).unwrap();
+        s.soft_delete(&[img], 3).unwrap();
         assert!(ids(&s, "季度预算").is_empty());
         assert!(s.purge_if_deleted_at(img, 3).unwrap());
         let n: i64 = s
@@ -1479,7 +1492,7 @@ pub(crate) mod tests {
         let mut s = mem();
         let id = added(&mut s, &rec("周四会议纪要"), 1);
         assert_eq!(fts_py_count(&s.conn, "\"'hui'yi\""), 1);
-        s.soft_delete(id, 2).unwrap();
+        s.soft_delete(&[id], 2).unwrap();
         assert!(s.purge_if_deleted_at(id, 2).unwrap());
         assert_eq!(fts_py_count(&s.conn, "\"'hui'yi\""), 0);
     }
@@ -1776,7 +1789,7 @@ pub(crate) mod tests {
         let (Upsert::Added(id), _) = s.insert_or_merge(&rec("a"), 1, 500).unwrap() else {
             panic!()
         };
-        s.soft_delete(id, 5).unwrap();
+        s.soft_delete(&[id], 5).unwrap();
         assert!(s.list_summaries().unwrap().is_empty());
         s.insert_or_merge(&rec("a"), 6, 500).unwrap();
         assert_eq!(s.list_summaries().unwrap().len(), 1);
@@ -1802,7 +1815,7 @@ pub(crate) mod tests {
             panic!()
         };
         assert_eq!(s.live_summary(id).unwrap().map(|r| r.id), Some(id));
-        s.soft_delete(id, 2).unwrap();
+        s.soft_delete(&[id], 2).unwrap();
         assert!(s.live_summary(id).unwrap().is_none());
         assert!(s.summary(id).unwrap().is_some());
     }
@@ -1844,7 +1857,7 @@ pub(crate) mod tests {
                 Upsert::Added(id) | Upsert::Merged(id) => id,
             })
             .collect();
-        s.soft_delete(ids[1], 2).unwrap();
+        s.soft_delete(&[ids[1]], 2).unwrap();
         assert_eq!(s.ids_for_app("x").unwrap(), [ids[0]]);
     }
     #[test]
@@ -1889,16 +1902,35 @@ pub(crate) mod tests {
         );
     }
     #[test]
+    fn soft_delete_many_and_undo_together() {
+        let mut s = mem();
+        let mut ids = Vec::new();
+        for (i, t) in ["a", "b", "c"].into_iter().enumerate() {
+            let (Upsert::Added(id), _) = s.insert_or_merge(&rec(t), 1 + i as i64, 500).unwrap()
+            else {
+                panic!()
+            };
+            ids.push(id);
+        }
+        let (a, b, c) = (ids[0], ids[1], ids[2]);
+        s.soft_delete(&[a, b], 9).unwrap();
+        assert!(s.live_summary(a).unwrap().is_none());
+        assert!(s.live_summary(b).unwrap().is_none());
+        assert!(s.live_summary(c).unwrap().is_some());
+        assert_eq!(s.undo_delete(&[a, b, 999]).unwrap(), vec![a, b]);
+        assert!(s.live_summary(a).unwrap().is_some());
+    }
+    #[test]
     fn soft_delete_undo_and_purge() {
         let mut s = mem();
         let (Upsert::Added(id), _) = s.insert_or_merge(&rec("a"), 1, 500).unwrap() else {
             panic!()
         };
         s.set_pinned(id, true).unwrap();
-        s.soft_delete(id, 100).unwrap();
-        assert!(s.undo_delete(id).unwrap());
+        s.soft_delete(&[id], 100).unwrap();
+        assert_eq!(s.undo_delete(&[id]).unwrap(), vec![id]);
         assert!(s.list_summaries().unwrap()[0].pinned);
-        s.soft_delete(id, 200).unwrap();
+        s.soft_delete(&[id], 200).unwrap();
         assert!(!s.purge_if_deleted_at(id, 199).unwrap());
         assert!(s.purge_if_deleted_at(id, 200).unwrap());
         assert!(s.summary(id).unwrap().is_none());
@@ -1909,7 +1941,7 @@ pub(crate) mod tests {
         let (Upsert::Added(id), _) = s.insert_or_merge(&rec("a"), 1, 500).unwrap() else {
             panic!()
         };
-        s.soft_delete(id, 1).unwrap();
+        s.soft_delete(&[id], 1).unwrap();
         assert_eq!(s.purge_all_soft_deleted().unwrap(), vec![id]);
     }
     #[test]
@@ -1992,7 +2024,7 @@ pub(crate) mod tests {
         };
         let img = s.dir.join("images").join(format!("{id}.png"));
         assert!(img.exists());
-        s.soft_delete(id, 1).unwrap();
+        s.soft_delete(&[id], 1).unwrap();
         s.purge_if_deleted_at(id, 1).unwrap();
         assert!(!img.exists());
     }
@@ -2024,7 +2056,7 @@ pub(crate) mod tests {
         let (Upsert::Added(a), _) = s.insert_or_merge(&rec("a"), 1, 500).unwrap() else {
             panic!()
         };
-        s.soft_delete(a, 1).unwrap();
+        s.soft_delete(&[a], 1).unwrap();
         s.purge_if_deleted_at(a, 1).unwrap();
         let (Upsert::Added(b), _) = s.insert_or_merge(&rec("b"), 2, 500).unwrap() else {
             panic!()
@@ -2101,7 +2133,7 @@ pub(crate) mod tests {
         let d = s.detail(other).unwrap().unwrap();
         assert_eq!((d.summary.ocr_state, d.ocr_text), (ocr_state::EMPTY, None));
 
-        s.soft_delete(other, 3).unwrap();
+        s.soft_delete(&[other], 3).unwrap();
         assert!(!s.set_ocr(other, ocr_state::TEXT, Some("x")).unwrap());
     }
 
@@ -2268,7 +2300,7 @@ pub(crate) mod tests {
         assert_eq!(s.ocr_pending_ids(&[p], 1).unwrap(), [c]);
         s.set_ocr(a, ocr_state::FAILED, None).unwrap();
         s.set_ocr(b, ocr_state::TEXT, Some("x")).unwrap();
-        s.soft_delete(c, 5).unwrap();
+        s.soft_delete(&[c], 5).unwrap();
         assert!(s.ocr_pending_ids(&[p], 10).unwrap().is_empty());
         assert_eq!(s.ocr_pending_ids(&[p, ocr_state::FAILED], 10).unwrap(), [a]);
         // a 失败、b 有文字：都算已处理
@@ -2295,7 +2327,7 @@ pub(crate) mod tests {
         let c = added(&mut s, &rec_image(3), 3);
         let d = added(&mut s, &rec_image(4), 4);
         s.set_ocr(b, ocr_state::TEXT, Some("x")).unwrap();
-        s.soft_delete(c, 5).unwrap();
+        s.soft_delete(&[c], 5).unwrap();
         assert!(s.set_ocr_many(&[], ocr_state::SKIPPED).unwrap().is_empty());
         let mut changed = s.set_ocr_many(&[a, b, c, d], ocr_state::SKIPPED).unwrap();
         changed.sort_unstable();
@@ -2312,7 +2344,7 @@ pub(crate) mod tests {
         assert_eq!(s.ocr_state(a).unwrap(), Some(ocr_state::PENDING));
         s.set_ocr(a, ocr_state::FAILED, None).unwrap();
         assert_eq!(s.ocr_state(a).unwrap(), Some(ocr_state::FAILED));
-        s.soft_delete(a, 2).unwrap();
+        s.soft_delete(&[a], 2).unwrap();
         assert_eq!(s.ocr_state(a).unwrap(), None);
         assert_eq!(s.ocr_state(a + 100).unwrap(), None);
     }
@@ -2438,7 +2470,7 @@ pub(crate) mod tests {
         let src = added(&mut s, &rec_image_flavors(1), 1);
         std::fs::write(s.dir.join("thumbs").join(format!("{src}.png")), b"t").unwrap();
         let id = s.save_snippet(src, "x", 2).unwrap().id;
-        s.soft_delete(src, 3).unwrap();
+        s.soft_delete(&[src], 3).unwrap();
         s.purge_all_soft_deleted().unwrap();
         assert_eq!(s.flavors(id).unwrap().len(), 2);
         assert!(s.dir.join("images").join(format!("{id}.png")).exists());
@@ -2472,7 +2504,7 @@ pub(crate) mod tests {
     fn save_snippet_rejects_deleted_source() {
         let mut s = mem();
         let src = added(&mut s, &rec("x"), 1);
-        s.soft_delete(src, 2).unwrap();
+        s.soft_delete(&[src], 2).unwrap();
         assert!(s.save_snippet(src, "n", 3).is_err());
     }
     #[test]

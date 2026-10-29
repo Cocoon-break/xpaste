@@ -1,7 +1,7 @@
 import './styles.css';
 import { attachConsole, info } from './api/log';
 import {
-  accessibilityGranted, bootstrap, clearHistory, copy, copyTextPlain, countUnpinned, deleteRecord, finishOnboarding, frontendReady, getRecord, hidePanel, installedApps, ocrProgress,
+  accessibilityGranted, bootstrap, clearHistory, copy, copyTextPlain, countUnpinned, deleteRecords, finishOnboarding, frontendReady, getRecord, hidePanel, installedApps, ocrProgress,
   openUrl, overlayBegin, pickFolder, prunePreview, reocr, requestAccessibility, requestScreenCapture, revealFile, saveSettings, screenCaptureGranted, search, setDialogOpen, setPaused,
   setPinned, undoDelete,
 } from './api/commands';
@@ -1072,7 +1072,7 @@ function remove(id: number) {
     fx(one ? layer.children[col] ?? null : null, [{ transform: 'scaleY(1)', opacity: 1 }, { transform: 'scaleY(0)', opacity: 0 }], { duration: 260, easing: EASE_MOVE, fill: 'forwards' });
   // 光标目标是下一条补位后的位置：同组时就是被删行的位置，光标停住、下一条滑进来（原型 1384–1393）
   select(next, { scroll: true, indDur: 340 });
-  deleteRecord(id).then(
+  deleteRecords([id]).then(
     () => {
       setTimeout(() => {
         if (!S.removing.delete(id)) return;
@@ -1109,8 +1109,9 @@ function undo() {
   S.undo = null;
   paintUndoHint();
   restoring = u.id;
-  undoDelete(u.id).then(
-    (ok) => {
+  undoDelete([u.id]).then(
+    (n) => {
+      const ok = n > 0;
       if (!ok) restoring = null;
       toast(ok ? '已恢复' : '已无法恢复');
     },

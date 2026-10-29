@@ -33,8 +33,12 @@ export const revealFile = (path: string) => invoke<void>('reveal_file', { path }
 export const getRecord = (id: number) => invoke<RecordDetail | null>('get_record', { id });
 export const search = (q: string) => invoke<SearchHit[]>('search', { q });
 export const setPinned = (id: number, on: boolean) => invoke<void>('set_pinned', { id, on });
-export const deleteRecord = (id: number) => invoke<void>('delete', { id });
-export const undoDelete = (id: number) => invoke<boolean>('undo_delete', { id });
+export const deleteRecords = (ids: number[]) => invoke<void>('delete', { ids });
+export const undoDelete = (ids: number[]) => invoke<number>('undo_delete', { ids });
+export const saveSnippet = (id: number, name: string) => invoke<number>('save_snippet', { id, name });
+export const createSnippet = (name: string, text: string) => invoke<number>('create_snippet', { name, text });
+export const updateSnippet = (id: number, name: string, text: string | null) =>
+  invoke<void>('update_snippet', { id, name, text });
 export const clearHistory = () => invoke<number>('clear_history');
 export const countUnpinned = () => invoke<number>('count_unpinned');
 /** 只对失败、跳过、本机不支持的记录生效。 */

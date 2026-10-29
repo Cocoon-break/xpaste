@@ -1,6 +1,7 @@
 //! 剪切板监听接线：平台层回调 → 读快照 → 入库 → 事件 → 补全任务。
 //! 日志只写字节数、敏感标记、来源应用名与记录 id。
 
+use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
 use tauri::{AppHandle, Manager};
@@ -89,30 +90,47 @@ fn ingest(app: &AppHandle, snap: Snapshot) {
             log::info!("记录新增 id={id}");
             emit_summary(app, RECORD_ADDED, id);
             emit_removed(app, &removed);
-            let dir = &state.data_dir;
-            let mut jobs = Vec::new();
-            match (kind, first_path) {
-                (Kind::Image, Some(path)) => jobs.push(Job::ImageFile { id, path }),
-                (Kind::Image, None) if dir.join("images").join(format!("{id}.png")).exists() => {
-                    jobs.push(Job::Bitmap { id });
-                }
-                (Kind::Video, Some(path)) => jobs.push(Job::Video { id, path }),
-                _ => {}
-            }
-            if ocr_files {
-                state.ocr.push_front(id);
-            }
+            enqueue_followups(app, id, kind, first_path, ocr_files);
             if let Some(app_id) = source
-                && !icon_path(dir, &app_id).exists()
+                && !icon_path(&state.data_dir, &app_id).exists()
+                && state.enrich.send(Job::AppIcon { app_id }).is_err()
             {
-                jobs.push(Job::AppIcon { app_id });
-            }
-            for job in jobs {
-                if state.enrich.send(job).is_err() {
-                    log::warn!("补全线程已退出");
-                }
+                log::warn!("补全线程已退出");
             }
         }
+    }
+}
+
+/// 新记录的后台任务：缩略图、视频封面与文字识别入队（不含应用图标）。
+pub fn enqueue_followups(
+    app: &AppHandle,
+    id: i64,
+    kind: Kind,
+    first_path: Option<PathBuf>,
+    ocr_files: bool,
+) {
+    let state = app.state::<AppState>();
+    let job = match (kind, first_path) {
+        (Kind::Image, Some(path)) => Some(Job::ImageFile { id, path }),
+        (Kind::Image, None)
+            if state
+                .data_dir
+                .join("images")
+                .join(format!("{id}.png"))
+                .exists() =>
+        {
+            Some(Job::Bitmap { id })
+        }
+        (Kind::Video, Some(path)) => Some(Job::Video { id, path }),
+        _ => None,
+    };
+    if ocr_files {
+        state.ocr.push_front(id);
+    }
+    if let Some(job) = job
+        && state.enrich.send(job).is_err()
+    {
+        log::warn!("补全线程已退出");
     }
 }
 
