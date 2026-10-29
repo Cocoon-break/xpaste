@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
-use xpaste_core::{Flavor, ImageInfo, Kind, RecordDetail, SearchHit, ocr_state};
+use xpaste_core::{Flavor, ImageInfo, Kind, RecordDetail, SearchHit, ocr_state, text_flavor};
 use xpaste_platform::{PasteBlock, PlatformError};
 
 use crate::clock::now_ms;
@@ -227,24 +227,6 @@ fn write_text_plain_via(
     write: impl FnOnce(&[Flavor]) -> Result<u64, PlatformError>,
 ) -> Result<(), AppError> {
     write_marked(state, || write(&[text_flavor(text)]))
-}
-
-/// 纯文本 flavor。
-pub(crate) fn text_flavor(text: &str) -> Flavor {
-    if cfg!(windows) {
-        // 存储口径：UTF-16LE、不带结尾 NUL（写回时 winfmt::write_bytes 补上）
-        Flavor {
-            item: 0,
-            format: "CF_UNICODETEXT".into(),
-            data: text.encode_utf16().flat_map(u16::to_le_bytes).collect(),
-        }
-    } else {
-        Flavor {
-            item: 0,
-            format: "public.utf8-plain-text".into(),
-            data: text.as_bytes().to_vec(),
-        }
-    }
 }
 
 /// 设计 8.5 第 1–2 步：记录存在、文件都在、有可写回的 flavor。任何一步不满足都不碰剪切板。

@@ -96,6 +96,7 @@ mod tests {
                 thumb: None,
                 duration_sec: None,
                 ocr_state: 0,
+                snippet_body: None,
             },
             text: None,
             truncated: false,

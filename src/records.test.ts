@@ -15,7 +15,7 @@ const rec = (id: number, copiedAt: number, pinned = false): RecordSummary => ({
   size: 1,
   lang: null,
   thumb: null,
-  durationSec: null, ocrState: 0,
+  durationSec: null, ocrState: 0, snippetBody: null,
 });
 
 test('applyAdded 新增后按复制时间倒序', () => {

@@ -429,6 +429,8 @@ pub struct RecordSummary {
     pub duration_sec: Option<f64>,
     /// 见 [`ocr_state`]；非图片记录恒为 0，不被消费
     pub ocr_state: u8,
+    /// 不为 None 即片段，值是列表第二行的摘要（设计 §4.1）；前端按它判断，不看 pinned
+    pub snippet_body: Option<String>,
 }
 
 impl fmt::Debug for RecordSummary {
@@ -512,6 +514,38 @@ pub struct VideoInfo {
     pub h: u32,
     pub fps: f64,
     pub codec: String,
+}
+
+/// 纯文本 flavor。
+pub fn text_flavor(text: &str) -> Flavor {
+    if cfg!(windows) {
+        // 存储口径：UTF-16LE、不带结尾 NUL（写回时 winfmt::write_bytes 补上）
+        Flavor {
+            item: 0,
+            format: "CF_UNICODETEXT".into(),
+            data: text.encode_utf16().flat_map(u16::to_le_bytes).collect(),
+        }
+    } else {
+        Flavor {
+            item: 0,
+            format: "public.utf8-plain-text".into(),
+            data: text.as_bytes().to_vec(),
+        }
+    }
+}
+
+/// 片段名字：去首尾空白，非空且不超过 100 个字符（设计 §4.2）。
+pub fn snippet_name(raw: &str) -> Result<String, CoreError> {
+    let name = raw.trim();
+    if name.is_empty() {
+        return Err(CoreError::InvalidSettings("片段名字不能为空".into()));
+    }
+    if name.chars().count() > 100 {
+        return Err(CoreError::InvalidSettings(
+            "片段名字不能超过 100 个字符".into(),
+        ));
+    }
+    Ok(name.into())
 }
 
 #[cfg(test)]
@@ -963,6 +997,7 @@ mod tests {
             thumb: None,
             duration_sec: None,
             ocr_state: ocr_state::TEXT,
+            snippet_body: None,
         };
         let d = RecordDetail {
             summary,
