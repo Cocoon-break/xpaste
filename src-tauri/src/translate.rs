@@ -167,7 +167,7 @@ const TIMEOUTS: Timeouts = Timeouts {
     read: Duration::from_secs(30),
 };
 
-/// `run` 的实现；`timeouts` 为 None 时用缓存的正式客户端，测试传短超时另建客户端。
+/// `run` 的实现；`timeouts` 为 None 时用正式客户端（见 `client`），测试传短超时另建客户端。
 pub async fn exec(
     cfg: &Cfg,
     text: &str,
@@ -234,15 +234,18 @@ fn build_client(loopback: bool, t: Timeouts) -> Result<reqwest::Client, Fail> {
     })
 }
 
-/// 正式客户端：本机与非本机各缓存一个。
+/// 正式客户端。reqwest 只在 build 时读一次系统代理，所以非本机地址每次现建，
+/// 用户中途开关代理也能跟上（设计 §4.1）；翻译由用户触发，建客户端的开销可以忽略。本机地址不走代理，缓存一个。
 fn client(loopback: bool) -> Result<reqwest::Client, Fail> {
-    static CLIENTS: [OnceLock<reqwest::Client>; 2] = [OnceLock::new(), OnceLock::new()];
-    let cell = &CLIENTS[usize::from(loopback)];
-    if let Some(c) = cell.get() {
+    static LOOPBACK: OnceLock<reqwest::Client> = OnceLock::new();
+    if !loopback {
+        return build_client(false, TIMEOUTS);
+    }
+    if let Some(c) = LOOPBACK.get() {
         return Ok(c.clone());
     }
-    let c = build_client(loopback, TIMEOUTS)?;
-    Ok(cell.get_or_init(|| c).clone())
+    let c = build_client(true, TIMEOUTS)?;
+    Ok(LOOPBACK.get_or_init(|| c).clone())
 }
 
 fn net(e: reqwest::Error) -> Fail {
