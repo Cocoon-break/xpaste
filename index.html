@@ -58,6 +58,7 @@
           <header class="phead">
             <div class="ptype" id="ptype"></div>
             <div class="pact">
+              <button class="btn icon" type="button" id="trBtn" aria-label="翻译" hidden><span data-icon="translate"></span></button>
               <button class="btn icon" type="button" id="pinBtn" aria-label="置顶" aria-pressed="false">
                 <span class="swap" data-state="a"><span data-s="a" data-icon="pin"></span><span data-s="b" data-icon="pinFill"></span></span>
               </button>
@@ -79,6 +80,7 @@
         <span class="k"><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
         <span class="k"><kbd class="mod"></kbd><kbd>1–9</kbd> <span data-verb="快速">快速复制</span></span>
         <span class="k"><kbd class="mod"></kbd><kbd>P</kbd> 置顶</span>
+        <span class="k" id="trHint" hidden><kbd class="mod"></kbd><kbd>T</kbd> 翻译</span>
         <span class="k"><kbd class="mod"></kbd><kbd>←→</kbd> 切换分类</span>
         <span class="k" id="multiHint" hidden><kbd class="mod"></kbd> 点击 多选</span>
         <span class="k"><kbd class="delmod" hidden>⌘</kbd><kbd class="del">Del</kbd> 删除</span>
@@ -91,9 +93,10 @@
         <button type="button" role="menuitem" data-m="pin" style="--i:1"><span data-icon="pin"></span><span id="mPin">置顶</span><kbd class="modp"></kbd></button>
         <button type="button" role="menuitem" data-m="editSnippet" style="--i:2" hidden><span data-icon="pencil"></span>编辑片段…<kbd data-modk="E"></kbd></button>
         <button type="button" role="menuitem" data-m="open" style="--i:3" hidden><span data-icon="link"></span><span id="mOpen"></span></button>
-        <button type="button" role="menuitem" data-m="saveSnippet" style="--i:4"><span data-icon="snip"></span>存为片段…<kbd data-modk="S"></kbd></button>
+        <button type="button" role="menuitem" data-m="translate" style="--i:4" hidden><span data-icon="translate"></span>翻译<kbd data-modk="T"></kbd></button>
+        <button type="button" role="menuitem" data-m="saveSnippet" style="--i:5"><span data-icon="snip"></span>存为片段…<kbd data-modk="S"></kbd></button>
         <div class="sep" role="separator"></div>
-        <button type="button" role="menuitem" data-m="del" class="danger" style="--i:5"><span data-icon="trash"></span><span id="mDel">删除</span><kbd class="del">Del</kbd></button>
+        <button type="button" role="menuitem" data-m="del" class="danger" style="--i:6"><span data-icon="trash"></span><span id="mDel">删除</span><kbd class="del">Del</kbd></button>
       </div>
 
       <div class="toast" id="toast" data-open="false">
