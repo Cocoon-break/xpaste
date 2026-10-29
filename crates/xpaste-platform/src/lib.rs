@@ -110,6 +110,32 @@ fn ocr_text(lines: Vec<(String, f32)>) -> OcrText {
     OcrText { text, confidence }
 }
 
+/// 系统翻译语言包状态（设计 §4.2）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackStatus {
+    /// 已下载
+    Installed,
+    /// 支持，需要用户在系统设置里下载
+    Download,
+    /// 不支持（含系统低于 macOS 26、Windows）
+    Unsupported,
+}
+
+/// 系统翻译失败原因（设计 §4.2）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SysTranslateError {
+    /// 系统低于 macOS 26
+    OsTooOld,
+    /// 缺语言包；`source` 为识别出的源语言代码，用来拼提示文案
+    NotInstalled { source: String },
+    /// 语言不支持或识别不出源语言
+    Unsupported,
+    /// 30 秒内没有结果
+    Timeout,
+    /// 其他失败；不带消息，日志另记错误码
+    Failed,
+}
+
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]

@@ -1,5 +1,7 @@
 use std::collections::HashSet;
+use std::ffi::{CStr, CString, c_char, c_void};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
@@ -23,8 +25,8 @@ use objc2_core_graphics::{
 };
 use objc2_core_media::{CMFormatDescription, CMTime};
 use objc2_foundation::{
-    NSArray, NSData, NSDictionary, NSFileManager, NSIndexSet, NSNumber, NSPoint, NSProcessInfo,
-    NSRect, NSSize, NSString, NSURL, ns_string,
+    NSArray, NSData, NSDictionary, NSFileManager, NSIndexSet, NSNumber, NSOperatingSystemVersion,
+    NSPoint, NSProcessInfo, NSRect, NSSize, NSString, NSURL, ns_string,
 };
 use objc2_vision::{
     VNImageRequestHandler, VNRecognizeTextRequest, VNRequest, VNRequestTextRecognitionLevel,
@@ -37,7 +39,10 @@ pub use macos_record::{
     Recorder, file_flavors, microphone_access, request_microphone, start_recording, window_number,
 };
 
-use crate::{Frame, OcrError, OcrText, PIN_TITLE_PREFIX, PasteBlock, PlatformError, WinRect};
+use crate::{
+    Frame, OcrError, OcrText, PIN_TITLE_PREFIX, PackStatus, PasteBlock, PlatformError,
+    SysTranslateError, WinRect,
+};
 
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
@@ -48,6 +53,21 @@ unsafe extern "C" {
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
     fn CGEventSourceButtonState(state_id: i32, button: u32) -> u8;
+}
+
+/// 回调：`code` 0 成功（`out` 为译文），1 缺语言包（`out` 为源语言代码），2 不支持，3 其他失败。
+/// 可能在任意线程上调用，`out` 只在回调期间有效。
+type TrCallback = extern "C" fn(ctx: *mut c_void, code: i32, out: *const c_char);
+
+// swift/translate.swift 编成的静态库，由 build.rs 链接（设计 §4.2）
+unsafe extern "C" {
+    fn xp_tr_pack(target: *const c_char) -> i32;
+    fn xp_tr_translate(
+        text: *const c_char,
+        target: *const c_char,
+        ctx: *mut c_void,
+        cb: TrCallback,
+    );
 }
 
 // libSystem，总是链接
@@ -630,6 +650,73 @@ pub fn ocr_png_bytes(png: &[u8], max_side_px: u32) -> Result<Option<OcrText>, Oc
             .unwrap_or_default();
         Ok(Some(crate::ocr_text(lines)))
     })
+}
+
+/// 系统翻译（`TranslationSession(installedSource:target:)`）需要 macOS 26（设计 §4.2）。
+pub fn translate_supported() -> bool {
+    NSProcessInfo::processInfo().isOperatingSystemAtLeastVersion(NSOperatingSystemVersion {
+        majorVersion: 26,
+        minorVersion: 0,
+        patchVersion: 0,
+    })
+}
+
+/// 英语 ↔ `target` 的语言包状态；`target` 为 `en` 时查简体中文 ↔ 英语。阻塞（本机查询，很快）。
+/// Translation 框架要靠主队列回调：只在工作线程调用，且主线程在跑事件循环；在主线程上调用会等 10 秒后返回 `Unsupported`。
+pub fn translate_pack(target: &str) -> PackStatus {
+    let Ok(target) = CString::new(target) else {
+        return PackStatus::Unsupported;
+    };
+    if !translate_supported() {
+        return PackStatus::Unsupported;
+    }
+    // SAFETY: 以 NUL 结尾的字符串，调用期间有效
+    match unsafe { xp_tr_pack(target.as_ptr()) } {
+        0 => PackStatus::Installed,
+        1 => PackStatus::Download,
+        _ => PackStatus::Unsupported,
+    }
+}
+
+/// 系统翻译超时（设计 §4.2）
+const TRANSLATE_TIMEOUT: Duration = Duration::from_secs(30);
+
+type TrSender = mpsc::Sender<Result<String, SysTranslateError>>;
+
+extern "C" fn on_translated(ctx: *mut c_void, code: i32, out: *const c_char) {
+    // SAFETY: ctx 是 translate_text 里 Box::into_raw 的发送端，Swift 侧恰好回调一次，这里收回所有权
+    let tx = unsafe { Box::from_raw(ctx.cast::<TrSender>()) };
+    // SAFETY: out 非空时为回调期间有效的 C 字符串
+    let s = || {
+        unsafe { CStr::from_ptr(out) }
+            .to_string_lossy()
+            .into_owned()
+    };
+    let r = match code {
+        0 if !out.is_null() => Ok(s()),
+        1 if !out.is_null() => Err(SysTranslateError::NotInstalled { source: s() }),
+        2 => Err(SysTranslateError::Unsupported),
+        _ => Err(SysTranslateError::Failed),
+    };
+    // 已超时则接收端已丢弃，send 失败忽略
+    let _ = tx.send(r);
+}
+
+/// 用系统翻译把 `text` 译成 `target`（源语言由系统识别）。阻塞，最多 30 秒。
+/// 同 `translate_pack`，只在工作线程调用且主线程在跑事件循环，否则只会等到 `Timeout`。
+pub fn translate_text(text: &str, target: &str) -> Result<String, SysTranslateError> {
+    if !translate_supported() {
+        return Err(SysTranslateError::OsTooOld);
+    }
+    let (Ok(text), Ok(target)) = (CString::new(text), CString::new(target)) else {
+        return Err(SysTranslateError::Failed);
+    };
+    let (tx, rx) = mpsc::channel();
+    let ctx = Box::into_raw(Box::new(tx)).cast::<c_void>();
+    // SAFETY: 字符串在调用期间有效（Swift 侧同步复制）；ctx 由 on_translated 收回
+    unsafe { xp_tr_translate(text.as_ptr(), target.as_ptr(), ctx, on_translated) };
+    rx.recv_timeout(TRANSLATE_TIMEOUT)
+        .unwrap_or(Err(SysTranslateError::Timeout))
 }
 
 /// 当前线程降到 utility QoS（后台识别用）。尽力而为。

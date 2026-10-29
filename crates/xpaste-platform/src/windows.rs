@@ -88,7 +88,10 @@ use crate::winfmt::{
     formats_to_read, is_desktop_class, is_shell_tray_class, join_ocr_words, parse_hdrop,
     png_to_dib, standard_format_id, standard_format_name, video_meta_from_props, write_bytes,
 };
-use crate::{Frame, OcrError, OcrText, PIN_TITLE_PREFIX, PasteBlock, PlatformError, WinRect};
+use crate::{
+    Frame, OcrError, OcrText, PIN_TITLE_PREFIX, PackStatus, PasteBlock, PlatformError,
+    SysTranslateError, WinRect,
+};
 
 pub const OS: &str = "windows";
 
@@ -923,6 +926,19 @@ pub fn ocr_png_bytes(png: &[u8], max_side_px: u32) -> Result<Option<OcrText>, Oc
         .collect::<Result<Vec<_>, Error>>()
         .map_err(err)?;
     Ok(Some(crate::ocr_text(lines)))
+}
+
+/// 系统翻译只在 macOS 26 及以上提供（设计 §4.2）。
+pub fn translate_supported() -> bool {
+    false
+}
+
+pub fn translate_pack(_target: &str) -> PackStatus {
+    PackStatus::Unsupported
+}
+
+pub fn translate_text(_text: &str, _target: &str) -> Result<String, SysTranslateError> {
+    Err(SysTranslateError::Unsupported)
 }
 
 /// 当前线程降到低于正常优先级（后台识别用）。尽力而为。
