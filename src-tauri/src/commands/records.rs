@@ -152,13 +152,13 @@ pub fn create_snippet(
     text: String,
 ) -> Result<i64, AppError> {
     let name = snippet_name(&name)?;
-    let id = state.store().create_snippet(&name, &text, now_ms())?;
+    let (id, kind) = {
+        let mut store = state.store();
+        let id = store.create_snippet(&name, &text, now_ms())?;
+        (id, store.summary(id)?.map(|s| s.kind))
+    };
     emit_summary(&app, RECORD_ADDED, id);
-    log::info!(
-        "片段 新建 id={id} kind={:?} bytes={}",
-        Kind::Text,
-        text.len()
-    );
+    log::info!("片段 新建 id={id} kind={kind:?} bytes={}", text.len());
     Ok(id)
 }
 

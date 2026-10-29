@@ -82,8 +82,10 @@ const INLINE_MAX: usize = 1_048_576;
 const DETAIL_TEXT_MAX: usize = 200 * 1024;
 const DAY_MS: i64 = 86_400_000;
 
-/// 片段按置顶存，因此也在这里豁免所有清理（M25 规则 10）。
-const LIVE_UNPINNED: &str = "pinned = 0 AND deleted_at IS NULL";
+/// 片段在两层上豁免所有清理（M25 规则 10）：库里按置顶存（`pinned = 1`），
+/// 这里再显式排除 `snippet_body IS NOT NULL`。后者是纵深防御：用户降级后在旧版本里
+/// 取消“置顶历史行”，再升级回来，片段也绝不能被清掉。
+const LIVE_UNPINNED: &str = "pinned = 0 AND snippet_body IS NULL AND deleted_at IS NULL";
 
 /// `save_snippet` 的结果：后两项告诉调用方要不要给新 id 补投后台任务。
 pub struct SavedSnippet {
@@ -634,7 +636,8 @@ impl Store {
         let (kind, state, eligible): (String, i64, bool) = tx
             .query_row(
                 &format!(
-                    "SELECT kind, ocr_state, {} FROM records WHERE id = ?1 AND deleted_at IS NULL",
+                    "SELECT kind, ocr_state, {} FROM records
+                     WHERE id = ?1 AND snippet_body IS NULL AND deleted_at IS NULL",
                     ocr_eligible_sql()
                 ),
                 [src],
@@ -2527,6 +2530,29 @@ pub(crate) mod tests {
             s.insert_or_merge(&r, 40 * DAY_MS, 1).unwrap();
         }
         assert!(s.prune_capacity(1).unwrap().iter().all(|&i| i != sid));
+        assert!(s.clear_unpinned().unwrap().iter().all(|&i| i != sid));
+        assert!(s.live_summary(sid).unwrap().is_some());
+    }
+    #[test]
+    fn save_snippet_rejects_snippet_source() {
+        let mut s = mem();
+        let sid = s.create_snippet("a", "b", 0).unwrap();
+        assert!(s.save_snippet(sid, "n", 1).is_err());
+    }
+    #[test]
+    fn cleanup_skips_snippet_even_if_unpinned() {
+        let mut s = mem();
+        let sid = s.create_snippet("a", "b", 0).unwrap();
+        s.conn
+            .execute("UPDATE records SET pinned = 0 WHERE id = ?1", [sid])
+            .unwrap();
+        assert_eq!(s.count_unpinned().unwrap(), 0);
+        assert_eq!(s.prune_preview(Some(7), 0, 30 * DAY_MS).unwrap(), 0);
+        assert!(s.prune_retention(Some(7), 30 * DAY_MS).unwrap().is_empty());
+        assert!(s.prune_capacity(0).unwrap().is_empty());
+        let r = rec("h");
+        let (_, removed) = s.insert_or_merge(&r, 40 * DAY_MS, 0).unwrap();
+        assert!(removed.iter().all(|&i| i != sid));
         assert!(s.clear_unpinned().unwrap().iter().all(|&i| i != sid));
         assert!(s.live_summary(sid).unwrap().is_some());
     }

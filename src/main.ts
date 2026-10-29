@@ -1464,7 +1464,7 @@ async function confirmClear(): Promise<string | null> {
   try {
     const n = await countUnpinned();
     if (n === 0) msg = '没有可删除的记录';
-    else if (!(await confirm({ title: '清空历史', body: `将删除 ${n} 条未置顶的记录，置顶记录会保留`, ok: `删除 ${n} 条记录`, danger: true }))) return null;
+    else if (!(await confirm({ title: '清空历史', body: `将删除 ${n} 条未置顶的记录，置顶记录与片段会保留`, ok: `删除 ${n} 条记录`, danger: true }))) return null;
     else [msg, icon] = [`已删除 ${await clearHistory()} 条记录`, 'trash'];
   } catch (e) {
     msg = (e as AppError).message;
@@ -2090,7 +2090,7 @@ async function submitSnippet() {
   }
   closeSnippet();
   if (dlg.open) snipNote.textContent = `已新建片段“${name}”，在面板的“片段”分类里`;
-  else toast(mode === 'edit' ? '片段已更新' : `已存为片段“${name}”，搜索这个名字就能找到`, { icon: 'snip' });
+  else toast(mode === 'edit' ? '片段已更新' : mode === 'new' ? `已新建片段“${name}”，搜索这个名字就能找到` : `已存为片段“${name}”，搜索这个名字就能找到`, { icon: 'snip' });
 }
 $('#stNewSnip').addEventListener('click', () => void openSnippet('new'));
 
