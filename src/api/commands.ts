@@ -53,7 +53,8 @@ export const setPaused = (on: boolean) => invoke<void>('set_paused', { on });
 export const finishOnboarding = () => invoke<void>('finish_onboarding');
 export const installedApps = () => invoke<string[]>('installed_apps');
 
-export const translateRecord = (id: number) => invoke<Translated>('translate_record', { id });
+/** again 为 false 且已有存库译文时直接返回它，不发请求；只有“重新翻译”传 true（M26 规则 4）。 */
+export const translateRecord = (id: number, again: boolean) => invoke<Translated>('translate_record', { id, again });
 /** 测试连接：用表单里（未保存）的值翻译固定短句，返回译文。 */
 export const translateTest = (engine: string, baseUrl: string, apiKey: string, model: string, lang: string) =>
   invoke<string>('translate_test', { engine, baseUrl, apiKey, model, lang });

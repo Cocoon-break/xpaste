@@ -18,7 +18,7 @@ use crate::error::AppError;
 use crate::events;
 use crate::panel::on_main;
 use crate::state::AppState;
-use crate::translate::{self, Coalescer, Delta, Lang};
+use crate::translate::{self, Coalescer, Delta, Fail, Lang};
 
 const LABEL_PREFIX: &str = "shot-";
 /// 按下快捷键后这么久还没全部上屏，视为卡住（某块屏的遮罩出错或没收到载荷），下次快捷键重新开始
@@ -1083,7 +1083,8 @@ fn run_action(
         }
         Action::Save => save(app, png)?,
         Action::Ocr => ocr(app, generation, png)?,
-        Action::Translate => unreachable!("翻译在 finish 里单独处理"),
+        // 翻译在 finish 里单独处理，走不到这里
+        Action::Translate => return Err(AppError::Invalid("截图处理中断".into())),
         Action::Pin => {
             let r = rect.ok_or_else(|| AppError::Invalid("贴图缺少选区".into()))?;
             open_pin(app, origin, scale, r, &png)?;
@@ -1193,13 +1194,18 @@ fn run_translate(
     label: &str,
     png: &[u8],
 ) -> Result<ShotOutcome, AppError> {
+    // 先看配置：没配置时不必等识别文字（M26 规则 5）
+    let cfg = translate::cfg(&app.state::<AppState>().settings());
+    if translate::unconfigured(&cfg) {
+        log::info!("translate shot 失败 config");
+        return Err(Fail::Config.into());
+    }
     let Some(text) = ocr_text(png)? else {
         return Err(AppError::Invalid("选区里没有识别到文字".into()));
     };
     if !session(app).is_current(generation) {
         return Err(AppError::Invalid("截图已结束".into()));
     }
-    let cfg = translate::cfg(&app.state::<AppState>().settings());
     let t0 = Instant::now();
     let mut co = Coalescer::default();
     let mut lang = None;

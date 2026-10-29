@@ -731,8 +731,11 @@ addEventListener('keydown', (e) => {
   const mod = isMac ? e.metaKey : e.ctrlKey;
   // Esc 直接退出，有选区也不先取消（M23 规则 8；取消选区用右键）
   if (e.key === 'Escape') { e.preventDefault(); closeOverlay(); return; }
-  // 译文卡片：只有回车复制、Esc 关闭；卡片里选中文字后的 Mod + C 照常
-  if (S.phase === 'card') { if (e.key === 'Enter') { e.preventDefault(); void copyTranslation(); } return; }
+  // 译文卡片：只有回车复制、Esc 关闭；卡片里选中文字后的 Mod + C 照常。焦点在卡片按钮（如“关闭”）上时回车交给按钮
+  if (S.phase === 'card') {
+    if (e.key === 'Enter' && !(e.target instanceof Element && e.target.closest('button'))) { e.preventDefault(); void copyTranslation(); }
+    return;
+  }
   if (S.phase !== 'idle' && S.phase !== 'selected') return;
   if (e.key === 'Enter') {
     e.preventDefault();

@@ -167,6 +167,11 @@ const TIMEOUTS: Timeouts = Timeouts {
     read: Duration::from_secs(30),
 };
 
+/// 未配置：用 OpenAI 兼容接口，且接口地址或模型 ID 为空（M26 规则 6）。
+pub fn unconfigured(cfg: &Cfg) -> bool {
+    cfg.engine == Engine::OpenAi && (cfg.model.trim().is_empty() || cfg.base_url.trim().is_empty())
+}
+
 /// `run` 的实现；`timeouts` 为 None 时用正式客户端（见 `client`），测试传短超时另建客户端。
 pub async fn exec(
     cfg: &Cfg,
@@ -174,9 +179,7 @@ pub async fn exec(
     timeouts: Option<Timeouts>,
     mut on_delta: impl FnMut(Lang, &str) -> bool + Send,
 ) -> Result<(Lang, String), Fail> {
-    if cfg.engine == Engine::OpenAi
-        && (cfg.model.trim().is_empty() || cfg.base_url.trim().is_empty())
-    {
+    if unconfigured(cfg) {
         return Err(Fail::Config);
     }
     if text.chars().count() > MAX_CHARS {
@@ -329,17 +332,17 @@ async fn openai(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::thread;
     use std::time::{Duration, Instant};
 
-    const SSE_HEAD: &str =
+    pub(crate) const SSE_HEAD: &str =
         "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
 
-    fn delta(s: &str) -> String {
+    pub(crate) fn delta(s: &str) -> String {
         format!(
             "data: {}\n\n",
             serde_json::json!({"choices": [{"delta": {"content": s}}]})
@@ -348,7 +351,10 @@ mod tests {
 
     /// 假服务：接一个连接，读完请求，按 `parts`（写之前先睡的毫秒数、字节）分几次写回；
     /// `hold` 为真时写完不关连接（睡 2 秒）。返回 Base URL 与收到的请求体。
-    fn serve(parts: Vec<(u64, Vec<u8>)>, hold: bool) -> (String, thread::JoinHandle<String>) {
+    pub(crate) fn serve(
+        parts: Vec<(u64, Vec<u8>)>,
+        hold: bool,
+    ) -> (String, thread::JoinHandle<String>) {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://127.0.0.1:{}/v1", l.local_addr().unwrap().port());
         let h = thread::spawn(move || {
@@ -384,7 +390,7 @@ mod tests {
         (url, h)
     }
 
-    fn openai(base_url: &str) -> Cfg {
+    pub(crate) fn openai(base_url: &str) -> Cfg {
         Cfg {
             engine: Engine::OpenAi,
             base_url: base_url.into(),
@@ -394,7 +400,7 @@ mod tests {
         }
     }
 
-    const FAST: Timeouts = Timeouts {
+    pub(crate) const FAST: Timeouts = Timeouts {
         connect: Duration::from_secs(2),
         read: Duration::from_millis(300),
     };

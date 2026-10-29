@@ -710,7 +710,8 @@ function doTranslate(id: number, again = false) {
     // 失败、中断时区块多了原因一行：再滚一次让它可见；成功时不动，免得打断正在读原文的人
     if (!res.ok) revealTr(id);
   };
-  translateRecord(id).then(
+  // 后端：已存过译文且不是重新翻译时直接返回存库译文（详情还没回来时按 Mod + T 不会覆盖它）；上次失败、中断等同重新翻译
+  translateRecord(id, again || cur !== undefined).then(
     (t) => end({ ok: true, ...t }),
     (err: AppError) => {
       // 别处已在翻译这条（同一条只跑一个请求）：增量照样会到
@@ -1667,7 +1668,7 @@ const trEngineEl = $('#trEngine'), trEngineBtns = [...trEngineEl.querySelectorAl
 const trBaseIn = $<HTMLInputElement>('#trBaseUrl'), trKeyIn = $<HTMLInputElement>('#trApiKey'), trModelIn = $<HTMLInputElement>('#trModel');
 const trLangIn = $<HTMLSelectElement>('#trLang'), trBaseErr = $('#trBaseUrlErr'), trTestBtn = $<HTMLButtonElement>('#trTestBtn'), trResult = $('#trTestResult');
 const trPackRow = $('#trPackRow'), trPack = $('#trPack'), trPackBtn = $('#trPackBtn'), trEngineNote = $('#trEngineNote');
-let trSupported = false, trEngine: 'system' | 'openai' = 'openai', trTouched = false, trSeq = 0;
+let trSupported = false, trEngine: 'system' | 'openai' = 'openai', trTouched = false, trSeq = 0, trOpenSeq = 0;
 const trEffective = () => (mac ? trEngine : 'openai');
 const trSave = () => (trTouched || !mac ? trEffective() : S.settings.translateEngine);
 function paintTrPack() {
@@ -1679,12 +1680,13 @@ function paintTrPack() {
   };
   show('');
   if (!mac || !trSupported || trEngine !== 'system') return;
-  const name = trLangIn.selectedOptions[0].text;
+  // 目标语言为 English 时后端查的是简体中文 ↔ English（M26 规则 6）
+  const pair = trLangIn.value === 'en' ? '简体中文 ↔ English' : `英语 ↔ ${trLangIn.selectedOptions[0].text}`;
   void translateStatus(trLangIn.value).then(
     (r) => {
       if (seq !== trSeq) return;
-      if (r.pack === 'installed') show(`英语 ↔ ${name}：已下载`);
-      else if (r.pack === 'download') show(`英语 ↔ ${name}：需要下载语言包`, true);
+      if (r.pack === 'installed') show(`${pair}：已下载`);
+      else if (r.pack === 'download') show(`${pair}：需要下载语言包`, true);
       else if (r.pack === 'unsupported') show('系统翻译不支持这种语言');
     },
     (e: AppError) => void info(`读取翻译语言包状态失败 kind=${e.kind}`),
@@ -1771,10 +1773,13 @@ function openTranslateTab(st: Settings) {
   trEngine = st.translateEngine === 'system' ? 'system' : 'openai';
   paintTrEngine();
   if (!mac) return;
+  const seq = ++trOpenSeq;
   void translateStatus(st.translateLang).then(
     (r) => {
+      // 上一次打开设置的迟到回复丢掉；用户已动过翻译方式时不改它
+      if (seq !== trOpenSeq) return;
       trSupported = r.supported;
-      trEngine = st.translateEngine === 'openai' || !r.supported ? 'openai' : 'system';
+      if (!trTouched) trEngine = st.translateEngine === 'openai' || !r.supported ? 'openai' : 'system';
       paintTrEngine();
     },
     (e: AppError) => void info(`读取翻译状态失败 kind=${e.kind}`),
