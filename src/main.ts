@@ -1663,13 +1663,16 @@ function dirField(id: string, placeholder: () => string) {
 }
 const shotDir = dirField('shotDir', () => (S.platform.os === 'macos' ? '~/Pictures/xPaste' : '图片\\xPaste'));
 const recDir = dirField('recDir', () => '~/Movies/xPaste');
-// 翻译标签（M26 规则 6）。翻译方式：stored 为空串（未选）时按系统翻译是否可用推断显示，用户没动就保存时原样写回
+// 翻译标签（M26 规则 6）：只显示当前翻译方式要用户操作的项。翻译方式只在本机能用系统翻译时出现；
+// stored 为空串（未选）时按本机能力显示，用户没动就保存时原样写回
 const trEngineEl = $('#trEngine'), trEngineBtns = [...trEngineEl.querySelectorAll<HTMLButtonElement>('[data-engine]')];
 const trBaseIn = $<HTMLInputElement>('#trBaseUrl'), trKeyIn = $<HTMLInputElement>('#trApiKey'), trModelIn = $<HTMLInputElement>('#trModel');
 const trLangIn = $<HTMLSelectElement>('#trLang'), trBaseErr = $('#trBaseUrlErr'), trTestBtn = $<HTMLButtonElement>('#trTestBtn'), trResult = $('#trTestResult');
-const trPackRow = $('#trPackRow'), trPack = $('#trPack'), trPackBtn = $('#trPackBtn'), trEngineNote = $('#trEngineNote');
-let trSupported = false, trEngine: 'system' | 'openai' = 'openai', trTouched = false, trSeq = 0, trOpenSeq = 0;
-const trEffective = () => (mac ? trEngine : 'openai');
+const trPackRow = $('#trPackRow'), trPack = $('#trPack'), trPackBtn = $('#trPackBtn');
+// trKnown：本机能否用系统翻译。第一次查到之前按 macOS 能用先画，免得常见情况（macOS 26+）打开时闪一下接口三项；查到后跨打开保留
+let trKnown: boolean | null = null, trEngine: 'system' | 'openai' = 'openai', trTouched = false, trSeq = 0, trOpenSeq = 0;
+const trSupported = () => mac && (trKnown ?? true);
+const trEffective = () => (trSupported() ? trEngine : 'openai');
 const trSave = () => (trTouched || !mac ? trEffective() : S.settings.translateEngine);
 function paintTrPack() {
   const seq = ++trSeq;
@@ -1679,7 +1682,7 @@ function paintTrPack() {
     trPackBtn.hidden = !btn;
   };
   show('');
-  if (!mac || !trSupported || trEngine !== 'system') return;
+  if (trEffective() !== 'system') return;
   // 目标语言为 English 时后端查的是简体中文 ↔ English（M26 规则 6）
   const pair = trLangIn.value === 'en' ? '简体中文 ↔ English' : `英语 ↔ ${trLangIn.selectedOptions[0].text}`;
   void translateStatus(trLangIn.value).then(
@@ -1693,23 +1696,21 @@ function paintTrPack() {
   );
 }
 function paintTrEngine() {
-  const sys = trEngine === 'system';
+  const sys = trEffective() === 'system';
+  $('#trEngineBox').hidden = !trSupported();
   trEngineEl.dataset.v = trEngine;
   trEngineBtns.forEach((b) => {
     const on = b.dataset.engine === trEngine;
     b.setAttribute('aria-checked', String(on));
     b.tabIndex = on ? 0 : -1;
   });
-  trEngineBtns[0].disabled = !trSupported;
-  trEngineNote.hidden = trSupported;
-  trEngineNote.textContent = trSupported ? '' : '系统翻译需要 macOS 26';
-  for (const el of [trBaseIn, trKeyIn, trModelIn, $('#trKeyBtn')] as HTMLInputElement[]) {
-    el.disabled = mac && sys;
-    el.closest('.field')!.classList.toggle('is-disabled', mac && sys);
-  }
-  $('#trPrivacy').textContent = sys && mac
-    ? '在本机完成，不上传'
-    : '翻译时，只把你选中要翻译的那段文字发送到上面的接口；不按翻译就不会发送任何内容。请求按系统代理设置发出，可能经过你在系统里设置的代理';
+  // 系统翻译不需要接口：三项整块隐藏，切回 OpenAI 兼容接口时原值还在
+  $('#trApi').hidden = sys;
+  if (sys) paintTrUrlErr(null);
+  $('#trPrivacy').textContent = sys
+    ? '使用 macOS 自带的翻译，在本机完成，不上传，不需要配置接口'
+    : '翻译时，只把你选中要翻译的那段文字发送到下面的接口；不按翻译就不会发送任何内容。请求按系统代理设置发出，可能经过你在系统里设置的代理';
+  setTrResult('');
   paintTrPack();
 }
 function setTrEngine(e: 'system' | 'openai') {
@@ -1719,14 +1720,13 @@ function setTrEngine(e: 'system' | 'openai') {
 }
 trEngineEl.addEventListener('click', (e) => {
   const b = (e.target as Element).closest<HTMLButtonElement>('[data-engine]');
-  if (b && !b.disabled) setTrEngine(b.dataset.engine as 'system' | 'openai');
+  if (b) setTrEngine(b.dataset.engine as 'system' | 'openai');
 });
 trEngineEl.addEventListener('keydown', (e) => {
   if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
   e.preventDefault();
   e.stopPropagation();
   const n = trEngineBtns[trEngine === 'system' ? 1 : 0];
-  if (n.disabled) return;
   setTrEngine(n.dataset.engine as 'system' | 'openai');
   n.focus();
 });
@@ -1753,7 +1753,7 @@ trTestBtn.addEventListener('click', () => {
   trTestBtn.disabled = true;
   setTrResult('测试中…');
   void translateTest(trEffective(), trBaseIn.value.trim().replace(/\/+$/, ''), trKeyIn.value, trModelIn.value.trim(), trLangIn.value).then(
-    (t) => setTrResult(`✓ 连接正常：${t}`, 'is-ok'),
+    (t) => setTrResult(`✓ 可以翻译：${t}`, 'is-ok'),
     (e: AppError) => setTrResult(e.message, 'is-err'),
   ).finally(() => (trTestBtn.disabled = false));
 });
@@ -1769,18 +1769,17 @@ function openTranslateTab(st: Settings) {
   paintTrUrlErr(null);
   setTrResult('');
   trTestBtn.disabled = false;
-  trSupported = false;
-  trEngine = st.translateEngine === 'system' ? 'system' : 'openai';
+  trEngine = st.translateEngine === 'openai' ? 'openai' : 'system';
   paintTrEngine();
   if (!mac) return;
   const seq = ++trOpenSeq;
   void translateStatus(st.translateLang).then(
     (r) => {
-      // 上一次打开设置的迟到回复丢掉；用户已动过翻译方式时不改它
+      // 上一次打开设置的迟到回复丢掉；结果跨打开保留，只在能力和先前假设不同时重画
       if (seq !== trOpenSeq) return;
-      trSupported = r.supported;
-      if (!trTouched) trEngine = st.translateEngine === 'openai' || !r.supported ? 'openai' : 'system';
-      paintTrEngine();
+      const changed = trSupported() !== r.supported;
+      trKnown = r.supported;
+      if (changed) paintTrEngine();
     },
     (e: AppError) => void info(`读取翻译状态失败 kind=${e.kind}`),
   );
@@ -2121,10 +2120,10 @@ async function submitSettings() {
   frequentErr.hidden = frequent !== null;
   frequentIn.setAttribute('aria-invalid', String(frequent === null));
   paintStErr();
-  const urlErr = baseUrlError(trBaseIn.value);
+  // 接口地址只在用 OpenAI 兼容接口时校验（系统翻译时这几项不显示，M26 规则 6）
+  const urlErr = trEffective() === 'openai' ? baseUrlError(trBaseIn.value) : null;
   paintTrUrlErr(urlErr);
-  // 切到第一个出错的标签（按标签顺序），聚焦其中出错的控件；翻译接口置灰时输入框聚焦不了，改聚焦翻译方式
-  if (urlErr && limit !== null && frequent !== null && trBaseIn.disabled) return showStControl(trEngineBtns.find((b) => b.tabIndex === 0)!);
+  // 切到第一个出错的标签（按标签顺序），聚焦其中出错的控件
   if (limit === null || frequent === null || urlErr) return showStControl(stPanes.map((p) => p.querySelector<HTMLElement>('[aria-invalid="true"]')).find(Boolean)!);
   const s = formToSettings(S.settings, {
     hotkey: pendingHotkey, retain: retainIn.value, limit, frequent, ignored: addIgnored(draftIgnored, ignoreIn.value), skipSensitive: sensitiveIn.checked,

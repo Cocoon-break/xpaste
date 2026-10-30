@@ -117,7 +117,7 @@ async fn translate_one(
     })
 }
 
-/// 设置页“测试连接”：用表单里（未保存）的值翻译固定短句，不存任何东西（M26 规则 6）。
+/// 设置页“测试翻译”：用表单里（未保存）的值翻译固定短句，不存任何东西（M26 规则 6）。
 #[tauri::command]
 pub async fn translate_test(
     engine: String,

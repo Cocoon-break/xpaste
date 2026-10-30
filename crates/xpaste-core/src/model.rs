@@ -302,8 +302,13 @@ impl Settings {
         if crate::translate::Lang::from_code(&self.translate_lang).is_none() {
             return fail("不支持这种翻译目标语言");
         }
+        // 选了系统翻译时设置里不显示接口三项，不拿它们拦保存（M26 规则 6）
         let url = &self.translate_base_url;
-        if !url.is_empty() && !url.starts_with("http://") && !url.starts_with("https://") {
+        if self.translate_engine != "system"
+            && !url.is_empty()
+            && !url.starts_with("http://")
+            && !url.starts_with("https://")
+        {
             return fail("请输入 http:// 或 https:// 开头的地址");
         }
         if !matches!(self.rec_fps, 30 | 60) {
@@ -686,6 +691,16 @@ mod tests {
                 ..Default::default()
             }),
             "请输入 http:// 或 https:// 开头的地址"
+        );
+        // 选了系统翻译时接口三项不显示，不合法的接口地址不拦保存
+        assert!(
+            Settings {
+                translate_engine: "system".into(),
+                translate_base_url: "api.openai.com".into(),
+                ..Default::default()
+            }
+            .validate()
+            .is_ok()
         );
         // 空 = 未配置，不报错
         assert!(

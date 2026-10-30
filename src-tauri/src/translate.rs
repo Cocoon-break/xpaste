@@ -40,8 +40,8 @@ pub struct Cfg {
 
 /// 读设置；引擎还没选（`""`）时本机支持系统翻译就用系统翻译，否则用 OpenAI 兼容接口（M26 规则 6）。
 pub fn cfg(s: &Settings) -> Cfg {
+    // 没选过，或选了系统翻译但本机用不了（换到 macOS 26 以下）：按本机能力选，与设置页显示一致（M26 规则 6）
     let engine = match s.translate_engine.as_str() {
-        "system" => Engine::System,
         "openai" => Engine::OpenAi,
         _ if xpaste_platform::translate_supported() => Engine::System,
         _ => Engine::OpenAi,
