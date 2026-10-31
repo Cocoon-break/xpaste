@@ -54,7 +54,8 @@ function render(pop = false) {
   const s = tr();
   // 另一种能用时就有换用按钮，翻译中也有（M26 规则 16）
   const view: CardState = s ? { ...s, other: engines ? otherEngine(s.engine, engines) : null, pick, dirty: dirty(s) } : st;
-  const focused = (document.activeElement as HTMLElement | null)?.dataset.act;
+  // 新卡片（pop）不沿用上一张卡片的焦点：隐藏前点过的下拉框会被重新聚焦、画出焦点环
+  const focused = pop ? undefined : (document.activeElement as HTMLElement | null)?.dataset.act;
   const tops = new Map(bodies().map((b) => [b.classList.contains('c-orig'), b.scrollTop]));
   const ta = src(), caret = ta && [ta.selectionStart, ta.selectionEnd];
   root.innerHTML = cardHTML(view, wide, MOD);
@@ -262,6 +263,10 @@ addEventListener('keydown', (e) => {
 root.addEventListener('mousedown', (e) => {
   const t = e.target as Element;
   if (t.closest('[data-tauri-drag-region]') && !t.closest('button, select')) moved = true;
+});
+// 输入卡片的窗口拿到键盘时光标放回原文框（focus() 先于窗口上屏时可能没落下）
+addEventListener('focus', () => {
+  if (st.kind === 'idle' && document.activeElement === document.body) src()?.focus();
 });
 // 点了卡片以外的地方：关闭（不交还键盘）；输入卡片后端不关
 addEventListener('blur', () => void cardBlur(seq));
