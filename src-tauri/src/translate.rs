@@ -350,11 +350,12 @@ fn client(loopback: bool) -> Result<reqwest::Client, Fail> {
     Ok(LOOPBACK.get_or_init(|| c).clone())
 }
 
+/// 连接阶段的失败（含 10 秒连接超时：Windows 连不上的端口会重试到超时，不立即拒绝）算连不上；
+/// 连上之后的读超时算超时；其余（DNS 失败、读到一半连接断开）也算连不上（M26 规则 13）。
 fn net(e: reqwest::Error) -> Fail {
-    if e.is_timeout() {
+    if !e.is_connect() && e.is_timeout() {
         Fail::Timeout
     } else {
-        // 连接失败、DNS 失败，以及读到一半连接断开
         Fail::Connect
     }
 }

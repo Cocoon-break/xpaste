@@ -210,7 +210,7 @@ pub fn label(shortcut: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Role, ShotRoute, failure_notice, label, role_of, shot_route};
+    use super::{REC_SUPPORTED, Role, ShotRoute, failure_notice, label, role_of, shot_route};
 
     #[test]
     fn shot_goes_to_panel_only_while_dialog_open_and_panel_focused() {
@@ -260,7 +260,11 @@ mod tests {
         let t = "Alt+Shift+T";
         assert_eq!(role_of(&shot, p, s, r, t), Some(Role::Shot));
         assert_eq!(role_of(&panel, p, s, r, t), Some(Role::Panel));
-        assert_eq!(role_of(&rec, p, s, r, t), Some(Role::Rec));
+        // Windows 不注册录屏快捷键（REC_SUPPORTED），也就不认
+        assert_eq!(
+            role_of(&rec, p, s, r, t),
+            REC_SUPPORTED.then_some(Role::Rec)
+        );
         // 截图、录屏为空串表示不启用：不认
         assert_eq!(role_of(&shot, p, "", r, t), None);
         assert_eq!(role_of(&rec, p, s, "", t), None);
