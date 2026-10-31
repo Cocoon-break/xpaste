@@ -713,8 +713,9 @@ function revealTr(id: number) {
   const d = br.bottom > pr.bottom - pad ? Math.min(br.bottom - pr.bottom + pad, br.top - pr.top - pad) : br.top < pr.top ? br.top - pr.top - pad : 0;
   if (d) pbody.scrollBy({ top: d, behavior: reduced.matches ? 'auto' : 'smooth' });
 }
+// 设置已开着时停在原来的标签（M26 规则 19）
 const openTrSettings = () => {
-  stTab = stTabs.findIndex((t) => t.id === 'st-tab-translate');
+  if (!dlg.classList.contains('is-shown')) stTab = stTabs.findIndex((t) => t.id === 'st-tab-translate');
   openSettings();
 };
 // 已有译文或正在翻译：只滚到区块，不发请求；上次失败、中断时等同重新翻译。again：先丢掉旧译文再请求。
