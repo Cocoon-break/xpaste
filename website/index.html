@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>xPaste · 能搜截图文字的剪切板历史，自带截图与录屏</title>
-<meta name="description" content="xPaste 是免费、开源、纯本地的 macOS / Windows 剪切板历史，自带截图、贴图和录屏（录屏仅 macOS）。截图里的字、文件里的内容都能搜到，按 Enter 贴回刚才的应用。">
+<title>xPaste · 能搜截图文字的剪切板历史，自带截图、录屏与翻译</title>
+<meta name="description" content="xPaste 是免费、开源、纯本地的 macOS / Windows 剪切板历史，自带截图、贴图、录屏（录屏仅 macOS）和翻译。截图里的字、文件里的内容都能搜到，按 Enter 贴回刚才的应用；任何应用里选中的文字都能翻译。">
 <meta name="theme-color" content="#05070E">
 <link rel="icon" type="image/svg+xml" href="assets/logo.svg">
 <meta property="og:type" content="website">
-<meta property="og:title" content="xPaste · 剪切板历史，自带截图与录屏">
-<meta property="og:description" content="免费、开源、纯本地的剪切板历史，自带截图、贴图和录屏。截图里的字、文件里的内容都能搜到。">
+<meta property="og:title" content="xPaste · 剪切板历史，自带截图、录屏与翻译">
+<meta property="og:description" content="免费、开源、纯本地的剪切板历史，自带截图、贴图、录屏和翻译。截图里的字、文件里的内容都能搜到。">
 <meta property="og:url" content="https://cocoon-break.github.io/xpaste/">
 <meta property="og:image" content="https://cocoon-break.github.io/xpaste/assets/og.jpg">
 <meta name="twitter:card" content="summary_large_image">
@@ -19,7 +19,8 @@
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"FAQPage","mainEntity":[
 {"@type":"Question","name":"xPaste 收费吗？","acceptedAnswer":{"@type":"Answer","text":"免费，代码开源。没有付费版本，也没有内购。"}},
-{"@type":"Question","name":"我复制的内容会上传到哪里吗？","acceptedAnswer":{"@type":"Answer","text":"不会。xPaste 没有账号、没有云同步、没有使用统计，数据只存在本机。日志里也不会出现剪切板内容、标题、文件路径和搜索词。"}},
+{"@type":"Question","name":"我复制的内容会上传到哪里吗？","acceptedAnswer":{"@type":"Answer","text":"不会。xPaste 没有账号、没有云同步、没有使用统计，数据只存在本机。日志里也不会出现剪切板内容、标题、文件路径和搜索词。唯一的例外是你手动发起的翻译。"}},
+{"@type":"Question","name":"翻译会把内容发到哪里？","acceptedAnswer":{"@type":"Answer","text":"只在你按翻译时发送要翻译的那一段文字。macOS 26 的系统翻译在本机完成；AI 翻译发到你自己在设置里填的 OpenAI 兼容接口，接本机的 Ollama 时不出本机。"}},
 {"@type":"Question","name":"识别图片里的文字需要联网或者下载模型吗？","acceptedAnswer":{"@type":"Answer","text":"不需要。xPaste 用系统自带的离线文字识别（macOS Vision、Windows.Media.Ocr），不联网、不上传，也不增加安装体积。"}},
 {"@type":"Question","name":"截图要什么权限？","acceptedAnswer":{"@type":"Answer","text":"macOS 上第一次截图前，要在系统设置 → 隐私与安全性 → 屏幕录制（macOS 15 起叫“录屏与系统录音”）里打开 xPaste，再退出并重新打开 xPaste。录屏用同一个权限，开着麦克风录制时系统会再问一次麦克风权限。Windows 不需要额外权限。"}},
 {"@type":"Question","name":"录屏为什么只有 macOS？","acceptedAnswer":{"@type":"Answer","text":"录屏先在 macOS 13 及以上做完，Windows 要换一套系统接口（Windows.Graphics.Capture 加 Media Foundation 编码），另做一期。现在 Windows 上没有录屏快捷键，设置里也没有录屏选项；截图和贴图两个系统都有。"}},
@@ -381,6 +382,46 @@ mark { background: var(--mark-bg); color: var(--mark-fg); border-radius: 2px; pa
 .cap-step kbd, .cap-note kbd { display: inline-block; padding: 0 4px; border-radius: 4px; border: 1px solid var(--s4); background: var(--s2); color: var(--fg); font-size: 14px; line-height: 20px; }
 .cap-step code { font: 14px/20px ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: var(--fg); }
 .cap-note { margin-top: 24px; text-align: center; color: var(--muted); font-size: 14px; line-height: 24px; }
+
+/* ---------- translation ---------- */
+/* 两个场景：在终端里选中英文、卡片出现在文字旁（划词翻译）；自己写中文、两栏对照（输入翻译）。卡片外观取自 src/card/card.css */
+.tr-stage { margin-top: 48px; display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 900px) { .tr-stage { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); } .tr-scene { display: flex; flex-direction: column; } .tr-scene > .tr-card.wide { margin: auto 0; } }
+.tr-scene { position: relative; padding: 20px; border-radius: 24px; border: 1px solid var(--s3); background: radial-gradient(120% 90% at 0% 0%, rgb(143 227 255 / .10), transparent 60%), radial-gradient(90% 80% at 100% 100%, rgb(255 111 216 / .08), transparent 60%), var(--s1); }
+.tr-scene > .lb { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; color: var(--muted); font-size: 14px; line-height: 20px; }
+.tr-scene > .lb i { font-size: 18px; color: var(--sc); }
+.tr-scene > .lb kbd { padding: 0 4px; border-radius: 4px; border: 1px solid var(--s4); background: var(--s2); color: var(--fg); font-size: 12px; line-height: 18px; }
+.tr-term { border-radius: 12px; border: 1px solid var(--ui-line); background: var(--ui); overflow: hidden; }
+.tr-term .tt { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--ui-line); color: var(--ui-faint); font-size: 12px; line-height: 16px; }
+.tr-term .tt u { width: 9px; height: 9px; border-radius: 50%; background: var(--s4); }
+.tr-term .tt span { margin-left: 6px; }
+.tr-term pre { margin: 0; padding: 12px 14px 56px; font: 12px/20px ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: var(--ui-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.tr-term pre b { font-weight: 400; color: var(--c-code); }
+.tr-term pre mark { color: var(--ui-fg); background: rgb(111 139 255 / .38); border-radius: 2px; }
+.tr-card { border-radius: 12px; border: 1px solid var(--ui-line); background: rgb(12 14 27 / .94); box-shadow: 0 24px 48px -16px rgb(0 0 0 / .6), 0 0 48px -20px var(--beam); font-size: 13px; line-height: 20px; }
+.tr-card .hd { display: flex; align-items: center; gap: 8px; padding: 10px 12px 4px 14px; font-size: 12px; line-height: 16px; color: var(--ui-muted); font-weight: 500; }
+.tr-card .hd .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tr-card .hd .to { display: inline-flex; align-items: center; gap: 6px; color: var(--ui-muted); font-weight: 400; }
+.tr-card .hd .sel { padding: 1px 8px; border-radius: 6px; border: 1px solid var(--ui-line); background: var(--s2); color: var(--ui-fg); }
+.tr-card .hd .lk { color: var(--beam); font-weight: 400; }
+.tr-card .src { padding: 10px 14px 0; font-size: 12px; color: var(--ui-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tr-card .body { padding: 6px 14px 10px; color: var(--ui-fg); }
+.tr-card .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 6px 12px 4px; }
+.tr-card .cols div { min-height: 112px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--ui-line); background: rgb(24 30 54 / .55); color: var(--ui-fg); }
+.tr-card .cols .in { background: rgb(5 7 14 / .7); border-color: var(--beam); }
+.tr-card .cols .in i { display: inline-block; width: 1px; height: 14px; margin-left: 1px; vertical-align: -2px; background: var(--beam); animation: trCaret 1s steps(1) infinite; }
+@keyframes trCaret { 50% { opacity: 0; } }
+.tr-card .ft { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; padding: 8px; border-top: 1px solid var(--ui-line); font-size: 13px; color: var(--ui-muted); }
+.tr-card.wide .ft { border-top: 0; padding-top: 6px; }
+.tr-card .ft span { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 8px; white-space: nowrap; }
+.tr-card .ft .sw { margin-right: auto; }
+.tr-card .ft .go { background: var(--beam); color: var(--on-beam); font-weight: 600; }
+.tr-card .ft kbd { padding: 0 4px; border-radius: 4px; border: 1px solid var(--ui-line); font-size: 11px; line-height: 16px; }
+.tr-card .ft .go kbd { border-color: rgb(6 16 28 / .3); }
+.tr-pop { position: relative; z-index: 1; margin: -44px 0 0 16%; }
+@media (max-width: 560px) { .tr-pop { margin-left: 4%; } .tr-card .cols { grid-template-columns: 1fr; } .tr-card .cols div { min-height: 64px; } }
+.tr-steps { margin-top: 16px; }
+@media (min-width: 900px) { .tr-steps { grid-template-columns: repeat(2, 1fr); } }
 @container (max-width: 560px) {
   .mbar .mi, .hintbar, .w2 .side, .chart .ct em, .w1 .code i:nth-child(n+7) { display: none; }
 }
@@ -548,6 +589,7 @@ footer::before { content: ""; position: absolute; top: 0; left: 0; right: 0; hei
     <div class="nav-links">
       <a href="#features">功能</a>
       <a href="#capture">截图录屏</a>
+      <a href="#translate">翻译</a>
       <a href="#how">用法</a>
       <a href="#privacy">隐私</a>
       <a href="#faq">常见问题</a>
@@ -559,10 +601,11 @@ footer::before { content: ""; position: absolute; top: 0; left: 0; right: 0; hei
   <div class="sheet" id="sheet">
     <a href="#features" style="--i:0">功能</a>
     <a href="#capture" style="--i:1">截图录屏</a>
-    <a href="#how" style="--i:2">用法</a>
-    <a href="#privacy" style="--i:3">隐私</a>
-    <a href="#faq" style="--i:4">常见问题</a>
-    <a href="https://github.com/Cocoon-break/xpaste" style="--i:5">GitHub 源码</a>
+    <a href="#translate" style="--i:2">翻译</a>
+    <a href="#how" style="--i:3">用法</a>
+    <a href="#privacy" style="--i:4">隐私</a>
+    <a href="#faq" style="--i:5">常见问题</a>
+    <a href="https://github.com/Cocoon-break/xpaste" style="--i:6">GitHub 源码</a>
   </div>
 </header>
 
@@ -580,7 +623,7 @@ footer::before { content: ""; position: absolute; top: 0; left: 0; right: 0; hei
     <div class="wrap">
       <span class="chip"><b></b>免费 · 开源 · 纯本地</span>
       <h1 id="hero-title"><span>复制过的一切，</span><span>一键找回</span></h1>
-      <p class="sub">xPaste 是 macOS 和 Windows 上的剪切板历史，自带截图和贴图，<span class="nb">macOS 上还能录屏。</span>按 <kbd>⌘</kbd> <kbd>Shift</kbd> <kbd>V</kbd> 唤起，截图里的字、文件里的内容都能搜到，按 Enter 贴回刚才的应用。</p>
+      <p class="sub">xPaste 是 macOS 和 Windows 上的剪切板历史，自带截图和贴图，<span class="nb">macOS 上还能录屏。</span>按 <kbd>⌘</kbd> <kbd>Shift</kbd> <kbd>V</kbd> 唤起，截图里的字、文件里的内容都能搜到，按 Enter 贴回刚才的应用；<span class="nb">选中的文字还能一键翻译。</span></p>
       <div class="cta">
         <a class="btn primary" href="#download"><i class="ph ph-download-simple"></i>免费下载 xPaste</a>
         <span class="proof"><span class="nb">不用注册 · 数据只存在本机 ·</span> <span class="nb">macOS 13+ 与 Windows 10 / 11</span></span>
@@ -763,7 +806,7 @@ footer::before { content: ""; position: absolute; top: 0; left: 0; right: 0; hei
           </div>
           <div class="ld" style="--d:.3s">
             <h3>隐私是硬约束，不是开关</h3>
-            <p>没有账号、没有云同步、没有使用统计。日志里从不出现剪切板内容、标题、文件路径和搜索词。</p>
+            <p>没有账号、没有云同步、没有使用统计。日志里从不出现剪切板内容、标题、文件路径和搜索词。唯一会联网的是你手动发起的 AI 翻译。</p>
           </div>
         </article>
 
@@ -789,6 +832,7 @@ footer::before { content: ""; position: absolute; top: 0; left: 0; right: 0; hei
               <li><i class="ph ph-backspace"></i>搜索框为空时按退格，不会误删记录</li>
               <li><i class="ph ph-keyboard"></i>Esc 先清搜索，再隐藏面板</li>
               <li><i class="ph ph-monitor"></i>面板出现在鼠标所在的显示器</li>
+              <li><i class="ph ph-bookmark-simple"></i>常用的一段存成片段，搜名字就能粘贴内容</li>
             </ul>
           </div>
         </article>
@@ -844,6 +888,55 @@ footer::before { content: ""; position: absolute; top: 0; left: 0; right: 0; hei
         <div class="cap-step reveal" style="--sc:var(--c-video);transition-delay:160ms"><h3><i class="ph ph-record"></i>录屏<small>仅 macOS</small></h3><p>按 <kbd>⌥</kbd> <kbd>Shift</kbd> <kbd>R</kbd>，用同样的方式选区域，倒计时 3 秒后录成 MP4（30 或 60 fps，清晰度可选），可以带系统声音和麦克风（麦克风要 macOS 15）。菜单栏显示计时，再按一次停止，视频存进 <code>~/Movies/xPaste</code> 并进入历史。</p></div>
       </div>
       <p class="cap-note reveal">Windows 上截图是 <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>A</kbd>，<span class="nb">保存是 <kbd>Ctrl</kbd> <kbd>S</kbd>，</span>暂不支持录屏。macOS 第一次截图前要授予“屏幕录制”权限。</p>
+    </div>
+  </section>
+
+  <!-- 2c. translation -->
+  <section id="translate" aria-labelledby="tr-title">
+    <div class="wrap">
+      <div class="head center reveal">
+        <div class="eyebrow">翻译</div>
+        <h2 id="tr-title"><span class="nb">选中就能翻，</span><span class="nb">写完再翻也行</span></h2>
+        <p>面板里、截图里、任何应用里选中的文字都能翻译，也可以自己写一段再翻。用 macOS 自带的离线系统翻译，或者接任意 OpenAI 兼容接口；每段译文都标出用的是哪种，翻译中也能临时换用另一种。</p>
+      </div>
+
+      <div class="tr-stage">
+        <div class="tr-scene reveal" style="--sc:var(--c-code)" role="img" aria-label="划词翻译：在终端里选中一句英文，按翻译快捷键，译文卡片出现在文字旁，标题写着“译文 · 系统翻译”，底部有“换用 AI 翻译”“关闭”“复制译文”。">
+          <div class="lb" aria-hidden="true"><i class="ph ph-cursor-text"></i>在终端里选中，按 <kbd>⌥</kbd><kbd>Shift</kbd><kbd>T</kbd></div>
+          <div class="tr-term" aria-hidden="true">
+            <div class="tt"><u></u><u></u><u></u><span>zsh — npm install</span></div>
+            <pre><b>~/app</b> npm install --dry-run
+added 34 packages in 2s
+<mark>The dry run shows 34 new packages with no peer conflicts, and nothing already installed gets changed.</mark></pre>
+          </div>
+          <div class="tr-card tr-pop" aria-hidden="true">
+            <div class="src">The dry run shows 34 new packages with n…</div>
+            <div class="hd"><span class="t">译文 · 系统翻译</span><span class="lk">对照原文</span></div>
+            <div class="body">试运行显示有 34 个新软件包，没有对等依赖冲突，已安装的内容都不会被改动。</div>
+            <div class="ft"><span class="sw">换用 AI 翻译</span><span>关闭 <kbd>Esc</kbd></span><span class="go">复制译文 <kbd>↵</kbd></span></div>
+          </div>
+        </div>
+
+        <div class="tr-scene reveal" style="--sc:var(--c-accent);transition-delay:80ms" role="img" aria-label="输入翻译：在两栏卡片左边写中文“明天下午三点开会，记得带上季度报告。”，右边是英文译文，标题写着“译文 · English · AI（gpt-4o-mini）”，目标语言为自动，底部按钮“复制译文 ⌘↵”。">
+          <div class="lb" aria-hidden="true"><i class="ph ph-note-pencil"></i>菜单栏“翻译…”，写完按 <kbd>⌘</kbd><kbd>↵</kbd></div>
+          <div class="tr-card wide" aria-hidden="true">
+            <div class="hd"><span class="t">译文 · English · AI（gpt-4o-mini）</span><span class="to">翻成<span class="sel">自动</span></span><span class="lk">收起</span></div>
+            <div class="cols">
+              <div class="in">明天下午三点开会，记得带上季度报告。<i></i></div>
+              <div>Meeting tomorrow at 3 PM, remember to bring the quarterly report.</div>
+            </div>
+            <div class="ft"><span class="sw">换用系统翻译</span><span>关闭 <kbd>Esc</kbd></span><span class="go">复制译文 <kbd>⌘↵</kbd></span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="cap-steps tr-steps">
+        <div class="cap-step reveal" style="--sc:var(--c-text)"><h3><i class="ph ph-app-window"></i>面板里翻译</h3><p>选中一条记录按 <kbd>⌘</kbd> <kbd>T</kbd>，译文显示在预览里并存下来，下次直接看。截图和文件也能翻，翻的是里面识别出的文字。</p></div>
+        <div class="cap-step reveal" style="--sc:var(--c-image);transition-delay:80ms"><h3><i class="ph ph-selection"></i>截图翻译</h3><p>截图框选后按 <kbd>T</kbd>，先识别图里的字再翻译，译文卡片出现在选区旁，回车复制。</p></div>
+        <div class="cap-step reveal" style="--sc:var(--c-code)"><h3><i class="ph ph-cursor-text"></i>划词翻译</h3><p>在浏览器、终端等任何应用里选中文字，按 <kbd>⌥</kbd> <kbd>Shift</kbd> <kbd>T</kbd>，译文出现在文字旁。点“对照原文”展开成两栏，可以直接改原文、换目标语言再翻。</p></div>
+        <div class="cap-step reveal" style="--sc:var(--c-accent);transition-delay:80ms"><h3><i class="ph ph-note-pencil"></i>写完再翻</h3><p>点菜单栏图标的“翻译…”，或者不选文字直接按翻译快捷键。写一段中文按 <kbd>⌘</kbd> <kbd>↵</kbd> 翻成英文，再按一次复制，回到聊天框粘贴。没写完关掉，草稿还在。</p></div>
+      </div>
+      <p class="cap-note reveal">系统翻译要 macOS 26，缺语言包时在 xPaste 里一键下载；AI 翻译接任意 OpenAI 兼容接口，接本机的 Ollama 时翻译不出本机。<span class="nb">只在你按翻译时发送那一段文字。</span>Windows 上是 <kbd>Ctrl</kbd> <kbd>T</kbd> 与 <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>T</kbd>，只能用 AI 翻译。</p>
     </div>
   </section>
 
@@ -923,7 +1016,8 @@ footer::before { content: ""; position: absolute; top: 0; left: 0; right: 0; hei
       </div>
       <div class="faq reveal">
         <details><summary>xPaste 收费吗？<i class="ph ph-plus"></i></summary><div class="a">免费，代码开源。没有付费版本，也没有内购。</div></details>
-        <details><summary>我复制的内容会上传到哪里吗？<i class="ph ph-plus"></i></summary><div class="a">不会。没有账号、没有云同步、没有使用统计，数据只存在本机。来自密码管理器或被系统标记为敏感的内容默认不记录；日志里也不会出现剪切板内容、标题、文件路径和搜索词。</div></details>
+        <details><summary>我复制的内容会上传到哪里吗？<i class="ph ph-plus"></i></summary><div class="a">不会。没有账号、没有云同步、没有使用统计，数据只存在本机。来自密码管理器或被系统标记为敏感的内容默认不记录；日志里也不会出现剪切板内容、标题、文件路径和搜索词。唯一的例外是翻译，见下一条。</div></details>
+        <details><summary>翻译会把内容发到哪里？<i class="ph ph-plus"></i></summary><div class="a">只在你按翻译时，把要翻译的那一段文字发出去，复制、选中、唤起都不会。用 macOS 26 自带的系统翻译时在本机完成，不联网；用 AI 翻译时发到你自己在设置里填的 OpenAI 兼容接口，接本机的 Ollama 时同样不出本机。请求按系统代理设置发出。密码管理器里的内容和被标记为敏感的内容不翻译。</div></details>
         <details><summary>识别图片文字要联网或者下载模型吗？<i class="ph ph-plus"></i></summary><div class="a">不需要。用的是系统自带的离线识别（macOS Vision、Windows.Media.Ocr），不增加安装体积。启动后第一次识别要加载系统模型，大约 8 秒，之后每张通常不到 1 秒。Windows 需要系统装有对应语言的 OCR 语言包。</div></details>
         <details><summary>macOS 提示“xPaste 已损坏，无法打开”怎么办？<i class="ph ph-plus"></i></summary><div class="a">安装包还没有签名，从浏览器下载后带有隔离属性。在终端运行 <code>xattr -dr com.apple.quarantine /Applications/xPaste.app</code>，再正常打开即可。</div></details>
         <details><summary>按 Enter 为什么没有直接粘贴？<i class="ph ph-plus"></i></summary><div class="a">macOS 上自动粘贴需要“辅助功能”权限，在系统设置 → 隐私与安全性 → 辅助功能里打开 xPaste。没授权时 Enter 会复制好并提示，到目标应用里按 ⌘ V 就行。</div></details>
@@ -1247,7 +1341,7 @@ footer::before { content: ""; position: absolute; top: 0; left: 0; right: 0; hei
       const s = { el, desk: q('.desk'), chart: q('#cap-chart'), w2: q('.w2'), sel: q('.sel'), hd: $$('.hd', el), sz: q('.sz'),
         pin: q('.pin'), ring: q('.pin .ring'), zoom: q('.pin .zoom'), img: q('.pin .img'), rc: q('.ann .rc'), ar: q('.ann .ar'), nm: q('.ann .nm'),
         tbs: q('.tb.shot'), tbr: q('.tb.rec'), tools: $$('.tb.shot [data-k]'), go: q('.tb.rec .go'), count: q('.count'), prg: q('.count .prg'), num: q('.count b'),
-        recb: q('.recb'), pill: q('.recpill'), hint: q('.hintbar'), notif: q('.notif'), keys: q('.keys'), cur: q('.cur'), steps: $$('.cap-step') };
+        recb: q('.recb'), pill: q('.recpill'), hint: q('.hintbar'), notif: q('.notif'), keys: q('.keys'), cur: q('.cur'), steps: $$('#capture .cap-step') };
       s.img.appendChild(s.chart.cloneNode(true)).removeAttribute('id');
       return s;
     }, draw(s, t) {
