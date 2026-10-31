@@ -110,7 +110,7 @@ pub struct Settings {
     pub translate_model: String,
     /// 目标语言代码，见 `translate::Lang`
     pub translate_lang: String,
-    /// 划词翻译全局快捷键；空字符串表示不启用（设计 §3.2、§3.3）
+    /// 划词翻译全局快捷键；空字符串表示不启用（M15、M26 规则 18）
     pub translate_hotkey: String,
 }
 
@@ -257,7 +257,7 @@ impl Settings {
                 self.rec_hotkey.clear();
             }
         }
-        // 翻译快捷键同理（设计 §3.3）：升级前唤起、截图、录屏已用了 Alt+Shift+T 的，读出为不启用
+        // 翻译快捷键同理（M15）：升级前唤起、截图、录屏已用了 Alt+Shift+T 的，读出为不启用
         if self.translate_hotkey_clash().is_some() {
             self.translate_hotkey.clear();
         }
@@ -546,7 +546,7 @@ pub struct RecordDetail {
     /// 最新一份译文及其目标语言代码（M26 规则 12）
     pub translation: Option<String>,
     pub translation_lang: Option<String>,
-    /// 翻译方式标签：`system` 或 `openai:{模型 ID}`（设计 §3.4）
+    /// 翻译方式标签：`system` 或 `openai:{模型 ID}`（M26 规则 16）
     pub translation_engine: Option<String>,
 }
 
@@ -1095,7 +1095,7 @@ mod tests {
         );
     }
 
-    /// 设计 §3.3：升级前截图（或唤起、录屏）已用 Alt+Shift+T 的，翻译快捷键读出为不启用，其余设置保留。
+    /// M15 翻译快捷键：升级前截图（或唤起、录屏）已用 Alt+Shift+T 的，翻译快捷键读出为不启用，其余设置保留。
     #[test]
     fn translate_hotkey_upgrade_conflict() {
         let (s, dropped) =

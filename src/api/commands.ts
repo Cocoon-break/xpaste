@@ -28,7 +28,7 @@ export const requestScreenCapture = () => invoke<void>('request_screen_capture')
 export const screenCaptureGranted = () => invoke<boolean>('screen_capture_granted');
 /** 设置开着时按截图或录屏快捷键、焦点不在录制框里：开始截图或录屏（面板与对话框保留）。 */
 export const overlayBegin = (rec: boolean) => invoke<void>('overlay_begin', { rec });
-/** 设置开着时按翻译快捷键、焦点不在录制框里：照常弹划词翻译卡片（设计 §3.2）。 */
+/** 设置开着时按翻译快捷键、焦点不在录制框里：照常弹划词翻译卡片（M15 交互规则 4、M26 规则 18）。 */
 export const trcardPress = () => invoke<void>('trcard_press');
 /** 系统的选择文件夹对话框；取消返回 null。 */
 export const pickFolder = (defaultPath?: string) => open({ directory: true, defaultPath }) as Promise<string | null>;
@@ -65,7 +65,7 @@ export const translateTest = (engine: string, baseUrl: string, apiKey: string, m
   invoke<string>('translate_test', { engine, baseUrl, apiKey, model, lang });
 export const translateStatus = (lang: string) => invoke<TranslateStatus>('translate_status', { lang });
 /**
- * 在 windowLabel 窗口里弹出系统的下载语言包确认，等下载结束：`installed` 已下载，`download` 取消了（设计 §3.1）。
+ * 在 windowLabel 窗口里弹出系统的下载语言包确认，等下载结束：`installed` 已下载，`download` 取消了（M26 规则 17）。
  * source 为空串时为设置那一行的语言对。确认框弹不出时后端打开“语言与地区”并报错说明。
  */
 export const translateDownload = (windowLabel: string, source: string, target: string) =>

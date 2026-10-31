@@ -151,7 +151,7 @@ pub(crate) fn wait_until(mut done: impl FnMut() -> bool, step_ms: u64, max_ms: u
     }
 }
 
-/// 模拟一次“复制”（macOS ⌘C，Windows Ctrl+Insert），返回剪切板有没有变（设计 §3.2、§4）。
+/// 模拟一次“复制”（macOS ⌘C，Windows Ctrl+Insert），返回剪切板有没有变（M26 规则 18）。
 /// 先等修饰键松开（最多 500 ms，否则按快捷键的 ⌥⇧ 会叠进去），再发按键，最多等 400 ms 看剪切板序号。
 /// macOS 没有辅助功能权限时返回 `NoAccessibility`，调用方改为翻译剪切板。
 /// 阻塞最多约 900 ms，只在后台线程调用，不要在主线程上调。

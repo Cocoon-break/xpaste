@@ -2,7 +2,7 @@
 import type { Engines, RecordSummary } from './api/types';
 import { esc } from './format.ts';
 
-/** engine：翻译方式标签 `system` / `openai:{模型 ID}`（设计 §3.4） */
+/** engine：翻译方式标签 `system` / `openai:{模型 ID}`（M26 规则 16） */
 export type Tr = { text: string; lang: string; engine: string; state: 'busy' | 'done' | 'cut' | 'fail'; error?: string };
 export type Engine = 'system' | 'openai';
 
@@ -18,7 +18,7 @@ export const LANG_LABEL: Record<string, string> = {
 export const translatable = (r: Pick<RecordSummary, 'kind' | 'ocrState'>): boolean =>
   r.kind === 'text' || r.kind === 'code' || ((r.kind === 'image' || r.kind === 'file') && r.ocrState === 1);
 
-/** 翻译方式标注，规则同 Rust 的 `engine_label`（设计 §3.4） */
+/** 翻译方式标注，规则同 Rust 的 `engine_label`（M26 规则 16） */
 export function engineLabel(tag: string): string {
   if (tag === 'system') return '系统翻译';
   if (!tag.startsWith('openai:')) return '';
@@ -26,7 +26,7 @@ export function engineLabel(tag: string): string {
   return m ? `AI（${m}）` : 'AI';
 }
 
-/** 能换用的另一种：只在另一种能用时给出，否则 null（设计 §3.4） */
+/** 能换用的另一种：只在另一种能用时给出，否则 null（M26 规则 16） */
 export function otherEngine(tag: string, avail: Engines): Engine | null {
   if (tag === 'system') return avail.openai ? 'openai' : null;
   if (tag.startsWith('openai:')) return avail.system ? 'system' : null;
@@ -38,7 +38,7 @@ const MODEL_MAX = 24;
 const SWITCH = { system: '换用系统翻译', openai: '换用 AI 翻译' };
 
 /** 默认展开、不可折叠；翻译中没有按钮。标题行带翻译方式，模型 ID 太长截断、悬停看完整值；
- *  other 为能换用的另一种，收完、失败、中断后多一个换用按钮（设计 §3.4） */
+ *  other 为能换用的另一种，收完、失败、中断后多一个换用按钮（M26 规则 16） */
 export function trBlockHTML(tr: Tr, mono: boolean, other: Engine | null): string {
   const full = engineLabel(tr.engine);
   const model = [...tr.engine.slice(7)];

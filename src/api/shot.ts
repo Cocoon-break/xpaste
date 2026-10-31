@@ -66,11 +66,11 @@ export async function onShotTranslateDelta(cb: (text: string, engine: string) =>
   await listen<TranslateDelta>(TRANSLATE_DELTA, (e) => { if (e.payload.id === null) cb(e.payload.text, e.payload.engine); }, { target: getCurrentWindow().label });
 }
 
-/** 译文卡片“换用…”（设计 §3.4）：用本次截图识别出的原文按 `engine` 重翻，增量照旧发给本遮罩。 */
+/** 译文卡片“换用…”（M26 规则 16）：用本次截图识别出的原文按 `engine` 重翻，增量照旧发给本遮罩。 */
 export const shotTranslateAgain = (generation: number, engine: 'system' | 'openai') =>
   stub ? dev.finish('translate') : invoke<ShotOutcome>('shot_translate_again', { generation, engine });
 
-/** 两种翻译方式能不能用、按设置用哪种（设计 §3.4）。 */
+/** 两种翻译方式能不能用、按设置用哪种（M26 规则 16）。 */
 export const shotEngines = (): Promise<Engines> =>
   stub ? Promise.resolve({ system: true, openai: true, model: 'gpt-4o-mini', current: 'system' }) : translateEngines();
 

@@ -60,7 +60,7 @@ pub fn screen_capture_granted() -> Result<bool, AppError> {
     Ok(xpaste_platform::screen_capture_granted())
 }
 
-/// 划词卡片“去设置”：唤起面板并打开设置的 `tab` 标签（如 `translate`，设计 §3.2）。同托盘“设置…”，在主线程上跑。
+/// 划词卡片“去设置”：唤起面板并打开设置的 `tab` 标签（如 `translate`，M26 规则 19）。同托盘“设置…”，在主线程上跑。
 #[tauri::command]
 pub fn open_panel_settings(app: AppHandle, tab: Option<String>) {
     crate::panel::show(&app, None, crate::panel::Trigger::Tray);

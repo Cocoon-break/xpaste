@@ -462,7 +462,7 @@ pub fn hide(app: &AppHandle) {
     on_main(app, |app| {
         // NSPanel 上 hide 即 orderOut:
         let Some(w) = window(app) else { return };
-        // 隐藏前取消挂在面板里的语言包下载，否则那边一直等、下载标记卡住（设计 §3.1）
+        // 隐藏前取消挂在面板里的语言包下载，否则那边一直等、下载标记卡住（M26 规则 17）
         #[cfg(target_os = "macos")]
         if let Ok(ns) = w.ns_window() {
             xpaste_platform::translate_prepare_cancel(ns as usize);

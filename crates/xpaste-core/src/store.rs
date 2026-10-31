@@ -74,7 +74,7 @@ INSERT INTO fts_py(fts_py) VALUES ('rebuild');
     "ALTER TABLE records ADD COLUMN snippet_body TEXT;",
     // 阶段 15 翻译：每条记录只存最新一份译文，见 M26 规则 12
     "ALTER TABLE records ADD COLUMN translation TEXT;\nALTER TABLE records ADD COLUMN translation_lang TEXT;",
-    // 阶段 15.1 译文标注翻译方式（`system` / `openai:{模型}`），设计 §3.4
+    // 阶段 15.1 译文标注翻译方式（`system` / `openai:{模型}`），M26 规则 12、16
     "ALTER TABLE records ADD COLUMN translation_engine TEXT;",
 ];
 

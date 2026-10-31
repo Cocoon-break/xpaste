@@ -661,7 +661,7 @@ pub fn activate_window(hwnd: isize) {
     }
 }
 
-/// 显示窗口但不激活它，前台窗口与键盘不变（划词卡片的提示，设计 §3.2）。
+/// 显示窗口但不激活它，前台窗口与键盘不变（划词卡片的提示，M26 规则 19）。
 /// tao 只在建窗口时按 `focused(false)` 用 SW_SHOWNOACTIVATE，之后的 `show()` 都是会激活的 SW_SHOW。hwnd 失效时什么也不做。
 pub fn show_no_activate(hwnd: isize) {
     // SAFETY: hwnd 失效时调用失败而不会崩溃；返回值是之前是否可见，不是错误
@@ -715,7 +715,7 @@ fn send_ctrl(down: INPUT, up: INPUT) -> Result<(), PlatformError> {
     Ok(())
 }
 
-/// 向前台窗口发 Ctrl+Insert（设计 §3.2）。不用 Ctrl+C：终端里没有选区时 Ctrl+C 是中断。
+/// 向前台窗口发 Ctrl+Insert（M26 规则 18）。不用 Ctrl+C：终端里没有选区时 Ctrl+C 是中断。
 pub(crate) fn send_copy() -> Result<(), PlatformError> {
     // 导航区的 Insert：扫描码与扩展键标志一起带。只带扫描码会被当成小键盘 0（Ctrl+小键盘 0 在浏览器里是重置缩放）
     // SAFETY: 纯查询
@@ -738,7 +738,7 @@ pub(crate) fn send_copy() -> Result<(), PlatformError> {
     send_ctrl(ins(false), ins(true))
 }
 
-/// Alt、Shift、Ctrl、Win 中有没有按着的（设计 §4）。
+/// Alt、Shift、Ctrl、Win 中有没有按着的（M26 规则 18）。
 pub(crate) fn modifiers_down() -> bool {
     // SAFETY: 纯查询；最高位为 1 表示按着
     [VK_MENU, VK_SHIFT, VK_CONTROL, VK_LWIN, VK_RWIN]

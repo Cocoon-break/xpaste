@@ -41,7 +41,7 @@ export interface Settings {
   translateModel: string;
   /** zh-Hans | zh-Hant | en | ja | ko */
   translateLang: string;
-  /** 划词翻译全局快捷键；'' 表示不启用（设计 §3.3） */
+  /** 划词翻译全局快捷键；'' 表示不启用（M15、M26 规则 18） */
   translateHotkey: string;
 }
 
@@ -152,7 +152,7 @@ export interface AppError {
     | 'translateOs'
     | 'translate';
   message: string;
-  /** 只有 translatePack：识别出的源语言代码与目标语言代码，下载语言包并重试时用（设计 §3.1） */
+  /** 只有 translatePack：识别出的源语言代码与目标语言代码，下载语言包并重试时用（M26 规则 17） */
   source?: string;
   target?: string;
 }
@@ -222,7 +222,7 @@ export type ShotAction = 'copy' | 'save' | 'ocr' | 'pin' | 'translate';
 /** 对应 `shot::ShotOutcome`；`text` 为完整译文、`engine` 为翻译方式标签，只有翻译动作有值。 */
 export type ShotOutcome = { action: ShotAction; chars: number | null; file: string | null; copied: boolean; text: string | null; engine: string | null };
 
-/** 划词卡片 `trcard-show`，对应 `trcard::Show`（设计 §3.2）。`seq` 之后的命令都带它；
+/** 划词卡片 `trcard-show`，对应 `trcard::Show`（M26 规则 19）。`seq` 之后的命令都带它；
  *  `source` / `engine` / `noAccess` 只对 `text` 有意义，`hotkey` 只对 `empty`。 */
 export type CardShow = {
   kind: 'text' | 'empty' | 'blocked';

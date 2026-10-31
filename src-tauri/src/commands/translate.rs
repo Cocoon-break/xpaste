@@ -25,7 +25,7 @@ pub struct Translated {
 
 /// 翻译一条记录并存库；增量经 `translate-delta` 广播。同一条记录已在翻译时报“正在翻译”，前端忽略。
 /// `again` 为假、没指定方式且已有存库译文时直接返回它，不发请求；只有“重新翻译”传真（M26 规则 4）。
-/// `engine`（`system` / `openai`）单次指定翻译方式，不改设置；没指定时“重新翻译”沿用库里译文的方式（设计 §3.4）。
+/// `engine`（`system` / `openai`）单次指定翻译方式，不改设置；没指定时“重新翻译”沿用库里译文的方式（M26 规则 16）。
 #[tauri::command]
 pub async fn translate_record(
     app: AppHandle,
@@ -42,7 +42,7 @@ pub async fn translate_record(
     .await
 }
 
-/// 前端单次指定的翻译方式（`system` / `openai`），没指定为 None（设计 §3.4）。
+/// 前端单次指定的翻译方式（`system` / `openai`），没指定为 None（M26 规则 16）。
 pub(crate) fn parse_engine(name: Option<&str>) -> Result<Option<Engine>, AppError> {
     match name {
         None => Ok(None),
@@ -191,7 +191,7 @@ pub struct Engines {
     pub current: String,
 }
 
-/// 两种翻译方式各自能不能用，给“换用”按钮判断（设计 §3.4）。
+/// 两种翻译方式各自能不能用，给“换用”按钮判断（M26 规则 16）。
 #[tauri::command]
 pub async fn translate_engines(app: AppHandle) -> Engines {
     let state = app.state::<AppState>();
@@ -232,7 +232,7 @@ pub async fn translate_status(lang: String) -> TranslateStatus {
     TranslateStatus { supported, pack }
 }
 
-/// 下载语言包（设计 §3.1）：在 `window_label` 那个正在显示的窗口里弹出系统的下载确认，等下载结束，
+/// 下载语言包（M26 规则 17）：在 `window_label` 那个正在显示的窗口里弹出系统的下载确认，等下载结束，
 /// 返回 `installed` 或 `download`（取消了）。`source` 为空串时用设置那一行的语言对（英语 ↔ 目标，目标是英语时为简体中文）。
 /// 确认框弹不出来时退回打开“语言与地区”，报错里说明去哪下载。
 #[tauri::command]
@@ -398,7 +398,7 @@ mod tests {
         assert_eq!(d.translation.as_deref(), Some("嗨"));
     }
 
-    /// 重新翻译沿用库里译文的方式；不重新翻译时直接返回存的（设计 §3.4）。
+    /// 重新翻译沿用库里译文的方式；不重新翻译时直接返回存的（M26 规则 16）。
     #[test]
     fn engine_follows_stored_translation() {
         let state = AppState::for_test();
@@ -468,7 +468,7 @@ mod tests {
         assert!(l.accept().is_err());
     }
 
-    /// 同一时刻只下载一个语言包；结束（含提前返回）后复位，可以再下载（设计 §3.1）。
+    /// 同一时刻只下载一个语言包；结束（含提前返回）后复位，可以再下载（M26 规则 17）。
     #[test]
     fn download_flag_allows_one_at_a_time() {
         let state = AppState::for_test();
@@ -502,14 +502,14 @@ mod tests {
     }
 }
 
-/// 设置或确认框开着时按了翻译快捷键、焦点不在快捷键录制框里：面板转回来照常弹划词翻译卡片（设计 §3.2、M15 交互规则 3）。
+/// 设置或确认框开着时按了翻译快捷键、焦点不在快捷键录制框里：面板转回来照常弹划词翻译卡片（M26 规则 18、M15 交互规则 3）。
 /// 同步命令，在主线程上跑，同 `overlay_begin`。
 #[tauri::command]
 pub fn trcard_press(app: AppHandle) {
     crate::trcard::pressed(&app);
 }
 
-/// 划词卡片用会话原文重翻（换用 / 重新翻译 / 下载语言包后重试，设计 §3.2、§3.4）。`seq` 取自 `trcard-show`
+/// 划词卡片用会话原文重翻（换用 / 重新翻译 / 下载语言包后重试，M26 规则 19、16）。`seq` 取自 `trcard-show`
 /// 或上一次的返回值；成功时新序号恒为 `seq + 1`，结果经 `trcard-done` 送达（可能先于本命令返回）。
 #[tauri::command]
 pub async fn trcard_again(

@@ -1,4 +1,4 @@
-// 划词翻译卡片页面（card.html，设计 §3.2、§3.4）：状态 st、渲染、键盘与按钮。整张卡片由 view.ts 生成。
+// 划词翻译卡片页面（card.html，M26 规则 19、16）：状态 st、渲染、键盘与按钮。整张卡片由 view.ts 生成。
 // 后端每次换卡片、重翻都换 seq：命令都带当前 seq，迟到的事件与调用按 seq 丢弃。
 import './card.css';
 import {
@@ -13,7 +13,7 @@ import { cardHTML, type CardState } from './view';
 addEventListener('error', (e) => void logError(`划词卡片页错误：${e.message}`));
 addEventListener('unhandledrejection', (e) => void logError(`划词卡片页未处理的拒绝：${String(e.reason)}`));
 
-/** 无文字、排除应用的提示停留多久；复制后“已复制译文”停留多久（设计 §3.2） */
+/** 无文字、排除应用的提示停留多久；复制后“已复制译文”停留多久（M26 规则 19） */
 const HINT_MS = 2000, COPIED_MS = 900;
 
 type Tr = Extract<CardState, { kind: 'busy' | 'done' | 'fail' }>;
@@ -33,7 +33,7 @@ const body = () => root.querySelector<HTMLElement>('.c-body');
 
 function render(pop = false) {
   const s = tr();
-  // 换用按钮只在收完或失败后、另一种能用时出现（设计 §3.4）
+  // 换用按钮只在收完或失败后、另一种能用时出现（M26 规则 16）
   const view: CardState = s ? { ...s, other: s.kind !== 'busy' && engines ? otherEngine(s.engine, engines) : null } : st;
   const focused = (document.activeElement as HTMLElement | null)?.dataset.act;
   const top = body()?.scrollTop ?? 0;
@@ -137,7 +137,7 @@ async function copy() {
   timer = window.setTimeout(() => void cardClose(at), COPIED_MS);
 }
 
-/** 下载语言包（设计 §3.1）：装好后用系统翻译重试；取消或失败时把键盘拿回来（下载期间失焦被忽略，不拿回来 Esc 和点别处都不再生效） */
+/** 下载语言包（M26 规则 17）：装好后用系统翻译重试；取消或失败时把键盘拿回来（下载期间失焦被忽略，不拿回来 Esc 和点别处都不再生效） */
 async function downloadPack() {
   const s = tr();
   if (!s || !pack || downloading) return;

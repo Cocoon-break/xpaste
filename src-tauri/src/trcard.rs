@@ -1,6 +1,6 @@
-//! 划词翻译卡片（设计 §3.2）：模拟复制取词、定位、显示卡片窗口 `tr-card`、翻译。
+//! 划词翻译卡片（M26 规则 18、19）：模拟复制取词、定位、显示卡片窗口 `tr-card`、翻译。
 //! 卡片窗口启动时预建、隐藏；macOS 是不激活应用的 NSPanel（同截图遮罩，M23 规则 1），拿键盘但前台应用不变。
-//! 日志不写原文、译文，只记 copied、字数、耗时与错误类别（设计 §4）。
+//! 日志不写原文、译文，只记 copied、字数、耗时与错误类别（M26 规则 14）。
 
 use std::sync::atomic::Ordering;
 use std::sync::{MutexGuard, PoisonError};
@@ -199,7 +199,7 @@ pub fn shown(app: &AppHandle) -> bool {
         .is_some_and(|w| w.is_visible().unwrap_or(false))
 }
 
-/// 卡片可见且拿着键盘：面板此时失焦不隐藏（设计 §3.2“面板开着时按快捷键：面板不隐藏”）。
+/// 卡片可见且拿着键盘：面板此时失焦不隐藏（M26 规则 18：面板开着时按快捷键，面板不隐藏）。
 /// 不拿键盘的提示不算，面板失焦给别的应用时照常隐藏。
 pub fn has_keyboard(app: &AppHandle) -> bool {
     app.get_webview_window(LABEL)
@@ -250,7 +250,7 @@ fn grab(app: &AppHandle, seq: u64) {
         return show(app, Show::hint("blocked", seq, None));
     }
     let t0 = Instant::now();
-    // 失败一律改为翻译剪切板；只有没权限时卡片带提示（设计 §3.2）
+    // 失败一律改为翻译剪切板；只有没权限时卡片带提示（M26 规则 18）
     let (copied, no_access) = match xpaste_platform::copy_selection() {
         Ok(c) => (c, false),
         Err(PlatformError::NoAccessibility) => (false, true),
@@ -407,7 +407,7 @@ fn hide_window(app: &AppHandle) {
         let Some(w) = app.get_webview_window(LABEL) else {
             return;
         };
-        // 隐藏前取消挂在卡片里的语言包下载，否则那边一直等、下载标记卡住（设计 §3.1）
+        // 隐藏前取消挂在卡片里的语言包下载，否则那边一直等、下载标记卡住（M26 规则 17）
         #[cfg(target_os = "macos")]
         if let Ok(ns) = w.ns_window() {
             xpaste_platform::translate_prepare_cancel(ns as usize);
@@ -498,7 +498,7 @@ async fn run(app: AppHandle, seq: u64, engine: Option<Engine>) {
     events::emit_to(&app, LABEL, TRCARD_DONE, done);
 }
 
-/// 用会话原文重翻（换用 / 重新翻译 / 下载语言包后重试，设计 §3.4）；`engine` 为 None 时按设置。
+/// 用会话原文重翻（换用 / 重新翻译 / 下载语言包后重试，M26 规则 16）；`engine` 为 None 时按设置。
 /// 不是当前这一次（卡片已关或已被取代）时报错。卡片重新拿键盘：下载语言包时系统确认框可能拿走了它。
 pub fn again(app: &AppHandle, seq: u64, engine: Option<Engine>) -> Result<Again, AppError> {
     let seq = {
@@ -517,7 +517,7 @@ pub fn again(app: &AppHandle, seq: u64, engine: Option<Engine>) -> Result<Again,
     })
 }
 
-/// 下载语言包的系统确认框取消或失败后，卡片重新拿键盘（期间失焦被忽略，不拿回来 Esc 和点别处都不再生效，设计 §3.1）。
+/// 下载语言包的系统确认框取消或失败后，卡片重新拿键盘（期间失焦被忽略，不拿回来 Esc 和点别处都不再生效，M26 规则 17）。
 /// 不是当前这一次时忽略。
 pub fn focus(app: &AppHandle, seq: u64) {
     if session(app).is_current(seq) {
@@ -604,7 +604,7 @@ pub fn blur(app: &AppHandle, seq: u64) {
     }
 }
 
-/// 复制译文：按普通写入写纯文本，进历史（同截图卡片，设计 §3.2）。
+/// 复制译文：按普通写入写纯文本，进历史（同截图卡片，M26 规则 19）。
 pub fn copy(text: &str) -> Result<(), AppError> {
     let chars = text.chars().count();
     xpaste_platform::write(&[xpaste_core::text_flavor(text)]).map_err(|e| {

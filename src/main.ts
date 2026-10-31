@@ -138,7 +138,7 @@ const S = {
   paused: false,
   /** macOS 已授权辅助功能 / Windows：Enter 直接粘贴 */
   canPaste: false,
-  /** 两种翻译方式能不能用：唤起时、保存设置后取（设计 §3.4）；没取到时不显示换用按钮 */
+  /** 两种翻译方式能不能用：唤起时、保存设置后取（M26 规则 16）；没取到时不显示换用按钮 */
   engines: null as Engines | null,
   cells: [] as Cell[],
   total: 0,
@@ -687,7 +687,7 @@ function refreshEngines() {
   );
 }
 // 本次请求会用的方式，规则同后端：指定的 > 存库译文的方式 > 设置（设置为系统翻译但本机用不了时用 AI）。
-// 只用于翻译中先标出方式与失败时的标注；第一段增量到了以增量为准（设计 §3.4）
+// 只用于翻译中先标出方式与失败时的标注；第一段增量到了以增量为准（M26 规则 16）
 function trTagFor(id: number, engine?: Engine): string {
   const d = S.detail?.id === id ? S.detail : details.get(id);
   const stored = d?.translation ? d.translationEngine : null;
@@ -718,7 +718,7 @@ const openTrSettings = () => {
   openSettings();
 };
 // 已有译文或正在翻译：只滚到区块，不发请求；上次失败、中断时等同重新翻译。again：先丢掉旧译文再请求。
-// engine：换用按钮单次指定的方式，不改设置（设计 §3.4）
+// engine：换用按钮单次指定的方式，不改设置（M26 规则 16）
 function doTranslate(id: number, again = false, engine?: Engine) {
   const r = S.records.get(id);
   if (!r || !translatable(r)) return;
@@ -747,7 +747,7 @@ function doTranslate(id: number, again = false, engine?: Engine) {
       // 别处已在翻译这条（同一条只跑一个请求）：增量照样会到
       if (err.kind === 'invalid' && err.message === '正在翻译') return;
       end({ ok: false, error: err.message, engine: trs.get(id)?.engine ?? tag });
-      // 未配置、系统太旧：去设置的“翻译”标签；缺语言包：就地下载，装好后用系统翻译重试（M26 规则 13，设计 §3.1）
+      // 未配置、系统太旧：去设置的“翻译”标签；缺语言包：就地下载，装好后用系统翻译重试（M26 规则 13、17）
       const action = err.kind === 'translateConfig' || err.kind === 'translateOs' ? { label: '去设置', run: openTrSettings }
         : err.kind === 'translatePack' ? { label: '下载语言包', run: () => downloadPack(id, err) }
           : undefined;
@@ -1636,7 +1636,7 @@ function showStControl(el: HTMLElement) {
 // 出错项所在标签显示红点：跟着行内错误走（.err 显示着），改正或复原后消失
 const paintStErr = () => stTabs.forEach((t, j) => t.toggleAttribute('data-err', !!stPanes[j].querySelector('.err:not([hidden])')));
 
-// 截图、录屏、翻译快捷键录制框（M15、M24、设计 §3.3）：同唤起快捷键，另可按不带修饰键的 ⌫ / Delete 清空，表示不启用。
+// 截图、录屏、翻译快捷键录制框（M15、M24、M26 规则 18）：同唤起快捷键，另可按不带修饰键的 ⌫ / Delete 清空，表示不启用。
 // idle：不在录制时的说明
 function optHotkey(id: string, idle = OPT_IDLE) {
   const input = $<HTMLInputElement>(`#${id}`), help = $(`#${id}Help`);
@@ -1751,7 +1751,7 @@ function paintTrEngine() {
   // 系统翻译不需要接口：三项整块隐藏，切回 OpenAI 兼容接口时原值还在
   $('#trApi').hidden = sys;
   if (sys) paintTrUrlErr(null);
-  // 能选翻译方式时（两种都有）接上默认与换用的说明（设计 §3.4）
+  // 能选翻译方式时（两种都有）接上默认与换用的说明（M26 规则 6）
   $('#trPrivacy').textContent = (sys
     ? '使用 macOS 自带的翻译，在本机完成，不上传，不需要配置接口'
     : '翻译时，只把你选中要翻译的那段文字发送到下面的接口；不按翻译就不会发送任何内容。请求按系统代理设置发出，可能经过你在系统里设置的代理')
@@ -1777,7 +1777,7 @@ trEngineEl.addEventListener('keydown', (e) => {
   n.focus();
 });
 trLangIn.addEventListener('change', paintTrPack);
-// 下载语言包（设计 §3.1）：系统确认框挂在面板上弹出；结果回来重查。期间换了语言或重画过，结果丢掉
+// 下载语言包（M26 规则 17）：系统确认框挂在面板上弹出；结果回来重查。期间换了语言或重画过，结果丢掉
 trPackBtn.addEventListener('click', () => {
   const seq = ++trSeq;
   showTrPack(`${trPair()}：下载中…`);
@@ -2658,7 +2658,7 @@ await onShotNeedPermission(({ pane, mode }) =>
 // 引导中按唤起快捷键：可见时面板不隐藏，隐藏时先 panel-shown 再到这里；只在“试按快捷键”这一步算成功
 // 设置对话框打开时按唤起快捷键：面板同样不隐藏；录制框有焦点就当作按下了当前快捷键（网页收不到被全局注册拦下的按键）
 // 截图、录屏、翻译快捷键同理：对话框开着且面板有焦点时后端先发到这里（role = shot / rec / translate），
-// 焦点不在录制框里时截图、录屏照常开始，翻译照常弹卡片（设计 §3.2；在录制框里时写入，不翻译）
+// 焦点不在录制框里时截图、录屏照常开始，翻译照常弹卡片（M15 交互规则 4、M26 规则 18；在录制框里时写入，不翻译）
 await onHotkeyPressed((role) => {
   // 只认面板有焦点时的按键：失焦时后端不发到这里，这里再防一道
   const on = (el: Element) => document.activeElement === el && document.hasFocus();

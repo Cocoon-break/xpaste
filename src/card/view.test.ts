@@ -40,7 +40,7 @@ test('失败：原因、下载语言包 / 去设置，中断保留已收到的�
   assert.match(pack, /data-act="pack">下载语言包</);
   assert.match(pack, /data-act="switch" data-engine="openai">换用 AI 翻译</);
   assert.doesNotMatch(pack, /去设置/);
-  assert.doesNotMatch(pack, /data-act="copy"/); // 失败只能关闭（设计 §3.2），按钮放不下
+  assert.doesNotMatch(pack, /data-act="copy"/); // 失败只能关闭（M26 规则 19），按钮放不下
   const cfg = cardHTML(st({ kind: 'fail', error: '未配置', errorKind: 'translateConfig' }));
   assert.match(cfg, /data-act="settings">去设置</);
   assert.doesNotMatch(cfg, /下载语言包/);
@@ -81,7 +81,7 @@ test('所有文本转义', () => {
   assert.match(cardHTML({ kind: 'empty', hotkey: '<k>' }), /&lt;k&gt;/);
 });
 
-test('截图卡片（cardInner）：没有原文提示，标题行带方式，有换用按钮（设计 §3.4）', () => {
+test('截图卡片（cardInner）：没有原文提示，标题行带方式，有换用按钮（M26 规则 5、16）', () => {
   const t = { kind: 'done', source: '', engine: 'system', text: 'x', noAccess: false, other: 'openai' } as const;
   const h = cardInner(t);
   assert.doesNotMatch(h, /c-src|role="dialog"/);

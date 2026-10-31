@@ -117,7 +117,7 @@ pub struct Session {
     finishing: bool,
     /// 遮罩页最后一次心跳（`shot_alive`，就绪也算一次），看门狗据此判断页面是否卡死
     alive: Option<Instant>,
-    /// 截图翻译识别出的原文，换用另一种翻译方式时重翻，不再识别（设计 §3.4）；截图结束或复制译文后清掉
+    /// 截图翻译识别出的原文，换用另一种翻译方式时重翻，不再识别（M26 规则 16）；截图结束或复制译文后清掉
     tr_text: Option<String>,
 }
 
@@ -996,7 +996,7 @@ pub struct ShotOutcome {
     pub copied: bool,
     /// 完整译文，只有翻译动作有值（M26 规则 5）
     pub text: Option<String>,
-    /// 翻译方式标签（`Cfg::tag`），只有翻译动作有值（设计 §3.4）
+    /// 翻译方式标签（`Cfg::tag`），只有翻译动作有值（M26 规则 16）
     pub engine: Option<String>,
 }
 
@@ -1226,7 +1226,7 @@ fn run_translate(
     stream(app, generation, label, &cfg, &text)
 }
 
-/// 译文卡片“换用…”（设计 §3.4）：用会话里的原文按 `engine`（None 按设置）重翻，不再识别；
+/// 译文卡片“换用…”（M26 规则 16）：用会话里的原文按 `engine`（None 按设置）重翻，不再识别；
 /// 增量照旧只发给第 `i` 块屏的遮罩。输出保持认领（卡片上失败后放开过的也重新认领），不能出第二个动作。
 /// 不是当前这次截图时报“截图已结束”。
 pub fn translate_again(

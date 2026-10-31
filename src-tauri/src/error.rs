@@ -23,7 +23,7 @@ pub enum AppError {
     #[error("请先在设置的“翻译”里配置接口")]
     TranslateConfig,
     /// 系统翻译缺语言包，消息为拼好的提示（M26 规则 13）；`from` / `to` 为源、目标语言代码，
-    /// 序列化为 `source` / `target`，面板据此下载语言包并重试（设计 §3.1）。字段不叫 source：thiserror 会当成错误源
+    /// 序列化为 `source` / `target`，面板据此下载语言包并重试（M26 规则 17）。字段不叫 source：thiserror 会当成错误源
     #[error("{msg}")]
     TranslatePack {
         msg: String,
@@ -112,7 +112,7 @@ mod tests {
         );
     }
 
-    /// 缺语言包带回源、目标语言代码，面板据此下载并重试（设计 §3.1）。
+    /// 缺语言包带回源、目标语言代码，面板据此下载并重试（M26 规则 17）。
     #[test]
     fn translate_pack_serializes_languages() {
         let e = AppError::TranslatePack {

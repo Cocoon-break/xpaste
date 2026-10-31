@@ -57,7 +57,7 @@ pub enum Role {
     Translate,
 }
 
-/// 触发的快捷键是哪一个（M23 规则 1、M24、设计 §3.2）：按解析后的组合比较；截图、录屏、翻译为空串时不认。
+/// 触发的快捷键是哪一个（M23 规则 1、M24、M26 规则 18）：按解析后的组合比较；截图、录屏、翻译为空串时不认。
 /// Windows 上录屏不注册、设置里也不校验，它留着的组合可能正是翻译快捷键，不认录屏。
 pub fn role_of(
     pressed: &Shortcut,
@@ -103,7 +103,7 @@ pub fn shot_pressed(app: &AppHandle) {
     overlay_pressed(app, crate::shot::Mode::Shot);
 }
 
-/// 翻译快捷键按下（设计 §3.2）：设置或确认框开着且面板有焦点时同截图交给面板（M15 规则 3：在录制框里就写入、不翻译，
+/// 翻译快捷键按下（M26 规则 18）：设置或确认框开着且面板有焦点时同截图交给面板（M15 规则 3：在录制框里就写入、不翻译，
 /// 否则面板调 `trcard_press` 照常弹卡片），其余情况直接弹划词翻译卡片。主线程调用。
 pub fn translate_pressed(app: &AppHandle) {
     let route = route_now(app);

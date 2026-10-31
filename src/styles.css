@@ -411,7 +411,7 @@ mark { background: var(--mark-bg); color: var(--mark-fg); border-radius: 3px; pa
 .ocr-block[open]:has([data-ocr="translate"]) summary { padding-right: 150px; }
 /* 译文：容器与标题行同图中文字，默认展开、不可折叠；逐段追加不加动效（M26 规则 3） */
 .tr-block { margin-top: 12px; border: 1px solid var(--line-2); border-radius: 12px; background: var(--glass-2); }
-/* 标题行带翻译方式、按钮多了“换用…”（设计 §3.4）：放不下时按钮整组换到下一行，靠右 */
+/* 标题行带翻译方式、按钮多了“换用…”（M26 规则 16）：放不下时按钮整组换到下一行，靠右 */
 .tr-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 9px 10px 9px 14px; font-size: 13px; line-height: 26px; }
 .tr-head > span { margin-right: auto; overflow-wrap: anywhere; }
 .tr-actions { display: flex; gap: 6px; margin-left: auto; }

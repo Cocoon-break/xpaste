@@ -1,4 +1,4 @@
-// 划词翻译卡片（card.html）与 Rust 侧 src-tauri/src/trcard.rs、commands/translate.rs 的对接（设计 §3.2）。
+// 划词翻译卡片（card.html）与 Rust 侧 src-tauri/src/trcard.rs、commands/translate.rs 的对接（M26 规则 19）。
 // 事件只发给 tr-card 窗口；除 again 外的命令都带卡片的 seq，后端据此认出旧卡片迟到的调用并忽略。
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';

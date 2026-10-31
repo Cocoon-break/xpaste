@@ -74,7 +74,7 @@ public func xp_tr_translate(
 /// 下载回调：code 0 已下载，1 用户取消（或仍未下载），2 失败（确认框弹不出来）。在主线程上调用，恰好一次。
 public typealias XpTrPrepareCallback = @convention(c) (UnsafeMutableRawPointer?, Int32) -> Void
 
-/// 弹出系统“下载翻译语言”确认并等下载完成（设计 §3.1、§4）。`prepareTranslation()` 的会话只能来自 SwiftUI 的
+/// 弹出系统“下载翻译语言”确认并等下载完成（M26 规则 17）。`prepareTranslation()` 的会话只能来自 SwiftUI 的
 /// `.translationTask`，所以在主线程把一个 1×1 透明的 SwiftUI 视图挂进 `window`（NSWindow，须是正在显示的
 /// xPaste 窗口，隐藏窗口里不弹确认、也不返回）的 contentView，完成后先移除视图再回调。
 /// 立即返回；`source` 为空串时用英语（目标是 en 时用简体中文），同 xp_tr_pack。
@@ -110,7 +110,7 @@ public func xp_tr_prepare(
     }
 }
 
-/// 隐藏 `window` 之前调用（设计 §3.1）：那个窗口里有进行中的下载时，移除视图并按取消回调（code 1）。
+/// 隐藏 `window` 之前调用（M26 规则 17）：那个窗口里有进行中的下载时，移除视图并按取消回调（code 1）。
 /// 窗口隐藏后 prepareTranslation 不会返回，不取消的话 Rust 侧会一直等、下载标记一直不复位。
 /// 任意线程可调，没有进行中的下载或不是这个窗口时什么都不做。
 @_cdecl("xp_tr_prepare_cancel")
@@ -164,7 +164,7 @@ private struct PrepareView: View {
                 } catch let e as CocoaError where e.code == .userCancelled {
                     code = 1
                 } catch {
-                    // 1 秒内就抛错视为确认框弹不出来（设计 §7）；之后的错误多半是用户关掉了确认框
+                    // 1 秒内就抛错视为确认框弹不出来（M26 规则 17）；之后的错误多半是用户关掉了确认框
                     code = ContinuousClock.now - t0 < .seconds(1) ? 2 : 1
                 }
                 let c = code

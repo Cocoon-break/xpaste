@@ -28,7 +28,7 @@ impl Engine {
         }
     }
 
-    /// 翻译方式标签（`system` / `openai:{模型}`）对应的方式，设计 §3.4。
+    /// 翻译方式标签（`system` / `openai:{模型}`）对应的方式，M26 规则 16。
     pub fn from_tag(tag: &str) -> Option<Self> {
         match tag {
             "system" => Some(Engine::System),
@@ -64,7 +64,7 @@ pub fn cfg(s: &Settings) -> Cfg {
     }
 }
 
-/// 同 `cfg`，`engine` 给了就强制用它，其余字段照设置（设计 §3.4 单次指定）。
+/// 同 `cfg`，`engine` 给了就强制用它，其余字段照设置（M26 规则 16 单次指定）。
 pub fn cfg_for(s: &Settings, engine: Option<Engine>) -> Cfg {
     let c = cfg(s);
     match engine {
@@ -74,7 +74,7 @@ pub fn cfg_for(s: &Settings, engine: Option<Engine>) -> Cfg {
 }
 
 impl Cfg {
-    /// 存库与增量里标注翻译方式的标签（设计 §3.4）。
+    /// 存库与增量里标注翻译方式的标签（M26 规则 16）。
     pub fn tag(&self) -> String {
         match self.engine {
             Engine::System => "system".into(),
@@ -186,7 +186,7 @@ impl From<Fail> for AppError {
     }
 }
 
-/// 语言代码的显示名：五种界面语言用 `Lang::label`，其余用系统的本地化名，都认不出时用原代码（设计 §3.1）。
+/// 语言代码的显示名：五种界面语言用 `Lang::label`，其余用系统的本地化名，都认不出时用原代码（M26 规则 13）。
 pub fn lang_name(code: &str) -> String {
     Lang::from_code(code)
         .map(|l| l.label().to_string())
@@ -588,7 +588,7 @@ pub(crate) mod tests {
         assert_eq!(c.flush(), None);
     }
 
-    /// 缺语言包的提示同时点出两种语言，不写成“A→B”（设计 §3.1）。
+    /// 缺语言包的提示同时点出两种语言，不写成“A→B”（M26 规则 13）。
     #[test]
     fn pack_message_names_both_languages() {
         let e = AppError::from(Fail::Pack {

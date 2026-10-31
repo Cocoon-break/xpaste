@@ -1,4 +1,4 @@
-//! 手动验证语言包下载（设计 §3.1）：`cargo run -p xpaste-platform --example translate_prepare [源] [目标]`，默认 `en` → `ko`。
+//! 手动验证语言包下载（M26 规则 17）：`cargo run -p xpaste-platform --example translate_prepare [源] [目标]`，默认 `en` → `ko`。
 //!
 //! 和应用里一样：accessory 应用（不进程序坞）、一个不激活应用的 NSPanel 当“xPaste 窗口”，
 //! 主线程跑事件循环，工作线程调 `translate_prepare`。会弹出系统的“下载翻译语言”确认框。

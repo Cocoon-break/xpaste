@@ -736,7 +736,7 @@ extern "C" fn on_prepared(ctx: *mut c_void, code: i32) {
     let _ = tx.send(code);
 }
 
-/// 弹出系统“下载翻译语言”确认，等用户选择及下载结束（设计 §3.1、§4）。`source` 为空串时同 `translate_pack` 的语言对。
+/// 弹出系统“下载翻译语言”确认，等用户选择及下载结束（M26 规则 17）。`source` 为空串时同 `translate_pack` 的语言对。
 /// `window` 是正在显示的 xPaste 窗口的 `NSWindow` 指针：确认框靠挂进它的 SwiftUI 视图弹出，隐藏窗口弹不出来。
 /// 阻塞、不设超时（下载时长由系统决定）；视图在主队列上挂，所以**只在工作线程调用**，且主线程在跑事件循环。
 /// 返回下载后的状态：装好了为 `Installed`，取消为 `Download`；确认框弹不出来为 `Err(Failed)`。
@@ -770,7 +770,7 @@ fn prepare_status(code: Option<i32>) -> Result<PackStatus, SysTranslateError> {
     }
 }
 
-/// 隐藏窗口前调用（设计 §3.1）：`window`（`NSWindow` 指针的数值）里有进行中的 `translate_prepare` 时取消它，
+/// 隐藏窗口前调用（M26 规则 17）：`window`（`NSWindow` 指针的数值）里有进行中的 `translate_prepare` 时取消它，
 /// 那边按用户取消返回 `Download`。隐藏的窗口里确认框不弹也不返回，不取消就会一直等。只比较数值、不解引用；
 /// 任意线程可调，没有进行中的下载时什么都不做。
 pub fn translate_prepare_cancel(window: usize) {
@@ -869,7 +869,7 @@ pub fn paste(_target: Option<isize>) -> Result<(), PlatformError> {
     Ok(())
 }
 
-/// Command、Option、Shift、Control 中有没有按着的（设计 §4）。
+/// Command、Option、Shift、Control 中有没有按着的（M26 规则 18）。
 pub(crate) fn modifiers_down() -> bool {
     let mask = CGEventFlags::MaskCommand
         | CGEventFlags::MaskAlternate
@@ -944,7 +944,7 @@ mod tests {
     use super::*;
     use objc2_core_graphics::kCGColorSpaceLinearSRGB;
 
-    /// 隐藏窗口时取消（code 1）与用户取消一样返回 Download：命令照常结束、下载标记经守卫复位，前端按取消处理（设计 §3.1）。
+    /// 隐藏窗口时取消（code 1）与用户取消一样返回 Download：命令照常结束、下载标记经守卫复位，前端按取消处理（M26 规则 17）。
     #[test]
     fn prepare_cancel_maps_to_download() {
         assert_eq!(prepare_status(Some(0)), Ok(PackStatus::Installed));

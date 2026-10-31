@@ -168,7 +168,7 @@ pub fn completion_text(json: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// 翻译方式标签的显示名（设计 §3.4）：`system` → 系统翻译，`openai:{模型}` → AI（模型），认不出为空。
+/// 翻译方式标签的显示名（M26 规则 16）：`system` → 系统翻译，`openai:{模型}` → AI（模型），认不出为空。
 pub fn engine_label(tag: &str) -> String {
     match tag.strip_prefix("openai:") {
         _ if tag == "system" => "系统翻译".into(),

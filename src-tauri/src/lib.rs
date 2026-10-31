@@ -206,7 +206,7 @@ pub fn run() {
             }
             match event {
                 // 对话框打开时（例如设置里切去别的应用查东西）、下载语言包期间（系统确认框会抢焦点）、
-                // 划词卡片拿走键盘时（设计 §3.2：面板不隐藏）失焦不隐藏
+                // 划词卡片拿走键盘时（M26 规则 18：面板不隐藏）失焦不隐藏
                 WindowEvent::Focused(false) => {
                     let app = window.app_handle();
                     let st = app.state::<AppState>();

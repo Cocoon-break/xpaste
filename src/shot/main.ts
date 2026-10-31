@@ -100,10 +100,10 @@ let readyGen = 0;
 type ShotTr = Extract<CardState, { kind: 'busy' | 'done' | 'fail' }> & { gen: number; seq: number };
 let tr: ShotTr | null = null;
 let trSeq = 0;
-/** 两种翻译方式能不能用，每次按 T 取一次（设计 §3.4） */
+/** 两种翻译方式能不能用，每次按 T 取一次（M26 规则 16） */
 let engines: Engines | null = null;
 
-/* 译文卡片（M26 规则 5、设计 §3.4）：第一段译文到达（或识别后翻译失败）时出现，定一次位置后只变高；内容由 cardInner 生成 */
+/* 译文卡片（M26 规则 5、16）：第一段译文到达（或识别后翻译失败）时出现，定一次位置后只变高；内容由 cardInner 生成 */
 const card = document.createElement('div');
 card.className = 'card';
 card.hidden = true;
@@ -572,7 +572,7 @@ async function act(a: ShotAction) {
     // 期间已按 Esc 退出；截图结束时后端中止翻译，结果丢弃
     if (!live(gen) || msg === '翻译已取消') return;
     // 译文卡片已出现，或识别出文字后翻译失败：卡片上显示原因（保留已收到的部分），不能复制，
-    // 可以下载语言包、换用另一种或关闭（M26 规则 5、设计 §3.4）
+    // 可以换用另一种或关闭；不给下载语言包（M26 规则 5、16）
     if (a === 'translate' && tr && ((S.phase as Phase) === 'card' || TR_FAIL.has((e as AppError)?.kind))) return failTr(tr, e as AppError);
     // 失败：回到选区，可以重试或换个动作
     tr = null;
@@ -616,7 +616,7 @@ function succeed(gen: number, msg: string, lead: Lead) {
 /** 识别出文字后翻译失败时出卡片的错误类别（没配置在识别前就报，仍回到选区） */
 const TR_FAIL = new Set(['translate', 'translatePack', 'translateOs']);
 
-/** 按 tr 重画卡片内容；换用按钮只在收完或失败后、另一种能用时出现（设计 §3.4）。焦点与滚动位置保留。 */
+/** 按 tr 重画卡片内容；换用按钮只在收完或失败后、另一种能用时出现（M26 规则 16）。焦点与滚动位置保留。 */
 function renderCard() {
   if (!tr || card.hidden) return;
   const other = tr.kind !== 'busy' && engines ? otherEngine(tr.engine, engines) : null;
@@ -668,7 +668,7 @@ void onShotTranslateDelta((d, engine) => {
   if (b) { b.append(d); b.scrollTop = b.scrollHeight; }
 });
 
-/** 用另一种重翻同一段原文，不再识别；输出仍被这次翻译占着（设计 §3.4） */
+/** 用另一种重翻同一段原文，不再识别；输出仍被这次翻译占着（M26 规则 16） */
 async function again(engine: Engine) {
   const t = tr;
   if (!t || t.kind === 'busy' || S.phase !== 'card') return;
