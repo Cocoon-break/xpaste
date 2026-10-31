@@ -3,7 +3,7 @@ import { attachConsole, info } from './api/log';
 import {
   accessibilityGranted, bootstrap, clearHistory, copy, copyTextPlain, countUnpinned, createSnippet, deleteRecords, finishOnboarding, frontendReady, getRecord, hidePanel, installedApps,
   ocrProgress, openUrl, overlayBegin, pickFolder, prunePreview, reocr, requestAccessibility, requestScreenCapture, revealFile, saveSettings, saveSnippet, screenCaptureGranted, search,
-  openTranslationSettings, setDialogOpen, setPaused, setPinned, translateRecord, translateStatus, translateTest, undoDelete, updateSnippet,
+  openTranslationSettings, setDialogOpen, setPaused, setPinned, translateEngines, translateRecord, translateStatus, translateTest, undoDelete, updateSnippet,
 } from './api/commands';
 import {
   onConfirmClear,
@@ -21,7 +21,7 @@ import {
   onShotNeedPermission,
   onTranslateDelta,
 } from './api/events';
-import type { AppError, Appearance, FileEntry, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
+import type { AppError, Appearance, Engines, FileEntry, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
 import { copyToast, needsAccessibility } from './copy-status';
 import {
   canInlinePlay, esc, FILTERS, FL, fmtBytes, fmtDateTime, fmtDur, fmtInt, hl, hlCode, host, isFav, isHttpUrl, isSnip, LABEL, rel, truncate, videoChips,
@@ -32,7 +32,7 @@ import { keyAction } from './keymap';
 import { copyVerb, escHint, openLabel } from './labels';
 import { ocrLabel, ocrProgressLabel, snippetHTML } from './ocr-label';
 import { searchGate } from './search-gate';
-import { translatable, trAfterDelta, trAfterEnd, trBlockHTML, type Tr } from './translate';
+import { otherEngine, translatable, trAfterDelta, trAfterEnd, trBlockHTML, type Engine, type Tr } from './translate';
 import { nextStep, onboardSteps, type Step } from './onboarding';
 import { applyAdded, applyRemoved, applyUpdated } from './records';
 import {
@@ -138,6 +138,8 @@ const S = {
   paused: false,
   /** macOS 已授权辅助功能 / Windows：Enter 直接粘贴 */
   canPaste: false,
+  /** 两种翻译方式能不能用：唤起时、保存设置后取（设计 §3.4）；没取到时不显示换用按钮 */
+  engines: null as Engines | null,
   cells: [] as Cell[],
   total: 0,
   /** 当前可见条数，供 aria-setsize */
@@ -668,10 +670,31 @@ function refreshOcr(id: number) {
 // 进行中与本次会话的结果按记录 id 存着：切走不取消请求，回来时照常显示；没有时用详情里存库的译文
 const trs = new Map<number, Tr>();
 const trOf = (id: number, d = S.detail?.id === id ? S.detail : details.get(id)): Tr | undefined =>
-  trs.get(id) ?? (d?.translation ? { text: d.translation, lang: d.translationLang ?? '', state: 'done' } : undefined);
+  trs.get(id) ?? (d?.translation ? { text: d.translation, lang: d.translationLang ?? '', engine: d.translationEngine ?? '', state: 'done' } : undefined);
 function trSlotHTML(d: RecordDetail): string {
   const t = trOf(d.id, d);
-  return t ? trBlockHTML(t, d.kind === 'code') : '';
+  return t ? trBlockHTML(t, d.kind === 'code', S.engines && otherEngine(t.engine, S.engines)) : '';
+}
+// 取两种方式的可用性；变了才重画译文区块（换用按钮跟着出现或消失）
+function refreshEngines() {
+  void translateEngines().then(
+    (e) => {
+      const changed = JSON.stringify(e) !== JSON.stringify(S.engines);
+      S.engines = e;
+      if (changed && S.detail) paintTr(S.detail.id);
+    },
+    (e: AppError) => void info(`读取翻译方式失败 kind=${e.kind}`),
+  );
+}
+// 本次请求会用的方式，规则同后端：指定的 > 存库译文的方式 > 设置（设置为系统翻译但本机用不了时用 AI）。
+// 只用于翻译中先标出方式与失败时的标注；第一段增量到了以增量为准（设计 §3.4）
+function trTagFor(id: number, engine?: Engine): string {
+  const d = S.detail?.id === id ? S.detail : details.get(id);
+  const stored = d?.translation ? d.translationEngine : null;
+  const sys = S.engines?.system ?? S.platform.os === 'macos';
+  const e = engine ?? (stored === 'system' ? 'system' : stored?.startsWith('openai:') ? 'openai'
+    : S.settings.translateEngine !== 'openai' && sys ? 'system' : 'openai');
+  return e === 'system' ? 'system' : `openai:${S.settings.translateModel.trim()}`;
 }
 // 只换 .tr-slot，原文与图中文字不动；焦点在区块里时交给新区块的按钮，翻译中没有按钮就交还搜索框
 function paintTr(id: number) {
@@ -694,29 +717,36 @@ const openTrSettings = () => {
   stTab = stTabs.findIndex((t) => t.id === 'st-tab-translate');
   openSettings();
 };
-// 已有译文或正在翻译：只滚到区块，不发请求；上次失败、中断时等同重新翻译。again：先丢掉旧译文再请求
-function doTranslate(id: number, again = false) {
+// 已有译文或正在翻译：只滚到区块，不发请求；上次失败、中断时等同重新翻译。again：先丢掉旧译文再请求。
+// engine：换用按钮单次指定的方式，不改设置（设计 §3.4）
+function doTranslate(id: number, again = false, engine?: Engine) {
   const r = S.records.get(id);
   if (!r || !translatable(r)) return;
   if (again) trs.delete(id);
   const cur = again ? undefined : trOf(id);
   if (cur?.state === 'done' || cur?.state === 'busy') return revealTr(id);
-  trs.set(id, { text: '', lang: '', state: 'busy' });
+  const tag = trTagFor(id, engine);
+  trs.set(id, { text: '', lang: '', engine: tag, state: 'busy' });
   paintTr(id);
   revealTr(id);
   const end = (res: Parameters<typeof trAfterEnd>[1]) => {
     trs.set(id, trAfterEnd(trs.get(id), res));
+    // 成功即已存库：缓存的详情跟着改，下次“重新翻译”按它的方式猜标注
+    if (res.ok) for (const d of [S.detail, details.get(id)]) {
+      if (d?.id === id) Object.assign(d, { translation: res.text, translationLang: res.lang, translationEngine: res.engine });
+    }
     paintTr(id);
     // 失败、中断时区块多了原因一行：再滚一次让它可见；成功时不动，免得打断正在读原文的人
     if (!res.ok) revealTr(id);
   };
   // 后端：已存过译文且不是重新翻译时直接返回存库译文（详情还没回来时按 Mod + T 不会覆盖它）；上次失败、中断等同重新翻译
-  translateRecord(id, again || cur !== undefined).then(
+  // 重新翻译不传 engine，后端沿用存库译文的方式
+  translateRecord(id, again || cur !== undefined, engine).then(
     (t) => end({ ok: true, ...t }),
     (err: AppError) => {
       // 别处已在翻译这条（同一条只跑一个请求）：增量照样会到
       if (err.kind === 'invalid' && err.message === '正在翻译') return;
-      end({ ok: false, error: err.message });
+      end({ ok: false, error: err.message, engine: trs.get(id)?.engine ?? tag });
       // 未配置、系统太旧：去设置的“翻译”标签；缺语言包：打开系统设置（M26 规则 13）
       const action = err.kind === 'translateConfig' || err.kind === 'translateOs' ? { label: '去设置', run: openTrSettings }
         : err.kind === 'translatePack' ? { label: '打开系统设置', run: () => void openTranslationSettings().catch((e: AppError) => toast(e.message)) }
@@ -1707,9 +1737,11 @@ function paintTrEngine() {
   // 系统翻译不需要接口：三项整块隐藏，切回 OpenAI 兼容接口时原值还在
   $('#trApi').hidden = sys;
   if (sys) paintTrUrlErr(null);
-  $('#trPrivacy').textContent = sys
+  // 能选翻译方式时（两种都有）接上默认与换用的说明（设计 §3.4）
+  $('#trPrivacy').textContent = (sys
     ? '使用 macOS 自带的翻译，在本机完成，不上传，不需要配置接口'
-    : '翻译时，只把你选中要翻译的那段文字发送到下面的接口；不按翻译就不会发送任何内容。请求按系统代理设置发出，可能经过你在系统里设置的代理';
+    : '翻译时，只把你选中要翻译的那段文字发送到下面的接口；不按翻译就不会发送任何内容。请求按系统代理设置发出，可能经过你在系统里设置的代理')
+    + (trSupported() ? '。面板、截图、划词翻译都默认用这一种；译文旁会标出用的是哪种，也可以临时换用另一种。' : '');
   setTrResult('');
   paintTrPack();
 }
@@ -2146,6 +2178,7 @@ async function submitSettings() {
     await saveSettings(s);
     const favChanged = s.frequentMinUses !== S.settings.frequentMinUses;
     S.settings = s;
+    refreshEngines();
     // 常用阈值只在前端用：立即按新阈值重算分类计数、列表与预览标签
     if (favChanged) {
       renderTabs(true);
@@ -2428,6 +2461,7 @@ const shown = (t0: number | null, trigger?: PanelShown['trigger']) => {
   S.shown = true;
   // 授权可能在隐藏期间变化；bootstrap 之前平台未知，由 bootstrap 后那一次负责
   if (S.platform.os) void paintVerb();
+  refreshEngines();
   // 淡出途中又被唤起：取消待发的隐藏
   clearTimeout(hideTimer);
   // 键盘唤起几乎即时（90 / 120ms）；托盘单击是鼠标唤起，按原型 240 / 320ms 弹性回位
@@ -2569,9 +2603,9 @@ await onRecordAdded((s) => handlers.added(s));
 await onRecordUpdated((s) => handlers.updated(s));
 await onRecordsRemoved((ids) => handlers.removed(ids));
 // 面板翻译的增量（截图翻译的 id 为 null）；只接进行中的那条，结果先于最后一段到达时不把完成态改回翻译中
-await onTranslateDelta(({ id, lang, text }) => {
+await onTranslateDelta(({ id, lang, engine, text }) => {
   if (id === null || trs.get(id)?.state !== 'busy') return;
-  trs.set(id, trAfterDelta(trs.get(id), lang, text));
+  trs.set(id, trAfterDelta(trs.get(id), lang, engine, text));
   paintTr(id);
 });
 await onPausedChanged((p) => handlers.paused(p));
@@ -2654,6 +2688,7 @@ $('.statusbar .del').textContent = mac ? '⌫' : 'Del';
 $('.statusbar .delmod').hidden = !mac;
 $('#menu .del').textContent = mac ? '⌘ ⌫' : 'Del';
 void paintVerb();
+refreshEngines();
 await info(`bootstrap 完成，平台 ${b.platform.os}，材质 ${b.platform.material}`);
 // 首次启动后端在 setup 里就要显示面板，但会等到下面的 frontendReady() 才真正上屏；
 // 随后到的 panel-shown 走 shown()，末尾打开引导
@@ -2833,6 +2868,7 @@ pbody.addEventListener('click', (e) => {
   const tb = t.closest<HTMLElement>('[data-tr]'), tid = S.detail?.id;
   if (tb && tid !== undefined) {
     if (tb.dataset.tr === 'again') return doTranslate(tid, true);
+    if (tb.dataset.tr === 'switch') return doTranslate(tid, true, tb.dataset.engine as Engine);
     const tr = trOf(tid);
     if (tr) copyTextPlain(tr.text).then(() => toast('已复制译文'), (err: AppError) => toast(err.message, { icon: 'copy' }));
     return;

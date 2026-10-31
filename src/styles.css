@@ -411,9 +411,10 @@ mark { background: var(--mark-bg); color: var(--mark-fg); border-radius: 3px; pa
 .ocr-block[open]:has([data-ocr="translate"]) summary { padding-right: 150px; }
 /* 译文：容器与标题行同图中文字，默认展开、不可折叠；逐段追加不加动效（M26 规则 3） */
 .tr-block { margin-top: 12px; border: 1px solid var(--line-2); border-radius: 12px; background: var(--glass-2); }
-.tr-head { display: flex; align-items: center; gap: 8px; padding: 9px 10px 9px 14px; font-size: 13px; line-height: 26px; }
-.tr-head > span { margin-right: auto; }
-.tr-actions { display: flex; gap: 6px; }
+/* 标题行带翻译方式、按钮多了“换用…”（设计 §3.4）：放不下时按钮整组换到下一行，靠右 */
+.tr-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 9px 10px 9px 14px; font-size: 13px; line-height: 26px; }
+.tr-head > span { margin-right: auto; overflow-wrap: anywhere; }
+.tr-actions { display: flex; gap: 6px; margin-left: auto; }
 .tr-text { margin: 0; padding: 0 14px 12px; font: inherit; font-size: 14px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; cursor: text; }
 .tr-text.mono { font: 12.5px/1.7 var(--font-mono); }
 .tr-err { margin: 0; padding: 0 14px 12px; font-size: 12.5px; color: var(--danger); }
