@@ -504,6 +504,23 @@ pub fn again(app: &AppHandle, seq: u64, engine: Option<Engine>) -> Result<Again,
         s.bump()
     };
     let engine_tag = translate::cfg_for(&app.state::<AppState>().settings(), engine).tag();
+    take_keyboard(app);
+    tauri::async_runtime::spawn(run(app.clone(), seq, engine));
+    Ok(Again {
+        seq,
+        engine: engine_tag,
+    })
+}
+
+/// 下载语言包的系统确认框取消或失败后，卡片重新拿键盘（期间失焦被忽略，不拿回来 Esc 和点别处都不再生效，设计 §3.1）。
+/// 不是当前这一次时忽略。
+pub fn focus(app: &AppHandle, seq: u64) {
+    if session(app).is_current(seq) {
+        take_keyboard(app);
+    }
+}
+
+fn take_keyboard(app: &AppHandle) {
     on_main(app, |app| {
         if let Some(w) = app.get_webview_window(LABEL)
             && let Err(e) = front(app, &w, true)
@@ -511,11 +528,6 @@ pub fn again(app: &AppHandle, seq: u64, engine: Option<Engine>) -> Result<Again,
             log::warn!("划词卡片取得焦点失败：{e}");
         }
     });
-    tauri::async_runtime::spawn(run(app.clone(), seq, engine));
-    Ok(Again {
-        seq,
-        engine: engine_tag,
-    })
 }
 
 /// 前端渲染后按内容改高度（只改高度，见 `resized`）。不是当前这一次时忽略。

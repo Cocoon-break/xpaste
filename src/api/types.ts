@@ -219,3 +219,22 @@ export type BeginPayload = {
 export type ShotAction = 'copy' | 'save' | 'ocr' | 'pin' | 'translate';
 /** 对应 `shot::ShotOutcome`；`text` 为完整译文，只有翻译动作有值。 */
 export type ShotOutcome = { action: ShotAction; chars: number | null; file: string | null; copied: boolean; text: string | null };
+
+/** 划词卡片 `trcard-show`，对应 `trcard::Show`（设计 §3.2）。`seq` 之后的命令都带它；
+ *  `source` / `engine` / `noAccess` 只对 `text` 有意义，`hotkey` 只对 `empty`。 */
+export type CardShow = {
+  kind: 'text' | 'empty' | 'blocked';
+  seq: number;
+  /** 原文提示：空白已折叠，前 40 个字，超出加“…” */
+  source: string | null;
+  /** 翻译方式标签：`system` 或 `openai:{模型 ID}` */
+  engine: string | null;
+  /** 没有辅助功能权限，翻译的是剪切板里的文字 */
+  noAccess: boolean;
+  /** 翻译快捷键的显示格式 */
+  hotkey: string | null;
+};
+/** 划词卡片 `trcard-done`，对应 `trcard::Done`。已被取代或关闭的请求不发。 */
+export type CardDone = { seq: number; ok: boolean; text: string | null; engine: string; error: AppError | null };
+/** `trcard_again` 的结果：新序号（恒为传入的 + 1）与这次用的翻译方式标签，对应 `trcard::Again`。 */
+export type CardAgain = { seq: number; engine: string };

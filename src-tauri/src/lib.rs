@@ -238,6 +238,7 @@ pub fn run() {
             commands::panel::request_screen_capture,
             commands::panel::open_url,
             commands::panel::reveal_file,
+            commands::panel::open_panel_settings,
             commands::records::get_record,
             commands::records::search,
             commands::records::set_pinned,
@@ -278,6 +279,7 @@ pub fn run() {
             commands::translate::trcard_copy,
             commands::translate::trcard_close,
             commands::translate::trcard_blur,
+            commands::translate::trcard_focus,
             commands::translate::trcard_resize
         ])
         .build(tauri::generate_context!())

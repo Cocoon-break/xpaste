@@ -2639,7 +2639,7 @@ await onPausedChanged((p) => handlers.paused(p));
 // 录屏遮罩的声音开关写回了设置（M24）：换掉手里的副本，之后保存设置或界面状态才不会把它改回去
 await onSettingsChanged((s) => void (S.settings = s));
 // 托盘“设置…”：后端已先唤起面板
-await onOpenSettings(openSettings);
+await onOpenSettings((tab) => (tab === 'translate' ? openTrSettings() : openSettings()));
 // 设置对话框开着时提示条被它盖住，结果同样写进“历史记录”行内：先切到“记录”标签，
 // 如同点了行内的“清空历史…”（确认框关闭后焦点回到这个按钮）
 await onConfirmClear(() => {

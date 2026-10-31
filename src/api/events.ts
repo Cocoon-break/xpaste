@@ -54,10 +54,11 @@ export const SETTINGS_CHANGED = 'settings-changed';
 export const onSettingsChanged = (cb: (s: Settings) => void): Promise<UnlistenFn> =>
   listen<Settings>(SETTINGS_CHANGED, (e) => cb(e.payload));
 
-/** 托盘“设置…”：面板显示后打开设置弹窗。 */
+/** 托盘“设置…”、划词卡片“去设置”：面板显示后打开设置弹窗。载荷为要切到的标签（`translate`），null 时停在上次的标签。 */
 export const OPEN_SETTINGS = 'open-settings';
 
-export const onOpenSettings = (cb: () => void): Promise<UnlistenFn> => listen(OPEN_SETTINGS, () => cb());
+export const onOpenSettings = (cb: (tab: string | null) => void): Promise<UnlistenFn> =>
+  listen<string | null>(OPEN_SETTINGS, (e) => cb(e.payload ?? null));
 
 /** 托盘“清空历史…”：面板显示后打开清空确认。 */
 export const CONFIRM_CLEAR = 'confirm-clear';

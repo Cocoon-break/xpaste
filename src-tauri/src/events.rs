@@ -18,7 +18,7 @@ pub const RECORDS_REMOVED: &str = "records-removed";
 pub const PAUSED_CHANGED: &str = "paused-changed";
 /// 后端改了设置（录屏遮罩的声音开关写回，M24），发给面板，载荷是完整设置；面板换掉手里的副本，免得之后保存把它改回去。
 pub const SETTINGS_CHANGED: &str = "settings-changed";
-/// 托盘“设置…”：面板显示后打开设置弹窗。
+/// 托盘“设置…”、划词卡片“去设置”：面板显示后打开设置弹窗。载荷为要切到的标签（`translate`），null 时停在上次的标签。
 pub const OPEN_SETTINGS: &str = "open-settings";
 /// 托盘“清空历史…”：面板显示后打开清空确认。
 pub const CONFIRM_CLEAR: &str = "confirm-clear";

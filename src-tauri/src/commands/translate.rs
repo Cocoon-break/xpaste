@@ -535,6 +535,12 @@ pub fn trcard_blur(app: AppHandle, seq: u64) {
     crate::trcard::blur(&app, seq);
 }
 
+/// 划词卡片里下载语言包取消或失败后重新拿键盘。不是当前的 `seq` 时忽略。
+#[tauri::command]
+pub fn trcard_focus(app: AppHandle, seq: u64) {
+    crate::trcard::focus(&app, seq);
+}
+
 /// 前端渲染后按内容改卡片高度（逻辑像素，只改高度）。不是当前的 `seq` 时忽略。
 #[tauri::command]
 pub fn trcard_resize(app: AppHandle, seq: u64, h: f64) {
