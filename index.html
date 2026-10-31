@@ -247,10 +247,9 @@
             </div>
             <div class="field" id="trEngineBox" style="--i:1">
               <span class="lbl" id="trEngineLabel">默认翻译方式</span>
-              <div class="seg two" id="trEngine" role="radiogroup" aria-labelledby="trEngineLabel" aria-describedby="trEngineHelp" data-v="system">
-                <span class="pill" aria-hidden="true"></span>
-                <button type="button" role="radio" data-engine="system">系统翻译</button>
-                <button type="button" role="radio" data-engine="openai">AI 翻译</button>
+              <div class="tr-pick" id="trEngine" role="radiogroup" aria-labelledby="trEngineLabel" aria-describedby="trEngineHelp">
+                <label><input type="radio" name="trEngine" value="system"><span><b>系统翻译</b><small>本机完成，不上传</small></span></label>
+                <label><input type="radio" name="trEngine" value="openai"><span><b>AI 翻译</b><small>用下方配置的接口</small></span></label>
               </div>
               <p class="help" id="trEngineHelp">面板、截图、划词翻译都默认用这一种；译文旁会标出用的是哪种，翻译中和翻译后都可以临时换用另一种</p>
             </div>

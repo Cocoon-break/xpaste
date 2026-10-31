@@ -617,12 +617,25 @@ dialog > form { display: contents; }
 /* 外观、自动粘贴权限（仅 macOS）：说明在左、控件在右 */
 .line { display: flex; justify-content: space-between; align-items: center; gap: 16px; min-height: 26px; }
 /* 截图文件夹：只读路径 + 更改按钮；开关列表里的权限行 */
-/* 翻译标签（M26 规则 6）：默认翻译方式两段选择，滑块按 data-v 平移；系统翻译、AI 翻译两组配置常驻，各带标题；测试结果行 */
+/* 翻译标签（M26 规则 6）：默认翻译方式是两张单选卡片（圆点 + 名称 + 一句说明，选中的描边与圆点用品牌色），
+   不用分段控件：它像标签页，深色下选中的一块也看不出来；系统翻译、AI 翻译两组配置常驻，各带标题；测试结果行 */
 .field .lbl { font-size: 13px; font-weight: 500; }
-.seg.two { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
-.seg.two button { width: auto; padding: 0 12px; font: inherit; font-size: 13px; }
-.seg.two .pill { width: calc((100% - 6px) / 2); }
-.seg.two[data-v="openai"] .pill { transform: translateX(100%); }
+.tr-pick { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.tr-pick label {
+  display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: 10px; cursor: pointer;
+  background: var(--glass-3); border: 1px solid var(--line-2); transition: border-color 160ms ease, background-color 160ms ease;
+}
+.tr-pick label:has(:checked) { border-color: var(--beam); background: color-mix(in srgb, var(--beam) 10%, var(--glass-3)); }
+.tr-pick label:has(:focus-visible) { outline: 2px solid var(--beam); outline-offset: 2px; }
+.field .tr-pick input {
+  appearance: none; flex: none; margin: 2px 0 0; padding: 0; width: 16px; height: 16px; border-radius: 50%;
+  border: 1.5px solid var(--line-2); background: transparent; cursor: pointer; transition: border-color 160ms ease;
+}
+.field .tr-pick input:checked { border-color: var(--beam); background: radial-gradient(circle, var(--beam) 0 3.5px, transparent 4px); }
+.field .tr-pick input:focus-visible { outline: none; box-shadow: none; }
+.tr-pick b { display: block; font-weight: 500; font-size: 13px; }
+.tr-pick small { display: block; font-size: 12px; color: var(--faint); }
+@media (hover: hover) and (pointer: fine) { .tr-pick label:not(:has(:checked)):hover { border-color: var(--muted); } }
 .tr-group { display: grid; gap: 12px; padding-top: 16px; border-top: 1px solid var(--line); }
 .tr-group h3 { margin: 0; font-size: 13px; font-weight: 600; }
 .tr-group > .help { margin: -6px 0 0; }

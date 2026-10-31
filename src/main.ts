@@ -1716,7 +1716,7 @@ const shotDir = dirField('shotDir', () => (S.platform.os === 'macos' ? '~/Pictur
 const recDir = dirField('recDir', () => '~/Movies/xPaste');
 // 翻译标签（M26 规则 6）：默认翻译方式与“系统翻译”一组只在本机能用系统翻译时出现，“AI 翻译”一组常驻，
 // 两组各自配置、互不隐藏。stored 为空串（未选）时按本机能力显示，用户没动就保存时原样写回
-const trEngineEl = $('#trEngine'), trEngineBtns = [...trEngineEl.querySelectorAll<HTMLButtonElement>('[data-engine]')];
+const trEngineEl = $('#trEngine'), trEngineIns = [...trEngineEl.querySelectorAll<HTMLInputElement>('input')];
 const trBaseIn = $<HTMLInputElement>('#trBaseUrl'), trKeyIn = $<HTMLInputElement>('#trApiKey'), trModelIn = $<HTMLInputElement>('#trModel');
 const trLangIn = $<HTMLSelectElement>('#trLang'), trBaseErr = $('#trBaseUrlErr'), trTestBtn = $<HTMLButtonElement>('#trTestBtn'), trResult = $('#trTestResult');
 const trPackRow = $('#trPackRow'), trPack = $('#trPack'), trPackBtn = $('#trPackBtn');
@@ -1749,12 +1749,7 @@ function paintTrPack() {
 }
 function paintTrEngine() {
   $('#trEngineBox').hidden = $('#trSys').hidden = !trSupported();
-  trEngineEl.dataset.v = trEngine;
-  trEngineBtns.forEach((b) => {
-    const on = b.dataset.engine === trEngine;
-    b.setAttribute('aria-checked', String(on));
-    b.tabIndex = on ? 0 : -1;
-  });
+  for (const i of trEngineIns) i.checked = i.value === trEngine;
   setTrResult('');
   paintTrPack();
 }
@@ -1763,18 +1758,8 @@ function setTrEngine(e: 'system' | 'openai') {
   trTouched = true;
   paintTrEngine();
 }
-trEngineEl.addEventListener('click', (e) => {
-  const b = (e.target as Element).closest<HTMLButtonElement>('[data-engine]');
-  if (b) setTrEngine(b.dataset.engine as 'system' | 'openai');
-});
-trEngineEl.addEventListener('keydown', (e) => {
-  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-  e.preventDefault();
-  e.stopPropagation();
-  const n = trEngineBtns[trEngine === 'system' ? 1 : 0];
-  setTrEngine(n.dataset.engine as 'system' | 'openai');
-  n.focus();
-});
+// 原生单选：点击与方向键切换都由浏览器处理
+trEngineEl.addEventListener('change', (e) => setTrEngine((e.target as HTMLInputElement).value as 'system' | 'openai'));
 trLangIn.addEventListener('change', paintTrPack);
 // 下载语言包（M26 规则 17）：系统确认框挂在面板上弹出；结果回来重查。期间换了语言或重画过，结果丢掉
 trPackBtn.addEventListener('click', () => {
