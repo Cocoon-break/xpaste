@@ -87,7 +87,23 @@ test('截图卡片（cardInner）：没有原文提示，标题行带方式，�
   assert.doesNotMatch(h, /c-src|role="dialog"/);
   assert.match(h, /class="c-title" title="译文 · 系统翻译">译文 · 系统翻译</);
   assert.match(h, /data-act="switch" data-engine="openai">换用 AI 翻译</);
-  assert.equal(cardHTML(t), `<div class="card" role="dialog" aria-label="译文">${h}</div>`);
+  assert.doesNotMatch(h, /data-act="wide"/); // 截图卡片旁边就是原图，不给对照
+});
+
+test('划词卡片对照原文（M26 规则 19）：收起时原文前 40 个字＋“对照原文”，展开时原文整段在左栏、译文在右栏', () => {
+  const source = 'Hello   world\n' + 'x'.repeat(60);
+  const narrow = cardHTML(st({ kind: 'done', source, text: '你好' }));
+  assert.match(narrow, /class="c-src">Hello world x+…</);
+  assert.match(narrow, /data-act="wide" aria-pressed="false">对照原文</);
+  assert.doesNotMatch(narrow, /c-cols/);
+  const wide = cardHTML(st({ kind: 'done', source, text: '你好' }), true);
+  assert.match(wide, /^<div class="card wide"/);
+  assert.match(wide, /data-act="wide" aria-pressed="true">收起</);
+  assert.doesNotMatch(wide, /c-src/);
+  assert.ok(wide.includes(`<div class="c-cols"><div class="c-body c-orig">Hello   world\n${'x'.repeat(60)}</div><div class="c-body">你好</div></div>`));
+  // 翻译中右栏是占位，失败没收到译文时右栏留空
+  assert.match(cardHTML(st({ kind: 'busy' }), true), /c-orig">Hello<\/div><div class="c-body c-wait">翻译中…/);
+  assert.match(cardHTML(st({ kind: 'fail', error: 'x' }), true), /c-orig">Hello<\/div><div class="c-body"><\/div><\/div>/);
 });
 
 test('截图卡片缺语言包：不给下载语言包，原因与换用照常（截图遮罩挂不了系统的下载确认）', () => {

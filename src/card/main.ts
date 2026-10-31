@@ -15,6 +15,8 @@ addEventListener('unhandledrejection', (e) => void logError(`划词卡片页未�
 
 /** 无文字、排除应用的提示停留多久；复制后“已复制译文”停留多久（M26 规则 19） */
 const HINT_MS = 2000, COPIED_MS = 900;
+/** 收起时的窗口宽度（后端 trcard.rs 的 CARD），比它宽就是展开对照 */
+const NARROW = 360;
 
 type Tr = Extract<CardState, { kind: 'busy' | 'done' | 'fail' }>;
 const root = document.body;
@@ -24,24 +26,27 @@ let st: CardState = { kind: 'blocked' };
 let engines: Engines | null = null;
 /** 缺语言包时那次识别出的语言对，下载用 */
 let pack: { source: string; target: string } | null = null;
-let timer = 0, lastH = 0;
+let timer = 0, lastH = 0, lastWide = false;
+/** 展开对照（M26 规则 19）：每张新卡片从收起开始 */
+let wide = false;
 /** 正在等系统的下载确认或下载：再点“下载语言包”不理，免得失败分支把键盘从确认框抢回来 */
 let downloading = false;
 
 const tr = (): Tr | null => (st.kind === 'empty' || st.kind === 'blocked' ? null : st);
-const body = () => root.querySelector<HTMLElement>('.c-body');
+/** 译文正文（展开对照时左栏原文也是 .c-body） */
+const body = () => root.querySelector<HTMLElement>('.c-body:not(.c-orig)');
+const bodies = () => [...root.querySelectorAll<HTMLElement>('.c-body')];
 
 function render(pop = false) {
   const s = tr();
   // 换用按钮只在收完或失败后、另一种能用时出现（M26 规则 16）
   const view: CardState = s ? { ...s, other: s.kind !== 'busy' && engines ? otherEngine(s.engine, engines) : null } : st;
   const focused = (document.activeElement as HTMLElement | null)?.dataset.act;
-  const top = body()?.scrollTop ?? 0;
-  root.innerHTML = cardHTML(view);
+  const tops = new Map(bodies().map((b) => [b.classList.contains('c-orig'), b.scrollTop]));
+  root.innerHTML = cardHTML(view, wide);
   if (pop) root.firstElementChild?.classList.add('pop-in');
   if (focused) root.querySelector<HTMLElement>(`[data-act="${focused}"]`)?.focus();
-  const b = body();
-  if (b) b.scrollTop = top;
+  for (const b of bodies()) b.scrollTop = tops.get(b.classList.contains('c-orig')) ?? 0;
   follow();
   fit();
 }
@@ -52,14 +57,24 @@ function follow() {
   if (b && st.kind === 'busy') b.scrollTop = b.scrollHeight;
 }
 
-/** 按内容的完整高度改窗口高度（后端限到工作区的 60%，超出部分正文在卡片内滚动）。提示也调，免得窗口留着透明的空条 */
+/** 按内容的完整高度改窗口高度（后端限到工作区的 60%，展开对照时 80%，超出部分正文在卡片内滚动）。
+ *  提示也调，免得窗口留着透明的空条。展开或收起时先只换宽度，等窗口换过来（resize）再量高度：在旧宽度里量两栏会量得过高 */
 function fit() {
-  const card = root.firstElementChild as HTMLElement | null, b = body();
+  const card = root.firstElementChild as HTMLElement | null;
   if (!card) return;
-  const h = Math.ceil(card.offsetHeight + (b ? b.scrollHeight - b.clientHeight : 0));
-  if (h !== lastH) {
+  if (wide !== innerWidth > NARROW) {
+    if (lastWide !== wide) {
+      lastWide = wide;
+      void cardResize(seq, lastH || card.offsetHeight, wide);
+    }
+    return;
+  }
+  const over = Math.max(0, ...bodies().map((b) => b.scrollHeight - b.clientHeight));
+  const h = Math.ceil(card.offsetHeight + over);
+  if (h !== lastH || wide !== lastWide) {
     lastH = h;
-    void cardResize(seq, h);
+    lastWide = wide;
+    void cardResize(seq, h, wide);
   }
 }
 
@@ -67,6 +82,7 @@ void onCardShow((p) => {
   clearTimeout(timer);
   seq = p.seq;
   lastH = 0;
+  lastWide = wide = false;
   pack = null;
   if (p.kind !== 'text') {
     st = p.kind === 'empty' ? { kind: 'empty', hotkey: p.hotkey } : { kind: 'blocked' };
@@ -165,6 +181,7 @@ root.addEventListener('click', (e) => {
   switch (b.dataset.act) {
     case 'copy': return void copy();
     case 'close': return void cardClose(at);
+    case 'wide': wide = !wide; return render();
     case 'switch': return void again(b.dataset.engine as Engine);
     case 'pack': return void downloadPack();
     // 先关卡片交还键盘，再唤起面板
@@ -180,5 +197,5 @@ addEventListener('keydown', (e) => {
 });
 // 点了卡片以外的地方：关闭（不交还键盘）
 addEventListener('blur', () => void cardBlur(seq));
-// 窗口高度被后端改了：翻译中仍跟到最新一段
-addEventListener('resize', follow);
+// 窗口被后端改了大小：翻译中仍跟到最新一段；展开或收起后按新宽度重新量高度
+addEventListener('resize', () => { follow(); fit(); });

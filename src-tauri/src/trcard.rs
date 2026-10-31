@@ -20,11 +20,12 @@ use crate::translate::{self, Coalescer, Delta, Engine, Lang};
 pub const LABEL: &str = "tr-card";
 /// 离指针的距离
 const GAP: f64 = 12.0;
-/// 卡片初始尺寸（逻辑像素）；前端渲染后经 `trcard_resize` 只改高度
+/// 卡片初始尺寸（逻辑像素）；前端渲染后经 `trcard_resize` 改高度，展开对照时改宽度
 const CARD: (f64, f64) = (360.0, 160.0);
 /// 最高为工作区高度的 60%
 const MAX_H: f64 = 0.6;
-const SOURCE_CHARS: usize = 40;
+/// 展开对照（原文、译文左右两栏）：宽 760（不超过工作区），最高为工作区高度的 80%
+const WIDE: (f64, f64) = (760.0, 0.8);
 
 /// 卡片的位置与所在屏（逻辑像素）。`up`：放在指针上方（向上翻转），改高度时底边不动。
 #[derive(Debug, Clone, Copy)]
@@ -118,21 +119,19 @@ pub fn place_card(cursor: (f64, f64), card: (f64, f64), work: Rect) -> (f64, f64
     )
 }
 
-/// 改成高度 `h`（不超过工作区的 60%）：向上翻转的卡片底边不动，否则顶边不动；再夹回工作区。
-fn resized(p: Placement, h: f64) -> Placement {
-    let h = h.min(p.work.h * MAX_H).max(1.0);
+/// 改成高度 `h`（不超过工作区的 60%，展开对照时 80%）、按 `wide` 换宽度：向上翻转的卡片底边不动，否则顶边不动；
+/// 左边不动，右边越过工作区时整体往左推；再夹回工作区。
+fn resized(p: Placement, h: f64, wide: bool) -> Placement {
+    let (w, max_h) = if wide {
+        (WIDE.0.min(p.work.w), WIDE.1)
+    } else {
+        (CARD.0, MAX_H)
+    };
+    let h = h.min(p.work.h * max_h).max(1.0);
     let y = if p.up { p.y + p.h - h } else { p.y };
     let y = y.min(p.work.y + p.work.h - h).max(p.work.y);
-    Placement { y, h, ..p }
-}
-
-/// 原文提示：空白折叠成一个空格，取前 40 个字，超出加“…”。
-fn preview(text: &str) -> String {
-    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    match flat.char_indices().nth(SOURCE_CHARS) {
-        Some((i, _)) => format!("{}…", &flat[..i]),
-        None => flat,
-    }
+    let x = p.x.min(p.work.x + p.work.w - w).max(p.work.x);
+    Placement { x, y, w, h, ..p }
 }
 
 /// `trcard-show` 的载荷。`kind`：`text`（有文字，开始翻译）/ `empty`（没有可翻译的文字）/ `blocked`（排除应用或敏感内容）。
@@ -141,7 +140,7 @@ fn preview(text: &str) -> String {
 struct Show {
     kind: &'static str,
     seq: u64,
-    /// `text`：原文提示
+    /// `text`：完整原文（卡片上只显示前 40 个字，展开对照时整段显示）
     source: Option<String>,
     /// `text`：翻译方式标签（`system` / `openai:{模型}`）
     engine: Option<String>,
@@ -320,14 +319,14 @@ fn grab(app: &AppHandle, seq: u64) {
         if !s.is_current(seq) {
             return;
         }
-        s.text = text.clone();
+        s.text.clone_from(&text);
     }
     show(
         app,
         Show {
             kind: "text",
             seq,
-            source: Some(preview(&text)),
+            source: Some(text.clone()),
             engine: Some(engine),
             no_access,
             hotkey: None,
@@ -591,15 +590,15 @@ fn take_keyboard(app: &AppHandle) {
     });
 }
 
-/// 前端渲染后按内容改高度（只改高度，见 `resized`）。不是当前这一次时忽略。
-pub fn resize(app: &AppHandle, seq: u64, h: f64) {
+/// 前端渲染后按内容改高度，`wide` 为展开对照（见 `resized`）。不是当前这一次时忽略。
+pub fn resize(app: &AppHandle, seq: u64, h: f64, wide: bool) {
     let p = {
         let mut s = session(app);
         if !s.is_current(seq) {
             return;
         }
         let Some(p) = s.place.as_mut() else { return };
-        *p = resized(*p, h);
+        *p = resized(*p, h, wide);
         *p
     };
     on_main(app, move |app| {
@@ -735,14 +734,38 @@ mod tests {
     /// 改高度：向上翻转的卡片底边不动，否则顶边不动；最高为工作区的 60%，超出工作区时往回推。
     #[test]
     fn resize_keeps_flipped_edge() {
-        let p = resized(placed(628.0, 160.0, true), 200.0);
+        let p = resized(placed(628.0, 160.0, true), 200.0, false);
         assert_eq!((p.y, p.h), (588.0, 200.0));
-        let p = resized(placed(112.0, 160.0, false), 200.0);
+        let p = resized(placed(112.0, 160.0, false), 200.0, false);
         assert_eq!((p.y, p.h), (112.0, 200.0));
-        let p = resized(placed(112.0, 160.0, false), 2000.0);
+        let p = resized(placed(112.0, 160.0, false), 2000.0, false);
         assert_eq!(p.h, 815.0 * 0.6);
-        let p = resized(placed(600.0, 160.0, false), 400.0);
+        let p = resized(placed(600.0, 160.0, false), 400.0, false);
         assert_eq!((p.y, p.h), (440.0, 400.0)); // 底边 840 不越过工作区
+    }
+
+    /// 展开对照：宽 760、最高 80%，右边越界时往左推；收起回到 360，左边不动。
+    #[test]
+    fn resize_wide_widens_and_clamps() {
+        let p = resized(placed(112.0, 160.0, false), 2000.0, true);
+        assert_eq!((p.x, p.w, p.h), (112.0, 760.0, 815.0 * 0.8));
+        let p = resized(
+            Placement {
+                x: 1000.0,
+                ..placed(112.0, 160.0, false)
+            },
+            300.0,
+            true,
+        );
+        assert_eq!((p.x, p.w), (680.0, 760.0));
+        let p = resized(p, 300.0, false);
+        assert_eq!((p.x, p.w), (680.0, 360.0));
+        let narrow = Placement {
+            work: Rect { w: 600.0, ..WORK },
+            ..placed(112.0, 160.0, false)
+        };
+        let p = resized(narrow, 300.0, true);
+        assert_eq!((p.x, p.w), (0.0, 600.0));
     }
 
     /// 只有 text 拿键盘（并开始翻译）；empty / blocked 提示不打断打字。
@@ -788,13 +811,5 @@ mod tests {
             Back::Stay,
             "macOS 由 orderOut 交还"
         );
-    }
-
-    #[test]
-    fn preview_takes_first_40_chars() {
-        assert_eq!(preview("  hello\n  world  "), "hello world");
-        let long = "字".repeat(41);
-        assert_eq!(preview(&long), format!("{}…", "字".repeat(40)));
-        assert_eq!(preview(&"字".repeat(40)), "字".repeat(40));
     }
 }

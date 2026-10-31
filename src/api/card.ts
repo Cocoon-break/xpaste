@@ -28,7 +28,7 @@ export const cardClose = (seq: number) => invoke<void>('trcard_close', { seq });
 export const cardBlur = (seq: number) => invoke<void>('trcard_blur', { seq });
 /** 下载语言包取消或失败后重新拿键盘。 */
 export const cardFocus = (seq: number) => invoke<void>('trcard_focus', { seq });
-/** 按内容高度（逻辑像素）改窗口高度，后端限到工作区的 60%。 */
-export const cardResize = (seq: number, h: number) => invoke<void>('trcard_resize', { seq, h });
+/** 按内容高度（逻辑像素）改窗口高度，后端限到工作区的 60%；`wide` 展开对照（加宽，限 80%）。 */
+export const cardResize = (seq: number, h: number, wide: boolean) => invoke<void>('trcard_resize', { seq, h, wide });
 /** 唤起面板并打开设置的 `tab` 标签。先 cardClose 再调，键盘交还的顺序才对。 */
 export const openPanelSettings = (tab: string) => invoke<void>('open_panel_settings', { tab });

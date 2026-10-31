@@ -30,6 +30,17 @@ kbd {
   font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere;
   user-select: text; -webkit-user-select: text; cursor: text;
 }
+/* 标题行右侧“对照原文 / 收起”（M26 规则 19） */
+.card .c-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 4px 8px 0 14px; }
+.card .c-head .c-title { flex: 1; min-width: 0; padding: 0; }
+.card .c-head button {
+  flex: none; height: 22px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent;
+  color: var(--beam); font-size: 12px; cursor: pointer; transition: background-color 130ms ease;
+}
+/* 展开对照：原文、译文左右两栏，各自滚动 */
+.card .c-cols { flex: 0 1 auto; min-height: 0; display: flex; }
+.card .c-cols .c-body { flex: 1 1 0; min-width: 0; }
+.card .c-cols .c-orig { border-right: 1px solid var(--line-2); }
 .card .c-wait { color: var(--muted); user-select: none; -webkit-user-select: none; cursor: default; }
 .card .c-err { flex: none; padding: 4px 14px 10px; font-size: 12px; color: var(--danger); overflow-wrap: anywhere; }
 .card .c-note {
@@ -55,6 +66,7 @@ kbd {
   .card .c-foot button:not(.go):hover { background: var(--hover); color: var(--fg); }
   .card .c-foot .go:not([aria-disabled="true"]):hover { background: var(--beam-hover); }
   .card .c-note button:hover { text-decoration: underline; }
+  .card .c-head button:hover { background: var(--hover); }
 }
 
 /* 无文字、排除应用：一行提示，2 秒后消失 */

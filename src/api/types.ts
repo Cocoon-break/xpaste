@@ -227,7 +227,7 @@ export type ShotOutcome = { action: ShotAction; chars: number | null; file: stri
 export type CardShow = {
   kind: 'text' | 'empty' | 'blocked';
   seq: number;
-  /** 原文提示：空白已折叠，前 40 个字，超出加“…” */
+  /** 完整原文（卡片显示前 40 个字，展开对照时整段） */
   source: string | null;
   /** 翻译方式标签：`system` 或 `openai:{模型 ID}` */
   engine: string | null;

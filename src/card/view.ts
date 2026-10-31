@@ -23,26 +23,29 @@ const SOURCE_CHARS = 40;
 const SWITCH = { system: '换用系统翻译', openai: '换用 AI 翻译' };
 const btn = (act: string, label: string, extra = '') => `<button type="button" data-act="${act}"${extra}>${label}</button>`;
 
-/** 原文提示：前 40 个字，超出加“…”（后端已截过一次，再截结果不变） */
+/** 原文提示：空白折成一个空格，取前 40 个字，超出加“…” */
 export function clipSource(s: string): string {
-  const cs = [...s];
-  return cs.length > SOURCE_CHARS ? cs.slice(0, SOURCE_CHARS).join('') + '…' : s;
+  const cs = [...s.trim().split(/\s+/).join(' ')];
+  return cs.length > SOURCE_CHARS ? cs.slice(0, SOURCE_CHARS).join('') + '…' : cs.join('');
 }
 
-export function cardHTML(s: CardState): string {
+/** `wide`：展开对照，原文整段与译文左右两栏（M26 规则 19） */
+export function cardHTML(s: CardState, wide = false): string {
   if (s.kind === 'empty' || s.kind === 'blocked') {
     const msg = s.kind === 'empty' ? `没有可翻译的文字：先选中文字再按 ${s.hotkey ?? '翻译快捷键'}` : '这个应用里的内容不翻译';
     return `<div class="card hint" role="status"><p class="c-msg">${esc(msg)}</p></div>`;
   }
-  return `<div class="card" role="dialog" aria-label="译文">${cardInner(s)}</div>`;
+  return `<div class="card${wide ? ' wide' : ''}" role="dialog" aria-label="译文">${cardInner(s, wide)}</div>`;
 }
 
-/** 翻译卡片的内容（不含外层 .card）；截图译文卡片也用它，原文为空时不出原文提示（M26 规则 5、16） */
-export function cardInner(s: Extract<CardState, { kind: 'busy' | 'done' | 'fail' }>): string {
+/** 翻译卡片的内容（不含外层 .card）；截图译文卡片也用它，原文为空时不出原文提示（M26 规则 5、16）。
+ *  `wide` 只有划词卡片传：标题行右侧出“对照原文 / 收起”，展开时原文整段放左栏 */
+export function cardInner(s: Extract<CardState, { kind: 'busy' | 'done' | 'fail' }>, wide?: boolean): string {
   const way = engineLabel(s.engine);
   const head = s.kind === 'busy' ? '翻译中…' : s.kind === 'done' ? '译文' : s.text ? '翻译中断' : '翻译失败';
   const title = way ? `${head} · ${way}` : head;
-  const body = s.text ? `<div class="c-body">${esc(s.text)}</div>` : s.kind === 'busy' ? '<div class="c-body c-wait">翻译中…</div>' : '';
+  let body = s.text ? `<div class="c-body">${esc(s.text)}</div>` : s.kind === 'busy' ? '<div class="c-body c-wait">翻译中…</div>' : '';
+  if (wide) body = `<div class="c-cols"><div class="c-body c-orig">${esc(s.source)}</div>${body || '<div class="c-body"></div>'}</div>`;
   const err = s.kind !== 'busy' && s.error ? `<div class="c-err">${esc(s.error)}</div>` : '';
   const note = s.noAccess ? `<div class="c-note"><span>没有辅助功能权限，翻译的是剪切板里的文字</span>${btn('access', '前往授权')}</div>` : '';
   let foot: string;
@@ -58,6 +61,8 @@ export function cardInner(s: Extract<CardState, { kind: 'busy' | 'done' | 'fail'
       : `<button type="button" class="go" data-act="copy" aria-disabled="${s.kind !== 'done'}">复制译文<kbd>↵</kbd></button>`;
     foot = `<div class="c-foot"><span class="c-more">${extra}</span>${btn('close', '关闭<kbd>Esc</kbd>')}${copy}</div>`;
   }
-  return (s.source ? `<div class="c-src">${esc(clipSource(s.source))}</div>` : '')
-    + `<div class="c-title" title="${esc(title)}">${esc(title)}</div>${body}${err}${note}${foot}`;
+  const line = `<div class="c-title" title="${esc(title)}">${esc(title)}</div>`;
+  const top = wide === undefined || s.copied ? line
+    : `<div class="c-head">${line}<button type="button" data-act="wide" aria-pressed="${wide}">${wide ? '收起' : '对照原文'}</button></div>`;
+  return (s.source && !wide ? `<div class="c-src">${esc(clipSource(s.source))}</div>` : '') + top + body + err + note + foot;
 }
