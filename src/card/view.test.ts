@@ -89,3 +89,11 @@ test('截图卡片（cardInner）：没有原文提示，标题行带方式，�
   assert.match(h, /data-act="switch" data-engine="openai">换用 AI 翻译</);
   assert.equal(cardHTML(t), `<div class="card" role="dialog" aria-label="译文">${h}</div>`);
 });
+
+test('截图卡片缺语言包：不给下载语言包，原因与换用照常（截图遮罩挂不了系统的下载确认）', () => {
+  const h = cardInner({ kind: 'fail', source: '', engine: 'system', text: '', noAccess: false, other: 'openai', error: '系统翻译还没有English和简体中文的语言包', errorKind: undefined });
+  assert.match(h, /翻译失败 · 系统翻译/);
+  assert.match(h, /class="c-err">系统翻译还没有English和简体中文的语言包/);
+  assert.match(h, /data-act="switch" data-engine="openai">换用 AI 翻译</);
+  assert.doesNotMatch(h, /下载语言包<|data-act="(pack|settings)"/);
+});

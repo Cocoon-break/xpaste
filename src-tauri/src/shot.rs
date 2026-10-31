@@ -1226,9 +1226,9 @@ fn run_translate(
     stream(app, generation, label, &cfg, &text)
 }
 
-/// 译文卡片“换用…”、下载语言包后重试（设计 §3.4）：用会话里的原文按 `engine`（None 按设置）重翻，不再识别；
+/// 译文卡片“换用…”（设计 §3.4）：用会话里的原文按 `engine`（None 按设置）重翻，不再识别；
 /// 增量照旧只发给第 `i` 块屏的遮罩。输出保持认领（卡片上失败后放开过的也重新认领），不能出第二个动作。
-/// 遮罩重新拿键盘：下载语言包时系统确认框可能拿走了它。不是当前这次截图时报“截图已结束”。
+/// 不是当前这次截图时报“截图已结束”。
 pub fn translate_again(
     app: &AppHandle,
     generation: u64,
@@ -1243,16 +1243,6 @@ pub fn translate_again(
         s.finishing = true;
         t
     };
-    // 主线程上再看一次：期间按了 Esc 时遮罩已隐藏，不能又摆回来
-    on_main(app, move |app| {
-        if session(app).is_current(generation)
-            && app
-                .get_webview_window(&label(i))
-                .is_some_and(|w| !w.is_focused().unwrap_or(true))
-        {
-            show_overlay(app, i, true);
-        }
-    });
     let cfg = translate::cfg_for(&app.state::<AppState>().settings(), engine);
     stream(app, generation, &label(i), &cfg, &text)
 }

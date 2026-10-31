@@ -102,7 +102,7 @@ pub fn shot_copy_text(app: AppHandle, generation: u64, text: String) -> Result<(
     shot::copy_text(&app, generation, &text)
 }
 
-/// 译文卡片“换用…”、下载语言包后重试（设计 §3.4）：用本次截图识别出的原文按 `engine`（`system` / `openai`，
+/// 译文卡片“换用…”（设计 §3.4）：用本次截图识别出的原文按 `engine`（`system` / `openai`，
 /// 为空按设置）重翻，增量发给调用方遮罩；不是当前这次截图时报“截图已结束”。
 #[tauri::command]
 pub async fn shot_translate_again(

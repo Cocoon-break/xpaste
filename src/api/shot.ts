@@ -7,7 +7,7 @@ import { emit, listen } from '@tauri-apps/api/event';
 import { Menu } from '@tauri-apps/api/menu';
 import { currentMonitor, getCurrentWindow, primaryMonitor } from '@tauri-apps/api/window';
 
-import { translateDownload, translateEngines } from './commands';
+import { translateEngines } from './commands';
 import { TRANSLATE_DELTA } from './events';
 import type { BeginPayload, Engines, LRect, ShotAction, ShotOutcome, TranslateDelta } from './types';
 
@@ -66,17 +66,13 @@ export async function onShotTranslateDelta(cb: (text: string, engine: string) =>
   await listen<TranslateDelta>(TRANSLATE_DELTA, (e) => { if (e.payload.id === null) cb(e.payload.text, e.payload.engine); }, { target: getCurrentWindow().label });
 }
 
-/** 译文卡片“换用…”、下载语言包后重试（设计 §3.4）：用本次截图识别出的原文按 `engine` 重翻，增量照旧发给本遮罩。 */
+/** 译文卡片“换用…”（设计 §3.4）：用本次截图识别出的原文按 `engine` 重翻，增量照旧发给本遮罩。 */
 export const shotTranslateAgain = (generation: number, engine: 'system' | 'openai') =>
   stub ? dev.finish('translate') : invoke<ShotOutcome>('shot_translate_again', { generation, engine });
 
 /** 两种翻译方式能不能用、按设置用哪种（设计 §3.4）。 */
 export const shotEngines = (): Promise<Engines> =>
   stub ? Promise.resolve({ system: true, openai: true, model: 'gpt-4o-mini', current: 'system' }) : translateEngines();
-
-/** 缺语言包时在第 `index` 块屏的遮罩里弹系统的下载确认（设计 §3.1）：`installed` 已下载，`download` 取消了。 */
-export const shotDownloadPack = (index: number, source: string, target: string) =>
-  stub ? Promise.resolve('installed' as const) : translateDownload(`shot-${index}`, source, target);
 
 /** 译文卡片“复制译文”：写剪切板（进历史）后后端进入提示条模式。 */
 export const shotCopyText = (generation: number, text: string) => (stub ? Promise.resolve() : invoke<void>('shot_copy_text', { generation, text }));

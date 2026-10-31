@@ -2,7 +2,7 @@
 // 状态 S、update / place、指针与键盘处理。坐标为本块屏的逻辑像素，冻结帧与标注 canvas 为物理像素。
 import './shot.css';
 import {
-  onShotBegin, onShotClaim, onShotEnd, onShotTranslateDelta, recStart, shotAlive, shotCancel, shotClaim, shotCopyText, shotDownloadPack, shotEngines,
+  onShotBegin, onShotClaim, onShotEnd, onShotTranslateDelta, recStart, shotAlive, shotCancel, shotClaim, shotCopyText, shotEngines,
   shotFinish, shotFrame, shotReady, shotTranslateAgain, type BeginPayload, type ShotAction, type ShotOutcome,
 } from '../api/shot';
 import { error as logError, info } from '../api/log';
@@ -102,8 +102,6 @@ let tr: ShotTr | null = null;
 let trSeq = 0;
 /** 两种翻译方式能不能用，每次按 T 取一次（设计 §3.4） */
 let engines: Engines | null = null;
-/** 缺语言包时那次识别出的语言对，下载用；正在等系统的下载确认或下载时再点不理 */
-let pack: { source: string; target: string } | null = null, downloading = false;
 
 /* 译文卡片（M26 规则 5、设计 §3.4）：第一段译文到达（或识别后翻译失败）时出现，定一次位置后只变高；内容由 cardInner 生成 */
 const card = document.createElement('div');
@@ -557,7 +555,6 @@ async function act(a: ShotAction) {
   S.phase = slow ? 'busy' : 'done';
   if (a === 'translate') {
     const t: ShotTr = tr = { gen, seq: ++trSeq, kind: 'busy', source: '', engine: '', text: '', noAccess: false, other: null };
-    pack = null;
     // 出第一段前就失败时，标题行按设置标出方式；增量、返回值带的是实际用的方式
     void shotEngines().then((e) => { engines = e; if (tr === t) { t.engine ||= e.current; renderCard(); } }, () => {});
   }
@@ -623,13 +620,16 @@ const TR_FAIL = new Set(['translate', 'translatePack', 'translateOs']);
 function renderCard() {
   if (!tr || card.hidden) return;
   const other = tr.kind !== 'busy' && engines ? otherEngine(tr.engine, engines) : null;
-  // 截图里只给“下载语言包”，不给“去设置”（M26 规则 13）
+  // 截图里不给“下载语言包”“去设置”（M26 规则 13）：系统的下载确认挂不到截图遮罩上，遮罩一退出它就既不弹出也不返回；
+  // 缺语言包的原因写在卡片上，AI 能用时还有“换用 AI 翻译”
   const focused = (document.activeElement as HTMLElement | null)?.dataset.act;
-  const top = cardBody()?.scrollTop ?? 0;
-  card.innerHTML = cardInner({ ...tr, other, errorKind: tr.errorKind === 'translatePack' ? tr.errorKind : undefined });
+  const old = cardBody();
+  // 原来在底部（翻译中跟着最新一段）的，换成完整译文后仍到底；否则保留滚动位置
+  const atEnd = !old || old.scrollTop + old.clientHeight >= old.scrollHeight - 2, top = old?.scrollTop ?? 0;
+  card.innerHTML = cardInner({ ...tr, other, errorKind: undefined });
   if (focused) card.querySelector<HTMLElement>(`[data-act="${focused}"]`)?.focus();
   const b = cardBody();
-  if (b) b.scrollTop = tr.kind === 'busy' ? b.scrollHeight : top;
+  if (b) b.scrollTop = tr.kind === 'busy' || atEnd ? b.scrollHeight : top;
 }
 
 /** 第一段译文到达（或识别后翻译失败）：工具栏与进行中提示隐藏，卡片在选区旁出现，位置只定这一次。宽 240–360。 */
@@ -653,7 +653,6 @@ function doneTr(t: ShotTr, out: ShotOutcome) {
 
 function failTr(t: ShotTr, e: AppError) {
   Object.assign(t, { kind: 'fail', error: e?.message || '翻译失败', errorKind: e?.kind });
-  pack = e?.kind === 'translatePack' ? { source: e.source ?? '', target: e.target ?? '' } : null;
   if (S.phase === 'busy') showCard(); else renderCard();
 }
 
@@ -669,12 +668,11 @@ void onShotTranslateDelta((d, engine) => {
   if (b) { b.append(d); b.scrollTop = b.scrollHeight; }
 });
 
-/** 用另一种（或下载语言包后用系统翻译）重翻同一段原文，不再识别；输出仍被这次翻译占着（设计 §3.4） */
+/** 用另一种重翻同一段原文，不再识别；输出仍被这次翻译占着（设计 §3.4） */
 async function again(engine: Engine) {
   const t = tr;
   if (!t || t.kind === 'busy' || S.phase !== 'card') return;
   const gen = S.gen, seq = (t.seq = ++trSeq);
-  pack = null;
   Object.assign(t, { kind: 'busy', text: '', error: undefined, errorKind: undefined, engine: engine === 'system' ? 'system' : `openai:${engines?.model ?? ''}` });
   renderCard();
   const stale = () => tr !== t || t.seq !== seq || !live(gen);
@@ -684,25 +682,6 @@ async function again(engine: Engine) {
   } catch (e) {
     if (!stale()) failTr(t, e as AppError);
   }
-}
-
-/** 下载语言包（设计 §3.1）：系统的确认挂在本屏遮罩上；装好后用系统翻译重试 */
-async function downloadPack() {
-  const t = tr;
-  if (!t || !pack || downloading) return;
-  const gen = S.gen, seq = t.seq;
-  let r: 'installed' | 'download' = 'download';
-  downloading = true;
-  try {
-    r = await shotDownloadPack(S.index, pack.source, pack.target);
-  } catch (e) {
-    const err = e as AppError;
-    // 已有一个语言包在下载（面板或设置里点的）：后端拒绝第二个，不报
-    if (tr === t && t.seq === seq && live(gen) && !(err.kind === 'invalid' && err.message === '正在下载语言包')) { t.error = err.message; renderCard(); }
-  } finally {
-    downloading = false;
-  }
-  if (r === 'installed' && tr === t && t.seq === seq && live(gen)) void again('system');
 }
 
 /** 复制译文（回车或按钮）：写剪切板进历史，然后走成功收尾。 */
@@ -729,7 +708,6 @@ card.addEventListener('click', (e) => {
     case 'close': return closeOverlay();
     case 'copy': return void copyTranslation();
     case 'switch': return void again(b.dataset.engine as Engine);
-    case 'pack': return void downloadPack();
   }
 });
 
