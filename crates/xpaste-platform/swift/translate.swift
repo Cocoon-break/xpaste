@@ -91,28 +91,56 @@ public func xp_tr_prepare(
     let ctxBits = UInt(bitPattern: ctx)
     DispatchQueue.main.async {
         let ctx = UnsafeMutableRawPointer(bitPattern: ctxBits)
-        guard #available(macOS 26, *), let ptr = UnsafeMutableRawPointer(bitPattern: winBits),
-            let content = Unmanaged<NSWindow>.fromOpaque(ptr).takeUnretainedValue().contentView
-        else { return cb(ctx, 2) }
-        let holder = ViewHolder()
+        guard #available(macOS 26, *), let ptr = UnsafeMutableRawPointer(bitPattern: winBits) else {
+            return cb(ctx, 2)
+        }
+        let win = Unmanaged<NSWindow>.fromOpaque(ptr).takeUnretainedValue()
+        guard let content = win.contentView else { return cb(ctx, 2) }
+        // 排队期间窗口已被隐藏（xp_tr_prepare_cancel 先到了）：隐藏窗口里不弹确认也不返回，按取消处理
+        guard win.isVisible else { return cb(ctx, 1) }
+        let holder = PrepareHolder(window: winBits) { cb(ctx, $0) }
         let host = NSHostingView(
             rootView: PrepareView(
-                cfg: .init(source: Locale.Language(identifier: src), target: Locale.Language(identifier: tgt))
-            ) { code in
-                // 只回调一次：.translationTask 重跑时第二次直接忽略，否则 Rust 侧会重复收回 ctx
-                guard let v = holder.view else { return }
-                v.removeFromSuperview()
-                holder.view = nil
-                cb(ctx, code)
-            })
+                cfg: .init(source: Locale.Language(identifier: src), target: Locale.Language(identifier: tgt)),
+                finish: holder.finish))
         host.frame = NSRect(x: 0, y: 0, width: 1, height: 1)
         holder.view = host
+        pendingPrepare = holder
         content.addSubview(host)
     }
 }
 
-private final class ViewHolder {
+/// 隐藏 `window` 之前调用（设计 §3.1）：那个窗口里有进行中的下载时，移除视图并按取消回调（code 1）。
+/// 窗口隐藏后 prepareTranslation 不会返回，不取消的话 Rust 侧会一直等、下载标记一直不复位。
+/// 任意线程可调，没有进行中的下载或不是这个窗口时什么都不做。
+@_cdecl("xp_tr_prepare_cancel")
+public func xp_tr_prepare_cancel(_ window: UInt) {
+    DispatchQueue.main.async {
+        if let h = pendingPrepare, h.window == window { h.finish(1) }
+    }
+}
+
+/// 进行中的下载；只在主线程读写（同一时刻最多一个，Rust 侧有标记把关）
+private var pendingPrepare: PrepareHolder?
+
+private final class PrepareHolder {
     var view: NSView?
+    let window: UInt
+    let done: (Int32) -> Void
+
+    init(window: UInt, done: @escaping (Int32) -> Void) {
+        self.window = window
+        self.done = done
+    }
+
+    /// 主线程上调用。只回调一次：.translationTask 重跑或取消与完成先后到达时，后到的直接忽略，否则 Rust 侧会重复收回 ctx
+    func finish(_ code: Int32) {
+        guard let v = view else { return }
+        v.removeFromSuperview()
+        view = nil
+        if pendingPrepare === self { pendingPrepare = nil }
+        done(code)
+    }
 }
 
 @available(macOS 26, *)

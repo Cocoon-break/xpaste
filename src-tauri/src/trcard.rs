@@ -407,6 +407,11 @@ fn hide_window(app: &AppHandle) {
         let Some(w) = app.get_webview_window(LABEL) else {
             return;
         };
+        // 隐藏前取消挂在卡片里的语言包下载，否则那边一直等、下载标记卡住（设计 §3.1）
+        #[cfg(target_os = "macos")]
+        if let Ok(ns) = w.ns_window() {
+            xpaste_platform::translate_prepare_cancel(ns as usize);
+        }
         // 保留 hide()：`text` 卡片经 show() 上屏，tao 的可见标记要跟着复位
         if let Err(e) = w.hide() {
             log::warn!("隐藏划词卡片失败：{e}");

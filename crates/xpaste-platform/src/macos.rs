@@ -76,6 +76,7 @@ unsafe extern "C" {
         ctx: *mut c_void,
         cb: extern "C" fn(ctx: *mut c_void, code: i32),
     );
+    fn xp_tr_prepare_cancel(window: usize);
 }
 
 // libSystem，总是链接
@@ -757,10 +758,25 @@ pub unsafe fn translate_prepare(
     let ctx = Box::into_raw(Box::new(tx)).cast::<c_void>();
     // SAFETY: 字符串在调用期间有效（Swift 侧同步复制）；window 见函数的 Safety；ctx 由 on_prepared 收回
     unsafe { xp_tr_prepare(source.as_ptr(), target.as_ptr(), window, ctx, on_prepared) };
-    match rx.recv() {
-        Ok(0) => Ok(PackStatus::Installed),
-        Ok(1) => Ok(PackStatus::Download),
+    prepare_status(rx.recv().ok())
+}
+
+/// Swift 回调码 → 结果：0 装好了；1 用户取消、仍未下载或窗口隐藏时被取消；2 或收不到回调为失败。
+fn prepare_status(code: Option<i32>) -> Result<PackStatus, SysTranslateError> {
+    match code {
+        Some(0) => Ok(PackStatus::Installed),
+        Some(1) => Ok(PackStatus::Download),
         _ => Err(SysTranslateError::Failed),
+    }
+}
+
+/// 隐藏窗口前调用（设计 §3.1）：`window`（`NSWindow` 指针的数值）里有进行中的 `translate_prepare` 时取消它，
+/// 那边按用户取消返回 `Download`。隐藏的窗口里确认框不弹也不返回，不取消就会一直等。只比较数值、不解引用；
+/// 任意线程可调，没有进行中的下载时什么都不做。
+pub fn translate_prepare_cancel(window: usize) {
+    if translate_supported() {
+        // SAFETY: 只传一个整数，Swift 侧派到主队列处理
+        unsafe { xp_tr_prepare_cancel(window) };
     }
 }
 
@@ -927,6 +943,17 @@ pub fn hide_window(_hwnd: isize) {}
 mod tests {
     use super::*;
     use objc2_core_graphics::kCGColorSpaceLinearSRGB;
+
+    /// 隐藏窗口时取消（code 1）与用户取消一样返回 Download：命令照常结束、下载标记经守卫复位，前端按取消处理（设计 §3.1）。
+    #[test]
+    fn prepare_cancel_maps_to_download() {
+        assert_eq!(prepare_status(Some(0)), Ok(PackStatus::Installed));
+        assert_eq!(prepare_status(Some(1)), Ok(PackStatus::Download));
+        assert_eq!(prepare_status(Some(2)), Err(SysTranslateError::Failed));
+        assert_eq!(prepare_status(None), Err(SysTranslateError::Failed));
+        // 没有进行中的下载时取消什么都不做
+        translate_prepare_cancel(0);
+    }
 
     #[test]
     fn unreadable_file_paths_fall_back_to_bitmap() {

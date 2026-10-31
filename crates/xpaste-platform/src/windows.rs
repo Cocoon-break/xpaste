@@ -1004,6 +1004,8 @@ pub unsafe fn translate_prepare(
     Err(SysTranslateError::Unsupported)
 }
 
+pub fn translate_prepare_cancel(_window: usize) {}
+
 pub fn language_name(_code: &str) -> Option<String> {
     None
 }
