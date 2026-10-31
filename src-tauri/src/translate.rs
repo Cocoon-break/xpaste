@@ -126,8 +126,11 @@ pub enum Fail {
     Timeout,
     Connect,
     Bad,
-    /// 系统翻译缺语言包，带拼好的提示
-    Pack(String),
+    /// 系统翻译缺语言包：识别出的源语言代码与目标语言
+    Pack {
+        source: String,
+        target: Lang,
+    },
     Os,
     Unsupported,
     System,
@@ -145,7 +148,7 @@ impl Fail {
             Fail::Timeout => "timeout".into(),
             Fail::Connect => "connect".into(),
             Fail::Bad => "bad".into(),
-            Fail::Pack(_) => "pack".into(),
+            Fail::Pack { .. } => "pack".into(),
             Fail::Os => "os".into(),
             Fail::Unsupported => "unsupported".into(),
             Fail::System => "system".into(),
@@ -165,7 +168,15 @@ impl From<Fail> for AppError {
             Fail::Timeout => t("翻译超时"),
             Fail::Connect => t("连不上翻译接口，请检查网络或接口地址"),
             Fail::Bad => t("翻译服务返回的内容无法识别"),
-            Fail::Pack(msg) => AppError::TranslatePack(msg),
+            Fail::Pack { source, target } => AppError::TranslatePack {
+                msg: format!(
+                    "系统翻译还没有{}和{}的语言包",
+                    lang_name(&source),
+                    target.label()
+                ),
+                from: source,
+                to: target.code().into(),
+            },
             Fail::Os => AppError::TranslateOs,
             Fail::Unsupported => t("系统翻译不支持这种语言"),
             Fail::System => t("系统翻译失败"),
@@ -173,6 +184,14 @@ impl From<Fail> for AppError {
             Fail::Internal(e) => e,
         }
     }
+}
+
+/// 语言代码的显示名：五种界面语言用 `Lang::label`，其余用系统的本地化名，都认不出时用原代码（设计 §3.1）。
+pub fn lang_name(code: &str) -> String {
+    Lang::from_code(code)
+        .map(|l| l.label().to_string())
+        .or_else(|| xpaste_platform::language_name(code))
+        .unwrap_or_else(|| code.to_string())
 }
 
 /// 翻译 `text`：返回实际翻成的语言与去掉首尾空白的完整译文。
@@ -245,10 +264,7 @@ async fn system(text: &str, target: Lang) -> Result<String, Fail> {
     .map_err(|e| Fail::Internal(e.into()))?;
     r.map_err(|e| match e {
         E::OsTooOld => Fail::Os,
-        E::NotInstalled { source } => {
-            let from = Lang::from_code(&source).map_or(source, |l| l.label().to_string());
-            Fail::Pack(format!("需要先下载{from}→{}的翻译语言包", target.label()))
-        }
+        E::NotInstalled { source } => Fail::Pack { source, target },
         E::Unsupported => Fail::Unsupported,
         E::Timeout => Fail::Timeout,
         E::Failed => Fail::System,
@@ -570,5 +586,26 @@ pub(crate) mod tests {
         assert_eq!(c.push("e", t + ms(70)), None);
         assert_eq!(c.flush().as_deref(), Some("e"));
         assert_eq!(c.flush(), None);
+    }
+
+    /// 缺语言包的提示同时点出两种语言，不写成“A→B”（设计 §3.1）。
+    #[test]
+    fn pack_message_names_both_languages() {
+        let e = AppError::from(Fail::Pack {
+            source: "en".into(),
+            target: Lang::ZhHans,
+        });
+        assert_eq!(e.to_string(), "系统翻译还没有English和简体中文的语言包");
+        // 不在五种之内的语言：系统本地化名，macOS 以外退回原代码
+        let e = AppError::from(Fail::Pack {
+            source: "fr".into(),
+            target: Lang::Ja,
+        });
+        let msg = e.to_string();
+        assert!(
+            msg.starts_with("系统翻译还没有") && msg.ends_with("和日本語的语言包"),
+            "{msg}"
+        );
+        assert!(!cfg!(windows) || msg.contains("fr"));
     }
 }

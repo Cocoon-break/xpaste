@@ -62,4 +62,9 @@ export const translateEngines = () => invoke<Engines>('translate_engines');
 export const translateTest = (engine: string, baseUrl: string, apiKey: string, model: string, lang: string) =>
   invoke<string>('translate_test', { engine, baseUrl, apiKey, model, lang });
 export const translateStatus = (lang: string) => invoke<TranslateStatus>('translate_status', { lang });
-export const openTranslationSettings = () => invoke<void>('open_translation_settings');
+/**
+ * 在 windowLabel 窗口里弹出系统的下载语言包确认，等下载结束：`installed` 已下载，`download` 取消了（设计 §3.1）。
+ * source 为空串时为设置那一行的语言对。确认框弹不出时后端打开“语言与地区”并报错说明。
+ */
+export const translateDownload = (windowLabel: string, source: string, target: string) =>
+  invoke<'installed' | 'download'>('translate_download', { windowLabel, source, target });

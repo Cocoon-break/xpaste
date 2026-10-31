@@ -48,6 +48,9 @@ fn main() {
     println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
     println!("cargo:rustc-link-arg=-Wl,-weak_framework,Translation");
     println!("cargo:rustc-link-lib=framework=NaturalLanguage");
+    // xp_tr_prepare 挂 SwiftUI 视图（NSHostingView）；两者 macOS 13 都有，正常链接
+    println!("cargo:rustc-link-lib=framework=SwiftUI");
+    println!("cargo:rustc-link-lib=framework=AppKit");
 }
 
 /// 跑 `xcrun` 取一行输出；失败时构建报错。

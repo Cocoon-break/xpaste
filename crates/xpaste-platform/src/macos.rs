@@ -25,8 +25,8 @@ use objc2_core_graphics::{
 };
 use objc2_core_media::{CMFormatDescription, CMTime};
 use objc2_foundation::{
-    NSArray, NSData, NSDictionary, NSFileManager, NSIndexSet, NSNumber, NSOperatingSystemVersion,
-    NSPoint, NSProcessInfo, NSRect, NSSize, NSString, NSURL, ns_string,
+    NSArray, NSData, NSDictionary, NSFileManager, NSIndexSet, NSLocale, NSNumber,
+    NSOperatingSystemVersion, NSPoint, NSProcessInfo, NSRect, NSSize, NSString, NSURL, ns_string,
 };
 use objc2_vision::{
     VNImageRequestHandler, VNRecognizeTextRequest, VNRequest, VNRequestTextRecognitionLevel,
@@ -67,6 +67,13 @@ unsafe extern "C" {
         target: *const c_char,
         ctx: *mut c_void,
         cb: TrCallback,
+    );
+    fn xp_tr_prepare(
+        source: *const c_char,
+        target: *const c_char,
+        window: *mut c_void,
+        ctx: *mut c_void,
+        cb: extern "C" fn(ctx: *mut c_void, code: i32),
     );
 }
 
@@ -717,6 +724,50 @@ pub fn translate_text(text: &str, target: &str) -> Result<String, SysTranslateEr
     unsafe { xp_tr_translate(text.as_ptr(), target.as_ptr(), ctx, on_translated) };
     rx.recv_timeout(TRANSLATE_TIMEOUT)
         .unwrap_or(Err(SysTranslateError::Timeout))
+}
+
+extern "C" fn on_prepared(ctx: *mut c_void, code: i32) {
+    // SAFETY: ctx 是 translate_prepare 里 Box::into_raw 的发送端，Swift 侧恰好回调一次，这里收回所有权
+    let tx = unsafe { Box::from_raw(ctx.cast::<mpsc::Sender<i32>>()) };
+    let _ = tx.send(code);
+}
+
+/// 弹出系统“下载翻译语言”确认，等用户选择及下载结束（设计 §3.1、§4）。`source` 为空串时同 `translate_pack` 的语言对。
+/// `window` 是正在显示的 xPaste 窗口的 `NSWindow` 指针：确认框靠挂进它的 SwiftUI 视图弹出，隐藏窗口弹不出来。
+/// 阻塞、不设超时（下载时长由系统决定）；视图在主队列上挂，所以**只在工作线程调用**，且主线程在跑事件循环。
+/// 返回下载后的状态：装好了为 `Installed`，取消为 `Download`；确认框弹不出来为 `Err(Failed)`。
+///
+/// # Safety
+/// `window` 为空或是有效的 `NSWindow` 指针，且在本函数返回前窗口不被释放。
+pub unsafe fn translate_prepare(
+    source: &str,
+    target: &str,
+    window: *mut c_void,
+) -> Result<PackStatus, SysTranslateError> {
+    if !translate_supported() {
+        return Err(SysTranslateError::OsTooOld);
+    }
+    let (Ok(source), Ok(target)) = (CString::new(source), CString::new(target)) else {
+        return Err(SysTranslateError::Failed);
+    };
+    let (tx, rx) = mpsc::channel::<i32>();
+    let ctx = Box::into_raw(Box::new(tx)).cast::<c_void>();
+    // SAFETY: 字符串在调用期间有效（Swift 侧同步复制）；window 见函数的 Safety；ctx 由 on_prepared 收回
+    unsafe { xp_tr_prepare(source.as_ptr(), target.as_ptr(), window, ctx, on_prepared) };
+    match rx.recv() {
+        Ok(0) => Ok(PackStatus::Installed),
+        Ok(1) => Ok(PackStatus::Download),
+        _ => Err(SysTranslateError::Failed),
+    }
+}
+
+/// 语言代码按系统语言的本地化名（如 `fr` → “法语”），认不出时为 None。
+pub fn language_name(code: &str) -> Option<String> {
+    autoreleasepool(|_| {
+        NSLocale::currentLocale()
+            .localizedStringForLanguageCode(&NSString::from_str(code))
+            .map(|s| s.to_string())
+    })
 }
 
 /// 当前线程降到 utility QoS（后台识别用）。尽力而为。

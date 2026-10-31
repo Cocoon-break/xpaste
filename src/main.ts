@@ -3,7 +3,7 @@ import { attachConsole, info } from './api/log';
 import {
   accessibilityGranted, bootstrap, clearHistory, copy, copyTextPlain, countUnpinned, createSnippet, deleteRecords, finishOnboarding, frontendReady, getRecord, hidePanel, installedApps,
   ocrProgress, openUrl, overlayBegin, pickFolder, prunePreview, reocr, requestAccessibility, requestScreenCapture, revealFile, saveSettings, saveSnippet, screenCaptureGranted, search,
-  openTranslationSettings, setDialogOpen, setPaused, setPinned, translateEngines, translateRecord, translateStatus, translateTest, undoDelete, updateSnippet,
+  setDialogOpen, setPaused, setPinned, translateEngines, translateDownload, translateRecord, translateStatus, translateTest, undoDelete, updateSnippet,
 } from './api/commands';
 import {
   onConfirmClear,
@@ -747,12 +747,21 @@ function doTranslate(id: number, again = false, engine?: Engine) {
       // 别处已在翻译这条（同一条只跑一个请求）：增量照样会到
       if (err.kind === 'invalid' && err.message === '正在翻译') return;
       end({ ok: false, error: err.message, engine: trs.get(id)?.engine ?? tag });
-      // 未配置、系统太旧：去设置的“翻译”标签；缺语言包：打开系统设置（M26 规则 13）
+      // 未配置、系统太旧：去设置的“翻译”标签；缺语言包：就地下载，装好后用系统翻译重试（M26 规则 13，设计 §3.1）
       const action = err.kind === 'translateConfig' || err.kind === 'translateOs' ? { label: '去设置', run: openTrSettings }
-        : err.kind === 'translatePack' ? { label: '打开系统设置', run: () => void openTranslationSettings().catch((e: AppError) => toast(e.message)) }
+        : err.kind === 'translatePack' ? { label: '下载语言包', run: () => downloadPack(id, err) }
           : undefined;
       if (action) toast(err.message, { action });
     },
+  );
+}
+// 面板里点“下载语言包”：用那次识别出的源语言和实际目标语言；只有最后一次点的结果触发重试
+let packSeq = 0;
+function downloadPack(id: number, err: AppError) {
+  const seq = ++packSeq;
+  void translateDownload('panel', err.source ?? '', err.target ?? S.settings.translateLang).then(
+    (r) => seq === packSeq && r === 'installed' && doTranslate(id, false, 'system'),
+    (e: AppError) => toast(e.message),
   );
 }
 
@@ -1704,22 +1713,23 @@ let trKnown: boolean | null = null, trEngine: 'system' | 'openai' = 'openai', tr
 const trSupported = () => mac && (trKnown ?? true);
 const trEffective = () => (trSupported() ? trEngine : 'openai');
 const trSave = () => (trTouched || !mac ? trEffective() : S.settings.translateEngine);
+function showTrPack(t: string, btn = false) {
+  trPackRow.hidden = !t;
+  trPack.textContent = t;
+  trPackBtn.hidden = !btn;
+}
+// 目标语言为 English 时后端查的是简体中文 ↔ English（M26 规则 6）
+const trPair = () => (trLangIn.value === 'en' ? '简体中文 ↔ English' : `英语 ↔ ${trLangIn.selectedOptions[0].text}`);
 function paintTrPack() {
   const seq = ++trSeq;
-  const show = (t: string, btn = false) => {
-    trPackRow.hidden = !t;
-    trPack.textContent = t;
-    trPackBtn.hidden = !btn;
-  };
+  const show = showTrPack, pair = trPair();
   show('');
   if (trEffective() !== 'system') return;
-  // 目标语言为 English 时后端查的是简体中文 ↔ English（M26 规则 6）
-  const pair = trLangIn.value === 'en' ? '简体中文 ↔ English' : `英语 ↔ ${trLangIn.selectedOptions[0].text}`;
   void translateStatus(trLangIn.value).then(
     (r) => {
       if (seq !== trSeq) return;
       if (r.pack === 'installed') show(`${pair}：已下载`);
-      else if (r.pack === 'download') show(`${pair}：需要下载语言包`, true);
+      else if (r.pack === 'download') show(`${pair}：未下载`, true);
       else if (r.pack === 'unsupported') show('系统翻译不支持这种语言');
     },
     (e: AppError) => void info(`读取翻译语言包状态失败 kind=${e.kind}`),
@@ -1763,7 +1773,18 @@ trEngineEl.addEventListener('keydown', (e) => {
   n.focus();
 });
 trLangIn.addEventListener('change', paintTrPack);
-trPackBtn.addEventListener('click', () => void openTranslationSettings().then(hide, (err: AppError) => toast(err.message)));
+// 下载语言包（设计 §3.1）：系统确认框挂在面板上弹出；结果回来重查。期间换了语言或重画过，结果丢掉
+trPackBtn.addEventListener('click', () => {
+  const seq = ++trSeq;
+  showTrPack(`${trPair()}：下载中…`);
+  void translateDownload('panel', '', trLangIn.value).then(
+    () => seq === trSeq && paintTrPack(),
+    (e: AppError) => {
+      toast(e.message);
+      if (seq === trSeq) paintTrPack();
+    },
+  );
+});
 $('#trKeyBtn').addEventListener('click', () => {
   const show = trKeyIn.type === 'password';
   trKeyIn.type = show ? 'text' : 'password';

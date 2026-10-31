@@ -12,7 +12,7 @@ use xpaste_platform::PackStatus;
 use crate::error::AppError;
 use crate::events::{TRANSLATE_DELTA, emit};
 use crate::state::AppState;
-use crate::translate::{self, Cfg, Coalescer, Delta, Engine, Lang, Timeouts};
+use crate::translate::{self, Cfg, Coalescer, Delta, Engine, Fail, Lang, Timeouts};
 
 #[derive(Debug, Serialize)]
 pub struct Translated {
@@ -221,6 +221,67 @@ pub async fn translate_status(lang: String) -> TranslateStatus {
         None
     };
     TranslateStatus { supported, pack }
+}
+
+/// 下载语言包（设计 §3.1）：在 `window_label` 那个正在显示的窗口里弹出系统的下载确认，等下载结束，
+/// 返回 `installed` 或 `download`（取消了）。`source` 为空串时用设置那一行的语言对（英语 ↔ 目标，目标是英语时为简体中文）。
+/// 确认框弹不出来时退回打开“语言与地区”，报错里说明去哪下载。
+#[tauri::command]
+pub async fn translate_download(
+    app: AppHandle,
+    window_label: String,
+    source: String,
+    target: String,
+) -> Result<&'static str, AppError> {
+    let Some(to) = Lang::from_code(&target) else {
+        return Err(AppError::Invalid("目标语言不对".into()));
+    };
+    let source = match source.as_str() {
+        "" if to == Lang::En => "zh-Hans".to_string(),
+        "" => "en".to_string(),
+        _ => source,
+    };
+    let w = app
+        .get_webview_window(&window_label)
+        .ok_or_else(|| AppError::Invalid("窗口不存在".into()))?;
+    // ns_window 经主线程取指针（Tauri 内部转到主线程）；视图由 Swift 侧派到主队列挂上，这里只在阻塞线程上等（见文件头）
+    #[cfg(target_os = "macos")]
+    let ns = w.ns_window()? as usize;
+    #[cfg(not(target_os = "macos"))]
+    let ns = {
+        let _ = w;
+        0usize
+    };
+    let t0 = Instant::now();
+    let src = source.clone();
+    let r = tauri::async_runtime::spawn_blocking(move || {
+        // SAFETY: 面板（及其他 xPaste 窗口）常驻、不销毁，指针在等待期间一直有效
+        unsafe { xpaste_platform::translate_prepare(&src, &target, ns as *mut std::ffi::c_void) }
+    })
+    .await?;
+    let ms = t0.elapsed().as_millis();
+    use xpaste_platform::SysTranslateError as E;
+    match r {
+        Ok(PackStatus::Installed) => {
+            log::info!("trpack 下载 installed ms={ms}");
+            Ok("installed")
+        }
+        Ok(_) => {
+            log::info!("trpack 下载 未完成 ms={ms}");
+            Ok("download")
+        }
+        Err(E::OsTooOld) => Err(AppError::TranslateOs),
+        Err(E::Failed) => {
+            log::warn!("trpack 确认框弹不出，打开语言与地区 ms={ms}");
+            open_translation_settings(app);
+            Err(AppError::Translate(format!(
+                "在这一页最下方点“翻译语言…”，下载{}和{}",
+                translate::lang_name(&source),
+                to.label()
+            )))
+        }
+        Err(_) => Err(Fail::Unsupported.into()),
+    }
 }
 
 /// 打开系统设置“语言与地区”（翻译语言在这一页），打不开时退回打开系统设置。

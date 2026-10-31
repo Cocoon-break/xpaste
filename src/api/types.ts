@@ -149,6 +149,9 @@ export interface AppError {
     | 'translateOs'
     | 'translate';
   message: string;
+  /** 只有 translatePack：识别出的源语言代码与目标语言代码，下载语言包并重试时用（设计 §3.1） */
+  source?: string;
+  target?: string;
 }
 
 /** `translate_record` 的结果：去掉首尾空白的译文与实际翻成的语言代码（M26 规则 8、9）。 */

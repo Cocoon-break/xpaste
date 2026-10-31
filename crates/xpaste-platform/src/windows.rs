@@ -941,6 +941,22 @@ pub fn translate_text(_text: &str, _target: &str) -> Result<String, SysTranslate
     Err(SysTranslateError::Unsupported)
 }
 
+/// 系统翻译只在 macOS 上有。
+///
+/// # Safety
+/// 同 macOS：`window` 为空或是有效的窗口指针（这里不用它）。
+pub unsafe fn translate_prepare(
+    _source: &str,
+    _target: &str,
+    _window: *mut std::ffi::c_void,
+) -> Result<PackStatus, SysTranslateError> {
+    Err(SysTranslateError::Unsupported)
+}
+
+pub fn language_name(_code: &str) -> Option<String> {
+    None
+}
+
 /// 当前线程降到低于正常优先级（后台识别用）。尽力而为。
 pub fn lower_thread_priority() {
     // SAFETY: 当前线程伪句柄，只改本线程
