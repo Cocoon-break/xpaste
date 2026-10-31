@@ -297,8 +297,8 @@ pub async fn translate_download(
     })
     .await;
     drop(guard);
-    // 期间被忽略的失焦补一次隐藏，同 set_dialog_open；设置还开着时不隐藏
-    if !state.dialog_open.load(Ordering::SeqCst) {
+    // 期间被忽略的失焦补一次隐藏，同 set_dialog_open；片段对话框开着时不隐藏
+    if !state.blur_keeps.load(Ordering::SeqCst) {
         crate::panel::hide_if_unfocused(&app);
     }
     let r = r?;

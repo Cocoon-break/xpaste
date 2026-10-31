@@ -454,9 +454,9 @@ pub fn hide_animated(app: &AppHandle, animate: bool) {
 /// 直接隐藏（失焦、粘贴前、兜底线程、淡出播完）。打断进行中的淡出，隐藏后把 alpha 复位为 1 供下次显示。
 pub fn hide(app: &AppHandle) {
     // 隐藏时前端会关掉所有对话框；这里先复位，前端漏发（例如开发时重载页面）也不会卡住失焦隐藏
-    app.state::<AppState>()
-        .dialog_open
-        .store(false, Ordering::SeqCst);
+    let state = app.state::<AppState>();
+    state.dialog_open.store(false, Ordering::SeqCst);
+    state.blur_keeps.store(false, Ordering::SeqCst);
     HIDE_REQ.store(0, Ordering::Relaxed);
     FADING.store(0, Ordering::Relaxed);
     on_main(app, |app| {
@@ -481,7 +481,7 @@ pub fn hide(app: &AppHandle) {
     });
 }
 
-/// 可见但已失焦时直接隐藏（对话框全部关闭时由 `set_dialog_open` 调用）。
+/// 可见但已失焦时直接隐藏（片段对话框关闭、选完文件夹时由 `set_dialog_open` 调用）。
 pub fn hide_if_unfocused(app: &AppHandle) {
     let Some(w) = window(app) else { return };
     if w.is_visible().unwrap_or(false) && !w.is_focused().unwrap_or(true) {

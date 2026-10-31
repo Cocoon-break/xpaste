@@ -205,15 +205,17 @@ pub fn run() {
                 return;
             }
             match event {
-                // 对话框打开时（例如设置里切去别的应用查东西）、下载语言包期间（系统确认框会抢焦点）、
-                // 划词卡片拿走键盘时（M26 规则 18：面板不隐藏）失焦不隐藏
+                // 失焦即隐藏，设置、确认框开着也一样（M04 规则 3）。例外：片段对话框开着或正在选文件夹、
+                // 下载语言包期间（系统确认框会抢焦点）、划词卡片拿走键盘时（M26 规则 18）、
+                // 设置开着时开始的截图或录屏遮罩拿走键盘时（M15 交互规则 4：面板留着一起截进去）
                 WindowEvent::Focused(false) => {
                     let app = window.app_handle();
                     let st = app.state::<AppState>();
                     let seq = std::sync::atomic::Ordering::SeqCst;
-                    if !st.dialog_open.load(seq)
+                    if !st.blur_keeps.load(seq)
                         && !st.tr_downloading.load(seq)
                         && !trcard::has_keyboard(app)
+                        && !shot::active(app)
                     {
                         panel::hide(app);
                     }

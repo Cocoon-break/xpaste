@@ -869,6 +869,11 @@ fn after_end(app: &AppHandle, generation: u64, previous: Option<isize>) {
     }
 }
 
+/// 截图（含录屏的选区与倒计时）进行中：期间面板失焦不隐藏（设置开着时面板留着，M15 交互规则 4）。
+pub fn active(app: &AppHandle) -> bool {
+    session(app).is_active()
+}
+
 /// 面板上开着设置或确认框：截图不隐藏面板。
 fn keeps_panel(app: &AppHandle) -> bool {
     app.state::<AppState>().dialog_open.load(Ordering::SeqCst)

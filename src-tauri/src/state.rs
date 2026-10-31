@@ -27,6 +27,9 @@ pub struct AppState {
     pub onboarding: AtomicBool,
     /// 面板上设置或确认框打开（引导不算）：失焦与快捷键都不隐藏面板（快捷键改发 `hotkey-pressed`）；面板隐藏时复位
     pub dialog_open: AtomicBool,
+    /// 面板失焦也不隐藏：片段对话框开着（写了一半的内容不能丢，M25 规则 5），或正在用系统窗口选文件夹。
+    /// 设置、确认框开着时失焦照常隐藏（M04 规则 3）；面板隐藏时复位
+    pub blur_keeps: AtomicBool,
     /// 进行中的截图（冻结图与各屏遮罩就绪情况）
     pub shot: Mutex<shot::Session>,
     /// 进行中的录屏（M24）
@@ -62,6 +65,7 @@ impl AppState {
             previous_window: AtomicIsize::new(0),
             onboarding: AtomicBool::new(false),
             dialog_open: AtomicBool::new(false),
+            blur_keeps: AtomicBool::new(false),
             shot: Mutex::default(),
             rec: Mutex::default(),
             translating: Mutex::default(),

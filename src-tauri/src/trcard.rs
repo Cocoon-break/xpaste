@@ -718,7 +718,7 @@ pub fn blur(app: &AppHandle, seq: u64) {
         s.keyboard = false;
     }
     hide_window(app);
-    if !state.dialog_open.load(Ordering::SeqCst) {
+    if !state.blur_keeps.load(Ordering::SeqCst) {
         crate::panel::hide_if_unfocused(app);
     }
 }

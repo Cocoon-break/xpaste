@@ -1531,11 +1531,14 @@ const handlers = {
 // 结果在点击时就交出去（调用方不必等收起动画），面板隐藏时直接 close 也按 false 结算。
 // 同一时间只有一个确认框：已有一个在等待时，新的请求直接得到 false
 const cfDlg = $<HTMLDialogElement>('#confirm'), cfOk = $<HTMLButtonElement>('#cfOk');
-// 设置、确认框或片段对话框（M25 规则 5）打开时后端不因失焦或快捷键隐藏面板：每次 showModal 之后与每个 close 事件里按 DOM 实际状态同步。
-// 引导不算：其中“授权”要切去系统设置，面板浮在最上层会盖住它，照旧失焦隐藏
+// 设置、确认框或片段对话框（M25 规则 5）打开时后端不因快捷键隐藏面板；失焦时只有片段对话框开着（写了一半的内容不能丢）
+// 或正在选文件夹（系统的选择窗口会抢焦点）才不隐藏，设置、确认框开着照常隐藏（M04 规则 3）。
+// 每次 showModal 之后与每个 close 事件里按 DOM 实际状态同步。引导不算：其中“授权”要切去系统设置，照旧失焦隐藏
 const keepDlgs = [...document.querySelectorAll<HTMLDialogElement>('#settings, #confirm, #snippet')];
+let picking = false;
 const syncDialogOpen = () =>
-  void setDialogOpen(keepDlgs.some((d) => d.open)).catch((e: AppError) => void info(`同步对话框状态失败 kind=${e.kind}`));
+  void setDialogOpen(keepDlgs.some((d) => d.open), picking || $<HTMLDialogElement>('#snippet').open)
+    .catch((e: AppError) => void info(`同步对话框状态失败 kind=${e.kind}`));
 keepDlgs.forEach((d) => d.addEventListener('close', syncDialogOpen));
 let cfResolve: ((ok: boolean) => void) | null = null, cfReturn: HTMLElement | null = null, cfTimer = 0;
 function confirm({ title, body, ok, cancel = '取消', danger = false }: { title: string; body: string; ok: string; cancel?: string; danger?: boolean }) {
@@ -1703,13 +1706,19 @@ function dirField(id: string, placeholder: () => string) {
       input.placeholder = placeholder();
     },
   };
-  $(`#${id}Btn`).addEventListener('click', () =>
+  // 系统的选择窗口会抢走面板的焦点：期间失焦不隐藏，关掉后面板没拿回焦点再补隐藏
+  $(`#${id}Btn`).addEventListener('click', () => {
+    picking = true;
+    syncDialogOpen();
     void pickFolder(f.pending || undefined).then((d) => {
       if (!d) return;
       f.pending = d;
       f.paint();
-    }, (err) => f.paint(`打开选择文件夹窗口失败：${String(err)}`)),
-  );
+    }, (err) => f.paint(`打开选择文件夹窗口失败：${String(err)}`)).finally(() => {
+      picking = false;
+      syncDialogOpen();
+    });
+  });
   return f;
 }
 const shotDir = dirField('shotDir', () => (S.platform.os === 'macos' ? '~/Pictures/xPaste' : '图片\\xPaste'));
