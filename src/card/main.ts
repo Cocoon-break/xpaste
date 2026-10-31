@@ -36,6 +36,9 @@ let wide = false;
 let moved = false;
 /** 卡片刚上屏、用户还没按键或点鼠标：这期间的聚焦不是用户给的（见下方 focusin） */
 let fresh = false;
+/** 输入卡片的草稿（M26 规则 20）：原文框里的字随写随存，复制译文后清空；下次打开输入卡片填回。
+ *  卡片窗口一直预建着，存在这里就跨卡片保留，退出 xPaste 后不留。input：这张卡片是输入卡片 */
+let draft = '', input = false;
 /** 正在等系统的下载确认或下载：再点“下载语言包”不理，免得失败分支把键盘从确认框抢回来 */
 let downloading = false;
 /** 这次请求的方式：翻译中换用后，被接替的请求迟到的增量据此丢掉（M26 规则 16） */
@@ -114,12 +117,14 @@ void onCardShow((p) => {
     timer = window.setTimeout(() => void cardClose(p.seq), HINT_MS);
     return;
   }
-  if (p.kind === 'input') {
-    // 空的输入卡片（M26 规则 20）：展开成两栏，光标在原文框里
-    st = { kind: 'idle', source: '', engine: '', text: '', noAccess: false, other: null };
+  input = p.kind === 'input';
+  if (input) {
+    // 输入卡片（M26 规则 20）：展开成两栏，填回上次没用完的草稿，光标在原文框末尾
+    st = { kind: 'idle', source: draft, engine: '', text: '', noAccess: false, other: null };
     wide = true;
     render(true);
     src()?.focus();
+    src()?.setSelectionRange(draft.length, draft.length);
   } else {
     st = { kind: 'busy', source: p.source ?? '', engine: p.engine ?? '', text: '', noAccess: p.noAccess, other: null };
     sent = { text: st.source, pick };
@@ -189,6 +194,7 @@ async function copy() {
     return;
   }
   if (at !== seq) return;
+  if (input) draft = '';
   s.copied = true;
   render();
   timer = window.setTimeout(() => void cardClose(at), COPIED_MS);
@@ -238,6 +244,7 @@ root.addEventListener('input', (e) => {
   if (!s || !t.matches('textarea.c-orig')) return;
   const was = dirty(s) || !s.source.trim();
   s.source = (t as HTMLTextAreaElement).value;
+  if (input) draft = s.source;
   if (was !== (dirty(s) || !s.source.trim())) render(); else fit();
 });
 root.addEventListener('change', (e) => {
