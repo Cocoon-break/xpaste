@@ -99,7 +99,9 @@ public func xp_tr_prepare(
             rootView: PrepareView(
                 cfg: .init(source: Locale.Language(identifier: src), target: Locale.Language(identifier: tgt))
             ) { code in
-                holder.view?.removeFromSuperview()
+                // 只回调一次：.translationTask 重跑时第二次直接忽略，否则 Rust 侧会重复收回 ctx
+                guard let v = holder.view else { return }
+                v.removeFromSuperview()
                 holder.view = nil
                 cb(ctx, code)
             })

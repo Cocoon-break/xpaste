@@ -2,6 +2,7 @@
 //! 系统翻译与语言包查询靠主队列回调，不能在主线程上等；同步命令跑在主线程，所以这几个命令都是 async，
 //! 平台调用经 `spawn_blocking`（见 `translate::system`）。
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use serde::Serialize;
@@ -252,13 +253,24 @@ pub async fn translate_download(
         let _ = w;
         0usize
     };
+    let state = app.state::<AppState>();
+    let Some(guard) = Downloading::begin(&state.tr_downloading) else {
+        // 前端静默忽略
+        return Err(AppError::Invalid("正在下载语言包".into()));
+    };
     let t0 = Instant::now();
     let src = source.clone();
     let r = tauri::async_runtime::spawn_blocking(move || {
         // SAFETY: 面板（及其他 xPaste 窗口）常驻、不销毁，指针在等待期间一直有效
         unsafe { xpaste_platform::translate_prepare(&src, &target, ns as *mut std::ffi::c_void) }
     })
-    .await?;
+    .await;
+    drop(guard);
+    // 期间被忽略的失焦补一次隐藏，同 set_dialog_open；设置还开着时不隐藏
+    if !state.dialog_open.load(Ordering::SeqCst) {
+        crate::panel::hide_if_unfocused(&app);
+    }
+    let r = r?;
     let ms = t0.elapsed().as_millis();
     use xpaste_platform::SysTranslateError as E;
     match r {
@@ -273,7 +285,7 @@ pub async fn translate_download(
         Err(E::OsTooOld) => Err(AppError::TranslateOs),
         Err(E::Failed) => {
             log::warn!("trpack 确认框弹不出，打开语言与地区 ms={ms}");
-            open_translation_settings(app);
+            open_translation_settings(app.clone());
             Err(AppError::Translate(format!(
                 "在这一页最下方点“翻译语言…”，下载{}和{}",
                 translate::lang_name(&source),
@@ -281,6 +293,24 @@ pub async fn translate_download(
             )))
         }
         Err(_) => Err(Fail::Unsupported.into()),
+    }
+}
+
+/// 下载语言包进行中的标记（`AppState::tr_downloading`）：拿到才下载，drop 时复位，提前返回也不会卡住。
+struct Downloading<'a>(&'a AtomicBool);
+
+impl<'a> Downloading<'a> {
+    /// 已有一个在下载时为 None
+    fn begin(flag: &'a AtomicBool) -> Option<Self> {
+        flag.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .ok()
+            .map(|_| Self(flag))
+    }
+}
+
+impl Drop for Downloading<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
     }
 }
 
@@ -428,6 +458,21 @@ mod tests {
         let e = run_with(&state, &c, id, false, Some(Engine::OpenAi), |_| {}).unwrap_err();
         assert_eq!(e.kind(), "translateConfig");
         assert!(l.accept().is_err());
+    }
+
+    /// 同一时刻只下载一个语言包；结束（含提前返回）后复位，可以再下载（设计 §3.1）。
+    #[test]
+    fn download_flag_allows_one_at_a_time() {
+        let state = AppState::for_test();
+        let g = Downloading::begin(&state.tr_downloading).unwrap();
+        assert!(
+            state.tr_downloading.load(Ordering::SeqCst),
+            "下载期间失焦不隐藏"
+        );
+        assert!(Downloading::begin(&state.tr_downloading).is_none());
+        drop(g);
+        assert!(!state.tr_downloading.load(Ordering::SeqCst));
+        assert!(Downloading::begin(&state.tr_downloading).is_some());
     }
 
     /// 翻译期间原文被改（片段编辑清掉了译文）：旧原文的译文不存，报“原文已改动”（M26 规则 12）。

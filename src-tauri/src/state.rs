@@ -33,6 +33,8 @@ pub struct AppState {
     pub rec: Mutex<rec::RecState>,
     /// 正在翻译的记录 id：同一条记录不发第二个请求（M26 规则 4）
     pub translating: Mutex<HashSet<i64>>,
+    /// 正在下载语言包：系统确认框可能抢走焦点，期间面板失焦不隐藏；同一时刻只下载一个（设计 §3.1）
+    pub tr_downloading: AtomicBool,
 }
 
 impl AppState {
@@ -60,6 +62,7 @@ impl AppState {
             shot: Mutex::default(),
             rec: Mutex::default(),
             translating: Mutex::default(),
+            tr_downloading: AtomicBool::new(false),
         }
     }
 

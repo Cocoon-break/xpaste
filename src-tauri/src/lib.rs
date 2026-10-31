@@ -188,14 +188,12 @@ pub fn run() {
                 return;
             }
             match event {
-                // 对话框打开时（例如设置里切去别的应用查东西）失焦不隐藏
+                // 对话框打开时（例如设置里切去别的应用查东西）、下载语言包期间（系统确认框会抢焦点）失焦不隐藏
                 WindowEvent::Focused(false) => {
                     let app = window.app_handle();
-                    if !app
-                        .state::<AppState>()
-                        .dialog_open
-                        .load(std::sync::atomic::Ordering::SeqCst)
-                    {
+                    let st = app.state::<AppState>();
+                    let seq = std::sync::atomic::Ordering::SeqCst;
+                    if !st.dialog_open.load(seq) && !st.tr_downloading.load(seq) {
                         panel::hide(app);
                     }
                 }

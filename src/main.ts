@@ -755,13 +755,15 @@ function doTranslate(id: number, again = false, engine?: Engine) {
     },
   );
 }
+// 已有一个语言包在下载：后端拒绝第二个，静默忽略
+const packBusy = (e: AppError) => e.kind === 'invalid' && e.message === '正在下载语言包';
 // 面板里点“下载语言包”：用那次识别出的源语言和实际目标语言；只有最后一次点的结果触发重试
 let packSeq = 0;
 function downloadPack(id: number, err: AppError) {
   const seq = ++packSeq;
   void translateDownload('panel', err.source ?? '', err.target ?? S.settings.translateLang).then(
     (r) => seq === packSeq && r === 'installed' && doTranslate(id, false, 'system'),
-    (e: AppError) => toast(e.message),
+    (e: AppError) => !packBusy(e) && toast(e.message),
   );
 }
 
@@ -1780,7 +1782,7 @@ trPackBtn.addEventListener('click', () => {
   void translateDownload('panel', '', trLangIn.value).then(
     () => seq === trSeq && paintTrPack(),
     (e: AppError) => {
-      toast(e.message);
+      if (!packBusy(e)) toast(e.message);
       if (seq === trSeq) paintTrPack();
     },
   );
