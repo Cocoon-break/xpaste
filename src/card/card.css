@@ -37,14 +37,23 @@ kbd {
   flex: none; height: 22px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent;
   color: var(--beam); font-size: 12px; cursor: pointer; transition: background-color 130ms ease;
 }
-/* 展开对照：左栏可编辑的原文、右栏译文，各自滚动（M26 规则 19、20）；标题行多目标语言下拉框 */
-.card .c-cols { flex: 0 1 auto; min-height: 0; display: flex; }
-.card .c-cols .c-body { flex: 1 1 0; min-width: 0; min-height: 140px; }
-.card .c-cols textarea.c-orig {
-  margin: 0; border: 0; border-right: 1px solid var(--line-2); border-radius: 0; resize: none; outline: none;
-  background: transparent; color: var(--fg); font: inherit; font-size: 13px; line-height: 1.6;
+/* 展开对照（M26 规则 19、20）：原文、译文各放进一个圆角框，中间留缝，不画贯穿的分割线（会和底部的横线交成十字）；
+   原文框是输入框的样子（凹底，聚焦时描边换品牌色），译文框是浅底。底部按钮不再画横线。标题行多目标语言下拉框 */
+.card .c-cols { flex: 0 1 auto; min-height: 0; display: flex; gap: 10px; padding: 6px 12px 4px; }
+.card .c-cols .c-body {
+  flex: 1 1 0; min-width: 0; min-height: 140px; padding: 10px 12px;
+  border-radius: 8px; border: 1px solid var(--line-2); background: var(--glass-2);
 }
+.card .c-cols .c-wait { color: var(--faint); }
+.card .c-cols textarea.c-orig {
+  margin: 0; resize: none; outline: none; background: var(--well); color: var(--fg);
+  font: inherit; font-size: 13px; line-height: 1.6; transition: border-color 130ms ease;
+}
+.card .c-cols textarea.c-orig:focus { border-color: var(--beam); }
 .card .c-cols textarea.c-orig::placeholder { color: var(--faint); }
+.card.wide .c-foot { border-top: 0; padding-top: 6px; }
+/* 展开时没有原文提示，标题行加高，好按住拖动 */
+.card.wide .c-head { padding: 10px 10px 4px 14px; }
 .card .c-head .c-to { flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
 .card .c-head select {
   flex: none; height: 22px; padding: 0 4px; border: 1px solid var(--line-2); border-radius: 6px;

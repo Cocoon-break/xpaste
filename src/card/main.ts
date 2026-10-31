@@ -82,7 +82,9 @@ function fit() {
     }
     return;
   }
-  const over = Math.max(0, ...bodies().map((b) => b.scrollHeight - b.clientHeight));
+  // 两栏整体被压低的部分（栏内框有最小高度）加上框内最多溢出的部分；只量框内会量少，窗口不长高，内容从底部透出来
+  const cols = root.querySelector<HTMLElement>('.c-cols');
+  const over = (cols ? cols.scrollHeight - cols.clientHeight : 0) + Math.max(0, ...bodies().map((b) => b.scrollHeight - b.clientHeight));
   const h = Math.ceil(card.offsetHeight + over);
   if (h !== lastH || wide !== lastWide) {
     lastH = h;

@@ -49,6 +49,8 @@ function langSelect(pick: string): string {
  *  `wide` 只有划词卡片传：标题行右侧出“对照原文 / 收起”；展开时标题行多目标语言下拉框，左栏是可编辑的原文，
  *  原文或语言改过时主按钮是“翻译 ⌘↵”（规则 20） */
 export function cardInner(s: Exclude<CardState, { kind: 'blocked' }>, wide?: boolean, mod = '⌘↵'): string {
+  // 截图卡片在遮罩里，不拖
+  const drag = wide === undefined ? '' : ' data-tauri-drag-region';
   const way = engineLabel(s.engine);
   const head = s.kind === 'idle' ? '翻译' : s.kind === 'busy' ? '翻译中…' : s.kind === 'done' ? '译文' : s.text ? '翻译中断' : '翻译失败';
   const lang = wide && s.kind === 'done' && s.lang ? LANG_LABEL[s.lang] ?? s.lang : '';
@@ -75,8 +77,9 @@ export function cardInner(s: Exclude<CardState, { kind: 'blocked' }>, wide?: boo
         : `<button type="button" class="go" data-act="copy" aria-disabled="${s.kind !== 'done'}">复制译文<kbd>${key}</kbd></button>`;
     foot = `<div class="c-foot"><span class="c-more">${extra}</span>${btn('close', '关闭<kbd>Esc</kbd>')}${go}</div>`;
   }
-  const line = `<div class="c-title" title="${esc(title)}">${esc(title)}</div>`;
+  // 标题行与原文提示是拖动区：按住拖动卡片（规则 19；按钮、下拉框不算）
+  const line = `<div class="c-title" title="${esc(title)}"${drag}>${esc(title)}</div>`;
   const toggle = s.kind === 'idle' ? '' : `<button type="button" data-act="wide" aria-pressed="${wide}">${wide ? '收起' : '对照原文'}</button>`;
-  const top = wide === undefined || s.copied ? line : `<div class="c-head">${line}${wide ? langSelect(s.pick ?? '') : ''}${toggle}</div>`;
-  return (s.source && !wide ? `<div class="c-src">${esc(clipSource(s.source))}</div>` : '') + top + body + err + note + foot;
+  const top = wide === undefined || s.copied ? line : `<div class="c-head"${drag}>${line}${wide ? langSelect(s.pick ?? '') : ''}${toggle}</div>`;
+  return (s.source && !wide ? `<div class="c-src"${drag}>${esc(clipSource(s.source))}</div>` : '') + top + body + err + note + foot;
 }

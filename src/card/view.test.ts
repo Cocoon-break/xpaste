@@ -68,7 +68,7 @@ test('原文提示取前 40 个字，超出加 …（后端已截过的再截一
   assert.equal(clipSource(s40 + '二'), s40 + '…');
   assert.equal(clipSource(clipSource(s40 + '二三')), s40 + '…');
   assert.equal(clipSource('😀'.repeat(41)), '😀'.repeat(40) + '…');
-  assert.match(cardHTML(st({ kind: 'busy', source: s40 + '二' })), new RegExp(`class="c-src">${s40}…<`));
+  assert.match(cardHTML(st({ kind: 'busy', source: s40 + '二' })), new RegExp(`class="c-src" data-tauri-drag-region>${s40}…<`));
 });
 
 test('所有文本转义', () => {
@@ -91,7 +91,7 @@ test('截图卡片（cardInner）：没有原文提示，标题行带方式，�
 test('划词卡片对照原文（M26 规则 19）：收起时原文前 40 个字＋“对照原文”，展开时原文整段在左栏、译文在右栏', () => {
   const source = 'Hello   world\n' + 'x'.repeat(60);
   const narrow = cardHTML(st({ kind: 'done', source, text: '你好' }));
-  assert.match(narrow, /class="c-src">Hello world x+…</);
+  assert.match(narrow, /class="c-src" data-tauri-drag-region>Hello world x+…</);
   assert.match(narrow, /data-act="wide" aria-pressed="false">对照原文</);
   assert.doesNotMatch(narrow, /c-cols/);
   const wide = cardHTML(st({ kind: 'done', source, text: '你好' }), true);
@@ -106,7 +106,7 @@ test('划词卡片对照原文（M26 规则 19）：收起时原文前 40 个字
 
 test('输入卡片（M26 规则 20）：空原文框、目标语言自动、“翻译”在原文为空时不可用，没有收起与换用', () => {
   const h = cardHTML(st({ kind: 'idle', source: '', engine: '', other: 'openai' }), true, 'Ctrl ↵');
-  assert.match(h, /class="c-title" title="翻译">翻译</);
+  assert.match(h, /class="c-title" title="翻译" data-tauri-drag-region>翻译</);
   assert.match(h, /<select data-act="lang" aria-label="目标语言"><option value="" selected>自动<\/option><option value="zh-Hans">简体中文/);
   assert.match(h, /placeholder="输入要翻译的文字" spellcheck="false"><\/textarea><div class="c-body c-wait">译文显示在这里/);
   assert.match(h, /data-act="go" aria-disabled="true">翻译<kbd>Ctrl ↵<\/kbd>/);

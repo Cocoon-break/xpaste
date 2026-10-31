@@ -627,23 +627,53 @@ fn take_keyboard(app: &AppHandle) {
 }
 
 /// 前端渲染后按内容改高度，`wide` 为展开对照（见 `resized`）。不是当前这一次时忽略。
+/// 用户拖动过卡片（标题行是拖动区，规则 19）时以窗口现在的位置与所在屏为准，不弹回原处，之后顶边不动。
 pub fn resize(app: &AppHandle, seq: u64, h: f64, wide: bool) {
-    let p = {
-        let mut s = session(app);
-        if !s.is_current(seq) {
-            return;
-        }
-        let Some(p) = s.place.as_mut() else { return };
-        *p = resized(*p, h, wide);
-        *p
-    };
     on_main(app, move |app| {
-        if let Some(w) = app.get_webview_window(LABEL)
-            && let Err(e) = apply(&w, &p)
-        {
-            log::warn!("划词卡片改高度失败：{e}");
+        let Some(w) = app.get_webview_window(LABEL) else {
+            return;
+        };
+        let now = current_place(&w);
+        let p = {
+            let mut s = session(app);
+            if !s.is_current(seq) {
+                return;
+            }
+            let Some(p) = s.place.as_mut() else { return };
+            if let Some((x, y, work, sf)) = now
+                && ((x - p.x).abs() > 1.0 || (y - p.y).abs() > 1.0)
+            {
+                *p = Placement {
+                    x,
+                    y,
+                    work,
+                    sf,
+                    up: false,
+                    ..*p
+                };
+            }
+            *p = resized(*p, h, wide);
+            *p
+        };
+        if let Err(e) = apply(&w, &p) {
+            log::warn!("划词卡片改大小失败：{e}");
         }
     });
+}
+
+/// 窗口现在的左上角（逻辑像素）与所在屏的工作区、缩放；换算同 `locate`。取不到时 None。
+fn current_place(w: &WebviewWindow) -> Option<(f64, f64, Rect, f64)> {
+    let m = w.current_monitor().ok()??;
+    let sf = m.scale_factor();
+    let pos = w.outer_position().ok()?;
+    let wa = m.work_area();
+    let work = Rect {
+        x: wa.position.x as f64 / sf,
+        y: wa.position.y as f64 / sf,
+        w: wa.size.width as f64 / sf,
+        h: wa.size.height as f64 / sf,
+    };
+    Some((pos.x as f64 / sf, pos.y as f64 / sf, work, sf))
 }
 
 /// 关闭（Esc、复制后、提示自动消失）：中止进行中的请求，撤下卡片；卡片拿过键盘时还给按快捷键前的地方
