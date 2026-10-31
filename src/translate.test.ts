@@ -48,7 +48,7 @@ test('翻译方式标注', () => {
   assert.equal(engineLabel(''), '');
 });
 test('换用另一种只在可用时', () => {
-  const a = { system: true, openai: true, model: 'm' };
+  const a = { system: true, openai: true, model: 'm', current: 'system' };
   assert.equal(otherEngine('system', a), 'openai');
   assert.equal(otherEngine('openai:m', a), 'system');
   assert.equal(otherEngine('system', { ...a, openai: false }), null);

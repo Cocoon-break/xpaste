@@ -1,4 +1,4 @@
-// 划词翻译卡片（设计 §3.2、§3.4）的整张 HTML。纯函数，状态由 main.ts 保存。
+// 划词翻译卡片（设计 §3.2、§3.4）的整张 HTML，截图译文卡片也用 cardInner。纯函数，状态由各自的 main.ts 保存。
 import { esc } from '../format.ts';
 import { engineLabel, type Engine } from '../translate.ts';
 
@@ -34,6 +34,11 @@ export function cardHTML(s: CardState): string {
     const msg = s.kind === 'empty' ? `没有可翻译的文字：先选中文字再按 ${s.hotkey ?? '翻译快捷键'}` : '这个应用里的内容不翻译';
     return `<div class="card hint" role="status"><p class="c-msg">${esc(msg)}</p></div>`;
   }
+  return `<div class="card" role="dialog" aria-label="译文">${cardInner(s)}</div>`;
+}
+
+/** 翻译卡片的内容（不含外层 .card）；截图译文卡片也用它，原文为空时不出原文提示（设计 §3.4） */
+export function cardInner(s: Extract<CardState, { kind: 'busy' | 'done' | 'fail' }>): string {
   const way = engineLabel(s.engine);
   const head = s.kind === 'busy' ? '翻译中…' : s.kind === 'done' ? '译文' : s.text ? '翻译中断' : '翻译失败';
   const title = way ? `${head} · ${way}` : head;
@@ -53,6 +58,6 @@ export function cardHTML(s: CardState): string {
       : `<button type="button" class="go" data-act="copy" aria-disabled="${s.kind !== 'done'}">复制译文<kbd>↵</kbd></button>`;
     foot = `<div class="c-foot"><span class="c-more">${extra}</span>${btn('close', '关闭<kbd>Esc</kbd>')}${copy}</div>`;
   }
-  return `<div class="card" role="dialog" aria-label="译文"><div class="c-src">${esc(clipSource(s.source))}</div>`
-    + `<div class="c-title" title="${esc(title)}">${esc(title)}</div>${body}${err}${note}${foot}</div>`;
+  return (s.source ? `<div class="c-src">${esc(clipSource(s.source))}</div>` : '')
+    + `<div class="c-title" title="${esc(title)}">${esc(title)}</div>${body}${err}${note}${foot}`;
 }

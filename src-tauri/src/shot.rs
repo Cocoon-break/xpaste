@@ -117,6 +117,8 @@ pub struct Session {
     finishing: bool,
     /// 遮罩页最后一次心跳（`shot_alive`，就绪也算一次），看门狗据此判断页面是否卡死
     alive: Option<Instant>,
+    /// 截图翻译识别出的原文，换用另一种翻译方式时重翻，不再识别（设计 §3.4）；截图结束或复制译文后清掉
+    tr_text: Option<String>,
 }
 
 /// 按下截图快捷键时怎么处理（M23 规则 1）。
@@ -295,6 +297,7 @@ impl Session {
         self.started = Some(now);
         // 冻结图已释放，之后的 shot_finish 因取不到帧被拒绝
         self.finishing = false;
+        self.tr_text = None;
         self.previous_window.take()
     }
 }
@@ -993,6 +996,8 @@ pub struct ShotOutcome {
     pub copied: bool,
     /// 完整译文，只有翻译动作有值（M26 规则 5）
     pub text: Option<String>,
+    /// 翻译方式标签（`Cfg::tag`），只有翻译动作有值（设计 §3.4）
+    pub engine: Option<String>,
 }
 
 /// 贴图图片目录；启动时清空（贴图只在本次运行内有效）。
@@ -1083,6 +1088,7 @@ fn run_action(
                 file: None,
                 copied: true,
                 text: None,
+                engine: None,
             }
         }
         Action::Save => save(app, png)?,
@@ -1098,6 +1104,7 @@ fn run_action(
                 file: None,
                 copied: false,
                 text: None,
+                engine: None,
             }
         }
     })
@@ -1139,6 +1146,7 @@ fn save(app: &AppHandle, png: Vec<u8>) -> Result<ShotOutcome, AppError> {
         file: Some(name),
         copied,
         text: None,
+        engine: None,
     })
 }
 
@@ -1187,6 +1195,7 @@ fn ocr(app: &AppHandle, generation: u64, png: Vec<u8>) -> Result<ShotOutcome, Ap
         file: None,
         copied: text.is_some(),
         text: None,
+        engine: None,
     })
 }
 
@@ -1207,9 +1216,55 @@ fn run_translate(
     let Some(text) = ocr_text(png)? else {
         return Err(AppError::Invalid("选区里没有识别到文字".into()));
     };
-    if !session(app).is_current(generation) {
-        return Err(AppError::Invalid("截图已结束".into()));
+    {
+        let mut s = session(app);
+        if !s.is_current(generation) {
+            return Err(AppError::Invalid("截图已结束".into()));
+        }
+        s.tr_text = Some(text.clone());
     }
+    stream(app, generation, label, &cfg, &text)
+}
+
+/// 译文卡片“换用…”、下载语言包后重试（设计 §3.4）：用会话里的原文按 `engine`（None 按设置）重翻，不再识别；
+/// 增量照旧只发给第 `i` 块屏的遮罩。输出保持认领（卡片上失败后放开过的也重新认领），不能出第二个动作。
+/// 遮罩重新拿键盘：下载语言包时系统确认框可能拿走了它。不是当前这次截图时报“截图已结束”。
+pub fn translate_again(
+    app: &AppHandle,
+    generation: u64,
+    i: usize,
+    engine: Option<translate::Engine>,
+) -> Result<ShotOutcome, AppError> {
+    let text = {
+        let mut s = session(app);
+        let Some(t) = s.tr_text.clone().filter(|_| s.is_current(generation)) else {
+            return Err(AppError::Invalid("截图已结束".into()));
+        };
+        s.finishing = true;
+        t
+    };
+    // 主线程上再看一次：期间按了 Esc 时遮罩已隐藏，不能又摆回来
+    on_main(app, move |app| {
+        if session(app).is_current(generation)
+            && app
+                .get_webview_window(&label(i))
+                .is_some_and(|w| !w.is_focused().unwrap_or(true))
+        {
+            show_overlay(app, i, true);
+        }
+    });
+    let cfg = translate::cfg_for(&app.state::<AppState>().settings(), engine);
+    stream(app, generation, &label(i), &cfg, &text)
+}
+
+/// 翻译 `text`，增量合并后发给 `label` 遮罩；每段发出前看一次截图是否已结束，已结束就中止请求、不再发事件。
+fn stream(
+    app: &AppHandle,
+    generation: u64,
+    label: &str,
+    cfg: &translate::Cfg,
+    text: &str,
+) -> Result<ShotOutcome, AppError> {
     let t0 = Instant::now();
     let mut co = Coalescer::default();
     let mut lang = None;
@@ -1223,7 +1278,7 @@ fn run_translate(
         };
         events::emit_to(app, label, events::TRANSLATE_DELTA, p);
     };
-    let r = tauri::async_runtime::block_on(translate::exec(&cfg, &text, None, |l, d| {
+    let r = tauri::async_runtime::block_on(translate::exec(cfg, text, None, |l, d| {
         if !session(app).is_current(generation) {
             return false;
         }
@@ -1253,6 +1308,7 @@ fn run_translate(
                 file: None,
                 copied: false,
                 text: Some(out),
+                engine: Some(tag),
             })
         }
         Err(f) => {
@@ -1454,6 +1510,7 @@ pub fn pin_copy(app: &AppHandle, w: &WebviewWindow) -> Result<ShotOutcome, AppEr
         file: None,
         copied: true,
         text: None,
+        engine: None,
     })
 }
 
@@ -1961,6 +2018,19 @@ mod tests {
         s.end();
         s.try_begin();
         assert!(s.claim_finish(), "新的一次截图重新可认领");
+    }
+
+    #[test]
+    fn tr_text_cleared_on_end() {
+        let mut s = Session::default();
+        s.try_begin();
+        s.tr_text = Some("原文".into());
+        s.end();
+        assert_eq!(s.tr_text, None, "截图结束后不再留着原文");
+        s.try_begin();
+        s.tr_text = Some("原文".into());
+        s.finish(Instant::now());
+        assert_eq!(s.tr_text, None, "复制译文后进入提示条模式，不能再换用");
     }
 
     #[test]

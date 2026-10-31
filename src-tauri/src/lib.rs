@@ -261,6 +261,7 @@ pub fn run() {
             commands::shot::overlay_begin,
             commands::shot::shot_finish,
             commands::shot::shot_copy_text,
+            commands::shot::shot_translate_again,
             commands::shot::pin_close,
             commands::shot::pin_copy,
             commands::shot::pin_save,

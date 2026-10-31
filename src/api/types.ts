@@ -170,6 +170,8 @@ export interface Engines {
   system: boolean;
   openai: boolean;
   model: string;
+  /** 按设置会用的翻译方式标签：`system` 或 `openai:{模型 ID}` */
+  current: string;
 }
 
 /** 系统翻译可用性；`pack` 为英语 ↔ 目标语言的语言包状态，不支持系统翻译时为 null。 */
@@ -217,8 +219,8 @@ export type BeginPayload = {
   recFps: number;
 };
 export type ShotAction = 'copy' | 'save' | 'ocr' | 'pin' | 'translate';
-/** 对应 `shot::ShotOutcome`；`text` 为完整译文，只有翻译动作有值。 */
-export type ShotOutcome = { action: ShotAction; chars: number | null; file: string | null; copied: boolean; text: string | null };
+/** 对应 `shot::ShotOutcome`；`text` 为完整译文、`engine` 为翻译方式标签，只有翻译动作有值。 */
+export type ShotOutcome = { action: ShotAction; chars: number | null; file: string | null; copied: boolean; text: string | null; engine: string | null };
 
 /** 划词卡片 `trcard-show`，对应 `trcard::Show`（设计 §3.2）。`seq` 之后的命令都带它；
  *  `source` / `engine` / `noAccess` 只对 `text` 有意义，`hotkey` 只对 `empty`。 */

@@ -43,7 +43,7 @@ pub async fn translate_record(
 }
 
 /// 前端单次指定的翻译方式（`system` / `openai`），没指定为 None（设计 §3.4）。
-fn parse_engine(name: Option<&str>) -> Result<Option<Engine>, AppError> {
+pub(crate) fn parse_engine(name: Option<&str>) -> Result<Option<Engine>, AppError> {
     match name {
         None => Ok(None),
         Some("system") => Ok(Some(Engine::System)),
@@ -187,6 +187,8 @@ pub struct Engines {
     pub openai: bool,
     /// 去掉首尾空白的模型 ID
     pub model: String,
+    /// 按设置会用的翻译方式标签（`Cfg::tag`）：截图翻译出第一段之前就失败时，卡片标题行据此标出方式
+    pub current: String,
 }
 
 /// 两种翻译方式各自能不能用，给“换用”按钮判断（设计 §3.4）。
@@ -198,6 +200,7 @@ pub async fn translate_engines(app: AppHandle) -> Engines {
         system: xpaste_platform::translate_supported(),
         openai: !s.translate_base_url.trim().is_empty() && !s.translate_model.trim().is_empty(),
         model: s.translate_model.trim().to_string(),
+        current: translate::cfg(&s).tag(),
     }
 }
 

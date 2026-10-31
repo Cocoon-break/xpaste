@@ -2,11 +2,13 @@
 // 状态 S、update / place、指针与键盘处理。坐标为本块屏的逻辑像素，冻结帧与标注 canvas 为物理像素。
 import './shot.css';
 import {
-  onShotBegin, onShotClaim, onShotEnd, onShotTranslateDelta, recStart, shotAlive, shotCancel, shotClaim, shotCopyText, shotFinish, shotFrame, shotReady,
-  type BeginPayload, type ShotAction, type ShotOutcome,
+  onShotBegin, onShotClaim, onShotEnd, onShotTranslateDelta, recStart, shotAlive, shotCancel, shotClaim, shotCopyText, shotDownloadPack, shotEngines,
+  shotFinish, shotFrame, shotReady, shotTranslateAgain, type BeginPayload, type ShotAction, type ShotOutcome,
 } from '../api/shot';
 import { error as logError, info } from '../api/log';
-import type { AppError } from '../api/types';
+import type { AppError, Engines } from '../api/types';
+import { cardInner, type CardState } from '../card/view';
+import { otherEngine, type Engine } from '../translate';
 import { badgePos, hit, loupePos, norm, outputSize, placeBar, placeCard, resize, type Handle, type Rect } from './geom';
 import { COLORS, drawObj, FONT, nextStep, type Obj, type Tool } from './ink';
 
@@ -93,21 +95,24 @@ let pix: HTMLCanvasElement | null = null; // 马赛克底图，第一次用马�
 let thumbUrl = '', toastT = 0, endT = 0, cdT = 0;
 /** 本屏已调用 shot_ready 的代数：只有已上屏的屏发心跳 */
 let readyGen = 0;
-/** 进行中的截图翻译：`done` 收完（可复制）；回到选区或开始新的一次时为 null */
-let tr: { gen: number; text: string; done: boolean } | null = null;
+/** 进行中的截图翻译：kind `done` 收完（可复制）；engine 为翻译方式标签，出第一段前先按设置猜；
+ *  seq 每次换用加一，迟到的结果按它丢弃；回到选区或开始新的一次时为 null */
+type ShotTr = Extract<CardState, { kind: 'busy' | 'done' | 'fail' }> & { gen: number; seq: number };
+let tr: ShotTr | null = null;
+let trSeq = 0;
+/** 两种翻译方式能不能用，每次按 T 取一次（设计 §3.4） */
+let engines: Engines | null = null;
+/** 缺语言包时那次识别出的语言对，下载用；正在等系统的下载确认或下载时再点不理 */
+let pack: { source: string; target: string } | null = null, downloading = false;
 
-/* 译文卡片（M26 规则 5）：第一段译文到达时出现，定一次位置后只变高 */
+/* 译文卡片（M26 规则 5、设计 §3.4）：第一段译文到达（或识别后翻译失败）时出现，定一次位置后只变高；内容由 cardInner 生成 */
 const card = document.createElement('div');
 card.className = 'card';
 card.hidden = true;
 card.setAttribute('role', 'dialog');
 card.setAttribute('aria-label', '译文');
-card.innerHTML = '<div class="c-body"></div><div class="c-err" hidden></div>'
-  + '<div class="c-foot"><button type="button" data-card="close">关闭<kbd>Esc</kbd></button>'
-  + '<button type="button" class="go" data-card="copy" aria-disabled="true">复制译文<kbd>↵</kbd></button></div>';
 ov.appendChild(card);
-const cardBody = card.querySelector<HTMLElement>('.c-body')!, cardErr = card.querySelector<HTMLElement>('.c-err')!;
-const cardCopy = card.querySelector<HTMLElement>('[data-card="copy"]')!;
+const cardBody = () => card.querySelector<HTMLElement>('.c-body');
 
 /* —— 开始：画冻结帧，画完才让后端上屏 —— */
 async function begin(p: BeginPayload) {
@@ -550,7 +555,12 @@ async function act(a: ShotAction) {
   const gen = S.gen, sel = { ...S.sel }, slow = a === 'ocr' || a === 'translate';
   busy.lastChild!.textContent = a === 'translate' ? '正在翻译…' : '正在识别文字…';
   S.phase = slow ? 'busy' : 'done';
-  if (a === 'translate') tr = { gen, text: '', done: false };
+  if (a === 'translate') {
+    const t: ShotTr = tr = { gen, seq: ++trSeq, kind: 'busy', source: '', engine: '', text: '', noAccess: false, other: null };
+    pack = null;
+    // 出第一段前就失败时，标题行按设置标出方式；增量、返回值带的是实际用的方式
+    void shotEngines().then((e) => { engines = e; if (tr === t) { t.engine ||= e.current; renderCard(); } }, () => {});
+  }
   update();
   const sweep = (a === 'copy' || a === 'save') && !reduced.matches;
   if (sweep) cut.insertAdjacentHTML('beforeend', '<i class="sweep"></i>');
@@ -564,8 +574,9 @@ async function act(a: ShotAction) {
     const msg = (e as AppError)?.message || '截图处理失败';
     // 期间已按 Esc 退出；截图结束时后端中止翻译，结果丢弃
     if (!live(gen) || msg === '翻译已取消') return;
-    // 译文卡片已出现：保留已收到的部分并显示原因，复制不可用，只能关闭（M26 规则 5）
-    if ((S.phase as Phase) === 'card') { cardErr.textContent = msg; cardErr.hidden = false; return; }
+    // 译文卡片已出现，或识别出文字后翻译失败：卡片上显示原因（保留已收到的部分），不能复制，
+    // 可以下载语言包、换用另一种或关闭（M26 规则 5、设计 §3.4）
+    if (a === 'translate' && tr && ((S.phase as Phase) === 'card' || TR_FAIL.has((e as AppError)?.kind))) return failTr(tr, e as AppError);
     // 失败：回到选区，可以重试或换个动作
     tr = null;
     cut.querySelector('.sweep')?.remove();
@@ -579,11 +590,7 @@ async function act(a: ShotAction) {
   if (!live(gen)) return;
   if (a === 'translate') {
     // 收完：以完整译文为准（最后一段增量可能晚于返回值到达）；后端不进提示条模式，复制时才进
-    tr = { gen, text: out.text ?? '', done: true };
-    if (S.phase === 'busy') showCard();
-    cardBody.textContent = tr.text;
-    cardBody.scrollTop = cardBody.scrollHeight;
-    cardCopy.setAttribute('aria-disabled', 'false');
+    if (tr) doneTr(tr, out);
     return;
   }
   if (a === 'copy' || a === 'save') thumbUrl = URL.createObjectURL(blob);
@@ -609,34 +616,98 @@ function succeed(gen: number, msg: string, lead: Lead) {
 }
 
 /* —— 译文卡片 —— */
-/** 第一段译文到达：工具栏与进行中提示隐藏，卡片在选区旁出现，位置只定这一次。宽 240–360。 */
+/** 识别出文字后翻译失败时出卡片的错误类别（没配置在识别前就报，仍回到选区） */
+const TR_FAIL = new Set(['translate', 'translatePack', 'translateOs']);
+
+/** 按 tr 重画卡片内容；换用按钮只在收完或失败后、另一种能用时出现（设计 §3.4）。焦点与滚动位置保留。 */
+function renderCard() {
+  if (!tr || card.hidden) return;
+  const other = tr.kind !== 'busy' && engines ? otherEngine(tr.engine, engines) : null;
+  // 截图里只给“下载语言包”，不给“去设置”（M26 规则 13）
+  const focused = (document.activeElement as HTMLElement | null)?.dataset.act;
+  const top = cardBody()?.scrollTop ?? 0;
+  card.innerHTML = cardInner({ ...tr, other, errorKind: tr.errorKind === 'translatePack' ? tr.errorKind : undefined });
+  if (focused) card.querySelector<HTMLElement>(`[data-act="${focused}"]`)?.focus();
+  const b = cardBody();
+  if (b) b.scrollTop = tr.kind === 'busy' ? b.scrollHeight : top;
+}
+
+/** 第一段译文到达（或识别后翻译失败）：工具栏与进行中提示隐藏，卡片在选区旁出现，位置只定这一次。宽 240–360。 */
 function showCard() {
   const sel = S.sel!;
   S.phase = 'card';
   update(); setCursor();
-  cardBody.textContent = tr?.text ?? '';
-  cardErr.hidden = true;
-  cardCopy.setAttribute('aria-disabled', 'true');
   Object.assign(card.style, { width: clamp(sel.w, 240, 360) + 'px', maxHeight: '' });
   card.hidden = false;
+  renderCard();
   const p = placeCard(sel, { w: card.offsetWidth, h: card.offsetHeight }, W, H);
   // 之后随内容变高，最高到屏底，超出时卡片内滚动
   Object.assign(card.style, { left: p.x + 'px', top: p.y + 'px', maxHeight: H - p.y - 8 + 'px' });
   restart(card, 'pop-in');
 }
 
-void onShotTranslateDelta((_lang, d) => {
-  if (!tr || tr.done || !live(tr.gen)) return;
+function doneTr(t: ShotTr, out: ShotOutcome) {
+  Object.assign(t, { kind: 'done', text: out.text ?? '', engine: out.engine ?? t.engine });
+  if (S.phase === 'busy') showCard(); else renderCard();
+}
+
+function failTr(t: ShotTr, e: AppError) {
+  Object.assign(t, { kind: 'fail', error: e?.message || '翻译失败', errorKind: e?.kind });
+  pack = e?.kind === 'translatePack' ? { source: e.source ?? '', target: e.target ?? '' } : null;
+  if (S.phase === 'busy') showCard(); else renderCard();
+}
+
+void onShotTranslateDelta((d, engine) => {
+  if (tr?.kind !== 'busy' || !live(tr.gen)) return;
+  const placeholder = !tr.text;
   tr.text += d;
+  tr.engine = engine;
   if (S.phase === 'busy') return showCard();
   if (S.phase !== 'card') return;
-  cardBody.append(d);
-  cardBody.scrollTop = cardBody.scrollHeight;
+  if (placeholder) return renderCard();
+  const b = cardBody();
+  if (b) { b.append(d); b.scrollTop = b.scrollHeight; }
 });
+
+/** 用另一种（或下载语言包后用系统翻译）重翻同一段原文，不再识别；输出仍被这次翻译占着（设计 §3.4） */
+async function again(engine: Engine) {
+  const t = tr;
+  if (!t || t.kind === 'busy' || S.phase !== 'card') return;
+  const gen = S.gen, seq = (t.seq = ++trSeq);
+  pack = null;
+  Object.assign(t, { kind: 'busy', text: '', error: undefined, errorKind: undefined, engine: engine === 'system' ? 'system' : `openai:${engines?.model ?? ''}` });
+  renderCard();
+  const stale = () => tr !== t || t.seq !== seq || !live(gen);
+  try {
+    const out = await shotTranslateAgain(gen, engine);
+    if (!stale()) doneTr(t, out);
+  } catch (e) {
+    if (!stale()) failTr(t, e as AppError);
+  }
+}
+
+/** 下载语言包（设计 §3.1）：系统的确认挂在本屏遮罩上；装好后用系统翻译重试 */
+async function downloadPack() {
+  const t = tr;
+  if (!t || !pack || downloading) return;
+  const gen = S.gen, seq = t.seq;
+  let r: 'installed' | 'download' = 'download';
+  downloading = true;
+  try {
+    r = await shotDownloadPack(S.index, pack.source, pack.target);
+  } catch (e) {
+    const err = e as AppError;
+    // 已有一个语言包在下载（面板或设置里点的）：后端拒绝第二个，不报
+    if (tr === t && t.seq === seq && live(gen) && !(err.kind === 'invalid' && err.message === '正在下载语言包')) { t.error = err.message; renderCard(); }
+  } finally {
+    downloading = false;
+  }
+  if (r === 'installed' && tr === t && t.seq === seq && live(gen)) void again('system');
+}
 
 /** 复制译文（回车或按钮）：写剪切板进历史，然后走成功收尾。 */
 async function copyTranslation() {
-  if (S.phase !== 'card' || !tr?.done) return;
+  if (S.phase !== 'card' || tr?.kind !== 'done') return;
   const gen = S.gen, text = tr.text;
   S.phase = 'done';
   try {
@@ -652,10 +723,14 @@ async function copyTranslation() {
 }
 
 card.addEventListener('click', (e) => {
-  const b = (e.target as Element).closest<HTMLElement>('button');
+  const b = (e.target as Element).closest<HTMLElement>('button[data-act]');
   if (!b || b.getAttribute('aria-disabled') === 'true') return;
-  if (b.dataset.card === 'close') closeOverlay();
-  else void copyTranslation();
+  switch (b.dataset.act) {
+    case 'close': return closeOverlay();
+    case 'copy': return void copyTranslation();
+    case 'switch': return void again(b.dataset.engine as Engine);
+    case 'pack': return void downloadPack();
+  }
 });
 
 /* —— 录屏：倒计时 3、2、1，数到 0 开始录制（M24） —— */

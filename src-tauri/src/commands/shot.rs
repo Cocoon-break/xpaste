@@ -102,6 +102,23 @@ pub fn shot_copy_text(app: AppHandle, generation: u64, text: String) -> Result<(
     shot::copy_text(&app, generation, &text)
 }
 
+/// 译文卡片“换用…”、下载语言包后重试（设计 §3.4）：用本次截图识别出的原文按 `engine`（`system` / `openai`，
+/// 为空按设置）重翻，增量发给调用方遮罩；不是当前这次截图时报“截图已结束”。
+#[tauri::command]
+pub async fn shot_translate_again(
+    app: AppHandle,
+    window: WebviewWindow,
+    generation: u64,
+    engine: Option<String>,
+) -> Result<shot::ShotOutcome, AppError> {
+    let i = index_of(&window)?;
+    let engine = crate::commands::translate::parse_engine(engine.as_deref())?;
+    // 等翻译是阻塞调用（block_on）
+    tauri::async_runtime::spawn_blocking(move || shot::translate_again(&app, generation, i, engine))
+        .await
+        .map_err(|_| AppError::Invalid("截图处理中断".into()))?
+}
+
 /// 倒计时结束，开始录屏（M24）。`generation` 与 `index` 取自 `shot-begin` 载荷：只接受当前这一次截图、
 /// 由该序号遮罩发起的调用。`rect` 为该屏内逻辑像素；两个声音开关与设置不同时写回设置。
 #[tauri::command]

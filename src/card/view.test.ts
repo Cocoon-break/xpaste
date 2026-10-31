@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cardHTML, clipSource, type CardState } from './view.ts';
+import { cardHTML, cardInner, clipSource, type CardState } from './view.ts';
 
 const base = { source: 'Hello', engine: 'system', text: '', noAccess: false, other: null } as const;
 type Tr = Extract<CardState, { kind: 'busy' | 'done' | 'fail' }>;
@@ -79,4 +79,13 @@ test('所有文本转义', () => {
   assert.match(h, /&lt;b&gt;&amp;/);
   assert.match(h, /AI（&lt;m&gt;）/);
   assert.match(cardHTML({ kind: 'empty', hotkey: '<k>' }), /&lt;k&gt;/);
+});
+
+test('截图卡片（cardInner）：没有原文提示，标题行带方式，有换用按钮（设计 §3.4）', () => {
+  const t = { kind: 'done', source: '', engine: 'system', text: 'x', noAccess: false, other: 'openai' } as const;
+  const h = cardInner(t);
+  assert.doesNotMatch(h, /c-src|role="dialog"/);
+  assert.match(h, /class="c-title" title="译文 · 系统翻译">译文 · 系统翻译</);
+  assert.match(h, /data-act="switch" data-engine="openai">换用 AI 翻译</);
+  assert.equal(cardHTML(t), `<div class="card" role="dialog" aria-label="译文">${h}</div>`);
 });
