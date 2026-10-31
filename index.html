@@ -245,16 +245,14 @@
               <input id="trHotkey" readonly autocomplete="off" spellcheck="false" placeholder="未启用" aria-describedby="trHotkeyHelp">
               <p class="help" id="trHotkeyHelp">在任何应用里选中文字后按下，译文显示在鼠标旁</p>
             </div>
-            <div class="field" style="--i:1">
-              <div class="field" id="trEngineBox">
-                <span class="lbl" id="trEngineLabel">翻译方式</span>
-                <div class="seg two" id="trEngine" role="radiogroup" aria-labelledby="trEngineLabel" aria-describedby="trPrivacy" data-v="system">
-                  <span class="pill" aria-hidden="true"></span>
-                  <button type="button" role="radio" data-engine="system">系统翻译（本机）</button>
-                  <button type="button" role="radio" data-engine="openai">OpenAI 兼容接口</button>
-                </div>
+            <div class="field" id="trEngineBox" style="--i:1">
+              <span class="lbl" id="trEngineLabel">默认翻译方式</span>
+              <div class="seg two" id="trEngine" role="radiogroup" aria-labelledby="trEngineLabel" aria-describedby="trEngineHelp" data-v="system">
+                <span class="pill" aria-hidden="true"></span>
+                <button type="button" role="radio" data-engine="system">系统翻译</button>
+                <button type="button" role="radio" data-engine="openai">AI 翻译</button>
               </div>
-              <p class="help" id="trPrivacy"></p>
+              <p class="help" id="trEngineHelp">面板、截图、划词翻译都默认用这一种；译文旁会标出用的是哪种，翻译中和翻译后都可以临时换用另一种</p>
             </div>
             <div class="field" style="--i:2">
               <label for="trLang">目标语言</label>
@@ -262,11 +260,17 @@
                 <option value="zh-Hans">简体中文</option><option value="zh-Hant">繁體中文</option><option value="en">English</option><option value="ja">日本語</option><option value="ko">한국어</option>
               </select>
             </div>
-            <div class="line" id="trPackRow" style="--i:3" hidden>
-              <span><b>语言包</b><small id="trPack" aria-live="polite"></small></span>
-              <button class="btn sm" type="button" id="trPackBtn" hidden>下载语言包</button>
+            <div class="tr-group" id="trSys" style="--i:3">
+              <h3>系统翻译</h3>
+              <p class="help">使用 macOS 自带的翻译，在本机完成，不上传，不需要配置接口</p>
+              <div class="line" id="trPackRow" hidden>
+                <span><b>语言包</b><small id="trPack" aria-live="polite"></small></span>
+                <button class="btn sm" type="button" id="trPackBtn" hidden>下载语言包</button>
+              </div>
             </div>
-            <div class="tr-api" id="trApi" style="--i:3">
+            <div class="tr-group" id="trApi" style="--i:4">
+              <h3 id="trApiTitle">AI 翻译（OpenAI 兼容接口）</h3>
+              <p class="help" id="trPrivacy">翻译时，只把你选中要翻译的那段文字发送到下面的接口；不按翻译就不会发送任何内容。请求按系统代理设置发出，可能经过你在系统里设置的代理</p>
               <div class="field">
                 <label for="trBaseUrl">接口地址（Base URL）</label>
                 <input id="trBaseUrl" autocomplete="off" spellcheck="false" placeholder="https://api.openai.com/v1" aria-describedby="trBaseUrlHelp trBaseUrlErr">
@@ -282,10 +286,10 @@
                 <label for="trModel">模型 ID</label>
                 <input id="trModel" autocomplete="off" spellcheck="false" placeholder="gpt-4o-mini">
               </div>
-            </div>
-            <div class="line" style="--i:4">
-              <span class="help tr-result" id="trTestResult" role="status" aria-live="polite"></span>
-              <button class="btn" type="button" id="trTestBtn">测试翻译</button>
+              <div class="line">
+                <span class="help tr-result" id="trTestResult" role="status" aria-live="polite"></span>
+                <button class="btn" type="button" id="trTestBtn">测试翻译</button>
+              </div>
             </div>
           </section>
         </div>

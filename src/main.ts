@@ -32,7 +32,7 @@ import { keyAction } from './keymap';
 import { copyVerb, escHint, openLabel } from './labels';
 import { ocrLabel, ocrProgressLabel, snippetHTML } from './ocr-label';
 import { searchGate } from './search-gate';
-import { otherEngine, translatable, trAfterDelta, trAfterEnd, trBlockHTML, type Engine, type Tr } from './translate';
+import { otherEngine, staleDelta, translatable, trAfterDelta, trAfterEnd, trBlockHTML, type Engine, type Tr } from './translate';
 import { nextStep, onboardSteps, type Step } from './onboarding';
 import { applyAdded, applyRemoved, applyUpdated } from './records';
 import {
@@ -669,6 +669,9 @@ function refreshOcr(id: number) {
 // —— 翻译（M26 规则 2–4）——
 // 进行中与本次会话的结果按记录 id 存着：切走不取消请求，回来时照常显示；没有时用详情里存库的译文
 const trs = new Map<number, Tr>();
+// 每条记录最近一次请求的序号与指定的方式：翻译中换用后，被接替的请求迟到的结果与增量据此丢掉（M26 规则 16）
+const trReq = new Map<number, { n: number; want?: Engine }>();
+let trN = 0;
 const trOf = (id: number, d = S.detail?.id === id ? S.detail : details.get(id)): Tr | undefined =>
   trs.get(id) ?? (d?.translation ? { text: d.translation, lang: d.translationLang ?? '', engine: d.translationEngine ?? '', state: 'done' } : undefined);
 function trSlotHTML(d: RecordDetail): string {
@@ -719,7 +722,7 @@ const openTrSettings = () => {
   openSettings();
 };
 // 已有译文或正在翻译：只滚到区块，不发请求；上次失败、中断时等同重新翻译。again：先丢掉旧译文再请求。
-// engine：换用按钮单次指定的方式，不改设置（M26 规则 16）
+// engine：换用按钮单次指定的方式，不改设置；翻译中也能换用，后端中止进行中的请求（M26 规则 16）
 function doTranslate(id: number, again = false, engine?: Engine) {
   const r = S.records.get(id);
   if (!r || !translatable(r)) return;
@@ -727,10 +730,14 @@ function doTranslate(id: number, again = false, engine?: Engine) {
   const cur = again ? undefined : trOf(id);
   if (cur?.state === 'done' || cur?.state === 'busy') return revealTr(id);
   const tag = trTagFor(id, engine);
+  const n = ++trN;
+  trReq.set(id, { n, want: engine });
   trs.set(id, { text: '', lang: '', engine: tag, state: 'busy' });
   paintTr(id);
   revealTr(id);
   const end = (res: Parameters<typeof trAfterEnd>[1]) => {
+    if (trReq.get(id)?.n !== n) return;
+    trReq.delete(id);
     trs.set(id, trAfterEnd(trs.get(id), res));
     // 成功即已存库：缓存的详情跟着改，下次“重新翻译”按它的方式猜标注
     if (res.ok) for (const d of [S.detail, details.get(id)]) {
@@ -745,8 +752,8 @@ function doTranslate(id: number, again = false, engine?: Engine) {
   translateRecord(id, again || cur !== undefined, engine).then(
     (t) => end({ ok: true, ...t }),
     (err: AppError) => {
-      // 别处已在翻译这条（同一条只跑一个请求）：增量照样会到
-      if (err.kind === 'invalid' && err.message === '正在翻译') return;
+      // 别处已在翻译这条（同一条只跑一个请求）：增量照样会到；已换用：被这次之后的请求接替
+      if (err.kind === 'invalid' && (err.message === '正在翻译' || err.message === '已换用')) return;
       end({ ok: false, error: err.message, engine: trs.get(id)?.engine ?? tag });
       // 未配置、系统太旧：去设置的“翻译”标签；缺语言包：就地下载，装好后用系统翻译重试（M26 规则 13、17）
       const action = err.kind === 'translateConfig' || err.kind === 'translateOs' ? { label: '去设置', run: openTrSettings }
@@ -1707,8 +1714,8 @@ function dirField(id: string, placeholder: () => string) {
 }
 const shotDir = dirField('shotDir', () => (S.platform.os === 'macos' ? '~/Pictures/xPaste' : '图片\\xPaste'));
 const recDir = dirField('recDir', () => '~/Movies/xPaste');
-// 翻译标签（M26 规则 6）：只显示当前翻译方式要用户操作的项。翻译方式只在本机能用系统翻译时出现；
-// stored 为空串（未选）时按本机能力显示，用户没动就保存时原样写回
+// 翻译标签（M26 规则 6）：默认翻译方式与“系统翻译”一组只在本机能用系统翻译时出现，“AI 翻译”一组常驻，
+// 两组各自配置、互不隐藏。stored 为空串（未选）时按本机能力显示，用户没动就保存时原样写回
 const trEngineEl = $('#trEngine'), trEngineBtns = [...trEngineEl.querySelectorAll<HTMLButtonElement>('[data-engine]')];
 const trBaseIn = $<HTMLInputElement>('#trBaseUrl'), trKeyIn = $<HTMLInputElement>('#trApiKey'), trModelIn = $<HTMLInputElement>('#trModel');
 const trLangIn = $<HTMLSelectElement>('#trLang'), trBaseErr = $('#trBaseUrlErr'), trTestBtn = $<HTMLButtonElement>('#trTestBtn'), trResult = $('#trTestResult');
@@ -1729,7 +1736,7 @@ function paintTrPack() {
   const seq = ++trSeq;
   const show = showTrPack, pair = trPair();
   show('');
-  if (trEffective() !== 'system') return;
+  if (!trSupported()) return;
   void translateStatus(trLangIn.value).then(
     (r) => {
       if (seq !== trSeq) return;
@@ -1741,22 +1748,13 @@ function paintTrPack() {
   );
 }
 function paintTrEngine() {
-  const sys = trEffective() === 'system';
-  $('#trEngineBox').hidden = !trSupported();
+  $('#trEngineBox').hidden = $('#trSys').hidden = !trSupported();
   trEngineEl.dataset.v = trEngine;
   trEngineBtns.forEach((b) => {
     const on = b.dataset.engine === trEngine;
     b.setAttribute('aria-checked', String(on));
     b.tabIndex = on ? 0 : -1;
   });
-  // 系统翻译不需要接口：三项整块隐藏，切回 OpenAI 兼容接口时原值还在
-  $('#trApi').hidden = sys;
-  if (sys) paintTrUrlErr(null);
-  // 能选翻译方式时（两种都有）接上默认与换用的说明（M26 规则 6）
-  $('#trPrivacy').textContent = (sys
-    ? '使用 macOS 自带的翻译，在本机完成，不上传，不需要配置接口'
-    : '翻译时，只把你选中要翻译的那段文字发送到下面的接口；不按翻译就不会发送任何内容。请求按系统代理设置发出，可能经过你在系统里设置的代理')
-    + (trSupported() ? '。面板、截图、划词翻译都默认用这一种；译文旁会标出用的是哪种，也可以临时换用另一种。' : '');
   setTrResult('');
   paintTrPack();
 }
@@ -1806,11 +1804,11 @@ const setTrResult = (t: string, cls = '') => {
   trResult.textContent = t;
   trResult.className = `help tr-result ${cls}`;
 };
-// 用当前表单（未保存）的值测试；期间按钮不可再点
+// 用“AI 翻译”一组当前（未保存）的值测试；系统翻译看语言包一行。期间按钮不可再点
 trTestBtn.addEventListener('click', () => {
   trTestBtn.disabled = true;
   setTrResult('测试中…');
-  void translateTest(trEffective(), trBaseIn.value.trim().replace(/\/+$/, ''), trKeyIn.value, trModelIn.value.trim(), trLangIn.value).then(
+  void translateTest('openai', trBaseIn.value.trim().replace(/\/+$/, ''), trKeyIn.value, trModelIn.value.trim(), trLangIn.value).then(
     (t) => setTrResult(`✓ 可以翻译：${t}`, 'is-ok'),
     (e: AppError) => setTrResult(e.message, 'is-err'),
   ).finally(() => (trTestBtn.disabled = false));
@@ -2179,8 +2177,8 @@ async function submitSettings() {
   frequentErr.hidden = frequent !== null;
   frequentIn.setAttribute('aria-invalid', String(frequent === null));
   paintStErr();
-  // 接口地址只在用 OpenAI 兼容接口时校验（系统翻译时这几项不显示，M26 规则 6）
-  const urlErr = trEffective() === 'openai' ? baseUrlError(trBaseIn.value) : null;
+  // 接口地址不论默认用哪种都校验：“AI 翻译”一组常驻显示（M26 规则 6）
+  const urlErr = baseUrlError(trBaseIn.value);
   paintTrUrlErr(urlErr);
   // 切到第一个出错的标签（按标签顺序），聚焦其中出错的控件
   if (limit === null || frequent === null || urlErr) return showStControl(stPanes.map((p) => p.querySelector<HTMLElement>('[aria-invalid="true"]')).find(Boolean)!);
@@ -2632,7 +2630,7 @@ await onRecordUpdated((s) => handlers.updated(s));
 await onRecordsRemoved((ids) => handlers.removed(ids));
 // 面板翻译的增量（截图翻译的 id 为 null）；只接进行中的那条，结果先于最后一段到达时不把完成态改回翻译中
 await onTranslateDelta(({ id, lang, engine, text }) => {
-  if (id === null || trs.get(id)?.state !== 'busy') return;
+  if (id === null || trs.get(id)?.state !== 'busy' || staleDelta(engine, trReq.get(id)?.want)) return;
   trs.set(id, trAfterDelta(trs.get(id), lang, engine, text));
   paintTr(id);
 });

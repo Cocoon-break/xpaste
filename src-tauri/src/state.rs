@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64};
 use std::sync::{Mutex, MutexGuard, PoisonError, mpsc};
@@ -31,8 +31,9 @@ pub struct AppState {
     pub shot: Mutex<shot::Session>,
     /// 进行中的录屏（M24）
     pub rec: Mutex<rec::RecState>,
-    /// 正在翻译的记录 id：同一条记录不发第二个请求（M26 规则 4）
-    pub translating: Mutex<HashSet<i64>>,
+    /// 正在翻译的记录 id → 这次请求的序号：同一条记录不发第二个请求（M26 规则 4）；
+    /// 翻译中“换用…”换上新序号，旧请求据此中止、不存库（M26 规则 16）
+    pub translating: Mutex<HashMap<i64, u64>>,
     /// 正在下载语言包：系统确认框可能抢走焦点，期间面板失焦不隐藏；同一时刻只下载一个（M26 规则 17）
     pub tr_downloading: AtomicBool,
     /// 划词翻译卡片的会话（M26 规则 19）

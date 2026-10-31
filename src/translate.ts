@@ -33,12 +33,16 @@ export function otherEngine(tag: string, avail: Engines): Engine | null {
   return null;
 }
 
+/** 翻译中换用后，被接替的请求迟到的增量：方式与这次指定的 `want` 不同就丢掉；没指定时都收（M26 规则 16） */
+export const staleDelta = (engine: string, want: Engine | undefined): boolean =>
+  want !== undefined && (engine === 'system') !== (want === 'system');
+
 const TITLE = { busy: '翻译中…', cut: '翻译中断', fail: '翻译失败' };
 const MODEL_MAX = 24;
 const SWITCH = { system: '换用系统翻译', openai: '换用 AI 翻译' };
 
-/** 默认展开、不可折叠；翻译中没有按钮。标题行带翻译方式，模型 ID 太长截断、悬停看完整值；
- *  other 为能换用的另一种，收完、失败、中断后多一个换用按钮（M26 规则 16） */
+/** 默认展开、不可折叠；翻译中只有换用按钮。标题行带翻译方式，模型 ID 太长截断、悬停看完整值；
+ *  other 为能换用的另一种，有就多一个换用按钮，翻译中也有（中止当前请求，M26 规则 16） */
 export function trBlockHTML(tr: Tr, mono: boolean, other: Engine | null): string {
   const full = engineLabel(tr.engine);
   const model = [...tr.engine.slice(7)];
@@ -47,7 +51,7 @@ export function trBlockHTML(tr: Tr, mono: boolean, other: Engine | null): string
   const tip = label !== full ? ` title="${esc(full)}"` : '';
   const again = '<button class="btn sm" type="button" data-tr="again">重新翻译</button>';
   const sw = other ? `<button class="btn sm" type="button" data-tr="switch" data-engine="${other}">${SWITCH[other]}</button>` : '';
-  const acts = tr.state === 'busy' ? ''
+  const acts = tr.state === 'busy' ? (sw && `<div class="tr-actions">${sw}</div>`)
     : `<div class="tr-actions">${tr.state === 'done' ? '<button class="btn sm" type="button" data-tr="copy">复制译文</button>' : ''}${again}${sw}</div>`;
   const body = tr.text ? `<pre class="tr-text${mono ? ' mono' : ''}">${esc(tr.text)}</pre>` : '';
   const err = tr.state === 'cut' || tr.state === 'fail' ? `<p class="tr-err">${esc(tr.error ?? '')}</p>` : '';

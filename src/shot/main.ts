@@ -8,7 +8,7 @@ import {
 import { error as logError, info } from '../api/log';
 import type { AppError, Engines } from '../api/types';
 import { cardInner, type CardState } from '../card/view';
-import { otherEngine, type Engine } from '../translate';
+import { otherEngine, staleDelta, type Engine } from '../translate';
 import { badgePos, hit, loupePos, norm, outputSize, placeBar, placeCard, resize, type Handle, type Rect } from './geom';
 import { COLORS, drawObj, FONT, nextStep, type Obj, type Tool } from './ink';
 
@@ -97,7 +97,7 @@ let thumbUrl = '', toastT = 0, endT = 0, cdT = 0;
 let readyGen = 0;
 /** 进行中的截图翻译：kind `done` 收完（可复制）；engine 为翻译方式标签，出第一段前先按设置猜；
  *  seq 每次换用加一，迟到的结果按它丢弃；回到选区或开始新的一次时为 null */
-type ShotTr = Extract<CardState, { kind: 'busy' | 'done' | 'fail' }> & { gen: number; seq: number };
+type ShotTr = Extract<CardState, { kind: 'busy' | 'done' | 'fail' }> & { gen: number; seq: number; want?: Engine };
 let tr: ShotTr | null = null;
 let trSeq = 0;
 /** 两种翻译方式能不能用，每次按 T 取一次（M26 规则 16） */
@@ -563,14 +563,15 @@ async function act(a: ShotAction) {
   if (sweep) cut.insertAdjacentHTML('beforeend', '<i class="sweep"></i>');
   // 识别、翻译要几秒：期间其他屏不能框选、出第二个动作
   if (slow) void shotClaim({ generation: gen, index: S.index, state: 'busy' });
+  const seq0 = tr?.seq;
   let out: ShotOutcome, blob: Blob;
   try {
     blob = await exportPng(sel);
     [out] = await Promise.all([shotFinish(new Uint8Array(await blob.arrayBuffer()), a, S.index, sel), sweep && sleep(SWEEP_MS)]);
   } catch (e) {
     const msg = (e as AppError)?.message || '截图处理失败';
-    // 期间已按 Esc 退出；截图结束时后端中止翻译，结果丢弃
-    if (!live(gen) || msg === '翻译已取消') return;
+    // 期间已按 Esc 退出；截图结束时后端中止翻译，结果丢弃。翻译中换用了：结果归换用那次
+    if (!live(gen) || msg === '翻译已取消' || (a === 'translate' && tr && tr.seq !== seq0)) return;
     // 译文卡片已出现，或识别出文字后翻译失败：卡片上显示原因（保留已收到的部分），不能复制，
     // 可以换用另一种或关闭；不给下载语言包（M26 规则 5、16）
     if (a === 'translate' && tr && ((S.phase as Phase) === 'card' || TR_FAIL.has((e as AppError)?.kind))) return failTr(tr, e as AppError);
@@ -587,7 +588,7 @@ async function act(a: ShotAction) {
   if (!live(gen)) return;
   if (a === 'translate') {
     // 收完：以完整译文为准（最后一段增量可能晚于返回值到达）；后端不进提示条模式，复制时才进
-    if (tr) doneTr(tr, out);
+    if (tr && tr.seq === seq0) doneTr(tr, out);
     return;
   }
   if (a === 'copy' || a === 'save') thumbUrl = URL.createObjectURL(blob);
@@ -616,10 +617,10 @@ function succeed(gen: number, msg: string, lead: Lead) {
 /** 识别出文字后翻译失败时出卡片的错误类别（没配置在识别前就报，仍回到选区） */
 const TR_FAIL = new Set(['translate', 'translatePack', 'translateOs']);
 
-/** 按 tr 重画卡片内容；换用按钮只在收完或失败后、另一种能用时出现（M26 规则 16）。焦点与滚动位置保留。 */
+/** 按 tr 重画卡片内容；另一种能用时就有换用按钮，翻译中也有（M26 规则 16）。焦点与滚动位置保留。 */
 function renderCard() {
   if (!tr || card.hidden) return;
-  const other = tr.kind !== 'busy' && engines ? otherEngine(tr.engine, engines) : null;
+  const other = engines ? otherEngine(tr.engine, engines) : null;
   // 截图里不给“下载语言包”“去设置”（M26 规则 13）：系统的下载确认挂不到截图遮罩上，遮罩一退出它就既不弹出也不返回；
   // 缺语言包的原因写在卡片上，AI 能用时还有“换用 AI 翻译”
   const focused = (document.activeElement as HTMLElement | null)?.dataset.act;
@@ -657,7 +658,7 @@ function failTr(t: ShotTr, e: AppError) {
 }
 
 void onShotTranslateDelta((d, engine) => {
-  if (tr?.kind !== 'busy' || !live(tr.gen)) return;
+  if (tr?.kind !== 'busy' || !live(tr.gen) || staleDelta(engine, tr.want)) return;
   const placeholder = !tr.text;
   tr.text += d;
   tr.engine = engine;
@@ -668,12 +669,12 @@ void onShotTranslateDelta((d, engine) => {
   if (b) { b.append(d); b.scrollTop = b.scrollHeight; }
 });
 
-/** 用另一种重翻同一段原文，不再识别；输出仍被这次翻译占着（M26 规则 16） */
+/** 用另一种重翻同一段原文，不再识别，翻译中也行（后端中止进行中的请求）；输出仍被这次翻译占着（M26 规则 16） */
 async function again(engine: Engine) {
   const t = tr;
-  if (!t || t.kind === 'busy' || S.phase !== 'card') return;
+  if (!t || S.phase !== 'card') return;
   const gen = S.gen, seq = (t.seq = ++trSeq);
-  Object.assign(t, { kind: 'busy', text: '', error: undefined, errorKind: undefined, engine: engine === 'system' ? 'system' : `openai:${engines?.model ?? ''}` });
+  Object.assign(t, { kind: 'busy', text: '', error: undefined, errorKind: undefined, want: engine, engine: engine === 'system' ? 'system' : `openai:${engines?.model ?? ''}` });
   renderCard();
   const stale = () => tr !== t || t.seq !== seq || !live(gen);
   try {

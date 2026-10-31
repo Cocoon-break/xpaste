@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { engineLabel, otherEngine, translatable, trAfterDelta, trAfterEnd, trBlockHTML } from './translate.ts';
+import { engineLabel, otherEngine, staleDelta, translatable, trAfterDelta, trAfterEnd, trBlockHTML } from './translate.ts';
 
 test('可翻译的类型', () => {
   const r = (kind: string, ocrState = 0) => ({ kind, ocrState }) as any;
@@ -33,12 +33,25 @@ test('区块标题、按钮与转义', () => {
   const busy = trBlockHTML({ text: '', lang: 'en', engine: 'system', state: 'busy' }, false, null);
   assert.match(busy, /翻译中…/);
   assert.doesNotMatch(busy, /data-tr=/);
+  // 翻译中也能换用（M26 规则 16）：只有换用按钮
+  const busySw = trBlockHTML({ text: '', lang: 'en', engine: 'system', state: 'busy' }, false, 'openai');
+  assert.match(busySw, /<div class="tr-actions"><button class="btn sm" type="button" data-tr="switch" data-engine="openai">换用 AI 翻译<\/button><\/div>/);
+  assert.doesNotMatch(busySw, /data-tr="(copy|again)"/);
   const f = trBlockHTML({ text: '半', lang: 'en', engine: 'system', state: 'cut', error: '翻译超时' }, true, null);
   assert.match(f, /翻译中断/); assert.match(f, /翻译超时/); assert.match(f, /class="tr-text mono"/);
   assert.doesNotMatch(f, /data-tr="copy"/);
   assert.match(f, /data-tr="again"/);
   const x = trBlockHTML({ text: '', lang: '', engine: 'system', state: 'fail', error: '<x>' }, false, null);
   assert.match(x, /翻译失败/); assert.match(x, /&lt;x&gt;/); assert.match(x, /data-tr="again"/);
+});
+
+test('翻译中换用：被接替的请求迟到的增量按方式丢掉', () => {
+  assert.equal(staleDelta('openai:m', undefined), false);
+  assert.equal(staleDelta('system', undefined), false);
+  assert.equal(staleDelta('openai:m', 'system'), true);
+  assert.equal(staleDelta('system', 'system'), false);
+  assert.equal(staleDelta('system', 'openai'), true);
+  assert.equal(staleDelta('openai:m', 'openai'), false);
 });
 
 test('翻译方式标注', () => {
@@ -61,7 +74,7 @@ test('标题行与换用按钮', () => {
   assert.match(done, /data-tr="switch"[^>]*data-engine="openai"[^>]*>换用 AI 翻译/);
   const busy = trBlockHTML({ text: '', lang: '', engine: 'openai:m', state: 'busy' }, false, 'system');
   assert.match(busy, /翻译中… · AI（m）/);
-  assert.doesNotMatch(busy, /data-tr="switch"/);
+  assert.match(busy, /data-tr="switch" data-engine="system">换用系统翻译/); // 翻译中也能换用
   assert.match(trBlockHTML({ text: '', lang: '', engine: 'system', state: 'fail', error: 'x' }, false, 'openai'), /翻译失败 · 系统翻译[\s\S]*换用 AI 翻译/);
   assert.match(trBlockHTML({ text: '半', lang: 'en', engine: 'openai:m', state: 'cut', error: 'x' }, false, 'system'), /翻译中断 · AI（m）[\s\S]*data-engine="system"[^>]*>换用系统翻译/);
   // 模型 ID 太长截断，完整值放 title；没有标签时不加“ · ”

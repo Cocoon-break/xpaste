@@ -15,13 +15,15 @@ test('提示：无文字、排除应用，没有按钮', () => {
   assert.doesNotMatch(b, /<button/);
 });
 
-test('翻译中：标题带方式，正文占位，复制不可用，没有换用', () => {
+test('翻译中：标题带方式，正文占位，复制不可用，另一种能用时可以换用（M26 规则 16）', () => {
   const h = cardHTML(st({ kind: 'busy', other: 'openai' }));
   assert.match(h, /翻译中… · 系统翻译/);
   assert.match(h, /data-act="copy" aria-disabled="true"/);
   assert.match(h, /关闭<kbd>Esc<\/kbd>/);
   assert.match(h, /class="c-body c-wait">翻译中…/);
-  assert.doesNotMatch(h, /换用/);
+  assert.match(h, /data-act="switch" data-engine="openai">换用 AI 翻译</);
+  assert.doesNotMatch(h, /data-act="(pack|settings)"/);
+  assert.doesNotMatch(cardHTML(st({ kind: 'busy', other: null })), /换用/);
 });
 
 test('收完：译文标题、复制可用、按另一种给换用按钮', () => {

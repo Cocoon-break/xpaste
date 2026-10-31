@@ -14,9 +14,9 @@ const target = { target: getCurrentWindow().label };
 
 export const onCardShow = (cb: (p: CardShow) => void) => listen<CardShow>('trcard-show', (e) => cb(e.payload), target);
 export const onCardDone = (cb: (p: CardDone) => void) => listen<CardDone>('trcard-done', (e) => cb(e.payload), target);
-/** 卡片翻译的增量（`id` 为 null）；面板翻译的广播不收。增量不带 seq。 */
-export const onCardDelta = (cb: (text: string) => void) =>
-  listen<TranslateDelta>(TRANSLATE_DELTA, (e) => { if (e.payload.id === null) cb(e.payload.text); }, target);
+/** 卡片翻译的增量（`id` 为 null）与它的翻译方式标签；面板翻译的广播不收。增量不带 seq。 */
+export const onCardDelta = (cb: (text: string, engine: string) => void) =>
+  listen<TranslateDelta>(TRANSLATE_DELTA, (e) => { if (e.payload.id === null) cb(e.payload.text, e.payload.engine); }, target);
 
 /** 用原文重翻（换用、下载语言包后重试）；新 seq 恒为 seq + 1，`trcard-done` 可能早于返回到达。 */
 export const cardAgain = (seq: number, engine?: 'system' | 'openai') => invoke<CardAgain>('trcard_again', { seq, engine: engine ?? null });

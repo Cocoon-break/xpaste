@@ -7,7 +7,7 @@ import {
 } from '../api/card';
 import { error as logError } from '../api/log';
 import type { AppError, Engines } from '../api/types';
-import { otherEngine, type Engine } from '../translate';
+import { otherEngine, staleDelta, type Engine } from '../translate';
 import { cardHTML, type CardState } from './view';
 
 addEventListener('error', (e) => void logError(`划词卡片页错误：${e.message}`));
@@ -31,6 +31,8 @@ let timer = 0, lastH = 0, lastWide = false;
 let wide = false;
 /** 正在等系统的下载确认或下载：再点“下载语言包”不理，免得失败分支把键盘从确认框抢回来 */
 let downloading = false;
+/** 换用时指定的方式：翻译中换用后，被接替的请求迟到的增量据此丢掉（M26 规则 16） */
+let want: Engine | undefined;
 
 const tr = (): Tr | null => (st.kind === 'empty' || st.kind === 'blocked' ? null : st);
 /** 译文正文（展开对照时左栏原文也是 .c-body） */
@@ -39,8 +41,8 @@ const bodies = () => [...root.querySelectorAll<HTMLElement>('.c-body')];
 
 function render(pop = false) {
   const s = tr();
-  // 换用按钮只在收完或失败后、另一种能用时出现（M26 规则 16）
-  const view: CardState = s ? { ...s, other: s.kind !== 'busy' && engines ? otherEngine(s.engine, engines) : null } : st;
+  // 另一种能用时就有换用按钮，翻译中也有（M26 规则 16）
+  const view: CardState = s ? { ...s, other: engines ? otherEngine(s.engine, engines) : null } : st;
   const focused = (document.activeElement as HTMLElement | null)?.dataset.act;
   const tops = new Map(bodies().map((b) => [b.classList.contains('c-orig'), b.scrollTop]));
   root.innerHTML = cardHTML(view, wide);
@@ -84,6 +86,7 @@ void onCardShow((p) => {
   lastH = 0;
   lastWide = wide = false;
   pack = null;
+  want = undefined;
   if (p.kind !== 'text') {
     st = p.kind === 'empty' ? { kind: 'empty', hotkey: p.hotkey } : { kind: 'blocked' };
     render(true);
@@ -95,10 +98,10 @@ void onCardShow((p) => {
   void translateEngines().then((e) => { engines = e; render(); }, () => {});
 });
 
-// 增量不带 seq：只收翻译中的；重翻前已清空，旧请求的后端也不再发
-void onCardDelta((d) => {
+// 增量不带 seq：只收翻译中的；重翻前已清空，旧请求的后端也不再发，路上迟到的按方式丢掉
+void onCardDelta((d, engine) => {
   const s = tr();
-  if (s?.kind !== 'busy') return;
+  if (s?.kind !== 'busy' || staleDelta(engine, want)) return;
   const placeholder = !s.text;
   s.text += d;
   if (placeholder) return render();
@@ -119,13 +122,15 @@ void onCardDone((p) => {
   render();
 });
 
-/** 用另一种（或下载语言包后用系统翻译）重翻同一段原文。done 可能早于命令返回，所以先把 seq 换成新的 */
+/** 用另一种（或下载语言包后用系统翻译）重翻同一段原文，翻译中也行（后端中止进行中的请求）。
+ *  done 可能早于命令返回，所以先把 seq 换成新的 */
 async function again(engine: Engine) {
   const s = tr();
   if (!s) return;
   const from = seq;
   seq = from + 1;
   pack = null;
+  want = engine;
   Object.assign(s, { kind: 'busy', text: '', error: undefined, errorKind: undefined, copied: false, engine: engine === 'system' ? 'system' : `openai:${engines?.model ?? ''}` });
   render();
   try {

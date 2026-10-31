@@ -51,9 +51,8 @@ export function cardInner(s: Extract<CardState, { kind: 'busy' | 'done' | 'fail'
   let foot: string;
   if (s.copied) foot = '<div class="c-foot"><span class="c-ok" role="status">已复制译文</span></div>';
   else {
-    // 换用、下载语言包、去设置只在收完或失败后出现（增量不带序号，翻译中不给重翻的入口）
-    const extra = s.kind === 'busy' ? ''
-      : (s.kind === 'fail' && s.errorKind === 'translatePack' ? btn('pack', '下载语言包') : '')
+    // 下载语言包、去设置只在失败后出现；换用翻译中也有（M26 规则 16）
+    const extra = (s.kind === 'fail' && s.errorKind === 'translatePack' ? btn('pack', '下载语言包') : '')
       + (s.kind === 'fail' && (s.errorKind === 'translateConfig' || s.errorKind === 'translateOs') ? btn('settings', '去设置') : '')
       + (s.other ? btn('switch', SWITCH[s.other], ` data-engine="${s.other}"`) : '');
     // 复制译文收完才可用；失败时只能关闭，不放复制（M26 规则 19）

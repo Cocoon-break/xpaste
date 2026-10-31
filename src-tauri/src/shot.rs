@@ -119,6 +119,16 @@ pub struct Session {
     alive: Option<Instant>,
     /// 截图翻译识别出的原文，换用另一种翻译方式时重翻，不再识别（M26 规则 16）；截图结束或复制译文后清掉
     tr_text: Option<String>,
+    /// 这次截图里第几次翻译：翻译中“换用…”加一，旧请求见它变了就中止、不再发增量（M26 规则 16）
+    tr_seq: u64,
+}
+
+impl Session {
+    /// 开始一次翻译（识别后首次或换用），返回它的序号。
+    fn next_tr(&mut self) -> u64 {
+        self.tr_seq += 1;
+        self.tr_seq
+    }
 }
 
 /// 按下截图快捷键时怎么处理（M23 规则 1）。
@@ -1216,17 +1226,18 @@ fn run_translate(
     let Some(text) = ocr_text(png)? else {
         return Err(AppError::Invalid("选区里没有识别到文字".into()));
     };
-    {
+    let tr = {
         let mut s = session(app);
         if !s.is_current(generation) {
             return Err(AppError::Invalid("截图已结束".into()));
         }
         s.tr_text = Some(text.clone());
-    }
-    stream(app, generation, label, &cfg, &text)
+        s.next_tr()
+    };
+    stream(app, generation, tr, label, &cfg, &text)
 }
 
-/// 译文卡片“换用…”（M26 规则 16）：用会话里的原文按 `engine`（None 按设置）重翻，不再识别；
+/// 译文卡片“换用…”（M26 规则 16）：用会话里的原文按 `engine`（None 按设置）重翻，不再识别；翻译中换用时旧请求中止；
 /// 增量照旧只发给第 `i` 块屏的遮罩。输出保持认领（卡片上失败后放开过的也重新认领），不能出第二个动作。
 /// 不是当前这次截图时报“截图已结束”。
 pub fn translate_again(
@@ -1235,22 +1246,24 @@ pub fn translate_again(
     i: usize,
     engine: Option<translate::Engine>,
 ) -> Result<ShotOutcome, AppError> {
-    let text = {
+    let (text, tr) = {
         let mut s = session(app);
         let Some(t) = s.tr_text.clone().filter(|_| s.is_current(generation)) else {
             return Err(AppError::Invalid("截图已结束".into()));
         };
         s.finishing = true;
-        t
+        (t, s.next_tr())
     };
     let cfg = translate::cfg_for(&app.state::<AppState>().settings(), engine);
-    stream(app, generation, &label(i), &cfg, &text)
+    stream(app, generation, tr, &label(i), &cfg, &text)
 }
 
-/// 翻译 `text`，增量合并后发给 `label` 遮罩；每段发出前看一次截图是否已结束，已结束就中止请求、不再发事件。
+/// 翻译 `text`，增量合并后发给 `label` 遮罩；每段发出前看一次截图是否已结束、这次翻译是否已被换用（`tr`），
+/// 是就中止请求、不再发事件；被换用的报“已换用”，前端忽略。
 fn stream(
     app: &AppHandle,
     generation: u64,
+    tr: u64,
     label: &str,
     cfg: &translate::Cfg,
     text: &str,
@@ -1268,8 +1281,12 @@ fn stream(
         };
         events::emit_to(app, label, events::TRANSLATE_DELTA, p);
     };
+    let live = || {
+        let s = session(app);
+        s.is_current(generation) && s.tr_seq == tr
+    };
     let r = tauri::async_runtime::block_on(translate::exec(cfg, text, None, |l, d| {
-        if !session(app).is_current(generation) {
+        if !live() {
             return false;
         }
         lang = Some(l);
@@ -1278,14 +1295,18 @@ fn stream(
         }
         true
     }));
+    let ms = t0.elapsed().as_millis();
+    let chars = text.chars().count();
+    if session(app).is_current(generation) && !live() {
+        log::info!("translate shot 已换用 chars={chars} ms={ms}");
+        return Err(AppError::Invalid("已换用".into()));
+    }
     // 剩下的发完（失败时也发：卡片保留已收到的部分）
     if let (Some(l), Some(s)) = (lang, co.flush())
-        && session(app).is_current(generation)
+        && live()
     {
         send(l, s);
     }
-    let ms = t0.elapsed().as_millis();
-    let chars = text.chars().count();
     match r {
         Ok((_, out)) => {
             log::info!(
@@ -2021,6 +2042,16 @@ mod tests {
         s.tr_text = Some("原文".into());
         s.finish(Instant::now());
         assert_eq!(s.tr_text, None, "复制译文后进入提示条模式，不能再换用");
+    }
+
+    /// 翻译中换用：序号加一，旧请求据此中止（M26 规则 16）。
+    #[test]
+    fn next_tr_supersedes() {
+        let mut s = Session::default();
+        let a = s.next_tr();
+        let b = s.next_tr();
+        assert_ne!(a, b);
+        assert_eq!(s.tr_seq, b);
     }
 
     #[test]

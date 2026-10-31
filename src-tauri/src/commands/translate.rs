@@ -2,7 +2,7 @@
 //! 系统翻译与语言包查询靠主队列回调，不能在主线程上等；同步命令跑在主线程，所以这几个命令都是 async，
 //! 平台调用经 `spawn_blocking`（见 `translate::system`）。
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
 use serde::Serialize;
@@ -23,7 +23,8 @@ pub struct Translated {
     pub engine: String,
 }
 
-/// 翻译一条记录并存库；增量经 `translate-delta` 广播。同一条记录已在翻译时报“正在翻译”，前端忽略。
+/// 翻译一条记录并存库；增量经 `translate-delta` 广播。同一条记录已在翻译时报“正在翻译”，前端忽略；
+/// 指定了 `engine`（换用）时改为接替：旧请求中止、报“已换用”，前端忽略。
 /// `again` 为假、没指定方式且已有存库译文时直接返回它，不发请求；只有“重新翻译”传真（M26 规则 4）。
 /// `engine`（`system` / `openai`）单次指定翻译方式，不改设置；没指定时“重新翻译”沿用库里译文的方式（M26 规则 16）。
 #[tauri::command]
@@ -93,14 +94,27 @@ async fn translate_one(
         _ => cfg.clone(),
     };
     let tag = cfg.tag();
-    if !state
-        .translating
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .insert(id)
+    // 请求序号：翻译中“换用…”（指定了方式）接替进行中的请求，旧请求见序号变了就中止（M26 规则 16）
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed) + 1;
     {
-        return Err(AppError::Invalid("正在翻译".into()));
+        let mut m = state
+            .translating
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if engine.is_none() && m.contains_key(&id) {
+            return Err(AppError::Invalid("正在翻译".into()));
+        }
+        m.insert(id, seq);
     }
+    let live = || {
+        state
+            .translating
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&id)
+            == Some(&seq)
+    };
     let t0 = Instant::now();
     let mut co = Coalescer::default();
     let mut lang = None;
@@ -113,6 +127,9 @@ async fn translate_one(
         });
     };
     let r = translate::exec(cfg, &text, timeouts, |l, d| {
+        if !live() {
+            return false;
+        }
         lang = Some(l);
         if let Some(s) = co.push(d, Instant::now()) {
             send(l, s);
@@ -120,15 +137,21 @@ async fn translate_one(
         true
     })
     .await;
+    let ms = t0.elapsed().as_millis();
+    {
+        let mut m = state
+            .translating
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if m.get(&id) != Some(&seq) {
+            log::info!("translate id={id} 已换用 ms={ms}");
+            return Err(AppError::Invalid("已换用".into()));
+        }
+        m.remove(&id);
+    }
     if let (Some(l), Some(s)) = (lang, co.flush()) {
         send(l, s);
     }
-    state
-        .translating
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .remove(&id);
-    let ms = t0.elapsed().as_millis();
     let (lang, out) = match r {
         Ok(v) => v,
         Err(f) => {
@@ -481,6 +504,47 @@ mod tests {
         drop(g);
         assert!(!state.tr_downloading.load(Ordering::SeqCst));
         assert!(Downloading::begin(&state.tr_downloading).is_some());
+    }
+
+    /// 翻译中换用（M26 规则 16）：同一条在翻译时，没指定方式的请求报“正在翻译”，指定了方式的接替；
+    /// 被接替的请求不存库、报“已换用”，也不清掉接替者的登记。
+    #[test]
+    fn switch_takes_over_in_flight() {
+        let state = AppState::for_test();
+        let id = state.store().create_snippet("n", "hello", 1).unwrap();
+        state.translating.lock().unwrap().insert(id, 0);
+        let e = run(&state, &openai("http://127.0.0.1:9/v1"), id, true, |_| {}).unwrap_err();
+        assert_eq!(e.to_string(), "正在翻译");
+        let body = format!("{SSE_HEAD}{}data: [DONE]\n\n", delta("你好"));
+        let (url, _h) = serve(vec![(0, body.into_bytes())], false);
+        let t = run_with(
+            &state,
+            &openai(&url),
+            id,
+            true,
+            Some(Engine::OpenAi),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(t.text, "你好");
+        assert!(state.translating.lock().unwrap().is_empty());
+
+        // 请求进行中被换用：增量到达时登记换成了别的序号
+        let first = format!("{SSE_HEAD}{}", delta("旧"));
+        let rest = format!("{}data: [DONE]\n\n", delta("的"));
+        // 隔 80 ms 再发第二段，合并器才在请求进行中吐出增量
+        let (url, _h) = serve(
+            vec![(0, first.into_bytes()), (80, rest.into_bytes())],
+            false,
+        );
+        let e = run(&state, &openai(&url), id, true, |_| {
+            state.translating.lock().unwrap().insert(id, u64::MAX);
+        })
+        .unwrap_err();
+        assert_eq!(e.to_string(), "已换用");
+        let d = state.store().detail(id).unwrap().unwrap();
+        assert_eq!(d.translation.as_deref(), Some("你好"), "被接替的不存库");
+        assert_eq!(state.translating.lock().unwrap().get(&id), Some(&u64::MAX));
     }
 
     /// 翻译期间原文被改（片段编辑清掉了译文）：旧原文的译文不存，报“原文已改动”（M26 规则 12）。
