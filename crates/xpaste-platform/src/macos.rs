@@ -920,6 +920,9 @@ pub fn activate_window(_hwnd: isize) {}
 /// Windows 上显示窗口但不激活；macOS 上不激活应用的 NSPanel 用 `orderFrontRegardless` 即可，无操作。
 pub fn show_no_activate(_hwnd: isize) {}
 
+/// Windows 上收起经 `show_no_activate` 显示的窗口；macOS 无操作。
+pub fn hide_window(_hwnd: isize) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

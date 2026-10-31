@@ -401,12 +401,21 @@ fn front(app: &AppHandle, w: &WebviewWindow, focus: bool) -> tauri::Result<()> {
 }
 
 /// 撤下卡片（NSPanel 上 hide 即 orderOut，键盘交还仍处于激活状态的前台应用）。
+/// 所有收起卡片的路径（再按快捷键、关闭、失焦、Alt+F4）都走这里。
 fn hide_window(app: &AppHandle) {
     on_main(app, |app| {
-        if let Some(w) = app.get_webview_window(LABEL)
-            && let Err(e) = w.hide()
-        {
+        let Some(w) = app.get_webview_window(LABEL) else {
+            return;
+        };
+        // 保留 hide()：`text` 卡片经 show() 上屏，tao 的可见标记要跟着复位
+        if let Err(e) = w.hide() {
             log::warn!("隐藏划词卡片失败：{e}");
+        }
+        // Windows：提示经 show_no_activate 上屏，tao 的标记仍是隐藏，上面的 hide() 不会真的隐藏
+        #[cfg(windows)]
+        match w.hwnd() {
+            Ok(h) => xpaste_platform::hide_window(h.0 as isize),
+            Err(e) => log::warn!("划词卡片取不到窗口句柄：{e}"),
         }
     });
 }

@@ -74,7 +74,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GWL_EXSTYLE, GetClassNameW, GetForegroundWindow, GetIconInfo, GetMessageW,
     GetWindowLongW, GetWindowTextLengthW, GetWindowThreadProcessId, HICON, HWND_MESSAGE, ICONINFO,
     InternalGetWindowText, IsIconic, IsWindow, IsWindowVisible, MONITORINFOF_PRIMARY, MSG,
-    RegisterClassW, SW_SHOWNOACTIVATE, SetForegroundWindow, ShowWindow, WINDOW_EX_STYLE,
+    RegisterClassW, SW_HIDE, SW_SHOWNOACTIVATE, SetForegroundWindow, ShowWindow, WINDOW_EX_STYLE,
     WINDOW_STYLE, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_CLIPBOARDUPDATE, WNDCLASSW,
     WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
 };
@@ -667,6 +667,15 @@ pub fn show_no_activate(hwnd: isize) {
     // SAFETY: hwnd 失效时调用失败而不会崩溃；返回值是之前是否可见，不是错误
     unsafe {
         let _ = ShowWindow(HWND(hwnd as *mut _), SW_SHOWNOACTIVATE);
+    }
+}
+
+/// 隐藏窗口。经 `show_no_activate` 显示的窗口要用它收起：tao 不知道窗口已显示，`hide()` 比对自己的可见标记后什么也不做。
+/// hwnd 失效时什么也不做。
+pub fn hide_window(hwnd: isize) {
+    // SAFETY: 同 show_no_activate
+    unsafe {
+        let _ = ShowWindow(HWND(hwnd as *mut _), SW_HIDE);
     }
 }
 
