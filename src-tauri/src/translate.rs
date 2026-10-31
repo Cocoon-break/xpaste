@@ -5,12 +5,12 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use xpaste_core::Settings;
 pub use xpaste_core::translate::Lang;
 use xpaste_core::translate::{
     MAX_CHARS, SseLine, chat_body, completion_text, endpoint, http_error, is_loopback,
     resolve_target, sse_line,
 };
+use xpaste_core::{Secret, Settings};
 
 use crate::error::AppError;
 
@@ -41,8 +41,8 @@ impl Engine {
 #[derive(Debug, Clone)]
 pub struct Cfg {
     pub engine: Engine,
-    pub base_url: String,
-    pub api_key: String,
+    pub base_url: Secret,
+    pub api_key: Secret,
     pub model: String,
     pub lang: Lang,
 }
@@ -84,7 +84,8 @@ impl Cfg {
 }
 
 /// `translate-delta` 的载荷（M26 规则 3、5）。
-#[derive(Debug, Clone, Serialize)]
+/// 不派生 Debug：带着译文（日志不能出现剪切板内容）
+#[derive(Clone, Serialize)]
 pub struct Delta {
     pub id: Option<i64>,
     pub lang: String,
@@ -220,6 +221,58 @@ const TIMEOUTS: Timeouts = Timeouts {
 pub fn unconfigured(cfg: &Cfg) -> bool {
     cfg.engine == Engine::OpenAi && (cfg.model.trim().is_empty() || cfg.base_url.trim().is_empty())
 }
+
+/// 翻译并把增量合并后（规则 3，约 50 ms 一段）组成 `Delta` 交给 `emit`；面板、截图卡片、划词卡片共用。
+/// `live` 为假（已关闭、已被换用接替）时中止请求、不再发增量；结束（含失败，卡片保留已收到的部分）时仍 live 才发完剩下的。
+/// 调用方返回后自己再看一次 `live` 决定是否还要交结果。
+pub async fn exec_streamed(
+    cfg: &Cfg,
+    text: &str,
+    timeouts: Option<Timeouts>,
+    id: Option<i64>,
+    live: impl Fn() -> bool + Sync,
+    emit: impl Fn(Delta) + Sync,
+) -> Result<(Lang, String), Fail> {
+    let tag = cfg.tag();
+    let send = |l: Lang, text: String| {
+        emit(Delta {
+            id,
+            lang: l.code().into(),
+            engine: tag.clone(),
+            text,
+        })
+    };
+    let mut co = Coalescer::default();
+    let mut lang = None;
+    let r = exec(cfg, text, timeouts, |l, d| {
+        if !live() {
+            return false;
+        }
+        lang = Some(l);
+        if let Some(s) = co.push(d, Instant::now()) {
+            send(l, s);
+        }
+        true
+    })
+    .await;
+    if let (Some(l), Some(s)) = (lang, co.flush())
+        && live()
+    {
+        send(l, s);
+    }
+    r
+}
+
+/// 翻译中“换用…”后被接替的请求报的错（M26 规则 16）：前端忽略，截图不因它放开输出认领。
+pub fn superseded() -> AppError {
+    AppError::Invalid(SUPERSEDED.into())
+}
+
+pub fn is_superseded(e: &AppError) -> bool {
+    matches!(e, AppError::Invalid(m) if m == SUPERSEDED)
+}
+
+const SUPERSEDED: &str = "已换用";
 
 /// `run` 的实现；`timeouts` 为 None 时用正式客户端（见 `client`），测试传短超时另建客户端。
 pub async fn exec(

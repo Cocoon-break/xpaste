@@ -2,7 +2,6 @@
 //! 卡片窗口启动时预建、隐藏；macOS 是不激活应用的 NSPanel（同截图遮罩，M23 规则 1），拿键盘但前台应用不变。
 //! 日志不写原文、译文，只记 copied、字数、耗时与错误类别（M26 规则 14）。
 
-use std::sync::atomic::Ordering;
 use std::sync::{MutexGuard, PoisonError};
 use std::time::Instant;
 
@@ -15,7 +14,7 @@ use crate::error::AppError;
 use crate::events::{self, TRANSLATE_DELTA, TRCARD_DONE, TRCARD_SHOW};
 use crate::panel::{Rect, on_main};
 use crate::state::AppState;
-use crate::translate::{self, Coalescer, Delta, Engine, Lang};
+use crate::translate::{self, Delta, Engine, Lang};
 
 pub const LABEL: &str = "tr-card";
 /// 离指针的距离
@@ -57,6 +56,8 @@ pub struct Session {
     keyboard: bool,
     /// 这张卡片上选的目标语言；None 为“自动”（按设置的目标语言，规则 9）
     lang: Option<Lang>,
+    /// 卡片上发起的语言包下载进行中：系统确认框挂在卡片上，期间失焦不关闭
+    downloading: bool,
 }
 
 /// 撤下卡片时键盘交还到哪（M26 规则 18、19）。
@@ -146,7 +147,8 @@ fn resized(p: Placement, h: f64, wide: bool) -> Placement {
 
 /// `trcard-show` 的载荷。`kind`：`text`（有文字，开始翻译）/ `input`（空的输入卡片，M26 规则 20）/
 /// `blocked`（排除应用或敏感内容）。
-#[derive(Debug, Clone, Serialize)]
+// 不派生 Debug：带着原文 / 译文
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Show {
     kind: &'static str,
@@ -179,7 +181,8 @@ impl Show {
 
 /// `trcard-done` 的载荷：这次翻译结束。`lang`：成功时实际翻成的语言代码（规则 9）。
 /// `error` 同命令报错的 `{ kind, message, source?, target? }`。
-#[derive(Debug, Clone, Serialize)]
+// 不派生 Debug：带着原文 / 译文
+#[derive(Clone, Serialize)]
 struct Done {
     seq: u64,
     ok: bool,
@@ -529,38 +532,14 @@ async fn run(app: AppHandle, seq: u64, engine: Option<Engine>) {
     }
     let tag = cfg.tag();
     let current = || session(&app).is_current(seq);
-    let send = |l: Lang, text: String| {
-        let p = Delta {
-            id: None,
-            lang: l.code().into(),
-            engine: tag.clone(),
-            text,
-        };
-        events::emit_to(&app, LABEL, TRANSLATE_DELTA, p);
-    };
+    let emit = |p: Delta| events::emit_to(&app, LABEL, TRANSLATE_DELTA, p);
     let t0 = Instant::now();
-    let mut co = Coalescer::default();
-    let mut lang = None;
-    let r = translate::exec(&cfg, &text, None, |l, d| {
-        if !current() {
-            return false;
-        }
-        lang = Some(l);
-        if let Some(s) = co.push(d, Instant::now()) {
-            send(l, s);
-        }
-        true
-    })
-    .await;
+    let r = translate::exec_streamed(&cfg, &text, None, None, current, emit).await;
     let ms = t0.elapsed().as_millis();
     let chars = text.chars().count();
     if !current() {
         log::info!("translate card 中止 chars={chars} ms={ms}");
         return;
-    }
-    // 剩下的发完（失败时也发：卡片保留已收到的部分）
-    if let (Some(l), Some(s)) = (lang, co.flush()) {
-        send(l, s);
     }
     let done = match r {
         Ok((l, out)) => {
@@ -703,13 +682,10 @@ pub fn close(app: &AppHandle, seq: u64) {
 /// 卡片失去键盘（点了别处）：同关闭，但键盘已在用户点的地方，不再交还。面板开着且没开对话框时，
 /// 像面板自己失焦一样隐藏。下载语言包期间忽略（系统确认框会拿走键盘）。不是当前这一次时忽略。
 pub fn blur(app: &AppHandle, seq: u64) {
-    let state = app.state::<AppState>();
-    if state.tr_downloading.load(Ordering::SeqCst) {
-        return;
-    }
     {
         let mut s = session(app);
-        if !s.is_current(seq) {
+        // 只有挂在卡片上的下载才忽略：面板或设置里发起的下载与卡片无关，卡片失焦后收不到 Esc，不关就一直留在屏幕上
+        if !s.is_current(seq) || s.downloading {
             return;
         }
         s.bump();
@@ -718,19 +694,18 @@ pub fn blur(app: &AppHandle, seq: u64) {
         s.keyboard = false;
     }
     hide_window(app);
-    if !state.blur_keeps.load(Ordering::SeqCst) {
-        crate::panel::hide_if_unfocused(app);
-    }
+    crate::panel::hide_if_unfocused(app);
+}
+
+/// 卡片上点了“下载语言包”：系统确认框挂在卡片上，期间卡片失焦不关闭（M26 规则 17）。
+pub fn set_downloading(app: &AppHandle, on: bool) {
+    session(app).downloading = on;
 }
 
 /// 复制译文：按普通写入写纯文本，进历史（同截图卡片，M26 规则 19）。
 pub fn copy(text: &str) -> Result<(), AppError> {
-    let chars = text.chars().count();
-    xpaste_platform::write(&[xpaste_core::text_flavor(text)]).map_err(|e| {
-        log::warn!("trcard 译文写剪切板失败 {chars} 字：{e}");
-        AppError::ClipboardWrite
-    })?;
-    log::info!("trcard 复制译文 {chars} 字");
+    crate::clipboard::write_text(text, "trcard 译文")?;
+    log::info!("trcard 复制译文 {} 字", text.chars().count());
     Ok(())
 }
 

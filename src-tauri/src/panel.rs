@@ -481,10 +481,22 @@ pub fn hide(app: &AppHandle) {
     });
 }
 
-/// 可见但已失焦时直接隐藏（片段对话框关闭、选完文件夹时由 `set_dialog_open` 调用）。
+/// 面板失焦时能不能隐藏（M04 规则 3）：设置、确认框开着照常隐藏；片段对话框开着或正在选文件夹、
+/// 下载语言包期间（系统确认框会抢焦点）、划词卡片拿着键盘时（M26 规则 18）、截图或录屏遮罩进行中
+/// （M15 交互规则 4：面板留着一起截进去）不隐藏。失焦事件与所有补隐藏的路径都按它判断。
+pub fn blur_hides(app: &AppHandle) -> bool {
+    let state = app.state::<AppState>();
+    !state.blur_keeps.load(Ordering::SeqCst)
+        && !state.tr_downloading.load(Ordering::SeqCst)
+        && !crate::trcard::has_keyboard(app)
+        && !crate::shot::active(app)
+}
+
+/// 可见但已失焦、且 `blur_hides` 时隐藏：补上期间被忽略的失焦（片段对话框关闭、选完文件夹、下载语言包结束、
+/// 划词卡片失焦关闭）。
 pub fn hide_if_unfocused(app: &AppHandle) {
     let Some(w) = window(app) else { return };
-    if w.is_visible().unwrap_or(false) && !w.is_focused().unwrap_or(true) {
+    if blur_hides(app) && w.is_visible().unwrap_or(false) && !w.is_focused().unwrap_or(true) {
         hide(app);
     }
 }

@@ -18,7 +18,7 @@ use crate::error::AppError;
 use crate::events;
 use crate::panel::on_main;
 use crate::state::AppState;
-use crate::translate::{self, Coalescer, Delta, Fail, Lang};
+use crate::translate::{self, Delta, Fail};
 
 const LABEL_PREFIX: &str = "shot-";
 /// 按下快捷键后这么久还没全部上屏，视为卡住（某块屏的遮罩出错或没收到载荷），下次快捷键重新开始
@@ -1075,8 +1075,8 @@ pub fn finish(
             .inspect(|_| enter_toast(app, generation)),
     };
     // 失败一律交还输出：卡片还没出现的遮罩回到选区可以重试；已出现的卡片上只能关闭，由遮罩自己挡住第二个动作
-    // （增量与失败返回到达遮罩的先后不定，后端判断不了卡片是否已出现）
-    if r.is_err() {
+    // （增量与失败返回到达遮罩的先后不定，后端判断不了卡片是否已出现）。被换用接替的不算：接替的翻译还占着输出
+    if r.as_ref().is_err_and(|e| !translate::is_superseded(e)) {
         let mut s = session(app);
         if s.is_current(generation) {
             s.release_finish();
@@ -1199,10 +1199,7 @@ fn ocr(app: &AppHandle, generation: u64, png: Vec<u8>) -> Result<ShotOutcome, Ap
     }
     if let Some(text) = &text {
         // 不经过 write_marked：同“复制截图”，要进历史
-        xpaste_platform::write(&[xpaste_core::text_flavor(text)]).map_err(|e| {
-            log::warn!("识别文字写剪切板失败 {chars} 字：{e}");
-            AppError::ClipboardWrite
-        })?;
+        crate::clipboard::write_text(text, "识别文字")?;
     }
     Ok(ShotOutcome {
         action: "ocr",
@@ -1274,43 +1271,19 @@ fn stream(
     text: &str,
 ) -> Result<ShotOutcome, AppError> {
     let t0 = Instant::now();
-    let mut co = Coalescer::default();
-    let mut lang = None;
     let tag = cfg.tag();
-    let send = |l: Lang, text: String| {
-        let p = Delta {
-            id: None,
-            lang: l.code().into(),
-            engine: tag.clone(),
-            text,
-        };
-        events::emit_to(app, label, events::TRANSLATE_DELTA, p);
-    };
     let live = || {
         let s = session(app);
         s.is_current(generation) && s.tr_seq == tr
     };
-    let r = tauri::async_runtime::block_on(translate::exec(cfg, text, None, |l, d| {
-        if !live() {
-            return false;
-        }
-        lang = Some(l);
-        if let Some(s) = co.push(d, Instant::now()) {
-            send(l, s);
-        }
-        true
-    }));
+    let emit = |p: Delta| events::emit_to(app, label, events::TRANSLATE_DELTA, p);
+    let r =
+        tauri::async_runtime::block_on(translate::exec_streamed(cfg, text, None, None, live, emit));
     let ms = t0.elapsed().as_millis();
     let chars = text.chars().count();
     if session(app).is_current(generation) && !live() {
         log::info!("translate shot 已换用 chars={chars} ms={ms}");
-        return Err(AppError::Invalid("已换用".into()));
-    }
-    // 剩下的发完（失败时也发：卡片保留已收到的部分）
-    if let (Some(l), Some(s)) = (lang, co.flush())
-        && live()
-    {
-        send(l, s);
+        return Err(translate::superseded());
     }
     match r {
         Ok((_, out)) => {
@@ -1339,12 +1312,8 @@ pub fn copy_text(app: &AppHandle, generation: u64, text: &str) -> Result<(), App
     if !session(app).is_current(generation) {
         return Err(AppError::Invalid("截图已结束".into()));
     }
-    let chars = text.chars().count();
-    xpaste_platform::write(&[xpaste_core::text_flavor(text)]).map_err(|e| {
-        log::warn!("译文写剪切板失败 {chars} 字：{e}");
-        AppError::ClipboardWrite
-    })?;
-    log::info!("shot 复制译文 {chars} 字");
+    crate::clipboard::write_text(text, "译文")?;
+    log::info!("shot 复制译文 {} 字", text.chars().count());
     enter_toast(app, generation);
     Ok(())
 }

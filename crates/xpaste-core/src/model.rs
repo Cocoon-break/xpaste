@@ -55,6 +55,41 @@ pub enum RecQuality {
     Small,
 }
 
+/// 不能出现在日志与调试输出里的设置值（翻译的 API Key 与接口地址，5.2 第 3 条）：`{:?}` 只显示是否为空，
+/// 序列化与普通字符串相同，读取当作 `String`。
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Secret(pub String);
+
+impl fmt::Debug for Secret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(if self.0.is_empty() {
+            "Secret(空)"
+        } else {
+            "Secret(..)"
+        })
+    }
+}
+
+impl std::ops::Deref for Secret {
+    type Target = String;
+    fn deref(&self) -> &String {
+        &self.0
+    }
+}
+
+impl From<&str> for Secret {
+    fn from(s: &str) -> Self {
+        Self(s.into())
+    }
+}
+
+impl From<String> for Secret {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -105,8 +140,8 @@ pub struct Settings {
     /// 翻译引擎：`""`（还没选，由应用层按平台决定）| `"system"` | `"openai"`（M26 规则 6）
     pub translate_engine: String,
     /// OpenAI 兼容接口的 Base URL
-    pub translate_base_url: String,
-    pub translate_api_key: String,
+    pub translate_base_url: Secret,
+    pub translate_api_key: Secret,
     pub translate_model: String,
     /// 目标语言代码，见 `translate::Lang`
     pub translate_lang: String,
@@ -151,7 +186,7 @@ impl Default for Settings {
             rec_fps: 30,
             translate_engine: String::new(),
             translate_base_url: "https://api.openai.com/v1".into(),
-            translate_api_key: String::new(),
+            translate_api_key: Secret::default(),
             translate_model: String::new(),
             translate_lang: "zh-Hans".into(),
             translate_hotkey: "Alt+Shift+T".into(),
@@ -289,13 +324,13 @@ impl Settings {
     /// 翻译的三个文本字段去首尾空白，Base URL 再去掉末尾的 `/`（M26 规则 6）；保存设置时在 `validate` 之前调用。
     pub fn normalize(&mut self) {
         for f in [
-            &mut self.translate_base_url,
-            &mut self.translate_api_key,
+            &mut self.translate_base_url.0,
+            &mut self.translate_api_key.0,
             &mut self.translate_model,
         ] {
             *f = f.trim().to_owned();
         }
-        self.translate_base_url = self.translate_base_url.trim_end_matches('/').to_owned();
+        self.translate_base_url = self.translate_base_url.trim_end_matches('/').into();
     }
 
     /// 按顺序检查，返回第一条不满足的规则。
@@ -339,7 +374,8 @@ impl Settings {
             return fail("不支持这种翻译目标语言");
         }
         // 接口地址不论默认用哪种都校验：设置里两组配置常驻显示（M26 规则 6）
-        let url = &self.translate_base_url;
+        // 协议名不分大小写（同前端 baseUrlError）
+        let url = self.translate_base_url.to_ascii_lowercase();
         if !url.is_empty() && !url.starts_with("http://") && !url.starts_with("https://") {
             return fail("请输入 http:// 或 https:// 开头的地址");
         }
@@ -736,10 +772,29 @@ mod tests {
             .validate()
             .is_err()
         );
+        // 协议名不分大小写，同前端
+        assert!(
+            Settings {
+                translate_base_url: "HTTPS://api.openai.com/v1".into(),
+                ..Default::default()
+            }
+            .validate()
+            .is_ok()
+        );
+        // API Key 与接口地址不进调试输出
+        let dbg = format!(
+            "{:?}",
+            Settings {
+                translate_api_key: "sk-secret".into(),
+                translate_base_url: "https://key.example/v1".into(),
+                ..Default::default()
+            }
+        );
+        assert!(!dbg.contains("sk-secret") && !dbg.contains("key.example"));
         // 空 = 未配置，不报错
         assert!(
             Settings {
-                translate_base_url: String::new(),
+                translate_base_url: Secret::default(),
                 ..Default::default()
             }
             .validate()

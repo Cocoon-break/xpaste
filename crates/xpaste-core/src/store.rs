@@ -107,6 +107,25 @@ pub enum Upsert {
     Merged(i64),
 }
 
+/// 存着的译文（`Store::stored_translation`）：升级前存的没有语言与翻译方式（库迁移 8、9）。
+#[derive(Clone, PartialEq)]
+pub struct StoredTranslation {
+    pub text: String,
+    pub lang: Option<String>,
+    pub engine: Option<String>,
+}
+
+/// 译文是剪切板内容的翻译，调试输出只给字数。
+impl std::fmt::Debug for StoredTranslation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StoredTranslation")
+            .field("text_chars", &self.text.chars().count())
+            .field("lang", &self.lang)
+            .field("engine", &self.engine)
+            .finish()
+    }
+}
+
 pub struct Store {
     conn: Connection,
     pub dir: PathBuf,
@@ -440,6 +459,26 @@ impl Store {
             params![text, lang, id, engine],
         )?;
         Ok(n > 0)
+    }
+
+    /// 存着的译文与它的语言、翻译方式（M26 规则 4、12、16）；没有译文、已删除、不存在为 None。
+    /// 翻译入口只要这三列，不跑整条记录的 `detail`。
+    pub fn stored_translation(&self, id: i64) -> Result<Option<StoredTranslation>, CoreError> {
+        let row: Option<(Option<String>, Option<String>, Option<String>)> = self
+            .conn
+            .query_row(
+                "SELECT translation, translation_lang, translation_engine FROM records WHERE id = ?1 AND deleted_at IS NULL",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        Ok(row.and_then(|(t, lang, engine)| {
+            Some(StoredTranslation {
+                text: t?,
+                lang,
+                engine,
+            })
+        }))
     }
 
     /// 可翻译的原文（M26 规则 1）：文本、代码取全文，图片、文件在识别出文字时取识别结果；其余、已删除、不存在为 None。
@@ -2540,6 +2579,15 @@ pub(crate) mod tests {
             (d.translation.as_deref(), d.translation_lang.as_deref()),
             (Some("你好"), Some("zh-Hans"))
         );
+        assert_eq!(
+            s.stored_translation(id).unwrap(),
+            Some(StoredTranslation {
+                text: "你好".into(),
+                lang: Some("zh-Hans".into()),
+                engine: Some("system".into())
+            })
+        );
+        assert_eq!(s.stored_translation(id + 100).unwrap(), None);
         // 片段改内容会清掉译文；只改名不清
         let sid = s.create_snippet("n", "hi", 2).unwrap();
         s.set_translation(sid, "嗨", "zh-Hans", "system").unwrap();

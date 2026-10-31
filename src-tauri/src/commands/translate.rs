@@ -13,7 +13,7 @@ use xpaste_platform::PackStatus;
 use crate::error::AppError;
 use crate::events::{TRANSLATE_DELTA, emit};
 use crate::state::AppState;
-use crate::translate::{self, Cfg, Coalescer, Delta, Engine, Fail, Lang, Timeouts};
+use crate::translate::{self, Cfg, Delta, Engine, Fail, Lang, Timeouts};
 
 #[derive(Debug, Serialize)]
 pub struct Translated {
@@ -67,23 +67,22 @@ async fn translate_one(
     let Some(text) = state.store().translate_source(id)? else {
         return Err(AppError::Invalid("这条记录不能翻译".into()));
     };
-    let stored = state.store().detail(id)?;
+    let stored = state.store().stored_translation(id)?;
     if !again
         && engine.is_none()
-        && let Some(d) = &stored
-        && let Some(t) = &d.translation
+        && let Some(t) = stored
     {
         return Ok(Translated {
-            text: t.clone(),
-            lang: d.translation_lang.clone().unwrap_or_default(),
-            engine: d.translation_engine.clone().unwrap_or_default(),
+            text: t.text,
+            lang: t.lang.unwrap_or_default(),
+            engine: t.engine.unwrap_or_default(),
         });
     }
     let want = engine.or_else(|| {
         stored
             .as_ref()
             .filter(|_| again)
-            .and_then(|d| d.translation_engine.as_deref())
+            .and_then(|t| t.engine.as_deref())
             .and_then(Engine::from_tag)
     });
     let cfg = &match want {
@@ -116,27 +115,7 @@ async fn translate_one(
             == Some(&seq)
     };
     let t0 = Instant::now();
-    let mut co = Coalescer::default();
-    let mut lang = None;
-    let send = |lang: Lang, text: String| {
-        send(Delta {
-            id: Some(id),
-            lang: lang.code().into(),
-            engine: tag.clone(),
-            text,
-        });
-    };
-    let r = translate::exec(cfg, &text, timeouts, |l, d| {
-        if !live() {
-            return false;
-        }
-        lang = Some(l);
-        if let Some(s) = co.push(d, Instant::now()) {
-            send(l, s);
-        }
-        true
-    })
-    .await;
+    let r = translate::exec_streamed(cfg, &text, timeouts, Some(id), live, send).await;
     let ms = t0.elapsed().as_millis();
     {
         let mut m = state
@@ -145,12 +124,9 @@ async fn translate_one(
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if m.get(&id) != Some(&seq) {
             log::info!("translate id={id} 已换用 ms={ms}");
-            return Err(AppError::Invalid("已换用".into()));
+            return Err(translate::superseded());
         }
         m.remove(&id);
-    }
-    if let (Some(l), Some(s)) = (lang, co.flush()) {
-        send(l, s);
     }
     let (lang, out) = match r {
         Ok(v) => v,
@@ -192,8 +168,8 @@ pub async fn translate_test(
     }
     let cfg = translate::cfg(&Settings {
         translate_engine: engine,
-        translate_base_url: base_url,
-        translate_api_key: api_key,
+        translate_base_url: base_url.into(),
+        translate_api_key: api_key.into(),
         translate_model: model,
         translate_lang: lang,
         ..Settings::default()
@@ -221,7 +197,7 @@ pub async fn translate_engines(app: AppHandle) -> Engines {
     let s = state.settings();
     Engines {
         system: xpaste_platform::translate_supported(),
-        openai: !s.translate_base_url.trim().is_empty() && !s.translate_model.trim().is_empty(),
+        openai: !translate::unconfigured(&translate::cfg_for(&s, Some(Engine::OpenAi))),
         model: s.translate_model.trim().to_string(),
         current: translate::cfg(&s).tag(),
     }
@@ -291,16 +267,21 @@ pub async fn translate_download(
     };
     let t0 = Instant::now();
     let src = source.clone();
+    let card = window_label == crate::trcard::LABEL;
+    if card {
+        crate::trcard::set_downloading(&app, true);
+    }
     let r = tauri::async_runtime::spawn_blocking(move || {
         // SAFETY: 面板（及其他 xPaste 窗口）常驻、不销毁，指针在等待期间一直有效
         unsafe { xpaste_platform::translate_prepare(&src, &target, ns as *mut std::ffi::c_void) }
     })
     .await;
     drop(guard);
-    // 期间被忽略的失焦补一次隐藏，同 set_dialog_open；片段对话框开着时不隐藏
-    if !state.blur_keeps.load(Ordering::SeqCst) {
-        crate::panel::hide_if_unfocused(&app);
+    if card {
+        crate::trcard::set_downloading(&app, false);
     }
+    // 期间被忽略的失焦补一次隐藏（划词卡片还拿着键盘、片段对话框开着时不隐藏，见 panel::blur_hides）
+    crate::panel::hide_if_unfocused(&app);
     let r = r?;
     let ms = t0.elapsed().as_millis();
     use xpaste_platform::SysTranslateError as E;

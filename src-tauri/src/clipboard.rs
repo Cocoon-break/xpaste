@@ -134,6 +134,16 @@ pub fn enqueue_followups(
     }
 }
 
+/// 按普通写入写纯文本（不打自身写入标记），监听器把它作为一条文本记录收进历史：截图识别文字、复制译文用。
+/// 失败时日志只记 `what` 与字数，报“写剪切板失败”。
+pub fn write_text(text: &str, what: &str) -> Result<(), crate::error::AppError> {
+    xpaste_platform::write(&[xpaste_core::text_flavor(text)]).map_err(|e| {
+        log::warn!("{what}写剪切板失败 {} 字：{e}", text.chars().count());
+        crate::error::AppError::ClipboardWrite
+    })?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::is_self_write;
