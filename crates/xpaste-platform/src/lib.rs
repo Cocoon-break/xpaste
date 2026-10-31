@@ -136,6 +136,36 @@ pub enum SysTranslateError {
     Failed,
 }
 
+/// 每 `step_ms` 查一次 `done`，为真立即返回 true；累计等满 `max_ms` 后最后查一次仍为假返回 false。
+pub(crate) fn wait_until(mut done: impl FnMut() -> bool, step_ms: u64, max_ms: u64) -> bool {
+    let mut waited = 0;
+    loop {
+        if done() {
+            return true;
+        }
+        if waited >= max_ms {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(step_ms));
+        waited += step_ms;
+    }
+}
+
+/// 模拟一次“复制”（macOS ⌘C，Windows Ctrl+Insert），返回剪切板有没有变（设计 §3.2、§4）。
+/// 先等修饰键松开（最多 500 ms，否则按快捷键的 ⌥⇧ 会叠进去），再发按键，最多等 400 ms 看剪切板序号。
+/// macOS 没有辅助功能权限时返回 `NoAccessibility`，调用方改为翻译剪切板。
+/// 阻塞最多约 900 ms，只在后台线程调用，不要在主线程上调。
+pub fn copy_selection() -> Result<bool, PlatformError> {
+    if can_paste(None) == PasteBlock::NeedAccessibility {
+        return Err(PlatformError::NoAccessibility);
+    }
+    // 等不到松开也照发：macOS 的按键只带 Command 标志，不受按着的修饰键影响
+    wait_until(|| !modifiers_down(), 10, 500);
+    let before = change_count();
+    send_copy()?;
+    Ok(wait_until(|| change_count() != before, 20, 400))
+}
+
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
@@ -158,6 +188,35 @@ mod tests {
         assert_eq!((r.text.as_str(), r.confidence), ("a\nb", 0.75));
         let empty = super::ocr_text(vec![]);
         assert_eq!((empty.text.as_str(), empty.confidence), ("", 0.0));
+    }
+
+    #[test]
+    fn wait_until_stops_at_max() {
+        let mut calls = 0;
+        assert!(!super::wait_until(
+            || {
+                calls += 1;
+                false
+            },
+            5,
+            15
+        ));
+        // 0、5、10、15 ms 各查一次
+        assert_eq!(calls, 4);
+    }
+
+    #[test]
+    fn wait_until_returns_early() {
+        let mut calls = 0;
+        assert!(super::wait_until(
+            || {
+                calls += 1;
+                calls == 2
+            },
+            5,
+            1000
+        ));
+        assert_eq!(calls, 2);
     }
 
     #[test]

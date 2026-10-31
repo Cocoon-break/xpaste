@@ -53,6 +53,7 @@ unsafe extern "C" {
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
     fn CGEventSourceButtonState(state_id: i32, button: u32) -> u8;
+    fn CGEventSourceFlagsState(state_id: i32) -> u64;
 }
 
 /// 回调：`code` 0 成功（`out` 为译文），1 缺语言包（`out` 为源语言代码），2 不支持，3 其他失败。
@@ -90,6 +91,8 @@ const QOS_CLASS_UTILITY: u32 = 0x11;
 
 /// `kVK_ANSI_V`
 const KEY_V: u16 = 9;
+/// `kVK_ANSI_C`
+const KEY_C: u16 = 8;
 
 pub const OS: &str = "macos";
 
@@ -843,6 +846,28 @@ pub fn can_paste(_target: Option<isize>) -> PasteBlock {
 pub fn paste(_target: Option<isize>) -> Result<(), PlatformError> {
     for down in [true, false] {
         let event = CGEvent::new_keyboard_event(None, KEY_V, down)
+            .ok_or_else(|| PlatformError::Clipboard("创建按键事件失败".into()))?;
+        CGEvent::set_flags(Some(&event), CGEventFlags::MaskCommand);
+        CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&event));
+    }
+    Ok(())
+}
+
+/// Command、Option、Shift、Control 中有没有按着的（设计 §4）。
+pub(crate) fn modifiers_down() -> bool {
+    let mask = CGEventFlags::MaskCommand
+        | CGEventFlags::MaskAlternate
+        | CGEventFlags::MaskShift
+        | CGEventFlags::MaskControl;
+    // kCGEventSourceStateCombinedSessionState = 0
+    // SAFETY: 纯查询，无指针参数
+    unsafe { CGEventSourceFlagsState(0) & mask.0 != 0 }
+}
+
+/// 向前台应用发 ⌘C，标志显式只带 Command（不叠上还按着的 ⌥⇧）。调用方已查过辅助功能权限。
+pub(crate) fn send_copy() -> Result<(), PlatformError> {
+    for down in [true, false] {
+        let event = CGEvent::new_keyboard_event(None, KEY_C, down)
             .ok_or_else(|| PlatformError::Clipboard("创建按键事件失败".into()))?;
         CGEvent::set_flags(Some(&event), CGEventFlags::MaskCommand);
         CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&event));

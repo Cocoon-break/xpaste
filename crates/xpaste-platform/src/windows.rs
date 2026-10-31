@@ -58,7 +58,8 @@ use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT,
-    KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CONTROL, VK_LBUTTON, VK_RBUTTON,
+    KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CONTROL, VK_INSERT, VK_LBUTTON, VK_LWIN, VK_MENU,
+    VK_RBUTTON, VK_RWIN, VK_SHIFT,
 };
 use windows::Win32::UI::Shell::PropertiesSystem::{
     GPS_DEFAULT, IPropertyStore, SHGetPropertyStoreFromParsingName,
@@ -676,11 +677,15 @@ pub fn paste(target: Option<isize>) -> Result<(), PlatformError> {
             }
         }
     }
-    let v = VIRTUAL_KEY(u16::from(b'V'));
+    send_ctrl(VIRTUAL_KEY(u16::from(b'V')))
+}
+
+/// 发 Ctrl+`vk`：Ctrl 按下、`vk` 按下/松开、Ctrl 松开。
+fn send_ctrl(vk: VIRTUAL_KEY) -> Result<(), PlatformError> {
     let inputs = [
         key(VK_CONTROL, false),
-        key(v, false),
-        key(v, true),
+        key(vk, false),
+        key(vk, true),
         key(VK_CONTROL, true),
     ];
     // SAFETY: inputs 是本地数组，cbsize 为单个 INPUT 大小
@@ -693,6 +698,19 @@ pub fn paste(target: Option<isize>) -> Result<(), PlatformError> {
         )));
     }
     Ok(())
+}
+
+/// 向前台窗口发 Ctrl+Insert（设计 §3.2）。不用 Ctrl+C：终端里没有选区时 Ctrl+C 是中断。
+pub(crate) fn send_copy() -> Result<(), PlatformError> {
+    send_ctrl(VK_INSERT)
+}
+
+/// Alt、Shift、Ctrl、Win 中有没有按着的（设计 §4）。
+pub(crate) fn modifiers_down() -> bool {
+    // SAFETY: 纯查询；最高位为 1 表示按着
+    [VK_MENU, VK_SHIFT, VK_CONTROL, VK_LWIN, VK_RWIN]
+        .iter()
+        .any(|vk| unsafe { GetAsyncKeyState(vk.0 as i32) } < 0)
 }
 
 pub fn request_accessibility() {}
