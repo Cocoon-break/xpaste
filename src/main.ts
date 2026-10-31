@@ -40,6 +40,7 @@ import {
   ticks as winTicks, winLabel, xOf, zoomWin, type Layout, type Win,
 } from './spectrum';
 import { addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFrequent, parseLimit, pickerOptions, removeIgnored } from './settings-form';
+import { composing, justComposed } from './ime';
 import { errorControl, revealsFocus, tabKeyTarget } from './settings-tabs';
 import {
   armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, nextSelection, pruneMulti, rangeIds, snippetTextChange, UNDO_MS, visible, type UndoState,
@@ -1576,9 +1577,10 @@ cfDlg.addEventListener('close', () => {
   if (S.shown && cfReturn?.isConnected) cfReturn.focus({ preventScroll: true });
   cfReturn = null;
 });
+// 对话框的 Esc：用来结束输入法选字的那次不关（WebKit 先结束选字再发 Esc，见 ime.ts）
 cfDlg.addEventListener('cancel', (e) => {
   e.preventDefault();
-  closeConfirm(false);
+  if (!justComposed()) closeConfirm(false);
 });
 let cfDownOnBackdrop = false;
 cfDlg.addEventListener('pointerdown', (e) => (cfDownOnBackdrop = e.target === cfDlg));
@@ -1890,7 +1892,7 @@ ignoreIn.addEventListener('input', () => paintAppList(true));
 ignoreIn.addEventListener('blur', () => paintAppList(false));
 ignoreIn.addEventListener('keydown', (e) => {
   // 输入法组字中的回车 / 方向键归输入法
-  if (e.isComposing || e.keyCode === 229) return;
+  if (composing(e)) return;
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
     e.preventDefault();
     if (ignoreList.hidden) paintAppList(true);
@@ -2130,7 +2132,7 @@ dlg.addEventListener('close', () => {
 });
 dlg.addEventListener('cancel', (e) => {
   e.preventDefault();
-  if (!escClosedList) closeSettings();
+  if (!escClosedList && !justComposed()) closeSettings();
 });
 // 遮罩点击才关：在输入框里拖选文字、松手落到遮罩上不算（那次 click 的目标也是 dialog）
 let downOnBackdrop = false;
@@ -2299,7 +2301,7 @@ snipDlg.addEventListener('close', () => {
 });
 snipDlg.addEventListener('cancel', (e) => {
   e.preventDefault();
-  closeSnippet();
+  if (!justComposed()) closeSnippet();
 });
 let snipDownOnBackdrop = false;
 snipDlg.addEventListener('pointerdown', (e) => (snipDownOnBackdrop = e.target === snipDlg));
@@ -2540,7 +2542,8 @@ const hide = () => {
 
 // —— 键盘 ——
 document.addEventListener('keydown', (e) => {
-  if (e.isComposing) return;
+  // 搜索框里用输入法选字时按 Esc / 回车只收起候选、上屏，不清空搜索、不收起面板、不粘贴
+  if (composing(e)) return;
   const t = e.target as Element, inSearch = t === q;
   // 其他输入控件（设置里的快捷键、保留时长）自己处理按键
   if (!inSearch && t.closest?.('input, textarea, select')) return;
