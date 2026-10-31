@@ -147,6 +147,7 @@ pub fn setup(app: &App) -> tauri::Result<()> {
     let pause = MenuItem::with_id(app, "pause", pause_label(paused), true, None::<&str>)?;
     let clear = MenuItem::with_id(app, "clear", "清空历史…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
+    let translate = MenuItem::with_id(app, "translate", "翻译…", true, None::<&str>)?;
     let version = MenuItem::with_id(
         app,
         "version",
@@ -160,6 +161,8 @@ pub fn setup(app: &App) -> tauri::Result<()> {
         app,
         &[
             &open,
+            &PredefinedMenuItem::separator(app)?,
+            &translate,
             &PredefinedMenuItem::separator(app)?,
             &pause,
             &clear,
@@ -190,6 +193,8 @@ pub fn setup(app: &App) -> tauri::Result<()> {
                 emit(app, CONFIRM_CLEAR, ());
             }
             "settings" => open_settings(app),
+            // 输入卡片（M26 规则 20）
+            "translate" => crate::trcard::open_input(app),
             "rec-stop" => crate::rec::stop(app),
             // 录制中退出由 ExitRequested 里的 rec::hold_exit 先停止、写完文件再退出（M24 规则 8）
             "quit" => app.exit(0),

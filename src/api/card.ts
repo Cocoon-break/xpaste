@@ -18,8 +18,10 @@ export const onCardDone = (cb: (p: CardDone) => void) => listen<CardDone>('trcar
 export const onCardDelta = (cb: (text: string, engine: string) => void) =>
   listen<TranslateDelta>(TRANSLATE_DELTA, (e) => { if (e.payload.id === null) cb(e.payload.text, e.payload.engine); }, target);
 
-/** 用原文重翻（换用、下载语言包后重试）；新 seq 恒为 seq + 1，`trcard-done` 可能早于返回到达。 */
-export const cardAgain = (seq: number, engine?: 'system' | 'openai') => invoke<CardAgain>('trcard_again', { seq, engine: engine ?? null });
+/** 翻译卡片上的原文 `text`，`lang` 为这张卡片选的目标语言（null 为自动）；`engine` 不给时按设置。
+ *  用于输入卡片 ⌘↵、改过原文重翻、换用、下载语言包后重试；新 seq 恒为 seq + 1，`trcard-done` 可能早于返回到达。 */
+export const cardTranslate = (seq: number, text: string, lang: string | null, engine?: 'system' | 'openai') =>
+  invoke<CardAgain>('trcard_translate', { seq, text, lang, engine: engine ?? null });
 /** 复制译文：普通写入剪切板，进历史；不关卡片。 */
 export const cardCopy = (text: string) => invoke<void>('trcard_copy', { text });
 /** 关闭并把键盘交还原处。 */

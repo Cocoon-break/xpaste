@@ -97,7 +97,7 @@ let thumbUrl = '', toastT = 0, endT = 0, cdT = 0;
 let readyGen = 0;
 /** 进行中的截图翻译：kind `done` 收完（可复制）；engine 为翻译方式标签，出第一段前先按设置猜；
  *  seq 每次换用加一，迟到的结果按它丢弃；回到选区或开始新的一次时为 null */
-type ShotTr = Extract<CardState, { kind: 'busy' | 'done' | 'fail' }> & { gen: number; seq: number; want?: Engine };
+type ShotTr = Exclude<CardState, { kind: 'blocked' }> & { gen: number; seq: number; want?: Engine };
 let tr: ShotTr | null = null;
 let trSeq = 0;
 /** 两种翻译方式能不能用，每次按 T 取一次（M26 规则 16） */

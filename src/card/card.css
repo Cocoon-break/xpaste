@@ -37,10 +37,20 @@ kbd {
   flex: none; height: 22px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent;
   color: var(--beam); font-size: 12px; cursor: pointer; transition: background-color 130ms ease;
 }
-/* 展开对照：原文、译文左右两栏，各自滚动 */
+/* 展开对照：左栏可编辑的原文、右栏译文，各自滚动（M26 规则 19、20）；标题行多目标语言下拉框 */
 .card .c-cols { flex: 0 1 auto; min-height: 0; display: flex; }
-.card .c-cols .c-body { flex: 1 1 0; min-width: 0; }
-.card .c-cols .c-orig { border-right: 1px solid var(--line-2); }
+.card .c-cols .c-body { flex: 1 1 0; min-width: 0; min-height: 140px; }
+.card .c-cols textarea.c-orig {
+  margin: 0; border: 0; border-right: 1px solid var(--line-2); border-radius: 0; resize: none; outline: none;
+  background: transparent; color: var(--fg); font: inherit; font-size: 13px; line-height: 1.6;
+}
+.card .c-cols textarea.c-orig::placeholder { color: var(--faint); }
+.card .c-head .c-to { flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.card .c-head select {
+  flex: none; height: 22px; padding: 0 4px; border: 1px solid var(--line-2); border-radius: 6px;
+  background: var(--glass-2); color: var(--fg); font: inherit; font-size: 12px; cursor: pointer;
+}
+.card .c-head select option { background: var(--pop-solid); color: var(--fg); }
 .card .c-wait { color: var(--muted); user-select: none; -webkit-user-select: none; cursor: default; }
 .card .c-err { flex: none; padding: 4px 14px 10px; font-size: 12px; color: var(--danger); overflow-wrap: anywhere; }
 .card .c-note {

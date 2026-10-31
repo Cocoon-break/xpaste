@@ -276,7 +276,7 @@ pub fn run() {
             commands::translate::translate_engines,
             commands::translate::open_translation_settings,
             commands::translate::trcard_press,
-            commands::translate::trcard_again,
+            commands::translate::trcard_translate,
             commands::translate::trcard_copy,
             commands::translate::trcard_close,
             commands::translate::trcard_blur,

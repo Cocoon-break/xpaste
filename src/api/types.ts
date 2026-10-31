@@ -225,7 +225,7 @@ export type ShotOutcome = { action: ShotAction; chars: number | null; file: stri
 /** 划词卡片 `trcard-show`，对应 `trcard::Show`（M26 规则 19）。`seq` 之后的命令都带它；
  *  `source` / `engine` / `noAccess` 只对 `text` 有意义，`hotkey` 只对 `empty`。 */
 export type CardShow = {
-  kind: 'text' | 'empty' | 'blocked';
+  kind: 'text' | 'input' | 'blocked';
   seq: number;
   /** 完整原文（卡片显示前 40 个字，展开对照时整段） */
   source: string | null;
@@ -233,10 +233,8 @@ export type CardShow = {
   engine: string | null;
   /** 没有辅助功能权限，翻译的是剪切板里的文字 */
   noAccess: boolean;
-  /** 翻译快捷键的显示格式 */
-  hotkey: string | null;
 };
 /** 划词卡片 `trcard-done`，对应 `trcard::Done`。已被取代或关闭的请求不发。 */
-export type CardDone = { seq: number; ok: boolean; text: string | null; engine: string; error: AppError | null };
-/** `trcard_again` 的结果：新序号（恒为传入的 + 1）与这次用的翻译方式标签，对应 `trcard::Again`。 */
+export type CardDone = { seq: number; ok: boolean; text: string | null; lang: string | null; engine: string; error: AppError | null };
+/** `trcard_translate` 的结果：新序号（恒为传入的 + 1）与这次用的翻译方式标签，对应 `trcard::Again`。 */
 export type CardAgain = { seq: number; engine: string };

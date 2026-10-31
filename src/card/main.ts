@@ -1,8 +1,8 @@
-// 划词翻译卡片页面（card.html，M26 规则 19、16）：状态 st、渲染、键盘与按钮。整张卡片由 view.ts 生成。
+// 划词翻译卡片页面（card.html，M26 规则 19、16、20）：状态 st、渲染、键盘与按钮。整张卡片由 view.ts 生成。
 // 后端每次换卡片、重翻都换 seq：命令都带当前 seq，迟到的事件与调用按 seq 丢弃。
 import './card.css';
 import {
-  cardAgain, cardBlur, cardClose, cardCopy, cardFocus, cardResize, onCardDelta, onCardDone, onCardShow, openPanelSettings,
+  cardBlur, cardClose, cardCopy, cardFocus, cardResize, cardTranslate, onCardDelta, onCardDone, onCardShow, openPanelSettings,
   requestAccessibility, translateDownload, translateEngines,
 } from '../api/card';
 import { error as logError } from '../api/log';
@@ -13,12 +13,15 @@ import { cardHTML, type CardState } from './view';
 addEventListener('error', (e) => void logError(`划词卡片页错误：${e.message}`));
 addEventListener('unhandledrejection', (e) => void logError(`划词卡片页未处理的拒绝：${String(e.reason)}`));
 
-/** 无文字、排除应用的提示停留多久；复制后“已复制译文”停留多久（M26 规则 19） */
+/** 排除应用的提示停留多久；复制后“已复制译文”停留多久（M26 规则 19） */
 const HINT_MS = 2000, COPIED_MS = 900;
 /** 收起时的窗口宽度（后端 trcard.rs 的 CARD），比它宽就是展开对照 */
 const NARROW = 360;
+/** ⌘↵（Windows Ctrl + 回车）：翻译，或收完后复制译文（M26 规则 20） */
+const MAC = navigator.userAgent.includes('Mac');
+const MOD = MAC ? '⌘↵' : 'Ctrl ↵';
 
-type Tr = Extract<CardState, { kind: 'busy' | 'done' | 'fail' }>;
+type Tr = Exclude<CardState, { kind: 'blocked' }>;
 const root = document.body;
 let seq = 0;
 let st: CardState = { kind: 'blocked' };
@@ -31,10 +34,16 @@ let timer = 0, lastH = 0, lastWide = false;
 let wide = false;
 /** 正在等系统的下载确认或下载：再点“下载语言包”不理，免得失败分支把键盘从确认框抢回来 */
 let downloading = false;
-/** 换用时指定的方式：翻译中换用后，被接替的请求迟到的增量据此丢掉（M26 规则 16） */
+/** 这次请求的方式：翻译中换用后，被接替的请求迟到的增量据此丢掉（M26 规则 16） */
 let want: Engine | undefined;
+/** 这张卡片选的目标语言，空串为自动（M26 规则 20）；sent：上一次按什么原文和语言翻的，改过就是 dirty */
+let pick = '';
+let sent: { text: string; pick: string } | null = null;
 
-const tr = (): Tr | null => (st.kind === 'empty' || st.kind === 'blocked' ? null : st);
+const tr = (): Tr | null => (st.kind === 'blocked' ? null : st);
+const dirty = (s: Tr) => !sent || s.source !== sent.text || pick !== sent.pick;
+const kindOf = (tag: string): Engine | undefined => (tag === 'system' ? 'system' : tag.startsWith('openai:') ? 'openai' : undefined);
+const src = () => root.querySelector<HTMLTextAreaElement>('textarea.c-orig');
 /** 译文正文（展开对照时左栏原文也是 .c-body） */
 const body = () => root.querySelector<HTMLElement>('.c-body:not(.c-orig)');
 const bodies = () => [...root.querySelectorAll<HTMLElement>('.c-body')];
@@ -42,12 +51,14 @@ const bodies = () => [...root.querySelectorAll<HTMLElement>('.c-body')];
 function render(pop = false) {
   const s = tr();
   // 另一种能用时就有换用按钮，翻译中也有（M26 规则 16）
-  const view: CardState = s ? { ...s, other: engines ? otherEngine(s.engine, engines) : null } : st;
+  const view: CardState = s ? { ...s, other: engines ? otherEngine(s.engine, engines) : null, pick, dirty: dirty(s) } : st;
   const focused = (document.activeElement as HTMLElement | null)?.dataset.act;
   const tops = new Map(bodies().map((b) => [b.classList.contains('c-orig'), b.scrollTop]));
-  root.innerHTML = cardHTML(view, wide);
+  const ta = src(), caret = ta && [ta.selectionStart, ta.selectionEnd];
+  root.innerHTML = cardHTML(view, wide, MOD);
   if (pop) root.firstElementChild?.classList.add('pop-in');
   if (focused) root.querySelector<HTMLElement>(`[data-act="${focused}"]`)?.focus();
+  if (caret) src()?.setSelectionRange(caret[0], caret[1]);
   for (const b of bodies()) b.scrollTop = tops.get(b.classList.contains('c-orig')) ?? 0;
   follow();
   fit();
@@ -87,14 +98,25 @@ void onCardShow((p) => {
   lastWide = wide = false;
   pack = null;
   want = undefined;
-  if (p.kind !== 'text') {
-    st = p.kind === 'empty' ? { kind: 'empty', hotkey: p.hotkey } : { kind: 'blocked' };
+  pick = '';
+  sent = null;
+  if (p.kind === 'blocked') {
+    st = { kind: 'blocked' };
     render(true);
     timer = window.setTimeout(() => void cardClose(p.seq), HINT_MS);
     return;
   }
-  st = { kind: 'busy', source: p.source ?? '', engine: p.engine ?? '', text: '', noAccess: p.noAccess, other: null };
-  render(true);
+  if (p.kind === 'input') {
+    // 空的输入卡片（M26 规则 20）：展开成两栏，光标在原文框里
+    st = { kind: 'idle', source: '', engine: '', text: '', noAccess: false, other: null };
+    wide = true;
+    render(true);
+    src()?.focus();
+  } else {
+    st = { kind: 'busy', source: p.source ?? '', engine: p.engine ?? '', text: '', noAccess: p.noAccess, other: null };
+    sent = { text: st.source, pick };
+    render(true);
+  }
   void translateEngines().then((e) => { engines = e; render(); }, () => {});
 });
 
@@ -114,7 +136,7 @@ void onCardDone((p) => {
   const s = tr();
   if (!s || p.seq !== seq) return;
   // 成功以完整译文为准；失败保留已收到的部分（标题为“翻译中断”）
-  if (p.ok) Object.assign(s, { kind: 'done', text: p.text ?? '', engine: p.engine });
+  if (p.ok) Object.assign(s, { kind: 'done', text: p.text ?? '', engine: p.engine, lang: p.lang ?? undefined });
   else {
     Object.assign(s, { kind: 'fail', engine: p.engine, error: p.error?.message ?? '翻译失败', errorKind: p.error?.kind });
     pack = p.error?.kind === 'translatePack' ? { source: p.error.source ?? '', target: p.error.target ?? '' } : null;
@@ -122,19 +144,25 @@ void onCardDone((p) => {
   render();
 });
 
-/** 用另一种（或下载语言包后用系统翻译）重翻同一段原文，翻译中也行（后端中止进行中的请求）。
+/** 按卡片上的原文与目标语言翻译（M26 规则 16、20）：输入卡片 ⌘↵、改过原文或语言后 ⌘↵、换用、下载语言包后重试。
+ *  翻译中也行（后端中止进行中的请求）。engine 没给时沿用卡片当前的方式，还没有就按设置。
  *  done 可能早于命令返回，所以先把 seq 换成新的 */
-async function again(engine: Engine) {
+async function go(engine?: Engine) {
   const s = tr();
-  if (!s) return;
+  if (!s || !s.source.trim()) return;
   const from = seq;
+  const e = engine ?? kindOf(s.engine);
   seq = from + 1;
   pack = null;
-  want = engine;
-  Object.assign(s, { kind: 'busy', text: '', error: undefined, errorKind: undefined, copied: false, engine: engine === 'system' ? 'system' : `openai:${engines?.model ?? ''}` });
+  want = e;
+  sent = { text: s.source, pick };
+  Object.assign(s, {
+    kind: 'busy', text: '', error: undefined, errorKind: undefined, copied: false, lang: undefined,
+    engine: e === 'system' ? 'system' : e === 'openai' ? `openai:${engines?.model ?? ''}` : '',
+  });
   render();
   try {
-    const r = await cardAgain(from, engine);
+    const r = await cardTranslate(from, s.source, pick || null, e);
     if (r.seq === seq && st === s && s.kind === 'busy') { s.engine = r.engine; render(); }
   } catch {
     // 卡片已关闭或已被取代：窗口已撤下
@@ -175,7 +203,7 @@ async function downloadPack() {
     downloading = false;
   }
   if (at !== seq) return;
-  if (r === 'installed') void again('system');
+  if (r === 'installed') void go('system');
   else void cardFocus(at);
 }
 
@@ -185,9 +213,10 @@ root.addEventListener('click', (e) => {
   const at = seq;
   switch (b.dataset.act) {
     case 'copy': return void copy();
+    case 'go': return void go();
     case 'close': return void cardClose(at);
     case 'wide': wide = !wide; return render();
-    case 'switch': return void again(b.dataset.engine as Engine);
+    case 'switch': return void go(b.dataset.engine as Engine);
     case 'pack': return void downloadPack();
     // 先关卡片交还键盘，再唤起面板
     case 'settings': return void cardClose(at).finally(() => openPanelSettings('translate'));
@@ -195,12 +224,37 @@ root.addEventListener('click', (e) => {
   }
 });
 
-// 回车复制、Esc 关闭；卡片里选中文字后的 Mod + C 照常。焦点在按钮上时回车交给按钮（同截图卡片）
+// 原文框里改字、换目标语言（M26 规则 20）：主按钮在“翻译”和“复制译文”之间换时才重画，否则只调高度
+root.addEventListener('input', (e) => {
+  const s = tr(), t = e.target as Element;
+  if (!s || !t.matches('textarea.c-orig')) return;
+  const was = dirty(s) || !s.source.trim();
+  s.source = (t as HTMLTextAreaElement).value;
+  if (was !== (dirty(s) || !s.source.trim())) render(); else fit();
+});
+root.addEventListener('change', (e) => {
+  const t = e.target as HTMLSelectElement;
+  if (!t.matches('select[data-act="lang"]')) return;
+  pick = t.value;
+  render();
+});
+
+// ⌘↵（Windows Ctrl + 回车）：没翻译过或改过原文、语言时翻译，否则复制译文；回车复制（在原文框里是换行）；Esc 关闭。
+// 卡片里选中文字后的 Mod + C 照常。焦点在按钮上时回车交给按钮（同截图卡片）
 addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { e.preventDefault(); void cardClose(seq); return; }
-  if (e.key === 'Enter' && !(e.target instanceof Element && e.target.closest('button'))) { e.preventDefault(); void copy(); }
+  if (e.key !== 'Enter' || e.isComposing) return;
+  const s = tr();
+  if (MAC ? e.metaKey : e.ctrlKey) {
+    e.preventDefault();
+    if (s && (s.kind === 'idle' || dirty(s))) void go(); else void copy();
+    return;
+  }
+  if (e.target instanceof Element && e.target.closest('button, textarea, select')) return;
+  e.preventDefault();
+  void copy();
 });
-// 点了卡片以外的地方：关闭（不交还键盘）
+// 点了卡片以外的地方：关闭（不交还键盘）；输入卡片后端不关
 addEventListener('blur', () => void cardBlur(seq));
 // 窗口被后端改了大小：翻译中仍跟到最新一段；展开或收起后按新宽度重新量高度
 addEventListener('resize', () => { follow(); fit(); });

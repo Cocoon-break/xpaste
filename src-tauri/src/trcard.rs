@@ -51,8 +51,12 @@ pub struct Session {
     previous: Option<isize>,
     /// 按快捷键时面板有焦点：关闭时把键盘还给面板
     panel_focused: bool,
-    /// 卡片拿了键盘（`text` 上屏后）；提示不拿，撤下时不交还
+    /// 卡片拿了键盘（`text` / `input` 上屏后）；提示不拿，撤下时不交还
     keyboard: bool,
+    /// 输入卡片（M26 规则 20）：点别处不关闭，免得写了一半的字丢掉
+    input: bool,
+    /// 这张卡片上选的目标语言；None 为“自动”（按设置的目标语言，规则 9）
+    lang: Option<Lang>,
 }
 
 /// 撤下卡片时键盘交还到哪（M26 规则 18、19）。
@@ -134,7 +138,8 @@ fn resized(p: Placement, h: f64, wide: bool) -> Placement {
     Placement { x, y, w, h, ..p }
 }
 
-/// `trcard-show` 的载荷。`kind`：`text`（有文字，开始翻译）/ `empty`（没有可翻译的文字）/ `blocked`（排除应用或敏感内容）。
+/// `trcard-show` 的载荷。`kind`：`text`（有文字，开始翻译）/ `input`（空的输入卡片，M26 规则 20）/
+/// `blocked`（排除应用或敏感内容）。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Show {
@@ -146,39 +151,39 @@ struct Show {
     engine: Option<String>,
     /// `text`：没有辅助功能权限，翻译的是剪切板里的文字
     no_access: bool,
-    /// `empty`：翻译快捷键的显示格式
-    hotkey: Option<String>,
 }
 
 impl Show {
-    /// 只有要翻译的卡片拿键盘（回车复制、Esc 关闭）；提示 2 秒后自己消失，不打断打字。
+    /// 翻译卡片与输入卡片拿键盘；提示 2 秒后自己消失，不打断打字。
     fn takes_keyboard(&self) -> bool {
-        self.kind == "text"
+        self.kind != "blocked"
     }
 
-    fn hint(kind: &'static str, seq: u64, hotkey: Option<String>) -> Self {
+    /// 没有原文的卡片：`blocked` 提示或空的输入卡片。
+    fn bare(kind: &'static str, seq: u64) -> Self {
         Self {
             kind,
             seq,
             source: None,
             engine: None,
             no_access: false,
-            hotkey,
         }
     }
 }
 
-/// `trcard-done` 的载荷：这次翻译结束。`error` 同命令报错的 `{ kind, message, source?, target? }`。
+/// `trcard-done` 的载荷：这次翻译结束。`lang`：成功时实际翻成的语言代码（规则 9）。
+/// `error` 同命令报错的 `{ kind, message, source?, target? }`。
 #[derive(Debug, Clone, Serialize)]
 struct Done {
     seq: u64,
     ok: bool,
     text: Option<String>,
+    lang: Option<String>,
     engine: String,
     error: Option<serde_json::Value>,
 }
 
-/// `trcard_again` 的结果：新的序号（恒为传入的 + 1）与这次用的翻译方式标签。
+/// `trcard_translate` 的结果：新的序号（恒为传入的 + 1）与这次用的翻译方式标签。
 #[derive(Debug, Serialize)]
 pub struct Again {
     pub seq: u64,
@@ -231,6 +236,13 @@ pub fn has_keyboard(app: &AppHandle) -> bool {
 /// 翻译快捷键按下、不交给面板录制框时调用。主线程调用：只换序号、撤下开着的卡片，模拟复制（最多约 900 ms）
 /// 与翻译都在后台做。
 pub fn pressed(app: &AppHandle) {
+    let seq = reset(app);
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || grab(&app, seq));
+}
+
+/// 开一张新卡片前：换序号、记下键盘要还去的地方，开着的卡片先撤下。返回新序号。主线程调用。
+fn reset(app: &AppHandle) -> u64 {
     let was_shown = shown(app);
     let panel_shown = panel_shown(app);
     let panel_focused = panel_shown
@@ -253,32 +265,28 @@ pub fn pressed(app: &AppHandle) {
             s.panel_focused = panel_focused;
         }
         s.keyboard = false;
+        s.lang = None;
         (s.bump(), back)
     };
     // 卡片开着时先撤下：拿着键盘的话先交还（同关闭），模拟复制才发得到原来的应用。前端随后的 blur 带着旧序号，被忽略
     if was_shown {
         hide_to(app, back);
     }
-    let app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || grab(&app, seq));
+    seq
 }
 
 /// 后台线程：排除应用 → 模拟复制 → 读剪切板文字 → 显示卡片并开始翻译。
 fn grab(app: &AppHandle, seq: u64) {
     let state = app.state::<AppState>();
-    let (ignored, skip_sensitive, hotkey) = {
+    let (ignored, skip_sensitive) = {
         let s = state.settings();
-        (
-            s.ignored_apps.clone(),
-            s.skip_sensitive,
-            crate::hotkey::label(&s.translate_hotkey),
-        )
+        (s.ignored_apps.clone(), s.skip_sensitive)
     };
     // 排除应用（含密码管理器，M15）：不复制、不翻译
     if xpaste_platform::frontmost_app().is_some_and(|a| capture::is_ignored_app(&a.name, &ignored))
     {
         log::info!("trcard 排除应用");
-        return show(app, Show::hint("blocked", seq, None));
+        return show(app, Show::bare("blocked", seq));
     }
     // 等修饰键松开期间又按了一次：只让新的那次发模拟复制
     if !session(app).is_current(seq) {
@@ -301,7 +309,7 @@ fn grab(app: &AppHandle, seq: u64) {
     // 敏感内容（M01）：不翻译，免得把密码发给翻译接口
     if snap.as_ref().is_some_and(|s| s.sensitive) {
         log::info!("trcard 排除应用 sensitive");
-        return show(app, Show::hint("blocked", seq, None));
+        return show(app, Show::bare("blocked", seq));
     }
     let text = snap.and_then(|s| s.text).filter(|t| !t.trim().is_empty());
     let chars = text.as_deref().map_or(0, |t| t.chars().count());
@@ -309,9 +317,10 @@ fn grab(app: &AppHandle, seq: u64) {
         "trcard copied={copied} chars={chars} ms={}",
         t0.elapsed().as_millis()
     );
+    // 选区和剪切板都没有文字：打开空的输入卡片（M26 规则 20）
     let Some(text) = text else {
-        log::info!("trcard 无文字");
-        return show(app, Show::hint("empty", seq, Some(hotkey)));
+        log::info!("trcard 无文字，打开输入卡片");
+        return show(app, Show::bare("input", seq));
     };
     let engine = translate::cfg(&state.settings()).tag();
     {
@@ -329,14 +338,19 @@ fn grab(app: &AppHandle, seq: u64) {
             source: Some(text.clone()),
             engine: Some(engine),
             no_access,
-            hotkey: None,
         },
     );
 }
 
+/// 托盘菜单“翻译…”：在鼠标旁打开空的输入卡片（M26 规则 20）。开着的卡片先撤下（同再按翻译快捷键）。主线程调用。
+pub fn open_input(app: &AppHandle) {
+    let seq = reset(app);
+    show(app, Show::bare("input", seq));
+}
+
 /// 定位到指针旁、发 `trcard-show`、上屏。已被新的一次取代时什么都不做。
-/// 只有 `text` 拿键盘并开始翻译：翻译排在 `trcard-show` 之后开始，增量与结果不会先于它到达、被它清掉；
-/// `empty` / `blocked` 提示不拿键盘，用户接着打的字照常进原来的应用。
+/// `text` 拿键盘并开始翻译：翻译排在 `trcard-show` 之后开始，增量与结果不会先于它到达、被它清掉；
+/// `input` 拿键盘、等用户输入；`blocked` 提示不拿键盘，用户接着打的字照常进原来的应用。
 fn show(app: &AppHandle, payload: Show) {
     on_main(app, move |app| {
         let Some(w) = app.get_webview_window(LABEL) else {
@@ -348,6 +362,7 @@ fn show(app: &AppHandle, payload: Show) {
                 return;
             }
             s.keyboard = payload.takes_keyboard();
+            s.input = payload.kind == "input";
         }
         match locate(app) {
             Ok(Some(p)) => {
@@ -359,12 +374,16 @@ fn show(app: &AppHandle, payload: Show) {
             Ok(None) => log::warn!("划词卡片找不到显示器"),
             Err(e) => log::warn!("划词卡片取指针位置失败：{e}"),
         }
-        let (seq, text) = (payload.seq, payload.takes_keyboard());
+        let (seq, start, focus) = (
+            payload.seq,
+            payload.kind == "text",
+            payload.takes_keyboard(),
+        );
         events::emit_to(app, LABEL, TRCARD_SHOW, payload);
-        if text {
+        if start {
             tauri::async_runtime::spawn(run(app.clone(), seq, None));
         }
-        if let Err(e) = front(app, &w, text) {
+        if let Err(e) = front(app, &w, focus) {
             log::warn!("显示划词卡片失败：{e}");
         }
     });
@@ -482,14 +501,17 @@ fn panel_shown(app: &AppHandle) -> bool {
 
 /// 翻译会话原文，增量只发给卡片；被新的一次取代时中止请求、不再发事件。
 async fn run(app: AppHandle, seq: u64, engine: Option<Engine>) {
-    let text = {
+    let (text, lang) = {
         let s = session(&app);
         if !s.is_current(seq) {
             return;
         }
-        s.text.clone()
+        (s.text.clone(), s.lang)
     };
-    let cfg = translate::cfg_for(&app.state::<AppState>().settings(), engine);
+    let mut cfg = translate::cfg_for(&app.state::<AppState>().settings(), engine);
+    if let Some(l) = lang {
+        cfg.lang = l;
+    }
     let tag = cfg.tag();
     let current = || session(&app).is_current(seq);
     let send = |l: Lang, text: String| {
@@ -526,7 +548,7 @@ async fn run(app: AppHandle, seq: u64, engine: Option<Engine>) {
         send(l, s);
     }
     let done = match r {
-        Ok((_, out)) => {
+        Ok((l, out)) => {
             log::info!(
                 "translate card engine={} chars={chars} ms={ms} ok",
                 cfg.engine.name()
@@ -535,6 +557,7 @@ async fn run(app: AppHandle, seq: u64, engine: Option<Engine>) {
                 seq,
                 ok: true,
                 text: Some(out),
+                lang: Some(l.code().into()),
                 engine: tag,
                 error: None,
             }
@@ -545,6 +568,7 @@ async fn run(app: AppHandle, seq: u64, engine: Option<Engine>) {
                 seq,
                 ok: false,
                 text: None,
+                lang: None,
                 engine: tag,
                 error: serde_json::to_value(AppError::from(f)).ok(),
             }
@@ -553,14 +577,26 @@ async fn run(app: AppHandle, seq: u64, engine: Option<Engine>) {
     events::emit_to(&app, LABEL, TRCARD_DONE, done);
 }
 
-/// 用会话原文重翻（换用 / 重新翻译 / 下载语言包后重试，M26 规则 16）；`engine` 为 None 时按设置。
+/// 用卡片上的原文 `text` 与目标语言 `lang`（None 为自动）翻译：输入卡片按 ⌘↵、改了原文重翻、换用、
+/// 下载语言包后重试（M26 规则 16、20）；`engine` 为 None 时按设置。翻译中调用时中止进行中的请求。
 /// 不是当前这一次（卡片已关或已被取代）时报错。卡片重新拿键盘：下载语言包时系统确认框可能拿走了它。
-pub fn again(app: &AppHandle, seq: u64, engine: Option<Engine>) -> Result<Again, AppError> {
+pub fn translate(
+    app: &AppHandle,
+    seq: u64,
+    text: String,
+    lang: Option<Lang>,
+    engine: Option<Engine>,
+) -> Result<Again, AppError> {
+    if text.trim().is_empty() {
+        return Err(AppError::Invalid("没有可翻译的文字".into()));
+    }
     let seq = {
         let mut s = session(app);
-        if !s.is_current(seq) || s.text.is_empty() {
+        if !s.is_current(seq) {
             return Err(AppError::Invalid("卡片已关闭".into()));
         }
+        s.text = text;
+        s.lang = lang;
         s.bump()
     };
     let engine_tag = translate::cfg_for(&app.state::<AppState>().settings(), engine).tag();
@@ -638,7 +674,8 @@ pub fn blur(app: &AppHandle, seq: u64) {
     }
     {
         let mut s = session(app);
-        if !s.is_current(seq) {
+        // 输入卡片点别处不关（M26 规则 20）
+        if !s.is_current(seq) || s.input {
             return;
         }
         s.bump();
@@ -768,16 +805,12 @@ mod tests {
         assert_eq!((p.x, p.w), (0.0, 600.0));
     }
 
-    /// 只有 text 拿键盘（并开始翻译）；empty / blocked 提示不打断打字。
+    /// 翻译卡片与输入卡片拿键盘；blocked 提示不打断打字。
     #[test]
-    fn only_text_takes_keyboard() {
-        assert!(!Show::hint("empty", 1, Some("⌥ + Shift + T".into())).takes_keyboard());
-        assert!(!Show::hint("blocked", 1, None).takes_keyboard());
-        let text = Show {
-            kind: "text",
-            ..Show::hint("blocked", 1, None)
-        };
-        assert!(text.takes_keyboard());
+    fn hints_do_not_take_keyboard() {
+        assert!(!Show::bare("blocked", 1).takes_keyboard());
+        assert!(Show::bare("input", 1).takes_keyboard());
+        assert!(Show::bare("text", 1).takes_keyboard());
     }
 
     /// 撤下卡片时：提示（没拿键盘）哪也不还；拿着键盘时按快捷键前面板有焦点且面板仍开着 → 面板，否则 → 原来的窗口。
