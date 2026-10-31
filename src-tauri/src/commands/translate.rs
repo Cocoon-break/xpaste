@@ -617,8 +617,9 @@ pub fn trcard_focus(app: AppHandle, seq: u64) {
     crate::trcard::focus(&app, seq);
 }
 
-/// 前端渲染后按内容改卡片高度（逻辑像素），`wide` 为展开对照（加宽成两栏）。不是当前的 `seq` 时忽略。
+/// 前端渲染后按内容改卡片高度（逻辑像素），`wide` 为展开对照（加宽成两栏），`moved` 为用户拖动过卡片
+/// （之后左上角留在原处）。不是当前的 `seq` 时忽略。
 #[tauri::command]
-pub fn trcard_resize(app: AppHandle, seq: u64, h: f64, wide: bool) {
-    crate::trcard::resize(&app, seq, h, wide);
+pub fn trcard_resize(app: AppHandle, seq: u64, h: f64, wide: bool, moved: bool) {
+    crate::trcard::resize(&app, seq, h, wide, moved);
 }

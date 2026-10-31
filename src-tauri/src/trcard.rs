@@ -27,7 +27,8 @@ const MAX_H: f64 = 0.6;
 /// 展开对照（原文、译文左右两栏）：宽 760（不超过工作区），最高为工作区高度的 80%
 const WIDE: (f64, f64) = (760.0, 0.8);
 
-/// 卡片的位置与所在屏（逻辑像素）。`up`：放在指针上方（向上翻转），改高度时底边不动。
+/// 卡片的位置与所在屏（逻辑像素）。`up`：放在指针上方（向上翻转），改高度时底边不动；
+/// `center`：放在屏幕正中（没有新选中的文字、托盘打开，规则 19、20），改大小时中心不动。
 #[derive(Debug, Clone, Copy)]
 pub struct Placement {
     pub x: f64,
@@ -35,6 +36,7 @@ pub struct Placement {
     pub w: f64,
     pub h: f64,
     pub up: bool,
+    pub center: bool,
     pub work: Rect,
     /// 所在屏的缩放（Windows 按它换成物理像素）
     pub sf: f64,
@@ -123,8 +125,8 @@ pub fn place_card(cursor: (f64, f64), card: (f64, f64), work: Rect) -> (f64, f64
     )
 }
 
-/// 改成高度 `h`（不超过工作区的 60%，展开对照时 80%）、按 `wide` 换宽度：向上翻转的卡片底边不动，否则顶边不动；
-/// 左边不动，右边越过工作区时整体往左推；再夹回工作区。
+/// 改成高度 `h`（不超过工作区的 60%，展开对照时 80%）、按 `wide` 换宽度：居中的卡片中心不动；
+/// 否则向上翻转的底边不动、其余顶边不动，左边不动、右边越过工作区时整体往左推；再夹回工作区。
 fn resized(p: Placement, h: f64, wide: bool) -> Placement {
     let (w, max_h) = if wide {
         (WIDE.0.min(p.work.w), WIDE.1)
@@ -132,9 +134,15 @@ fn resized(p: Placement, h: f64, wide: bool) -> Placement {
         (CARD.0, MAX_H)
     };
     let h = h.min(p.work.h * max_h).max(1.0);
-    let y = if p.up { p.y + p.h - h } else { p.y };
+    let (x, y) = if p.center {
+        (p.x + (p.w - w) / 2.0, p.y + (p.h - h) / 2.0)
+    } else if p.up {
+        (p.x, p.y + p.h - h)
+    } else {
+        (p.x, p.y)
+    };
     let y = y.min(p.work.y + p.work.h - h).max(p.work.y);
-    let x = p.x.min(p.work.x + p.work.w - w).max(p.work.x);
+    let x = x.min(p.work.x + p.work.w - w).max(p.work.x);
     Placement { x, y, w, h, ..p }
 }
 
@@ -286,7 +294,7 @@ fn grab(app: &AppHandle, seq: u64) {
     if xpaste_platform::frontmost_app().is_some_and(|a| capture::is_ignored_app(&a.name, &ignored))
     {
         log::info!("trcard 排除应用");
-        return show(app, Show::bare("blocked", seq));
+        return show(app, Show::bare("blocked", seq), false);
     }
     // 等修饰键松开期间又按了一次：只让新的那次发模拟复制
     if !session(app).is_current(seq) {
@@ -309,7 +317,7 @@ fn grab(app: &AppHandle, seq: u64) {
     // 敏感内容（M01）：不翻译，免得把密码发给翻译接口
     if snap.as_ref().is_some_and(|s| s.sensitive) {
         log::info!("trcard 排除应用 sensitive");
-        return show(app, Show::bare("blocked", seq));
+        return show(app, Show::bare("blocked", seq), false);
     }
     let text = snap.and_then(|s| s.text).filter(|t| !t.trim().is_empty());
     let chars = text.as_deref().map_or(0, |t| t.chars().count());
@@ -320,7 +328,7 @@ fn grab(app: &AppHandle, seq: u64) {
     // 选区和剪切板都没有文字：打开空的输入卡片（M26 规则 20）
     let Some(text) = text else {
         log::info!("trcard 无文字，打开输入卡片");
-        return show(app, Show::bare("input", seq));
+        return show(app, Show::bare("input", seq), true);
     };
     let engine = translate::cfg(&state.settings()).tag();
     {
@@ -339,19 +347,21 @@ fn grab(app: &AppHandle, seq: u64) {
             engine: Some(engine),
             no_access,
         },
+        // 选中了文字放在文字（指针）旁；没有新选中的、翻的是剪切板里原有的文字时放在屏幕正中
+        !copied,
     );
 }
 
-/// 托盘菜单“翻译…”：在鼠标旁打开空的输入卡片（M26 规则 20）。开着的卡片先撤下（同再按翻译快捷键）。主线程调用。
+/// 托盘菜单“翻译…”：在鼠标所在屏的正中打开空的输入卡片（M26 规则 20）。开着的卡片先撤下（同再按翻译快捷键）。主线程调用。
 pub fn open_input(app: &AppHandle) {
     let seq = reset(app);
-    show(app, Show::bare("input", seq));
+    show(app, Show::bare("input", seq), true);
 }
 
-/// 定位到指针旁、发 `trcard-show`、上屏。已被新的一次取代时什么都不做。
+/// 定位到指针旁（`center` 时指针所在屏的正中）、发 `trcard-show`、上屏。已被新的一次取代时什么都不做。
 /// `text` 拿键盘并开始翻译：翻译排在 `trcard-show` 之后开始，增量与结果不会先于它到达、被它清掉；
 /// `input` 拿键盘、等用户输入；`blocked` 提示不拿键盘，用户接着打的字照常进原来的应用。
-fn show(app: &AppHandle, payload: Show) {
+fn show(app: &AppHandle, payload: Show, center: bool) {
     on_main(app, move |app| {
         let Some(w) = app.get_webview_window(LABEL) else {
             return log::warn!("找不到划词卡片窗口");
@@ -364,7 +374,7 @@ fn show(app: &AppHandle, payload: Show) {
             s.keyboard = payload.takes_keyboard();
             s.input = payload.kind == "input";
         }
-        match locate(app) {
+        match locate(app, center) {
             Ok(Some(p)) => {
                 session(app).place = Some(p);
                 if let Err(e) = apply(&w, &p) {
@@ -389,8 +399,8 @@ fn show(app: &AppHandle, payload: Show) {
     });
 }
 
-/// 指针位置与所在屏的工作区（避开菜单栏、程序坞、任务栏），按初始尺寸算出位置。主线程调用。
-fn locate(app: &AppHandle) -> tauri::Result<Option<Placement>> {
+/// 指针位置与所在屏的工作区（避开菜单栏、程序坞、任务栏），按初始尺寸算出位置；`center` 时放在工作区正中。主线程调用。
+fn locate(app: &AppHandle, center: bool) -> tauri::Result<Option<Placement>> {
     let c = app.cursor_position()?;
     let Some(m) = crate::panel::cursor_monitor(app)? else {
         return Ok(None);
@@ -411,13 +421,21 @@ fn locate(app: &AppHandle) -> tauri::Result<Option<Placement>> {
         h: wa.size.height as f64 / sf,
     };
     let cursor = (c.x / cs, c.y / cs);
-    let (x, y) = place_card(cursor, CARD, work);
+    let (x, y) = if center {
+        (
+            work.x + (work.w - CARD.0) / 2.0,
+            work.y + (work.h - CARD.1) / 2.0,
+        )
+    } else {
+        place_card(cursor, CARD, work)
+    };
     Ok(Some(Placement {
         x,
         y,
         w: CARD.0,
         h: CARD.1,
-        up: y < cursor.1,
+        up: !center && y < cursor.1,
+        center,
         work,
         sf,
     }))
@@ -627,53 +645,43 @@ fn take_keyboard(app: &AppHandle) {
 }
 
 /// 前端渲染后按内容改高度，`wide` 为展开对照（见 `resized`）。不是当前这一次时忽略。
-/// 用户拖动过卡片（标题行是拖动区，规则 19）时以窗口现在的位置与所在屏为准，不弹回原处，之后顶边不动。
-pub fn resize(app: &AppHandle, seq: u64, h: f64, wide: bool) {
+/// `moved`：用户按住标题行拖过卡片（规则 19）——只改大小，左上角留在窗口现在的位置（原样读出写回，不做坐标换算），不弹回原处。
+pub fn resize(app: &AppHandle, seq: u64, h: f64, wide: bool, moved: bool) {
+    let p = {
+        let mut s = session(app);
+        if !s.is_current(seq) {
+            return;
+        }
+        let Some(p) = s.place.as_mut() else { return };
+        *p = resized(*p, h, wide);
+        *p
+    };
     on_main(app, move |app| {
         let Some(w) = app.get_webview_window(LABEL) else {
             return;
         };
-        let now = current_place(&w);
-        let p = {
-            let mut s = session(app);
-            if !s.is_current(seq) {
-                return;
-            }
-            let Some(p) = s.place.as_mut() else { return };
-            if let Some((x, y, work, sf)) = now
-                && ((x - p.x).abs() > 1.0 || (y - p.y).abs() > 1.0)
-            {
-                *p = Placement {
-                    x,
-                    y,
-                    work,
-                    sf,
-                    up: false,
-                    ..*p
-                };
-            }
-            *p = resized(*p, h, wide);
-            *p
+        let r = if moved {
+            resize_in_place(&w, &p)
+        } else {
+            apply(&w, &p)
         };
-        if let Err(e) = apply(&w, &p) {
+        if let Err(e) = r {
             log::warn!("划词卡片改大小失败：{e}");
         }
     });
 }
 
-/// 窗口现在的左上角（逻辑像素）与所在屏的工作区、缩放；换算同 `locate`。取不到时 None。
-fn current_place(w: &WebviewWindow) -> Option<(f64, f64, Rect, f64)> {
-    let m = w.current_monitor().ok()??;
-    let sf = m.scale_factor();
-    let pos = w.outer_position().ok()?;
-    let wa = m.work_area();
-    let work = Rect {
-        x: wa.position.x as f64 / sf,
-        y: wa.position.y as f64 / sf,
-        w: wa.size.width as f64 / sf,
-        h: wa.size.height as f64 / sf,
-    };
-    Some((pos.x as f64 / sf, pos.y as f64 / sf, work, sf))
+/// 拖动过的卡片改大小：左上角不动。macOS 改尺寸时左下角不动，所以把改之前读到的位置原样写回。
+fn resize_in_place(w: &WebviewWindow, p: &Placement) -> tauri::Result<()> {
+    let pos = w.outer_position()?;
+    #[cfg(target_os = "macos")]
+    w.set_size(tauri::LogicalSize::new(p.w, p.h))?;
+    #[cfg(not(target_os = "macos"))]
+    w.set_size(tauri::PhysicalSize::new(
+        (p.w * p.sf) as u32,
+        (p.h * p.sf) as u32,
+    ))?;
+    w.set_position(pos)
 }
 
 /// 关闭（Esc、复制后、提示自动消失）：中止进行中的请求，撤下卡片；卡片拿过键盘时还给按快捷键前的地方
@@ -793,6 +801,7 @@ mod tests {
             w: 360.0,
             h,
             up,
+            center: false,
             work: WORK,
             sf: 2.0,
         }
@@ -833,6 +842,21 @@ mod tests {
         };
         let p = resized(narrow, 300.0, true);
         assert_eq!((p.x, p.w), (0.0, 600.0));
+    }
+
+    /// 居中的卡片（没有新选中的文字、托盘打开）改大小时中心不动，仍夹在工作区内。
+    #[test]
+    fn resize_keeps_center() {
+        let c = Placement {
+            x: 540.0,
+            y: 352.5,
+            center: true,
+            ..placed(0.0, 160.0, false)
+        };
+        let p = resized(c, 300.0, true);
+        assert_eq!((p.x, p.y, p.w, p.h), (340.0, 282.5, 760.0, 300.0));
+        let p = resized(c, 2000.0, true);
+        assert_eq!((p.y, p.h), (25.0 + 815.0 * 0.1, 815.0 * 0.8));
     }
 
     /// 翻译卡片与输入卡片拿键盘；blocked 提示不打断打字。

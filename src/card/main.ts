@@ -32,6 +32,8 @@ let pack: { source: string; target: string } | null = null;
 let timer = 0, lastH = 0, lastWide = false;
 /** 展开对照（M26 规则 19）：每张新卡片从收起开始 */
 let wide = false;
+/** 按住过标题行（拖动区）：之后改大小时后端不再按原来的位置摆，卡片留在拖到的地方 */
+let moved = false;
 /** 正在等系统的下载确认或下载：再点“下载语言包”不理，免得失败分支把键盘从确认框抢回来 */
 let downloading = false;
 /** 这次请求的方式：翻译中换用后，被接替的请求迟到的增量据此丢掉（M26 规则 16） */
@@ -78,7 +80,7 @@ function fit() {
   if (wide !== innerWidth > NARROW) {
     if (lastWide !== wide) {
       lastWide = wide;
-      void cardResize(seq, lastH || card.offsetHeight, wide);
+      void cardResize(seq, lastH || card.offsetHeight, wide, moved);
     }
     return;
   }
@@ -89,7 +91,7 @@ function fit() {
   if (h !== lastH || wide !== lastWide) {
     lastH = h;
     lastWide = wide;
-    void cardResize(seq, h, wide);
+    void cardResize(seq, h, wide, moved);
   }
 }
 
@@ -97,7 +99,7 @@ void onCardShow((p) => {
   clearTimeout(timer);
   seq = p.seq;
   lastH = 0;
-  lastWide = wide = false;
+  lastWide = wide = moved = false;
   pack = null;
   want = undefined;
   pick = '';
@@ -255,6 +257,11 @@ addEventListener('keydown', (e) => {
   if (e.target instanceof Element && e.target.closest('button, textarea, select')) return;
   e.preventDefault();
   void copy();
+});
+// 按住拖动区（标题行、原文提示；按钮与下拉框不算）：记下拖动过，系统随后接手拖动
+root.addEventListener('mousedown', (e) => {
+  const t = e.target as Element;
+  if (t.closest('[data-tauri-drag-region]') && !t.closest('button, select')) moved = true;
 });
 // 点了卡片以外的地方：关闭（不交还键盘）；输入卡片后端不关
 addEventListener('blur', () => void cardBlur(seq));
