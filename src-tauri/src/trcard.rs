@@ -50,9 +50,32 @@ pub struct Session {
     previous: Option<isize>,
     /// 按快捷键时面板有焦点：关闭时把键盘还给面板
     panel_focused: bool,
+    /// 卡片拿了键盘（`text` 上屏后）；提示不拿，撤下时不交还
+    keyboard: bool,
+}
+
+/// 撤下卡片时键盘交还到哪（M26 规则 18、19）。
+#[derive(Debug, PartialEq)]
+enum Back {
+    /// 不动：卡片没拿键盘，或 macOS 上由 orderOut 交还
+    Stay,
+    Panel,
+    /// Windows：按快捷键时的前台窗口
+    Window(isize),
 }
 
 impl Session {
+    /// 卡片没拿过键盘（提示）时哪也不还：键盘一直在用户手里，交还会把前台抢回他可能已离开的应用（设计反目标“不抢前台”）。
+    /// 按快捷键时面板有焦点、面板仍开着时还给面板，否则还给原来的窗口。
+    fn back(&self, panel_shown: bool) -> Back {
+        match self.previous {
+            _ if !self.keyboard => Back::Stay,
+            _ if self.panel_focused && panel_shown => Back::Panel,
+            Some(h) => Back::Window(h),
+            None => Back::Stay,
+        }
+    }
+
     pub fn bump(&mut self) -> u64 {
         self.seq += 1;
         self.seq
@@ -210,23 +233,32 @@ pub fn has_keyboard(app: &AppHandle) -> bool {
 /// 与翻译都在后台做。
 pub fn pressed(app: &AppHandle) {
     let was_shown = shown(app);
-    let panel_focused = app
-        .get_webview_window("panel")
-        .is_some_and(|w| w.is_visible().unwrap_or(false) && w.is_focused().unwrap_or(false));
+    let panel_shown = panel_shown(app);
+    let panel_focused = panel_shown
+        && app
+            .get_webview_window("panel")
+            .is_some_and(|w| w.is_focused().unwrap_or(false));
     let previous = xpaste_platform::foreground_window();
-    let seq = {
+    let (seq, back) = {
         let mut s = session(app);
         s.text.clear();
-        // 卡片开着时再按：前台是卡片自己，沿用上一次记下的去处
-        if !was_shown {
+        let card_has_keyboard = was_shown && s.keyboard;
+        let back = if card_has_keyboard {
+            s.back(panel_shown)
+        } else {
+            Back::Stay
+        };
+        // 拿着键盘的卡片开着时再按：前台是卡片自己，沿用上一次记下的去处；提示开着时前台仍是用户手里的应用
+        if !card_has_keyboard {
             s.previous = previous;
             s.panel_focused = panel_focused;
         }
-        s.bump()
+        s.keyboard = false;
+        (s.bump(), back)
     };
-    // 卡片开着时先撤下：键盘回到原来的应用，模拟复制才发得到那里。前端随后的 blur 带着旧序号，被忽略
+    // 卡片开着时先撤下：拿着键盘的话先交还（同关闭），模拟复制才发得到原来的应用。前端随后的 blur 带着旧序号，被忽略
     if was_shown {
-        hide_window(app);
+        hide_to(app, back);
     }
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || grab(&app, seq));
@@ -248,6 +280,10 @@ fn grab(app: &AppHandle, seq: u64) {
     {
         log::info!("trcard 排除应用");
         return show(app, Show::hint("blocked", seq, None));
+    }
+    // 等修饰键松开期间又按了一次：只让新的那次发模拟复制
+    if !session(app).is_current(seq) {
+        return;
     }
     let t0 = Instant::now();
     // 失败一律改为翻译剪切板；只有没权限时卡片带提示（M26 规则 18）
@@ -307,8 +343,12 @@ fn show(app: &AppHandle, payload: Show) {
         let Some(w) = app.get_webview_window(LABEL) else {
             return log::warn!("找不到划词卡片窗口");
         };
-        if !session(app).is_current(payload.seq) {
-            return;
+        {
+            let mut s = session(app);
+            if !s.is_current(payload.seq) {
+                return;
+            }
+            s.keyboard = payload.takes_keyboard();
         }
         match locate(app) {
             Ok(Some(p)) => {
@@ -386,7 +426,7 @@ fn front(app: &AppHandle, w: &WebviewWindow, focus: bool) -> tauri::Result<()> {
             w.as_ref().set_focus()?;
         }
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
     {
         let _ = app;
         if focus {
@@ -423,6 +463,22 @@ fn hide_window(app: &AppHandle) {
             Err(e) => log::warn!("划词卡片取不到窗口句柄：{e}"),
         }
     });
+}
+
+/// 撤下卡片，键盘交还到 `back`。Windows：卡片还在前台时先切回原来的窗口（本进程此刻是前台进程，系统允许），再撤下卡片。
+fn hide_to(app: &AppHandle, back: Back) {
+    if let Back::Window(h) = back {
+        on_main(app, move |_| xpaste_platform::activate_window(h));
+    }
+    hide_window(app);
+    if back == Back::Panel {
+        crate::panel::refocus(app);
+    }
+}
+
+fn panel_shown(app: &AppHandle) -> bool {
+    app.get_webview_window("panel")
+        .is_some_and(|w| w.is_visible().unwrap_or(false))
 }
 
 /// 翻译会话原文，增量只发给卡片；被新的一次取代时中止请求、不再发事件。
@@ -555,31 +611,23 @@ pub fn resize(app: &AppHandle, seq: u64, h: f64) {
     });
 }
 
-/// 关闭（Esc、复制后、提示自动消失）：中止进行中的请求，撤下卡片，键盘还给按快捷键前的地方
-/// （面板或原来的应用；macOS 上原来的应用由 orderOut 交还）。不是当前这一次时忽略。
+/// 关闭（Esc、复制后、提示自动消失）：中止进行中的请求，撤下卡片；卡片拿过键盘时还给按快捷键前的地方
+/// （面板或原来的应用；macOS 上原来的应用由 orderOut 交还），提示不动键盘与前台。不是当前这一次时忽略。
 pub fn close(app: &AppHandle, seq: u64) {
-    let (previous, panel_focused) = {
+    let panel_shown = panel_shown(app);
+    let back = {
         let mut s = session(app);
         if !s.is_current(seq) {
             return;
         }
         s.bump();
         s.text.clear();
-        (s.previous.take(), s.panel_focused)
+        let back = s.back(panel_shown);
+        s.previous = None;
+        s.keyboard = false;
+        back
     };
-    let panel_shown = app
-        .get_webview_window("panel")
-        .is_some_and(|w| w.is_visible().unwrap_or(false));
-    if panel_focused && panel_shown {
-        hide_window(app);
-        crate::panel::refocus(app);
-    } else {
-        // Windows：卡片还在前台时先切回原来的窗口（本进程此刻是前台进程，系统允许），再撤下卡片
-        if let Some(h) = previous {
-            on_main(app, move |_| xpaste_platform::activate_window(h));
-        }
-        hide_window(app);
-    }
+    hide_to(app, back);
 }
 
 /// 卡片失去键盘（点了别处）：同关闭，但键盘已在用户点的地方，不再交还。面板开着且没开对话框时，
@@ -597,6 +645,7 @@ pub fn blur(app: &AppHandle, seq: u64) {
         s.bump();
         s.text.clear();
         s.previous = None;
+        s.keyboard = false;
     }
     hide_window(app);
     if !state.dialog_open.load(Ordering::SeqCst) {
@@ -706,6 +755,39 @@ mod tests {
             ..Show::hint("blocked", 1, None)
         };
         assert!(text.takes_keyboard());
+    }
+
+    /// 撤下卡片时：提示（没拿键盘）哪也不还；拿着键盘时按快捷键前面板有焦点且面板仍开着 → 面板，否则 → 原来的窗口。
+    #[test]
+    fn back_only_when_card_had_keyboard() {
+        let s = |keyboard, panel_focused, previous| Session {
+            keyboard,
+            panel_focused,
+            previous,
+            ..Session::default()
+        };
+        assert_eq!(
+            s(false, false, Some(7)).back(true),
+            Back::Stay,
+            "提示不抢前台"
+        );
+        assert_eq!(
+            s(false, true, Some(7)).back(true),
+            Back::Stay,
+            "提示不拉回面板"
+        );
+        assert_eq!(s(true, true, Some(7)).back(true), Back::Panel);
+        assert_eq!(
+            s(true, true, Some(7)).back(false),
+            Back::Window(7),
+            "面板已收起"
+        );
+        assert_eq!(s(true, false, Some(7)).back(true), Back::Window(7));
+        assert_eq!(
+            s(true, false, None).back(true),
+            Back::Stay,
+            "macOS 由 orderOut 交还"
+        );
     }
 
     #[test]
