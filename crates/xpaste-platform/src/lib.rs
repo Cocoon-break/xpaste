@@ -159,8 +159,11 @@ pub fn copy_selection() -> Result<bool, PlatformError> {
     if can_paste(None) == PasteBlock::NeedAccessibility {
         return Err(PlatformError::NoAccessibility);
     }
-    // 等不到松开也照发：macOS 的按键只带 Command 标志，不受按着的修饰键影响
-    wait_until(|| !modifiers_down(), 10, 500);
+    // 等不到松开就不发：Windows 会变成 Ctrl+Alt+Shift+Insert（Shift+Insert 在有的应用里是粘贴），
+    // 注入的 Ctrl 松开还会把用户按着的 Ctrl 在逻辑上松掉。返回“没变”，调用方翻译剪切板
+    if !wait_until(|| !modifiers_down(), 10, 500) {
+        return Ok(false);
+    }
     let before = change_count();
     send_copy()?;
     Ok(wait_until(|| change_count() != before, 20, 400))

@@ -58,8 +58,9 @@ use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT,
-    KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CONTROL, VK_INSERT, VK_LBUTTON, VK_LWIN, VK_MENU,
-    VK_RBUTTON, VK_RWIN, VK_SHIFT,
+    KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, MapVirtualKeyW, SendInput,
+    VIRTUAL_KEY, VK_CONTROL, VK_INSERT, VK_LBUTTON, VK_LWIN, VK_MENU, VK_RBUTTON, VK_RWIN,
+    VK_SHIFT,
 };
 use windows::Win32::UI::Shell::PropertiesSystem::{
     GPS_DEFAULT, IPropertyStore, SHGetPropertyStoreFromParsingName,
@@ -677,17 +678,13 @@ pub fn paste(target: Option<isize>) -> Result<(), PlatformError> {
             }
         }
     }
-    send_ctrl(VIRTUAL_KEY(u16::from(b'V')))
+    let v = VIRTUAL_KEY(u16::from(b'V'));
+    send_ctrl(key(v, false), key(v, true))
 }
 
-/// 发 Ctrl+`vk`：Ctrl 按下、`vk` 按下/松开、Ctrl 松开。
-fn send_ctrl(vk: VIRTUAL_KEY) -> Result<(), PlatformError> {
-    let inputs = [
-        key(VK_CONTROL, false),
-        key(vk, false),
-        key(vk, true),
-        key(VK_CONTROL, true),
-    ];
+/// 发 Ctrl 按下、`down`、`up`、Ctrl 松开。
+fn send_ctrl(down: INPUT, up: INPUT) -> Result<(), PlatformError> {
+    let inputs = [key(VK_CONTROL, false), down, up, key(VK_CONTROL, true)];
     // SAFETY: inputs 是本地数组，cbsize 为单个 INPUT 大小
     let sent = unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) };
     if sent as usize != inputs.len() {
@@ -702,7 +699,25 @@ fn send_ctrl(vk: VIRTUAL_KEY) -> Result<(), PlatformError> {
 
 /// 向前台窗口发 Ctrl+Insert（设计 §3.2）。不用 Ctrl+C：终端里没有选区时 Ctrl+C 是中断。
 pub(crate) fn send_copy() -> Result<(), PlatformError> {
-    send_ctrl(VK_INSERT)
+    // 导航区的 Insert：扫描码与扩展键标志一起带。只带扫描码会被当成小键盘 0（Ctrl+小键盘 0 在浏览器里是重置缩放）
+    // SAFETY: 纯查询
+    let scan = unsafe { MapVirtualKeyW(u32::from(VK_INSERT.0), MAPVK_VK_TO_VSC) } as u16;
+    let ins = |up: bool| INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: VK_INSERT,
+                wScan: scan,
+                dwFlags: if up {
+                    KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP
+                } else {
+                    KEYEVENTF_EXTENDEDKEY
+                },
+                ..Default::default()
+            },
+        },
+    };
+    send_ctrl(ins(false), ins(true))
 }
 
 /// Alt、Shift、Ctrl、Win 中有没有按着的（设计 §4）。
