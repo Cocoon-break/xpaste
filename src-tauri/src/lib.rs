@@ -213,7 +213,7 @@ pub fn run() {
                     let seq = std::sync::atomic::Ordering::SeqCst;
                     if !st.dialog_open.load(seq)
                         && !st.tr_downloading.load(seq)
-                        && !trcard::shown(app)
+                        && !trcard::has_keyboard(app)
                     {
                         panel::hide(app);
                     }

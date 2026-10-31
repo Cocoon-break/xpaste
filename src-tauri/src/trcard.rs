@@ -129,6 +129,11 @@ struct Show {
 }
 
 impl Show {
+    /// 只有要翻译的卡片拿键盘（回车复制、Esc 关闭）；提示 2 秒后自己消失，不打断打字。
+    fn takes_keyboard(&self) -> bool {
+        self.kind == "text"
+    }
+
     fn hint(kind: &'static str, seq: u64, hotkey: Option<String>) -> Self {
         Self {
             kind,
@@ -188,10 +193,17 @@ pub fn prewarm(app: &AppHandle) {
     }
 }
 
-/// 卡片窗口可见（面板此时失焦不隐藏，设计 §3.2“面板开着时按快捷键：面板不隐藏”）。
+/// 卡片窗口可见。
 pub fn shown(app: &AppHandle) -> bool {
     app.get_webview_window(LABEL)
         .is_some_and(|w| w.is_visible().unwrap_or(false))
+}
+
+/// 卡片可见且拿着键盘：面板此时失焦不隐藏（设计 §3.2“面板开着时按快捷键：面板不隐藏”）。
+/// 不拿键盘的提示不算，面板失焦给别的应用时照常隐藏。
+pub fn has_keyboard(app: &AppHandle) -> bool {
+    app.get_webview_window(LABEL)
+        .is_some_and(|w| w.is_visible().unwrap_or(false) && w.is_focused().unwrap_or(false))
 }
 
 /// 翻译快捷键按下、不交给面板录制框时调用。主线程调用：只换序号、撤下开着的卡片，模拟复制（最多约 900 ms）
@@ -285,10 +297,11 @@ fn grab(app: &AppHandle, seq: u64) {
             hotkey: None,
         },
     );
-    tauri::async_runtime::spawn(run(app.clone(), seq, None));
 }
 
-/// 定位到指针旁、发 `trcard-show`、上屏并拿键盘。已被新的一次取代时什么都不做。
+/// 定位到指针旁、发 `trcard-show`、上屏。已被新的一次取代时什么都不做。
+/// 只有 `text` 拿键盘并开始翻译：翻译排在 `trcard-show` 之后开始，增量与结果不会先于它到达、被它清掉；
+/// `empty` / `blocked` 提示不拿键盘，用户接着打的字照常进原来的应用。
 fn show(app: &AppHandle, payload: Show) {
     on_main(app, move |app| {
         let Some(w) = app.get_webview_window(LABEL) else {
@@ -307,8 +320,12 @@ fn show(app: &AppHandle, payload: Show) {
             Ok(None) => log::warn!("划词卡片找不到显示器"),
             Err(e) => log::warn!("划词卡片取指针位置失败：{e}"),
         }
+        let (seq, text) = (payload.seq, payload.takes_keyboard());
         events::emit_to(app, LABEL, TRCARD_SHOW, payload);
-        if let Err(e) = front_and_focus(app, &w) {
+        if text {
+            tauri::async_runtime::spawn(run(app.clone(), seq, None));
+        }
+        if let Err(e) = front(app, &w, text) {
             log::warn!("显示划词卡片失败：{e}");
         }
     });
@@ -354,23 +371,28 @@ fn apply(w: &WebviewWindow, p: &Placement) -> tauri::Result<()> {
     crate::shot::place(w, (p.x * k, p.y * k), (p.w * k, p.h * k))
 }
 
-/// 上屏并拿键盘；macOS 上不激活应用，前台应用保持不变（同 `shot::show_overlay`）。主线程调用。
-fn front_and_focus(app: &AppHandle, w: &WebviewWindow) -> tauri::Result<()> {
+/// 上屏，`focus` 时拿键盘；macOS 上不激活应用，前台应用保持不变（同 `shot::show_overlay`）。主线程调用。
+fn front(app: &AppHandle, w: &WebviewWindow, focus: bool) -> tauri::Result<()> {
     #[cfg(target_os = "macos")]
     {
         use tauri_nspanel::ManagerExt;
         match app.get_webview_panel(LABEL) {
             // orderFrontRegardless + makeKeyWindow
-            Ok(p) => p.show(),
+            Ok(p) if focus => p.show(),
+            Ok(p) => p.order_front_regardless(),
             Err(_) => w.show()?,
         }
-        w.as_ref().set_focus()?;
+        if focus {
+            w.as_ref().set_focus()?;
+        }
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = app;
         w.show()?;
-        w.set_focus()?;
+        if focus {
+            w.set_focus()?;
+        }
     }
     Ok(())
 }
@@ -472,7 +494,7 @@ pub fn again(app: &AppHandle, seq: u64, engine: Option<Engine>) -> Result<Again,
     let engine_tag = translate::cfg_for(&app.state::<AppState>().settings(), engine).tag();
     on_main(app, |app| {
         if let Some(w) = app.get_webview_window(LABEL)
-            && let Err(e) = front_and_focus(app, &w)
+            && let Err(e) = front(app, &w, true)
         {
             log::warn!("划词卡片取得焦点失败：{e}");
         }
@@ -643,6 +665,18 @@ mod tests {
         assert_eq!(p.h, 815.0 * 0.6);
         let p = resized(placed(600.0, 160.0, false), 400.0);
         assert_eq!((p.y, p.h), (440.0, 400.0)); // 底边 840 不越过工作区
+    }
+
+    /// 只有 text 拿键盘（并开始翻译）；empty / blocked 提示不打断打字。
+    #[test]
+    fn only_text_takes_keyboard() {
+        assert!(!Show::hint("empty", 1, Some("⌥ + Shift + T".into())).takes_keyboard());
+        assert!(!Show::hint("blocked", 1, None).takes_keyboard());
+        let text = Show {
+            kind: "text",
+            ..Show::hint("blocked", 1, None)
+        };
+        assert!(text.takes_keyboard());
     }
 
     #[test]
