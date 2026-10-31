@@ -58,6 +58,7 @@ pub enum Role {
 }
 
 /// 触发的快捷键是哪一个（M23 规则 1、M24、设计 §3.2）：按解析后的组合比较；截图、录屏、翻译为空串时不认。
+/// Windows 上录屏不注册、设置里也不校验，它留着的组合可能正是翻译快捷键，不认录屏。
 pub fn role_of(
     pressed: &Shortcut,
     panel: &str,
@@ -70,7 +71,7 @@ pub fn role_of(
         Some(Role::Panel)
     } else if is(shot) {
         Some(Role::Shot)
-    } else if is(rec) {
+    } else if REC_SUPPORTED && is(rec) {
         Some(Role::Rec)
     } else if is(translate) {
         Some(Role::Translate)
@@ -81,7 +82,8 @@ pub fn role_of(
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ShotRoute {
-    /// 交给面板（`hotkey-pressed`，载荷 `"shot"` / `"rec"` / `"translate"`）：录制框聚焦时写入录制框，否则由面板调 `overlay_begin` 开始
+    /// 交给面板（`hotkey-pressed`，载荷 `"shot"` / `"rec"` / `"translate"`）：录制框聚焦时写入录制框，
+    /// 否则由面板调 `overlay_begin`（截图、录屏）或 `trcard_press`（翻译）开始
     Recorder,
     Begin,
 }
@@ -101,8 +103,8 @@ pub fn shot_pressed(app: &AppHandle) {
     overlay_pressed(app, crate::shot::Mode::Shot);
 }
 
-/// 翻译快捷键按下（设计 §3.2）：设置或确认框里录制快捷键时同截图交给面板（M15 规则 3，写入录制框，不翻译），
-/// 否则弹划词翻译卡片。主线程调用。
+/// 翻译快捷键按下（设计 §3.2）：设置或确认框开着且面板有焦点时同截图交给面板（M15 规则 3：在录制框里就写入、不翻译，
+/// 否则面板调 `trcard_press` 照常弹卡片），其余情况直接弹划词翻译卡片。主线程调用。
 pub fn translate_pressed(app: &AppHandle) {
     let route = route_now(app);
     log::info!("translate 快捷键按下 {route:?}");
@@ -272,6 +274,14 @@ mod tests {
         assert_eq!(role_of(&tr, p, s, r, "alt+shift+t"), Some(Role::Translate));
         // 为空串表示不启用：不认
         assert_eq!(role_of(&tr, p, s, r, ""), None);
+        // Windows 上录屏不注册（M24）：翻译用了留着默认值的录屏组合时按翻译认，不能开录屏
+        let rec = "Alt+Shift+R".parse().unwrap();
+        let want = if cfg!(target_os = "macos") {
+            Role::Rec
+        } else {
+            Role::Translate
+        };
+        assert_eq!(role_of(&rec, p, s, r, r), Some(want));
     }
 
     #[test]

@@ -1110,9 +1110,24 @@ mod tests {
             (s.hotkey.as_str(), s.translate_hotkey.as_str()),
             ("Alt+Shift+T", "")
         );
+        // 录屏撞上：录屏只在 macOS 上注册，别处不让位
+        let (s, _) = Settings::from_json_lenient(r#"{"recHotkey":"Alt+Shift+T"}"#).unwrap();
+        let want = if cfg!(target_os = "macos") {
+            ""
+        } else {
+            "Alt+Shift+T"
+        };
+        assert_eq!(s.translate_hotkey, want);
         // 不撞时不动
         let (s, _) = Settings::from_json_lenient(r#"{"maxRecords":1000}"#).unwrap();
         assert_eq!(s.translate_hotkey, "Alt+Shift+T");
+        // 已存的、不撞的翻译快捷键保留
+        let (s, dropped) = Settings::from_json_lenient(
+            r#"{"shotHotkey":"Alt+Shift+T","translateHotkey":"Alt+Shift+U"}"#,
+        )
+        .unwrap();
+        assert_eq!(s.translate_hotkey, "Alt+Shift+U");
+        assert!(dropped.is_empty(), "{dropped:?}");
     }
 
     #[test]

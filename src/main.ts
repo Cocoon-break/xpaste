@@ -2,7 +2,7 @@ import './styles.css';
 import { attachConsole, info } from './api/log';
 import {
   accessibilityGranted, bootstrap, clearHistory, copy, copyTextPlain, countUnpinned, createSnippet, deleteRecords, finishOnboarding, frontendReady, getRecord, hidePanel, installedApps,
-  ocrProgress, openUrl, overlayBegin, pickFolder, prunePreview, reocr, requestAccessibility, requestScreenCapture, revealFile, saveSettings, saveSnippet, screenCaptureGranted, search,
+  ocrProgress, openUrl, overlayBegin, pickFolder, prunePreview, reocr, requestAccessibility, requestScreenCapture, revealFile, saveSettings, saveSnippet, screenCaptureGranted, search, trcardPress,
   setDialogOpen, setPaused, setPinned, translateEngines, translateDownload, translateRecord, translateStatus, translateTest, undoDelete, updateSnippet,
 } from './api/commands';
 import {
@@ -2658,7 +2658,7 @@ await onShotNeedPermission(({ pane, mode }) =>
 // 引导中按唤起快捷键：可见时面板不隐藏，隐藏时先 panel-shown 再到这里；只在“试按快捷键”这一步算成功
 // 设置对话框打开时按唤起快捷键：面板同样不隐藏；录制框有焦点就当作按下了当前快捷键（网页收不到被全局注册拦下的按键）
 // 截图、录屏、翻译快捷键同理：对话框开着且面板有焦点时后端先发到这里（role = shot / rec / translate），
-// 焦点不在录制框里时截图、录屏照常开始，翻译什么都不做（设计 §3.2：写入录制框，不翻译）
+// 焦点不在录制框里时截图、录屏照常开始，翻译照常弹卡片（设计 §3.2；在录制框里时写入，不翻译）
 await onHotkeyPressed((role) => {
   // 只认面板有焦点时的按键：失焦时后端不发到这里，这里再防一道
   const on = (el: Element) => document.activeElement === el && document.hasFocus();
@@ -2670,7 +2670,7 @@ await onHotkeyPressed((role) => {
     if (on(self.input)) self.record(pressed);
     else if (on(hotkeyIn)) setHotkeyHelp(`不能与${name}快捷键相同`, true);
     else if (other) other[0].setHelp(`${other[1]}快捷键不能与${name}快捷键相同`, true);
-    else if (role !== 'translate') void overlayBegin(role === 'rec').catch((err: AppError) => toast(err.message));
+    else void (role === 'translate' ? trcardPress() : overlayBegin(role === 'rec')).catch((err: AppError) => toast(err.message));
     return;
   }
   if (on(hotkeyIn)) return recordHotkey(S.settings.hotkey);

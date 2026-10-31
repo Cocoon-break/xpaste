@@ -493,3 +493,10 @@ mod tests {
         assert!(state.translating.lock().unwrap().is_empty());
     }
 }
+
+/// 设置或确认框开着时按了翻译快捷键、焦点不在快捷键录制框里：面板转回来照常弹划词翻译卡片（设计 §3.2、M15 交互规则 3）。
+/// 同步命令，在主线程上跑，同 `overlay_begin`。
+#[tauri::command]
+pub fn trcard_press(app: AppHandle) {
+    crate::trcard::pressed(&app);
+}
