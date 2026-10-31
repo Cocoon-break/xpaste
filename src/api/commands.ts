@@ -7,6 +7,7 @@ import type {
   RecordDetail,
   SearchHit,
   Settings,
+  Engines,
   TranslateStatus,
   Translated,
 } from './types';
@@ -54,7 +55,9 @@ export const finishOnboarding = () => invoke<void>('finish_onboarding');
 export const installedApps = () => invoke<string[]>('installed_apps');
 
 /** again 为 false 且已有存库译文时直接返回它，不发请求；只有“重新翻译”传 true（M26 规则 4）。 */
-export const translateRecord = (id: number, again: boolean) => invoke<Translated>('translate_record', { id, again });
+export const translateRecord = (id: number, again: boolean, engine?: 'system' | 'openai') =>
+  invoke<Translated>('translate_record', { id, again, engine: engine ?? null });
+export const translateEngines = () => invoke<Engines>('translate_engines');
 /** 测试翻译：用表单里（未保存）的值翻译固定短句，返回译文。 */
 export const translateTest = (engine: string, baseUrl: string, apiKey: string, model: string, lang: string) =>
   invoke<string>('translate_test', { engine, baseUrl, apiKey, model, lang });

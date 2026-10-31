@@ -251,6 +251,7 @@ pub fn run() {
             commands::translate::translate_record,
             commands::translate::translate_test,
             commands::translate::translate_status,
+            commands::translate::translate_engines,
             commands::translate::open_translation_settings
         ])
         .build(tauri::generate_context!())

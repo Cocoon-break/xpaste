@@ -27,6 +27,15 @@ impl Engine {
             Engine::OpenAi => "openai",
         }
     }
+
+    /// 翻译方式标签（`system` / `openai:{模型}`）对应的方式，设计 §3.4。
+    pub fn from_tag(tag: &str) -> Option<Self> {
+        match tag {
+            "system" => Some(Engine::System),
+            t if t.starts_with("openai:") => Some(Engine::OpenAi),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -55,11 +64,32 @@ pub fn cfg(s: &Settings) -> Cfg {
     }
 }
 
+/// 同 `cfg`，`engine` 给了就强制用它，其余字段照设置（设计 §3.4 单次指定）。
+pub fn cfg_for(s: &Settings, engine: Option<Engine>) -> Cfg {
+    let c = cfg(s);
+    match engine {
+        Some(e) => Cfg { engine: e, ..c },
+        None => c,
+    }
+}
+
+impl Cfg {
+    /// 存库与增量里标注翻译方式的标签（设计 §3.4）。
+    pub fn tag(&self) -> String {
+        match self.engine {
+            Engine::System => "system".into(),
+            Engine::OpenAi => format!("openai:{}", self.model.trim()),
+        }
+    }
+}
+
 /// `translate-delta` 的载荷（M26 规则 3、5）。
 #[derive(Debug, Clone, Serialize)]
 pub struct Delta {
     pub id: Option<i64>,
     pub lang: String,
+    /// 翻译方式标签，见 `Cfg::tag`
+    pub engine: String,
     pub text: String,
 }
 

@@ -12,51 +12,81 @@ use xpaste_platform::PackStatus;
 use crate::error::AppError;
 use crate::events::{TRANSLATE_DELTA, emit};
 use crate::state::AppState;
-use crate::translate::{self, Cfg, Coalescer, Delta, Lang, Timeouts};
+use crate::translate::{self, Cfg, Coalescer, Delta, Engine, Lang, Timeouts};
 
 #[derive(Debug, Serialize)]
 pub struct Translated {
     pub text: String,
     pub lang: String,
+    /// 译文用的翻译方式标签（`system` / `openai:{模型}`）
+    pub engine: String,
 }
 
 /// 翻译一条记录并存库；增量经 `translate-delta` 广播。同一条记录已在翻译时报“正在翻译”，前端忽略。
-/// `again` 为假且已有存库译文时直接返回它，不发请求；只有“重新翻译”传真（M26 规则 4）。
+/// `again` 为假、没指定方式且已有存库译文时直接返回它，不发请求；只有“重新翻译”传真（M26 规则 4）。
+/// `engine`（`system` / `openai`）单次指定翻译方式，不改设置；没指定时“重新翻译”沿用库里译文的方式（设计 §3.4）。
 #[tauri::command]
 pub async fn translate_record(
     app: AppHandle,
     id: i64,
     again: bool,
+    engine: Option<String>,
 ) -> Result<Translated, AppError> {
+    let engine = match engine.as_deref() {
+        None => None,
+        Some("system") => Some(Engine::System),
+        Some("openai") => Some(Engine::OpenAi),
+        Some(_) => return Err(AppError::Invalid("翻译方式不对".into())),
+    };
     let state = app.state::<AppState>();
-    let cfg = translate::cfg(&state.settings());
-    translate_one(&state, &cfg, None, id, again, |p| {
+    let cfg = translate::cfg_for(&state.settings(), engine);
+    translate_one(&state, &cfg, None, id, again, engine, |p| {
         emit(&app, TRANSLATE_DELTA, p)
     })
     .await
 }
 
-/// `translate_record` 的实现，测试传短超时与自己的增量接收。
+/// `translate_record` 的实现，测试传短超时与自己的增量接收。`cfg` 是按设置（及 `engine`）算出的配置。
+/// 选翻译方式：`engine` 给了就用它；否则“重新翻译”沿用库里译文的方式；其余用设置。指定的方式用不了就报错，不换另一种。
 async fn translate_one(
     state: &AppState,
     cfg: &Cfg,
     timeouts: Option<Timeouts>,
     id: i64,
     again: bool,
+    engine: Option<Engine>,
     send: impl Fn(Delta) + Sync,
 ) -> Result<Translated, AppError> {
     let Some(text) = state.store().translate_source(id)? else {
         return Err(AppError::Invalid("这条记录不能翻译".into()));
     };
+    let stored = state.store().detail(id)?;
     if !again
-        && let Some(d) = state.store().detail(id)?
-        && let Some(t) = d.translation
+        && engine.is_none()
+        && let Some(d) = &stored
+        && let Some(t) = &d.translation
     {
         return Ok(Translated {
-            text: t,
-            lang: d.translation_lang.unwrap_or_default(),
+            text: t.clone(),
+            lang: d.translation_lang.clone().unwrap_or_default(),
+            engine: d.translation_engine.clone().unwrap_or_default(),
         });
     }
+    let want = engine.or_else(|| {
+        stored
+            .as_ref()
+            .filter(|_| again)
+            .and_then(|d| d.translation_engine.as_deref())
+            .and_then(Engine::from_tag)
+    });
+    let cfg = &match want {
+        Some(e) if e != cfg.engine => Cfg {
+            engine: e,
+            ..cfg.clone()
+        },
+        _ => cfg.clone(),
+    };
+    let tag = cfg.tag();
     if !state
         .translating
         .lock()
@@ -72,6 +102,7 @@ async fn translate_one(
         send(Delta {
             id: Some(id),
             lang: lang.code().into(),
+            engine: tag.clone(),
             text,
         });
     };
@@ -110,10 +141,11 @@ async fn translate_one(
         cfg.engine.name(),
         text.chars().count()
     );
-    store.set_translation(id, &out, lang.code())?;
+    store.set_translation(id, &out, lang.code(), &tag)?;
     Ok(Translated {
         text: out,
         lang: lang.code().into(),
+        engine: tag,
     })
 }
 
@@ -139,6 +171,28 @@ pub async fn translate_test(
     });
     let (_, out) = translate::run(&cfg, "Hello, world.", |_, _| true).await?;
     Ok(out)
+}
+
+#[derive(Debug, Serialize)]
+pub struct Engines {
+    /// 本机能否用系统翻译
+    pub system: bool,
+    /// AI 翻译已配置（接口地址、模型 ID 都不为空）
+    pub openai: bool,
+    /// 去掉首尾空白的模型 ID
+    pub model: String,
+}
+
+/// 两种翻译方式各自能不能用，给“换用”按钮判断（设计 §3.4）。
+#[tauri::command]
+pub async fn translate_engines(app: AppHandle) -> Engines {
+    let state = app.state::<AppState>();
+    let s = state.settings();
+    Engines {
+        system: xpaste_platform::translate_supported(),
+        openai: !s.translate_base_url.trim().is_empty() && !s.translate_model.trim().is_empty(),
+        model: s.translate_model.trim().to_string(),
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -203,7 +257,18 @@ mod tests {
         again: bool,
         on: impl Fn(Delta) + Sync,
     ) -> Result<Translated, AppError> {
-        tauri::async_runtime::block_on(translate_one(state, cfg, Some(FAST), id, again, on))
+        run_with(state, cfg, id, again, None, on)
+    }
+
+    fn run_with(
+        state: &AppState,
+        cfg: &Cfg,
+        id: i64,
+        again: bool,
+        engine: Option<Engine>,
+        on: impl Fn(Delta) + Sync,
+    ) -> Result<Translated, AppError> {
+        tauri::async_runtime::block_on(translate_one(state, cfg, Some(FAST), id, again, engine, on))
     }
 
     /// 已有译文时不是“重新翻译”就直接返回存库译文，不发请求（M26 规则 4）。
@@ -213,7 +278,7 @@ mod tests {
         let id = state.store().create_snippet("n", "hello", 1).unwrap();
         state
             .store()
-            .set_translation(id, "你好", "zh-Hans")
+            .set_translation(id, "你好", "zh-Hans", "openai:m")
             .unwrap();
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         l.set_nonblocking(true).unwrap();
@@ -232,6 +297,76 @@ mod tests {
         assert_eq!(t.text, "嗨");
         let d = state.store().detail(id).unwrap().unwrap();
         assert_eq!(d.translation.as_deref(), Some("嗨"));
+    }
+
+    /// 重新翻译沿用库里译文的方式；不重新翻译时直接返回存的（设计 §3.4）。
+    #[test]
+    fn engine_follows_stored_translation() {
+        let state = AppState::for_test();
+        let id = state.store().create_snippet("n", "hello", 1).unwrap();
+        state
+            .store()
+            .set_translation(id, "你好", "zh-Hans", "openai:m1")
+            .unwrap();
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        l.set_nonblocking(true).unwrap();
+        let mut sys = openai(&format!(
+            "http://127.0.0.1:{}/v1",
+            l.local_addr().unwrap().port()
+        ));
+        sys.model = "m1".into();
+        sys.engine = Engine::System; // 设置选的是系统翻译
+        let t = run(&state, &sys, id, false, |_| panic!("不应有增量")).unwrap();
+        assert_eq!(t.engine, "openai:m1");
+        assert!(l.accept().is_err(), "不重新翻译不应发请求");
+
+        let body = format!("{SSE_HEAD}{}data: [DONE]\n\n", delta("嗨"));
+        let (url, _h) = serve(vec![(0, body.into_bytes())], false);
+        let mut c = openai(&url);
+        c.model = "m1".into();
+        c.engine = Engine::System;
+        let t = run(&state, &c, id, true, |_| {}).unwrap();
+        assert_eq!((t.text.as_str(), t.engine.as_str()), ("嗨", "openai:m1"));
+        let d = state.store().detail(id).unwrap().unwrap();
+        assert_eq!(d.translation_engine.as_deref(), Some("openai:m1"));
+    }
+
+    /// 单次指定方式：照指定的翻、标注、不碰设置；已有译文也重新翻译。
+    #[test]
+    fn explicit_engine_does_not_change_settings() {
+        let state = AppState::for_test();
+        let id = state.store().create_snippet("n", "hello", 1).unwrap();
+        state
+            .store()
+            .set_translation(id, "旧", "zh-Hans", "system")
+            .unwrap();
+        let before = state.settings().translate_engine.clone();
+        let body = format!("{SSE_HEAD}{}data: [DONE]\n\n", delta("嗨"));
+        let (url, _h) = serve(vec![(0, body.into_bytes())], false);
+        let mut c = openai(&url);
+        c.engine = Engine::System;
+        let t = run_with(&state, &c, id, false, Some(Engine::OpenAi), |_| {}).unwrap();
+        assert_eq!((t.text.as_str(), t.engine.as_str()), ("嗨", "openai:m"));
+        assert_eq!(state.settings().translate_engine, before);
+        let d = state.store().detail(id).unwrap().unwrap();
+        assert_eq!(d.translation_engine.as_deref(), Some("openai:m"));
+    }
+
+    /// 指定的方式用不了：报对应错误，不改用另一种，不发请求。
+    #[test]
+    fn explicit_unavailable_engine_errors() {
+        let state = AppState::for_test();
+        let id = state.store().create_snippet("n", "hello", 1).unwrap();
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        l.set_nonblocking(true).unwrap();
+        let mut c = openai(&format!(
+            "http://127.0.0.1:{}/v1",
+            l.local_addr().unwrap().port()
+        ));
+        c.model = String::new();
+        let e = run_with(&state, &c, id, false, Some(Engine::OpenAi), |_| {}).unwrap_err();
+        assert_eq!(e.kind(), "translateConfig");
+        assert!(l.accept().is_err());
     }
 
     /// 翻译期间原文被改（片段编辑清掉了译文）：旧原文的译文不存，报“原文已改动”（M26 规则 12）。

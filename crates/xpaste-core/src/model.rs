@@ -510,6 +510,8 @@ pub struct RecordDetail {
     /// 最新一份译文及其目标语言代码（M26 规则 12）
     pub translation: Option<String>,
     pub translation_lang: Option<String>,
+    /// 翻译方式标签：`system` 或 `openai:{模型 ID}`（设计 §3.4）
+    pub translation_engine: Option<String>,
 }
 
 impl fmt::Debug for RecordDetail {
@@ -1139,6 +1141,7 @@ mod tests {
             ocr_text: Some("secret-ocr".into()),
             translation: None,
             translation_lang: None,
+            translation_engine: None,
         };
         let out = format!("{d:?} {:?}", d.summary);
         assert!(!out.contains("secret"), "{out}");

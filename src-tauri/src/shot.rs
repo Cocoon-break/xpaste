@@ -1209,10 +1209,12 @@ fn run_translate(
     let t0 = Instant::now();
     let mut co = Coalescer::default();
     let mut lang = None;
+    let tag = cfg.tag();
     let send = |l: Lang, text: String| {
         let p = Delta {
             id: None,
             lang: l.code().into(),
+            engine: tag.clone(),
             text,
         };
         events::emit_to(app, label, events::TRANSLATE_DELTA, p);

@@ -130,6 +130,8 @@ export interface RecordDetail extends RecordSummary {
   /** 最新一份译文及其目标语言代码 */
   translation: string | null;
   translationLang: string | null;
+  /** 翻译方式标签：`system` 或 `openai:{模型 ID}` */
+  translationEngine: string | null;
 }
 
 export interface AppError {
@@ -153,6 +155,15 @@ export interface AppError {
 export interface Translated {
   text: string;
   lang: string;
+  /** 翻译方式标签：`system` 或 `openai:{模型 ID}` */
+  engine: string;
+}
+
+/** `translate_engines`：两种翻译方式各自能不能用；`model` 为去掉首尾空白的模型 ID。 */
+export interface Engines {
+  system: boolean;
+  openai: boolean;
+  model: string;
 }
 
 /** 系统翻译可用性；`pack` 为英语 ↔ 目标语言的语言包状态，不支持系统翻译时为 null。 */
@@ -165,6 +176,8 @@ export interface TranslateStatus {
 export interface TranslateDelta {
   id: number | null;
   lang: string;
+  /** 翻译方式标签 */
+  engine: string;
   text: string;
 }
 
