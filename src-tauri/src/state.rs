@@ -5,7 +5,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError, mpsc};
 
 use xpaste_core::{Settings, Store};
 
-use crate::{enrich, ocr, rec, shot};
+use crate::{enrich, ocr, rec, shot, trcard};
 
 /// 由 Tauri 托管、各命令共享的应用状态。
 /// 锁顺序：不同时持有 `settings` 与 `store`；持锁期间不发事件。
@@ -35,6 +35,8 @@ pub struct AppState {
     pub translating: Mutex<HashSet<i64>>,
     /// 正在下载语言包：系统确认框可能抢走焦点，期间面板失焦不隐藏；同一时刻只下载一个（设计 §3.1）
     pub tr_downloading: AtomicBool,
+    /// 划词翻译卡片的会话（设计 §3.2）
+    pub trcard: Mutex<trcard::Session>,
 }
 
 impl AppState {
@@ -63,6 +65,7 @@ impl AppState {
             rec: Mutex::default(),
             translating: Mutex::default(),
             tr_downloading: AtomicBool::new(false),
+            trcard: Mutex::default(),
         }
     }
 

@@ -623,6 +623,10 @@ pub(crate) fn place(w: &WebviewWindow, origin: (f64, f64), size: (f64, f64)) -> 
     Ok(())
 }
 
+/// 遮罩与录屏边框的层级：在菜单栏之上
+#[cfg(target_os = "macos")]
+pub(crate) const NS_SCREEN_SAVER_WINDOW_LEVEL: i32 = 1000;
+
 /// 补齐 `shot-0` … `shot-<n-1>`；返回新建窗口的页面加载完成信号。
 fn ensure_overlays(app: &AppHandle, n: usize) -> Vec<mpsc::Receiver<()>> {
     (0..n)
@@ -663,7 +667,7 @@ fn build_overlay(app: &AppHandle, i: usize, loaded: mpsc::Sender<()>) -> tauri::
         .build()?;
     #[cfg(target_os = "macos")]
     on_main(app, move |_| {
-        if let Err(e) = to_overlay_panel(&w) {
+        if let Err(e) = to_overlay_panel(&w, NS_SCREEN_SAVER_WINDOW_LEVEL) {
             log::warn!("遮罩转换 NSPanel 失败：{e}");
         }
     });
@@ -672,20 +676,20 @@ fn build_overlay(app: &AppHandle, i: usize, loaded: mpsc::Sender<()>) -> tauri::
     Ok(())
 }
 
-/// 不激活应用的 NSPanel，层级在菜单栏之上（录屏边框同），进入任何空间与全屏应用。主线程调用；每个窗口只能调一次。
+/// 不激活应用的 NSPanel，进入任何空间与全屏应用；`level` 为窗口层级：遮罩与录屏边框在菜单栏之上
+/// （`NS_SCREEN_SAVER_WINDOW_LEVEL`），划词卡片同贴图（`NSFloatingWindowLevel`，3）。主线程调用；每个窗口只能调一次。
 #[cfg(target_os = "macos")]
 #[allow(deprecated)] // cocoa 已弃用，但 tauri-nspanel 公开的就是它的类型
-pub(crate) fn to_overlay_panel(w: &WebviewWindow) -> tauri::Result<()> {
+pub(crate) fn to_overlay_panel(w: &WebviewWindow, level: i32) -> tauri::Result<()> {
     use tauri_nspanel::WebviewWindowExt;
     use tauri_nspanel::cocoa::{
         appkit::{NSWindow, NSWindowCollectionBehavior as B},
         base::id,
     };
-    const NS_SCREEN_SAVER_WINDOW_LEVEL: i32 = 1000;
     let mask = unsafe { (w.ns_window()? as id).styleMask() }.bits() as i32;
     let panel = w.to_panel()?;
     panel.set_style_mask(mask | crate::panel::NS_WINDOW_STYLE_MASK_NONACTIVATING_PANEL);
-    panel.set_level(NS_SCREEN_SAVER_WINDOW_LEVEL);
+    panel.set_level(level);
     panel.set_collection_behaviour(
         B::NSWindowCollectionBehaviorCanJoinAllSpaces
             | B::NSWindowCollectionBehaviorFullScreenAuxiliary

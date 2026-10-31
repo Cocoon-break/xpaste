@@ -527,7 +527,7 @@ fn build_frame(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     {
         let w = w.clone();
         on_main(app, move |_| {
-            if let Err(e) = shot::to_overlay_panel(&w) {
+            if let Err(e) = shot::to_overlay_panel(&w, shot::NS_SCREEN_SAVER_WINDOW_LEVEL) {
                 log::warn!("录屏边框转换 NSPanel 失败：{e}");
             }
         });

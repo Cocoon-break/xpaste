@@ -138,6 +138,7 @@ pub fn run() {
             }
             clipboard::start(app.handle().clone());
             shot::prewarm(app.handle());
+            trcard::prewarm(app.handle());
             // 首次启动直接显示面板与引导（AC-M18-01）
             if first_run {
                 app.state::<AppState>()
@@ -191,17 +192,29 @@ pub fn run() {
                 api.prevent_close();
                 shot::end(window.app_handle());
             }
+            // 卡片同理不能被关掉（Windows 上 Alt+F4），否则之后按翻译快捷键没有窗口可用：当作 Esc
+            if window.label() == trcard::LABEL
+                && let WindowEvent::CloseRequested { api, .. } = event
+            {
+                api.prevent_close();
+                let app = window.app_handle();
+                trcard::close(app, trcard::current(app));
+            }
             // 截图遮罩（shot-*）与贴图（pin-*）失焦不处理
             if window.label() != "panel" {
                 return;
             }
             match event {
-                // 对话框打开时（例如设置里切去别的应用查东西）、下载语言包期间（系统确认框会抢焦点）失焦不隐藏
+                // 对话框打开时（例如设置里切去别的应用查东西）、下载语言包期间（系统确认框会抢焦点）、
+                // 划词卡片拿走键盘时（设计 §3.2：面板不隐藏）失焦不隐藏
                 WindowEvent::Focused(false) => {
                     let app = window.app_handle();
                     let st = app.state::<AppState>();
                     let seq = std::sync::atomic::Ordering::SeqCst;
-                    if !st.dialog_open.load(seq) && !st.tr_downloading.load(seq) {
+                    if !st.dialog_open.load(seq)
+                        && !st.tr_downloading.load(seq)
+                        && !trcard::shown(app)
+                    {
                         panel::hide(app);
                     }
                 }
@@ -260,7 +273,12 @@ pub fn run() {
             commands::translate::translate_download,
             commands::translate::translate_engines,
             commands::translate::open_translation_settings,
-            commands::translate::trcard_press
+            commands::translate::trcard_press,
+            commands::translate::trcard_again,
+            commands::translate::trcard_copy,
+            commands::translate::trcard_close,
+            commands::translate::trcard_blur,
+            commands::translate::trcard_resize
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

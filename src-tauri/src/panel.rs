@@ -159,7 +159,7 @@ fn monitor_contains(
 }
 
 /// 鼠标所在显示器；找不到时用主显示器。
-fn cursor_monitor(app: &AppHandle) -> tauri::Result<Option<Monitor>> {
+pub(crate) fn cursor_monitor(app: &AppHandle) -> tauri::Result<Option<Monitor>> {
     let c = app.cursor_position()?;
     let primary = app.primary_monitor()?;
     let primary_sf = primary.as_ref().map_or(1.0, |m| m.scale_factor());

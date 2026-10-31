@@ -33,18 +33,23 @@ pub async fn translate_record(
     again: bool,
     engine: Option<String>,
 ) -> Result<Translated, AppError> {
-    let engine = match engine.as_deref() {
-        None => None,
-        Some("system") => Some(Engine::System),
-        Some("openai") => Some(Engine::OpenAi),
-        Some(_) => return Err(AppError::Invalid("翻译方式不对".into())),
-    };
+    let engine = parse_engine(engine.as_deref())?;
     let state = app.state::<AppState>();
     let cfg = translate::cfg_for(&state.settings(), engine);
     translate_one(&state, &cfg, None, id, again, engine, |p| {
         emit(&app, TRANSLATE_DELTA, p)
     })
     .await
+}
+
+/// 前端单次指定的翻译方式（`system` / `openai`），没指定为 None（设计 §3.4）。
+fn parse_engine(name: Option<&str>) -> Result<Option<Engine>, AppError> {
+    match name {
+        None => Ok(None),
+        Some("system") => Ok(Some(Engine::System)),
+        Some("openai") => Ok(Some(Engine::OpenAi)),
+        Some(_) => Err(AppError::Invalid("翻译方式不对".into())),
+    }
 }
 
 /// `translate_record` 的实现，测试传短超时与自己的增量接收。`cfg` 是按设置（及 `engine`）算出的配置。
@@ -499,4 +504,39 @@ mod tests {
 #[tauri::command]
 pub fn trcard_press(app: AppHandle) {
     crate::trcard::pressed(&app);
+}
+
+/// 划词卡片用会话原文重翻（换用 / 重新翻译 / 下载语言包后重试，设计 §3.2、§3.4）。`seq` 取自 `trcard-show`
+/// 或上一次的返回值；成功时新序号恒为 `seq + 1`，结果经 `trcard-done` 送达（可能先于本命令返回）。
+#[tauri::command]
+pub async fn trcard_again(
+    app: AppHandle,
+    seq: u64,
+    engine: Option<String>,
+) -> Result<crate::trcard::Again, AppError> {
+    crate::trcard::again(&app, seq, parse_engine(engine.as_deref())?)
+}
+
+/// 划词卡片“复制译文”：普通写入剪切板，进历史。
+#[tauri::command(async)]
+pub fn trcard_copy(text: String) -> Result<(), AppError> {
+    crate::trcard::copy(&text)
+}
+
+/// 关闭划词卡片（Esc、复制后、提示到时）：中止进行中的请求，键盘交还原处。不是当前的 `seq` 时忽略。
+#[tauri::command]
+pub fn trcard_close(app: AppHandle, seq: u64) {
+    crate::trcard::close(&app, seq);
+}
+
+/// 划词卡片窗口失去键盘（点了别处）时由前端调用：关闭，不交还键盘。不是当前的 `seq` 时忽略。
+#[tauri::command]
+pub fn trcard_blur(app: AppHandle, seq: u64) {
+    crate::trcard::blur(&app, seq);
+}
+
+/// 前端渲染后按内容改卡片高度（逻辑像素，只改高度）。不是当前的 `seq` 时忽略。
+#[tauri::command]
+pub fn trcard_resize(app: AppHandle, seq: u64, h: f64) {
+    crate::trcard::resize(&app, seq, h);
 }
