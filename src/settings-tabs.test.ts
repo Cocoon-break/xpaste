@@ -42,6 +42,9 @@ test('保存失败的快捷键错误落到对应录制框（出错标签跟着�
   assert.equal(errorControl('recHotkeyTaken', '录屏快捷键已被其他应用占用，请换一个'), 'recHotkey');
   assert.equal(errorControl('invalidSettings', '录屏快捷键不能与截图快捷键相同'), 'recHotkey');
   assert.equal(errorControl('invalidSettings', '录屏快捷键至少需要包含 Mod 或 Alt'), 'recHotkey');
+  assert.equal(errorControl('translateHotkeyTaken', '翻译快捷键已被其他应用占用，请换一个'), 'trHotkey');
+  assert.equal(errorControl('invalidSettings', '翻译快捷键不能与录屏快捷键相同'), 'trHotkey');
+  assert.equal(errorControl('invalidSettings', '翻译快捷键至少需要包含 Mod 或 Alt'), 'trHotkey');
   // 其余错误走提示条
   assert.equal(errorControl('invalidSettings', '请输入 2 到 99 之间的整数'), null);
   assert.equal(errorControl('internal', '录屏快捷键'), null);

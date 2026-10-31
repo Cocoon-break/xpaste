@@ -10,7 +10,7 @@ pub const PANEL_HIDDEN: &str = "panel-hidden";
 /// 快捷键 / 托盘要隐藏面板：前端播完淡出后调 `hide_panel`，400 ms 内没隐藏则后端兜底。
 pub const PANEL_HIDE_REQUESTED: &str = "panel-hide-requested";
 /// 引导或对话框打开时按下快捷键，面板保持显示：载荷 `"panel"`（唤起，前端据此推进引导、写入录制框）
-/// 或 `"shot"` / `"rec"`（截图、录屏，见 `hotkey::overlay_pressed`）。
+/// 或 `"shot"` / `"rec"`（截图、录屏，见 `hotkey::overlay_pressed`）、`"translate"`（翻译，见 `hotkey::translate_pressed`）。
 pub const HOTKEY_PRESSED: &str = "hotkey-pressed";
 pub const RECORD_ADDED: &str = "record-added";
 pub const RECORD_UPDATED: &str = "record-updated";

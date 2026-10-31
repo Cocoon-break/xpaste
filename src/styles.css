@@ -545,7 +545,7 @@ dialog > form { display: contents; }
 }
 .field select option { background: var(--pop-solid); color: var(--fg); }
 .field input:focus-visible, .field select:focus-visible { outline: none; border-color: var(--beam); box-shadow: 0 0 0 3px color-mix(in srgb, var(--beam) 18%, transparent); }
-#hotkey, #shotHotkey { font-family: var(--font-mono); cursor: pointer; }
+#hotkey, #shotHotkey, #trHotkey { font-family: var(--font-mono); cursor: pointer; }
 /* 不记录这些应用：芯片 + 组合框，外框代替输入框描边与焦点环；候选列表在文档流内，不会被中部滚动区裁掉 */
 .apps-box {
   display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 38px; padding: 5px 6px 5px 8px; border-radius: 10px;

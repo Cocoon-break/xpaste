@@ -14,6 +14,8 @@ pub enum AppError {
     ShotHotkeyTaken,
     #[error("录屏快捷键已被其他应用占用，请换一个")]
     RecHotkeyTaken,
+    #[error("翻译快捷键已被其他应用占用，请换一个")]
+    TranslateHotkeyTaken,
     /// 参数不合法（非 http 链接、记录不存在等）
     #[error("{0}")]
     Invalid(String),
@@ -52,6 +54,7 @@ impl AppError {
             Self::HotkeyTaken => "hotkeyTaken",
             Self::ShotHotkeyTaken => "shotHotkeyTaken",
             Self::RecHotkeyTaken => "recHotkeyTaken",
+            Self::TranslateHotkeyTaken => "translateHotkeyTaken",
             Self::Invalid(_) => "invalid",
             Self::TranslateConfig => "translateConfig",
             Self::TranslatePack { .. } => "translatePack",
@@ -98,6 +101,10 @@ mod tests {
         assert_eq!(
             serde_json::to_value(AppError::RecHotkeyTaken).unwrap(),
             json!({"kind": "recHotkeyTaken", "message": "录屏快捷键已被其他应用占用，请换一个"})
+        );
+        assert_eq!(
+            serde_json::to_value(AppError::TranslateHotkeyTaken).unwrap(),
+            json!({"kind": "translateHotkeyTaken", "message": "翻译快捷键已被其他应用占用，请换一个"})
         );
         assert_eq!(
             serde_json::to_value(AppError::ClipboardWrite).unwrap()["message"],

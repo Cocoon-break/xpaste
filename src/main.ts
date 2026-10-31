@@ -1636,8 +1636,9 @@ function showStControl(el: HTMLElement) {
 // 出错项所在标签显示红点：跟着行内错误走（.err 显示着），改正或复原后消失
 const paintStErr = () => stTabs.forEach((t, j) => t.toggleAttribute('data-err', !!stPanes[j].querySelector('.err:not([hidden])')));
 
-// 截图、录屏快捷键录制框（M15、M24）：同唤起快捷键，另可按不带修饰键的 ⌫ / Delete 清空，表示不启用
-function optHotkey(id: string) {
+// 截图、录屏、翻译快捷键录制框（M15、M24、设计 §3.3）：同唤起快捷键，另可按不带修饰键的 ⌫ / Delete 清空，表示不启用。
+// idle：不在录制时的说明
+function optHotkey(id: string, idle = OPT_IDLE) {
   const input = $<HTMLInputElement>(`#${id}`), help = $(`#${id}Help`);
   const f = {
     input,
@@ -1651,7 +1652,7 @@ function optHotkey(id: string) {
     reset(h: string) {
       f.pending = h;
       input.value = hotkeyLabel(h, S.platform.os);
-      f.setHelp(OPT_IDLE);
+      f.setHelp(idle);
     },
     record(h: string) {
       f.pending = h;
@@ -1661,7 +1662,7 @@ function optHotkey(id: string) {
     },
   };
   input.addEventListener('focus', () => f.setHelp('请按下组合键，至少包含一个修饰键；⌫ 清空…'));
-  input.addEventListener('blur', () => f.setHelp(OPT_IDLE));
+  input.addEventListener('blur', () => f.setHelp(idle));
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Tab' || e.key === 'Escape') return;
     e.preventDefault();
@@ -1678,6 +1679,7 @@ function optHotkey(id: string) {
   return f;
 }
 const shotKey = optHotkey('shotHotkey'), recKey = optHotkey('recHotkey');
+const trKey = optHotkey('trHotkey', '在任何应用里选中文字后按下，译文显示在鼠标旁');
 
 // 截图、录屏文件夹：设置里存空字符串表示默认文件夹，输入框只显示默认路径的写法。
 // 取消选择不改；选好的路径只在保存时写回。失败写在这一行下方（提示条会被设置框盖住）
@@ -2061,6 +2063,7 @@ function openSettings() {
   setHotkeyHelp(HOTKEY_IDLE);
   shotKey.reset(st.shotHotkey);
   recKey.reset(st.recHotkey);
+  trKey.reset(st.translateHotkey);
   shotDir.pending = st.shotDir;
   shotDir.paint();
   recDir.pending = st.recDir;
@@ -2190,6 +2193,7 @@ async function submitSettings() {
   // 翻译字段不经 SettingsForm；末尾的 / 由后端去掉。engine 没动过就原样写回（可能是空串）
   Object.assign(s, {
     translateEngine: trSave(), translateBaseUrl: trBaseIn.value.trim(), translateApiKey: trKeyIn.value, translateModel: trModelIn.value.trim(), translateLang: trLangIn.value,
+    translateHotkey: trKey.pending,
   });
   saving = true;
   try {
@@ -2219,7 +2223,7 @@ async function submitSettings() {
       showStControl(hotkeyIn);
       setHotkeyHelp(err.message, true);
     } else if (at) {
-      const f = at === 'shotHotkey' ? shotKey : recKey;
+      const f = { shotHotkey: shotKey, recHotkey: recKey, trHotkey: trKey }[at];
       showStControl(f.input);
       f.setHelp(err.message, true);
     } else toast(err.message);
@@ -2653,20 +2657,24 @@ await onShotNeedPermission(({ pane, mode }) =>
 );
 // 引导中按唤起快捷键：可见时面板不隐藏，隐藏时先 panel-shown 再到这里；只在“试按快捷键”这一步算成功
 // 设置对话框打开时按唤起快捷键：面板同样不隐藏；录制框有焦点就当作按下了当前快捷键（网页收不到被全局注册拦下的按键）
-// 截图、录屏快捷键同理：对话框开着且面板有焦点时后端先发到这里（role = shot / rec），焦点不在录制框里就照常开始
+// 截图、录屏、翻译快捷键同理：对话框开着且面板有焦点时后端先发到这里（role = shot / rec / translate），
+// 焦点不在录制框里时截图、录屏照常开始，翻译什么都不做（设计 §3.2：写入录制框，不翻译）
 await onHotkeyPressed((role) => {
   // 只认面板有焦点时的按键：失焦时后端不发到这里，这里再防一道
   const on = (el: Element) => document.activeElement === el && document.hasFocus();
+  const opts = [[shotKey, '截图', 'shot'], [recKey, '录屏', 'rec'], [trKey, '翻译', 'translate']] as const;
   if (role !== 'panel') {
-    const [self, other, name, otherName] = role === 'shot' ? [shotKey, recKey, '截图', '录屏'] : [recKey, shotKey, '录屏', '截图'];
-    if (on(self.input)) self.record(role === 'shot' ? S.settings.shotHotkey : S.settings.recHotkey);
+    const [self, name] = opts.find((o) => o[2] === role)!;
+    const other = opts.find(([f]) => f !== self && on(f.input));
+    const pressed = { shot: S.settings.shotHotkey, rec: S.settings.recHotkey, translate: S.settings.translateHotkey }[role];
+    if (on(self.input)) self.record(pressed);
     else if (on(hotkeyIn)) setHotkeyHelp(`不能与${name}快捷键相同`, true);
-    else if (on(other.input)) other.setHelp(`${otherName}快捷键不能与${name}快捷键相同`, true);
-    else void overlayBegin(role === 'rec').catch((err: AppError) => toast(err.message));
+    else if (other) other[0].setHelp(`${other[1]}快捷键不能与${name}快捷键相同`, true);
+    else if (role !== 'translate') void overlayBegin(role === 'rec').catch((err: AppError) => toast(err.message));
     return;
   }
   if (on(hotkeyIn)) return recordHotkey(S.settings.hotkey);
-  for (const [f, name] of [[shotKey, '截图'], [recKey, '录屏']] as const) if (on(f.input)) return f.setHelp(`${name}快捷键不能与唤起快捷键相同`, true);
+  for (const [f, name] of opts) if (on(f.input)) return f.setHelp(`${name}快捷键不能与唤起快捷键相同`, true);
   if (obStep === 'hotkey' && obDlg.open) obSucceed();
 });
 

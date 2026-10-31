@@ -110,6 +110,8 @@ pub struct Settings {
     pub translate_model: String,
     /// 目标语言代码，见 `translate::Lang`
     pub translate_lang: String,
+    /// 划词翻译全局快捷键；空字符串表示不启用（设计 §3.2、§3.3）
+    pub translate_hotkey: String,
 }
 
 impl Default for Settings {
@@ -152,6 +154,7 @@ impl Default for Settings {
             translate_api_key: String::new(),
             translate_model: String::new(),
             translate_lang: "zh-Hans".into(),
+            translate_hotkey: "Alt+Shift+T".into(),
         }
     }
 }
@@ -254,6 +257,33 @@ impl Settings {
                 self.rec_hotkey.clear();
             }
         }
+        // 翻译快捷键同理（设计 §3.3）：升级前唤起、截图、录屏已用了 Alt+Shift+T 的，读出为不启用
+        if self.translate_hotkey_clash().is_some() {
+            self.translate_hotkey.clear();
+        }
+    }
+
+    /// 翻译快捷键与哪个快捷键是同一组合（按唤起、截图、录屏的顺序）；录屏只在 macOS 上比（M24：别处不注册录屏快捷键）。
+    fn translate_hotkey_clash(&self) -> Option<&'static str> {
+        if self.translate_hotkey.is_empty() {
+            return None;
+        }
+        let tr = hotkey_key(&self.translate_hotkey);
+        [
+            ("唤起", self.hotkey.as_str()),
+            ("截图", self.shot_hotkey.as_str()),
+            (
+                "录屏",
+                if cfg!(target_os = "macos") {
+                    self.rec_hotkey.as_str()
+                } else {
+                    ""
+                },
+            ),
+        ]
+        .into_iter()
+        .find(|(_, k)| !k.is_empty() && hotkey_key(k) == tr)
+        .map(|(name, _)| name)
     }
 
     /// 翻译的三个文本字段去首尾空白，Base URL 再去掉末尾的 `/`（M26 规则 6）；保存设置时在 `validate` 之前调用。
@@ -295,6 +325,12 @@ impl Settings {
             if !self.shot_hotkey.is_empty() && rec == hotkey_key(&self.shot_hotkey) {
                 return fail("录屏快捷键不能与截图快捷键相同");
             }
+        }
+        if !self.translate_hotkey.is_empty() && !has_modifier(&self.translate_hotkey) {
+            return fail("翻译快捷键至少需要包含 Mod 或 Alt");
+        }
+        if let Some(name) = self.translate_hotkey_clash() {
+            return fail(&format!("翻译快捷键不能与{name}快捷键相同"));
         }
         if !matches!(self.translate_engine.as_str(), "" | "system" | "openai") {
             return fail("翻译引擎只能是系统翻译或 OpenAI 兼容接口");
@@ -1014,6 +1050,69 @@ mod tests {
                 .is_ok()
         );
         assert!(with("Alt+Space", "Alt+Shift+A", "R").validate().is_ok());
+    }
+
+    #[test]
+    fn validate_translate_hotkey() {
+        let with = |tr: &str| Settings {
+            hotkey: "Alt+Space".into(),
+            shot_hotkey: "Alt+Shift+A".into(),
+            rec_hotkey: "Alt+Shift+R".into(),
+            translate_hotkey: tr.into(),
+            ..Default::default()
+        };
+        assert_eq!(Settings::default().translate_hotkey, "Alt+Shift+T");
+        assert!(with("").validate().is_ok());
+        assert!(with("Alt+Shift+T").validate().is_ok());
+        assert_eq!(invalid(&with("T")), "翻译快捷键至少需要包含 Mod 或 Alt");
+        assert_eq!(
+            invalid(&with(" alt+SPACE")),
+            "翻译快捷键不能与唤起快捷键相同"
+        );
+        assert_eq!(
+            invalid(&with("Option+Shift+A")),
+            "翻译快捷键不能与截图快捷键相同"
+        );
+        // 录屏只在 macOS 上注册（M24），别处不占组合
+        let rec = with("shift+Alt+R").validate();
+        if cfg!(target_os = "macos") {
+            assert_eq!(
+                invalid(&with("shift+Alt+R")),
+                "翻译快捷键不能与录屏快捷键相同"
+            );
+        } else {
+            assert!(rec.is_ok());
+        }
+        // 截图不启用时不比
+        assert!(
+            Settings {
+                shot_hotkey: String::new(),
+                translate_hotkey: "Alt+Shift+A".into(),
+                ..Default::default()
+            }
+            .validate()
+            .is_ok()
+        );
+    }
+
+    /// 设计 §3.3：升级前截图（或唤起、录屏）已用 Alt+Shift+T 的，翻译快捷键读出为不启用，其余设置保留。
+    #[test]
+    fn translate_hotkey_upgrade_conflict() {
+        let (s, dropped) =
+            Settings::from_json_lenient(r#"{"shotHotkey":"Alt+Shift+T","maxRecords":1000}"#)
+                .unwrap();
+        assert_eq!(s.translate_hotkey, "");
+        assert_eq!(s.shot_hotkey, "Alt+Shift+T");
+        assert_eq!(s.max_records, 1000);
+        assert!(dropped.is_empty(), "{dropped:?}");
+        let (s, _) = Settings::from_json_lenient(r#"{"hotkey":"Alt+Shift+T"}"#).unwrap();
+        assert_eq!(
+            (s.hotkey.as_str(), s.translate_hotkey.as_str()),
+            ("Alt+Shift+T", "")
+        );
+        // 不撞时不动
+        let (s, _) = Settings::from_json_lenient(r#"{"maxRecords":1000}"#).unwrap();
+        assert_eq!(s.translate_hotkey, "Alt+Shift+T");
     }
 
     #[test]

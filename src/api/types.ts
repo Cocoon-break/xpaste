@@ -41,6 +41,8 @@ export interface Settings {
   translateModel: string;
   /** zh-Hans | zh-Hant | en | ja | ko */
   translateLang: string;
+  /** 划词翻译全局快捷键；'' 表示不启用（设计 §3.3） */
+  translateHotkey: string;
 }
 
 export interface PlatformInfo {
@@ -141,6 +143,7 @@ export interface AppError {
     | 'hotkeyTaken'
     | 'shotHotkeyTaken'
     | 'recHotkeyTaken'
+    | 'translateHotkeyTaken'
     | 'invalidSettings'
     | 'invalid'
     | 'internal'
