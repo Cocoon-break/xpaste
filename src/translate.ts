@@ -18,7 +18,7 @@ export const LANG_LABEL: Record<string, string> = {
 export const translatable = (r: Pick<RecordSummary, 'kind' | 'ocrState'>): boolean =>
   r.kind === 'text' || r.kind === 'code' || ((r.kind === 'image' || r.kind === 'file') && r.ocrState === 1);
 
-/** 翻译方式标注，规则同 Rust 的 `engine_label`（M26 规则 16） */
+/** 翻译方式标注：`system` → 系统翻译，`openai:{模型}` → AI（模型），认不出为空（M26 规则 16） */
 export function engineLabel(tag: string): string {
   if (tag === 'system') return '系统翻译';
   if (!tag.startsWith('openai:')) return '';

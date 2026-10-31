@@ -168,16 +168,6 @@ pub fn completion_text(json: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// 翻译方式标签的显示名（M26 规则 16）：`system` → 系统翻译，`openai:{模型}` → AI（模型），认不出为空。
-pub fn engine_label(tag: &str) -> String {
-    match tag.strip_prefix("openai:") {
-        _ if tag == "system" => "系统翻译".into(),
-        Some("") => "AI".into(),
-        Some(m) => format!("AI（{m}）"),
-        None => String::new(),
-    }
-}
-
 pub fn http_error(status: u16) -> String {
     match status {
         401 | 403 => "API Key 无效或没有权限".into(),
@@ -190,14 +180,6 @@ pub fn http_error(status: u16) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn engine_label_rules() {
-        assert_eq!(engine_label("system"), "系统翻译");
-        assert_eq!(engine_label("openai:gpt-4o-mini"), "AI（gpt-4o-mini）");
-        assert_eq!(engine_label("openai:"), "AI");
-        assert_eq!(engine_label("deepl"), "");
-    }
 
     #[test]
     fn resolve_target_follows_design_rules() {
