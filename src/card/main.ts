@@ -280,7 +280,7 @@ addEventListener('keydown', () => (fresh = false), true);
 addEventListener('focus', () => {
   if (st.kind === 'idle' && document.activeElement === document.body) src()?.focus();
 });
-// 点了卡片以外的地方：关闭（不交还键盘）；输入卡片后端不关
+// 点了卡片以外的地方：关闭（不交还键盘），输入卡片也一样（失焦后收不到 Esc，留在屏幕上关不掉）
 addEventListener('blur', () => void cardBlur(seq));
 // 窗口被后端改了大小：翻译中仍跟到最新一段；展开或收起后按新宽度重新量高度
 addEventListener('resize', () => { follow(); fit(); });

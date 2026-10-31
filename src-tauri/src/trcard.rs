@@ -55,8 +55,6 @@ pub struct Session {
     panel_focused: bool,
     /// 卡片拿了键盘（`text` / `input` 上屏后）；提示不拿，撤下时不交还
     keyboard: bool,
-    /// 输入卡片（M26 规则 20）：点别处不关闭，免得写了一半的字丢掉
-    input: bool,
     /// 这张卡片上选的目标语言；None 为“自动”（按设置的目标语言，规则 9）
     lang: Option<Lang>,
 }
@@ -372,7 +370,6 @@ fn show(app: &AppHandle, payload: Show, center: bool) {
                 return;
             }
             s.keyboard = payload.takes_keyboard();
-            s.input = payload.kind == "input";
         }
         match locate(app, center) {
             Ok(Some(p)) => {
@@ -712,8 +709,7 @@ pub fn blur(app: &AppHandle, seq: u64) {
     }
     {
         let mut s = session(app);
-        // 输入卡片点别处不关（M26 规则 20）
-        if !s.is_current(seq) || s.input {
+        if !s.is_current(seq) {
             return;
         }
         s.bump();
