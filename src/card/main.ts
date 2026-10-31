@@ -34,6 +34,8 @@ let timer = 0, lastH = 0, lastWide = false;
 let wide = false;
 /** 按住过标题行（拖动区）：之后改大小时后端不再按原来的位置摆，卡片留在拖到的地方 */
 let moved = false;
+/** 卡片刚上屏、用户还没按键或点鼠标：这期间的聚焦不是用户给的（见下方 focusin） */
+let fresh = false;
 /** 正在等系统的下载确认或下载：再点“下载语言包”不理，免得失败分支把键盘从确认框抢回来 */
 let downloading = false;
 /** 这次请求的方式：翻译中换用后，被接替的请求迟到的增量据此丢掉（M26 规则 16） */
@@ -101,6 +103,7 @@ void onCardShow((p) => {
   seq = p.seq;
   lastH = 0;
   lastWide = wide = moved = false;
+  fresh = true;
   pack = null;
   want = undefined;
   pick = '';
@@ -264,7 +267,16 @@ root.addEventListener('mousedown', (e) => {
   const t = e.target as Element;
   if (t.closest('[data-tauri-drag-region]') && !t.closest('button, select')) moved = true;
 });
-// 输入卡片的窗口拿到键盘时光标放回原文框（focus() 先于窗口上屏时可能没落下）
+// 窗口拿到键盘时 WebKit 会把焦点交给第一个可聚焦的控件（“对照原文”、下拉框），当作键盘聚焦画出焦点环，回车也会按到它。
+// 卡片刚上屏、用户还没按键或点鼠标时撤掉这种聚焦；输入卡片改把光标放回原文框
+addEventListener('focusin', (e) => {
+  const t = e.target as HTMLElement;
+  if (!fresh || t.matches('textarea.c-orig')) return;
+  t.blur();
+  if (st.kind === 'idle') src()?.focus();
+}, true);
+addEventListener('pointerdown', () => (fresh = false), true);
+addEventListener('keydown', () => (fresh = false), true);
 addEventListener('focus', () => {
   if (st.kind === 'idle' && document.activeElement === document.body) src()?.focus();
 });
