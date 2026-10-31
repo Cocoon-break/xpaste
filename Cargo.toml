@@ -20,6 +20,13 @@ tauri = { version = "2", features = [] }
 xpaste-core = { path = "crates/xpaste-core", default-features = false }
 xpaste-platform = { path = "crates/xpaste-platform" }
 
+# 开发构建只留行号表、依赖不带调试信息：target 从约 4.3 GB 降到约 2.2 GB，panic 回溯仍有文件与行号
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 codegen-units = 1
 lto = true
