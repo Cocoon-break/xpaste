@@ -389,9 +389,12 @@ fn front(app: &AppHandle, w: &WebviewWindow, focus: bool) -> tauri::Result<()> {
     #[cfg(not(target_os = "macos"))]
     {
         let _ = app;
-        w.show()?;
         if focus {
+            w.show()?;
             w.set_focus()?;
+        } else {
+            // show() 是会激活窗口的 SW_SHOW，提示要不抢前台
+            xpaste_platform::show_no_activate(w.hwnd()?.0 as isize);
         }
     }
     Ok(())

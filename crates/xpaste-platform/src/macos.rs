@@ -917,6 +917,9 @@ pub fn foreground_window() -> Option<isize> {
 /// Windows 上把窗口切到前台；macOS 没有窗口句柄的概念（`foreground_window` 恒为 `None`），无操作。
 pub fn activate_window(_hwnd: isize) {}
 
+/// Windows 上显示窗口但不激活；macOS 上不激活应用的 NSPanel 用 `orderFrontRegardless` 即可，无操作。
+pub fn show_no_activate(_hwnd: isize) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

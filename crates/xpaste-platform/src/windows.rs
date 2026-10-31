@@ -74,9 +74,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GWL_EXSTYLE, GetClassNameW, GetForegroundWindow, GetIconInfo, GetMessageW,
     GetWindowLongW, GetWindowTextLengthW, GetWindowThreadProcessId, HICON, HWND_MESSAGE, ICONINFO,
     InternalGetWindowText, IsIconic, IsWindow, IsWindowVisible, MONITORINFOF_PRIMARY, MSG,
-    RegisterClassW, SetForegroundWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT,
-    WINEVENT_SKIPOWNPROCESS, WM_CLIPBOARDUPDATE, WNDCLASSW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
-    WS_EX_TRANSPARENT,
+    RegisterClassW, SW_SHOWNOACTIVATE, SetForegroundWindow, ShowWindow, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_CLIPBOARDUPDATE, WNDCLASSW,
+    WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
 };
 use windows::core::{BOOL, Error, HSTRING, Interface, PCWSTR, PWSTR, w};
 use xpaste_core::capture::MAX_FLAVOR_BYTES;
@@ -658,6 +658,15 @@ pub fn activate_window(hwnd: isize) {
     // SAFETY: hwnd 失效时调用失败而不会崩溃
     unsafe {
         let _ = SetForegroundWindow(HWND(hwnd as *mut _));
+    }
+}
+
+/// 显示窗口但不激活它，前台窗口与键盘不变（划词卡片的提示，设计 §3.2）。
+/// tao 只在建窗口时按 `focused(false)` 用 SW_SHOWNOACTIVATE，之后的 `show()` 都是会激活的 SW_SHOW。hwnd 失效时什么也不做。
+pub fn show_no_activate(hwnd: isize) {
+    // SAFETY: hwnd 失效时调用失败而不会崩溃；返回值是之前是否可见，不是错误
+    unsafe {
+        let _ = ShowWindow(HWND(hwnd as *mut _), SW_SHOWNOACTIVATE);
     }
 }
 
