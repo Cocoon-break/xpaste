@@ -1,5 +1,5 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import type { RecordSummary, Settings } from './types';
+import type { RecordSummary, Settings, TranslateDelta } from './types';
 
 export const PANEL_SHOWN = 'panel-shown';
 
@@ -17,10 +17,10 @@ export const PANEL_HIDE_REQUESTED = 'panel-hide-requested';
 
 export const onPanelHideRequested = (cb: () => void): Promise<UnlistenFn> => listen(PANEL_HIDE_REQUESTED, () => cb());
 
-/** 引导或对话框打开时按下快捷键，面板保持显示：`panel` 唤起（引导据此推进），`shot` 截图、`rec` 录屏（只在对话框开着且面板有焦点时发）。 */
+/** 引导或对话框打开时按下快捷键，面板保持显示：`panel` 唤起（引导据此推进），`shot` 截图、`rec` 录屏、`translate` 翻译（只在对话框开着且面板有焦点时发）。 */
 export const HOTKEY_PRESSED = 'hotkey-pressed';
 
-export type HotkeyRole = 'panel' | 'shot' | 'rec';
+export type HotkeyRole = 'panel' | 'shot' | 'rec' | 'translate';
 export const onHotkeyPressed = (cb: (role: HotkeyRole) => void): Promise<UnlistenFn> =>
   listen<HotkeyRole>(HOTKEY_PRESSED, (e) => cb(e.payload));
 
@@ -54,12 +54,19 @@ export const SETTINGS_CHANGED = 'settings-changed';
 export const onSettingsChanged = (cb: (s: Settings) => void): Promise<UnlistenFn> =>
   listen<Settings>(SETTINGS_CHANGED, (e) => cb(e.payload));
 
-/** 托盘“设置…”：面板显示后打开设置弹窗。 */
+/** 托盘“设置…”、划词卡片“去设置”：面板显示后打开设置弹窗。载荷为要切到的标签（`translate`），null 时停在上次的标签。 */
 export const OPEN_SETTINGS = 'open-settings';
 
-export const onOpenSettings = (cb: () => void): Promise<UnlistenFn> => listen(OPEN_SETTINGS, () => cb());
+export const onOpenSettings = (cb: (tab: string | null) => void): Promise<UnlistenFn> =>
+  listen<string | null>(OPEN_SETTINGS, (e) => cb(e.payload ?? null));
 
 /** 托盘“清空历史…”：面板显示后打开清空确认。 */
 export const CONFIRM_CLEAR = 'confirm-clear';
 
 export const onConfirmClear = (cb: () => void): Promise<UnlistenFn> => listen(CONFIRM_CLEAR, () => cb());
+
+/** 翻译增量（后端约每 50 ms 合并一次）：面板翻译时广播，截图翻译时只发给发起的遮罩窗口。 */
+export const TRANSLATE_DELTA = 'translate-delta';
+
+export const onTranslateDelta = (cb: (d: TranslateDelta) => void): Promise<UnlistenFn> =>
+  listen<TranslateDelta>(TRANSLATE_DELTA, (e) => cb(e.payload));

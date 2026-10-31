@@ -7,6 +7,9 @@ import type {
   RecordDetail,
   SearchHit,
   Settings,
+  Engines,
+  TranslateStatus,
+  Translated,
 } from './types';
 
 export const bootstrap = () => invoke<Bootstrap>('bootstrap');
@@ -15,7 +18,8 @@ export const hidePanel = (animate: boolean) => invoke<void>('hide_panel', { anim
 /** 启动数据已渲染：后端据此放行面板显示，并补发就绪前积压的那次唤起。 */
 export const frontendReady = () => invoke<void>('frontend_ready');
 /** 有对话框打开时后端不因失焦或快捷键隐藏面板。 */
-export const setDialogOpen = (open: boolean) => invoke<void>('set_dialog_open', { open });
+/** `open`：设置、确认框或片段对话框开着（快捷键不隐藏面板）；`keep`：片段对话框开着或正在选文件夹（失焦也不隐藏，M04 规则 3） */
+export const setDialogOpen = (open: boolean, keep: boolean) => invoke<void>('set_dialog_open', { open, keep });
 export const copy = (id: number, paste: boolean) => invoke<CopyResult>('copy', { id, paste });
 /** 只写纯文本，标记为自身写入，不产生新记录。 */
 export const copyTextPlain = (text: string) => invoke<void>('copy_text_plain', { text });
@@ -25,6 +29,8 @@ export const requestScreenCapture = () => invoke<void>('request_screen_capture')
 export const screenCaptureGranted = () => invoke<boolean>('screen_capture_granted');
 /** 设置开着时按截图或录屏快捷键、焦点不在录制框里：开始截图或录屏（面板与对话框保留）。 */
 export const overlayBegin = (rec: boolean) => invoke<void>('overlay_begin', { rec });
+/** 设置开着时按翻译快捷键、焦点不在录制框里：照常弹划词翻译卡片（M15 交互规则 4、M26 规则 18）。 */
+export const trcardPress = () => invoke<void>('trcard_press');
 /** 系统的选择文件夹对话框；取消返回 null。 */
 export const pickFolder = (defaultPath?: string) => open({ directory: true, defaultPath }) as Promise<string | null>;
 export const openUrl = (url: string) => invoke<void>('open_url', { url });
@@ -50,3 +56,18 @@ export const saveSettings = (settings: Settings) => invoke<void>('save_settings'
 export const setPaused = (on: boolean) => invoke<void>('set_paused', { on });
 export const finishOnboarding = () => invoke<void>('finish_onboarding');
 export const installedApps = () => invoke<string[]>('installed_apps');
+
+/** again 为 false 且已有存库译文时直接返回它，不发请求；只有“重新翻译”传 true（M26 规则 4）。 */
+export const translateRecord = (id: number, again: boolean, engine?: 'system' | 'openai') =>
+  invoke<Translated>('translate_record', { id, again, engine: engine ?? null });
+export const translateEngines = () => invoke<Engines>('translate_engines');
+/** 测试翻译：用表单里（未保存）的值翻译固定短句，返回译文。 */
+export const translateTest = (engine: string, baseUrl: string, apiKey: string, model: string, lang: string) =>
+  invoke<string>('translate_test', { engine, baseUrl, apiKey, model, lang });
+export const translateStatus = (lang: string) => invoke<TranslateStatus>('translate_status', { lang });
+/**
+ * 在 windowLabel 窗口里弹出系统的下载语言包确认，等下载结束：`installed` 已下载，`download` 取消了（M26 规则 17）。
+ * source 为空串时为设置那一行的语言对。确认框弹不出时后端打开“语言与地区”并报错说明。
+ */
+export const translateDownload = (windowLabel: string, source: string, target: string) =>
+  invoke<'installed' | 'download'>('translate_download', { windowLabel, source, target });

@@ -7,6 +7,7 @@
 - Node.js 和 pnpm（版本见 `package.json` 的 `packageManager`）。CI 用 Node 25；Node 25 已于 2026-06 停止维护，下一次升级选 24 LTS 或 26。
 - Rust ≥ 1.90（`rustup` 安装，需要 `rustfmt`、`clippy`）。
 - macOS 13+ 或 Windows 10 21H2 / 11。Tauri 的系统依赖见 [Tauri 前置条件](https://tauri.app/start/prerequisites/)。
+- 在 macOS 上构建需要 macOS 26 及以上的 SDK（Xcode 26+ 或对应的 Command Line Tools）：系统翻译的 Swift 桥接要编译 Translation 框架的接口（规格说明 M26 规则 7）。CI 的 macOS 任务会选用 Xcode 26 及以上。编出的应用仍支持 macOS 13：`Translation` 与下载语言包用到的 `_Translation_SwiftUI` 都是弱链接，SwiftUI、AppKit 正常链接（`crates/xpaste-platform/build.rs`），改链接方式后用 `otool -L` 确认这两项仍是 weak。
 
 ## 常用命令
 
@@ -40,7 +41,7 @@ make release-win   # 在 macOS 上交叉打 Windows 安装程序（见下文）
 两条硬约束：
 
 - **日志里不能出现剪切板内容、标题、文件路径和搜索词。**
-- **数据只存在本机。** 不加联网、同步或统计功能。
+- **数据只存在本机。** 不加联网、同步或统计功能。唯一的例外是用户手动触发的翻译（M26），只发送要翻译的那段文字。
 
 ## 分支与协作
 

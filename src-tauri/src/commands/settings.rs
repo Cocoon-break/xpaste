@@ -61,6 +61,7 @@ pub fn bootstrap(state: State<'_, AppState>) -> Result<Bootstrap, AppError> {
 
 /// 校验、持久化并生效新设置。不处理快捷键、不清理、不发事件。
 pub fn save_settings_inner(state: &AppState, mut s: Settings) -> Result<(), AppError> {
+    s.normalize();
     s.validate()?;
     let mut cur = state.settings();
     // 面板尺寸只由 panel::remember_size 写：持锁取当前值，不用调用方早先的快照
@@ -128,6 +129,24 @@ pub fn changed_fields(old: &Settings, new: &Settings) -> Vec<&'static str> {
         ("recCopy", old.rec_copy != new.rec_copy),
         ("recQuality", old.rec_quality != new.rec_quality),
         ("recFps", old.rec_fps != new.rec_fps),
+        (
+            "translateEngine",
+            old.translate_engine != new.translate_engine,
+        ),
+        (
+            "translateBaseUrl",
+            old.translate_base_url != new.translate_base_url,
+        ),
+        (
+            "translateApiKey",
+            old.translate_api_key != new.translate_api_key,
+        ),
+        ("translateModel", old.translate_model != new.translate_model),
+        ("translateLang", old.translate_lang != new.translate_lang),
+        (
+            "translateHotkey",
+            old.translate_hotkey != new.translate_hotkey,
+        ),
     ]
     .into_iter()
     .filter_map(|(name, changed)| changed.then_some(name))
@@ -136,15 +155,16 @@ pub fn changed_fields(old: &Settings, new: &Settings) -> Vec<&'static str> {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum HotkeyAction {
-    /// 唤起、截图或录屏快捷键改了：先注册新的三个，失败则恢复旧的三个并返回 `HotkeyTaken` / `ShotHotkeyTaken` / `RecHotkeyTaken`，不保存
+    /// 唤起、截图、录屏或翻译快捷键改了：先注册新的四个，失败则恢复旧的四个并返回
+    /// `HotkeyTaken` / `ShotHotkeyTaken` / `RecHotkeyTaken` / `TranslateHotkeyTaken`，不保存
     Register,
-    /// 没改但唤起快捷键启动时注册失败过，或截图、录屏快捷键没注册上：保存之后顺带重试，失败不算保存失败
+    /// 没改但唤起快捷键启动时注册失败过，或截图、录屏、翻译快捷键没注册上：保存之后顺带重试，失败不算保存失败
     RetryBestEffort,
     None,
 }
 
 /// 启动时注册失败而组合仍被占用时，不能让每次保存（分类防抖、引导、改其他字段）都因重试失败而保存不了。
-/// `others_unregistered`：截图或录屏快捷键非空却没注册上（托盘只记唤起的失败）。
+/// `others_unregistered`：截图、录屏或翻译快捷键非空却没注册上（托盘只记唤起的失败）。
 pub fn hotkey_action(
     hotkey_changed: bool,
     startup_failed: bool,
@@ -158,7 +178,7 @@ pub fn hotkey_action(
 }
 
 fn hotkeys_changed(changed: &[&str]) -> bool {
-    ["hotkey", "shotHotkey", "recHotkey"]
+    ["hotkey", "shotHotkey", "recHotkey", "translateHotkey"]
         .iter()
         .any(|k| changed.contains(k))
 }
@@ -177,25 +197,35 @@ fn set_autostart(app: &AppHandle, on: bool) {
     }
 }
 
-/// 校验 → 快捷键改了就注册新的唤起、截图与录屏快捷键（失败恢复旧的三个）→ 持久化（失败也恢复）；返回变化的字段名。
-/// `register(唤起, 截图, 录屏)` 是唯一注入点（正式为 `hotkey::register`），测试借此模拟快捷键被占用。
+/// 注册唤起、截图、录屏、翻译快捷键。
+type RegisterFn<'a> = dyn FnMut(&str, &str, &str, &str) -> Result<(), AppError> + 'a;
+
+/// 校验 → 快捷键改了就注册新的唤起、截图、录屏与翻译快捷键（失败恢复旧的四个）→ 持久化（失败也恢复）；返回变化的字段名。
+/// `register(唤起, 截图, 录屏, 翻译)` 是唯一注入点（正式为 `hotkey::register`），测试借此模拟快捷键被占用。
 pub fn commit_settings(
     state: &AppState,
     mut settings: Settings,
-    mut register: impl FnMut(&str, &str, &str) -> Result<(), AppError>,
+    mut register: impl FnMut(&str, &str, &str, &str) -> Result<(), AppError>,
 ) -> Result<Vec<&'static str>, AppError> {
+    // 先去空白再校验、比较：粘贴带空格的 Base URL 不该报错，也不该算作改动（M26 规则 6）
+    settings.normalize();
     settings.validate()?;
     let old = state.settings().clone();
     // 面板尺寸只由拖动记忆（panel::remember_size）写；这里只为 changed 不含 panelSize，落库时 save_settings_inner 持锁再取
     settings.panel_size = old.panel_size;
     let changed = changed_fields(&old, &settings);
     let hotkey_changed = hotkeys_changed(&changed);
-    // register 会先注销全部快捷键，失败时要把旧的三个注册回去
-    let restore = |register: &mut dyn FnMut(&str, &str, &str) -> Result<(), AppError>| {
-        // 截图、录屏键在被占用时恢复不了很常见（多半正是它被占用），只记 debug
-        match register(&old.hotkey, &old.shot_hotkey, &old.rec_hotkey) {
+    // register 会先注销全部快捷键，失败时要把旧的四个注册回去
+    let restore = |register: &mut RegisterFn| {
+        // 截图、录屏、翻译键在被占用时恢复不了很常见（多半正是它被占用），只记 debug
+        match register(
+            &old.hotkey,
+            &old.shot_hotkey,
+            &old.rec_hotkey,
+            &old.translate_hotkey,
+        ) {
             Err(e @ AppError::HotkeyTaken) => log::warn!("恢复原快捷键失败：{e}"),
-            Err(e) => log::debug!("恢复原截图或录屏快捷键失败：{e}"),
+            Err(e) => log::debug!("恢复原截图、录屏或翻译快捷键失败：{e}"),
             Ok(()) => {}
         }
     };
@@ -204,6 +234,7 @@ pub fn commit_settings(
             &settings.hotkey,
             &settings.shot_hotkey,
             &settings.rec_hotkey,
+            &settings.translate_hotkey,
         )
     {
         restore(&mut register);
@@ -224,23 +255,25 @@ pub fn save_settings(
     state: State<'_, AppState>,
     settings: Settings,
 ) -> Result<(), AppError> {
-    let (hotkey, shot_hotkey, rec_hotkey, appearance, launch, ocr_on) = (
+    let (hotkey, shot_hotkey, rec_hotkey, tr_hotkey, appearance, launch, ocr_on) = (
         settings.hotkey.clone(),
         settings.shot_hotkey.clone(),
         settings.rec_hotkey.clone(),
+        settings.translate_hotkey.clone(),
         settings.appearance,
         settings.launch_at_login,
         settings.ocr_enabled,
     );
-    let changed = commit_settings(&state, settings, |p, s, r| {
-        crate::hotkey::register(&app, p, s, r)
+    let changed = commit_settings(&state, settings, |p, s, r, t| {
+        crate::hotkey::register(&app, p, s, r, t)
     })?;
     // 快捷键改了必为 Register，与 commit_settings 内一致；没改时只决定是否尽力重试
-    let (shot_missing, rec_missing) = crate::hotkey::unregistered(&app, &shot_hotkey, &rec_hotkey);
+    let (shot_missing, rec_missing, tr_missing) =
+        crate::hotkey::unregistered(&app, &shot_hotkey, &rec_hotkey, &tr_hotkey);
     let action = hotkey_action(
         hotkeys_changed(&changed),
         crate::tray::hotkey_failed(),
-        shot_missing || rec_missing,
+        shot_missing || rec_missing || tr_missing,
     );
     log::info!("设置已保存 changed=[{}]", changed.join(", "));
     // 设置已持久化并生效：以下步骤失败不回滚、不算保存失败（都只记日志）
@@ -251,10 +284,10 @@ pub fn save_settings(
     }
     match action {
         HotkeyAction::Register => crate::tray::set_hotkey_label(&hotkey),
-        // 唤起注册上后 set_hotkey_label 清掉失败状态（截图、录屏失败不算）；唤起失败时原本也没注册上，无需恢复
+        // 唤起注册上后 set_hotkey_label 清掉失败状态（截图、录屏、翻译失败不算）；唤起失败时原本也没注册上，无需恢复
         HotkeyAction::RetryBestEffort => {
             if !matches!(
-                crate::hotkey::register(&app, &hotkey, &shot_hotkey, &rec_hotkey),
+                crate::hotkey::register(&app, &hotkey, &shot_hotkey, &rec_hotkey, &tr_hotkey),
                 Err(AppError::HotkeyTaken)
             ) {
                 crate::tray::set_hotkey_label(&hotkey);
@@ -411,6 +444,36 @@ mod tests {
     }
 
     #[test]
+    fn commit_settings_trims_translate_fields_before_validate() {
+        let state = AppState::for_test();
+        let new = Settings {
+            translate_base_url: " https://x/v1/ ".into(),
+            translate_model: " m ".into(),
+            ..Settings::default()
+        };
+        let changed = commit_settings(&state, new, |_, _, _, _| Ok(())).unwrap();
+        assert_eq!(changed, ["translateBaseUrl", "translateModel"]);
+        let saved = state.store().load_settings();
+        assert_eq!(
+            (
+                saved.translate_base_url.as_str(),
+                saved.translate_model.as_str()
+            ),
+            ("https://x/v1", "m")
+        );
+        // 只差空白与末尾斜杠，不算改动
+        let same = Settings {
+            translate_base_url: "https://x/v1///".into(),
+            ..saved
+        };
+        assert!(
+            commit_settings(&state, same, |_, _, _, _| Ok(()))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn changed_fields_lists_only_differences() {
         let old = Settings::default();
         assert!(changed_fields(&old, &old).is_empty());
@@ -426,13 +489,14 @@ mod tests {
             shot_hotkey: "Alt+Shift+S".into(),
             shot_dir: "/x".into(),
             shot_save_copy: false,
-            rec_hotkey: "Alt+Shift+T".into(),
+            rec_hotkey: "Alt+Shift+Y".into(),
             rec_dir: "/y".into(),
             rec_system_audio: true,
             rec_microphone: true,
             rec_copy: false,
             rec_quality: xpaste_core::RecQuality::High,
             rec_fps: 60,
+            translate_hotkey: "Alt+Shift+U".into(),
             ..Settings::default()
         };
         assert_eq!(
@@ -455,7 +519,8 @@ mod tests {
                 "recMicrophone",
                 "recCopy",
                 "recQuality",
-                "recFps"
+                "recFps",
+                "translateHotkey"
             ]
         );
     }
@@ -486,7 +551,7 @@ mod tests {
             ..Settings::default()
         };
         let mut calls = Vec::new();
-        let r = commit_settings(&state, new, |p, s, _| {
+        let r = commit_settings(&state, new, |p, s, _, _| {
             calls.push((p.to_string(), s.to_string()));
             if p == "CommandOrControl+Alt+C" {
                 Err(AppError::HotkeyTaken)
@@ -513,7 +578,7 @@ mod tests {
             ..Settings::default()
         };
         let mut calls = Vec::new();
-        let r = commit_settings(&state, new, |p, s, _| {
+        let r = commit_settings(&state, new, |p, s, _, _| {
             calls.push((p.to_string(), s.to_string()));
             if s == "Alt+Shift+S" {
                 Err(AppError::ShotHotkeyTaken)
@@ -538,13 +603,13 @@ mod tests {
         let state = AppState::for_test();
         let old = state.settings().clone();
         let new = Settings {
-            rec_hotkey: "Alt+Shift+T".into(),
+            rec_hotkey: "Alt+Shift+Y".into(),
             ..Settings::default()
         };
         let mut calls = Vec::new();
-        let r = commit_settings(&state, new, |p, s, r| {
+        let r = commit_settings(&state, new, |p, s, r, _| {
             calls.push([p, s, r].map(String::from));
-            if r == "Alt+Shift+T" {
+            if r == "Alt+Shift+Y" {
                 Err(AppError::RecHotkeyTaken)
             } else {
                 Ok(())
@@ -557,8 +622,38 @@ mod tests {
         assert_eq!(
             calls,
             [
-                [p.clone(), s.clone(), "Alt+Shift+T".into()],
+                [p.clone(), s.clone(), "Alt+Shift+Y".into()],
                 [p, s, old.rec_hotkey.clone()]
+            ]
+        );
+    }
+
+    #[test]
+    fn translate_hotkey_change_restores_all_four_on_failure() {
+        let state = AppState::for_test();
+        let old = state.settings().clone();
+        let new = Settings {
+            translate_hotkey: "Alt+Shift+U".into(),
+            ..Settings::default()
+        };
+        let mut calls = Vec::new();
+        let r = commit_settings(&state, new, |p, s, r, t| {
+            calls.push([p, s, r, t].map(String::from));
+            if t == "Alt+Shift+U" {
+                Err(AppError::TranslateHotkeyTaken)
+            } else {
+                Ok(())
+            }
+        });
+        assert!(matches!(r, Err(AppError::TranslateHotkeyTaken)));
+        assert_eq!(*state.settings(), old);
+        assert_eq!(state.store().load_settings(), old);
+        let [p, s, r] = [&old.hotkey, &old.shot_hotkey, &old.rec_hotkey].map(Clone::clone);
+        assert_eq!(
+            calls,
+            [
+                [p.clone(), s.clone(), r.clone(), "Alt+Shift+U".into()],
+                [p, s, r, old.translate_hotkey.clone()]
             ]
         );
     }
@@ -571,7 +666,7 @@ mod tests {
             ..Settings::default()
         };
         let mut calls = 0;
-        let changed = commit_settings(&state, new, |_, _, _| {
+        let changed = commit_settings(&state, new, |_, _, _, _| {
             calls += 1;
             Ok(())
         })

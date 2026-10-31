@@ -1,0 +1,135 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { cardHTML, cardInner, clipSource, type CardState } from './view.ts';
+
+const base = { source: 'Hello', engine: 'system', text: '', noAccess: false, other: null } as const;
+type Tr = Exclude<CardState, { kind: 'blocked' }>;
+const st = (s: Partial<Tr> & Pick<Tr, 'kind'>): CardState => ({ ...base, ...s });
+
+test('提示：排除应用，没有按钮', () => {
+  const b = cardHTML({ kind: 'blocked' });
+  assert.match(b, /这个应用里的内容不翻译/);
+  assert.doesNotMatch(b, /<button/);
+});
+
+test('翻译中：标题带方式，正文占位，复制不可用，另一种能用时可以换用（M26 规则 16）', () => {
+  const h = cardHTML(st({ kind: 'busy', other: 'openai' }));
+  assert.match(h, /翻译中… · 系统翻译/);
+  assert.match(h, /data-act="copy" aria-disabled="true"/);
+  assert.match(h, /关闭<kbd>Esc<\/kbd>/);
+  assert.match(h, /class="c-body c-wait">翻译中…/);
+  assert.match(h, /data-act="switch" data-engine="openai">换用 AI 翻译</);
+  assert.doesNotMatch(h, /data-act="(pack|settings)"/);
+  assert.doesNotMatch(cardHTML(st({ kind: 'busy', other: null })), /换用/);
+});
+
+test('收完：译文标题、复制可用、按另一种给换用按钮', () => {
+  const h = cardHTML(st({ kind: 'done', text: '你好', engine: 'openai:gpt-4o-mini', other: 'system' }));
+  assert.match(h, /译文 · AI（gpt-4o-mini）/);
+  assert.match(h, /data-act="copy" aria-disabled="false">复制译文<kbd>↵<\/kbd>/);
+  assert.match(h, /data-act="switch" data-engine="system">换用系统翻译</);
+  assert.match(cardHTML(st({ kind: 'done', text: 'x', other: 'openai' })), />换用 AI 翻译</);
+  assert.doesNotMatch(cardHTML(st({ kind: 'done', text: 'x', other: null })), /data-act="switch"/);
+});
+
+test('失败：原因、下载语言包 / 去设置，中断保留已收到的部分', () => {
+  const pack = cardHTML(st({ kind: 'fail', error: '系统翻译还没有英语和简体中文的语言包', errorKind: 'translatePack', other: 'openai' }));
+  assert.match(pack, /翻译失败 · 系统翻译/);
+  assert.match(pack, /class="c-err">系统翻译还没有英语和简体中文的语言包/);
+  assert.match(pack, /data-act="pack">下载语言包</);
+  assert.match(pack, /data-act="switch" data-engine="openai">换用 AI 翻译</);
+  assert.doesNotMatch(pack, /去设置/);
+  assert.doesNotMatch(pack, /data-act="copy"/); // 失败只能关闭（M26 规则 19），按钮放不下
+  const cfg = cardHTML(st({ kind: 'fail', error: '未配置', errorKind: 'translateConfig' }));
+  assert.match(cfg, /data-act="settings">去设置</);
+  assert.doesNotMatch(cfg, /下载语言包/);
+  const cut = cardHTML(st({ kind: 'fail', text: '已收到', error: '翻译超时', errorKind: 'translate' }));
+  assert.match(cut, /翻译中断 · 系统翻译/);
+  assert.match(cut, /已收到/);
+  assert.doesNotMatch(cut, /data-act="(pack|settings)"/);
+});
+
+test('没有辅助功能权限：底部提示加前往授权', () => {
+  const h = cardHTML(st({ kind: 'done', text: 'x', noAccess: true }));
+  assert.match(h, /没有辅助功能权限，翻译的是剪切板里的文字/);
+  assert.match(h, /data-act="access">前往授权</);
+  assert.doesNotMatch(cardHTML(st({ kind: 'done', text: 'x' })), /前往授权/);
+});
+
+test('复制后：显示已复制译文，没有按钮', () => {
+  const h = cardHTML(st({ kind: 'done', text: 'x', copied: true, other: 'openai' }));
+  assert.match(h, /已复制译文/);
+  assert.doesNotMatch(h, /<button/);
+});
+
+test('原文提示取前 40 个字，超出加 …（后端已截过的再截一次不变）', () => {
+  const s40 = '一'.repeat(40);
+  assert.equal(clipSource(s40), s40);
+  assert.equal(clipSource(s40 + '二'), s40 + '…');
+  assert.equal(clipSource(clipSource(s40 + '二三')), s40 + '…');
+  assert.equal(clipSource('😀'.repeat(41)), '😀'.repeat(40) + '…');
+  assert.match(cardHTML(st({ kind: 'busy', source: s40 + '二' })), new RegExp(`class="c-src" data-tauri-drag-region>${s40}…<`));
+});
+
+test('所有文本转义', () => {
+  const h = cardHTML(st({ kind: 'fail', source: '<i>', text: '<b>&', engine: 'openai:<m>', error: '<x>', errorKind: 'translate' }));
+  assert.doesNotMatch(h, /<i>|<b>|<m>|<x>/);
+  assert.match(h, /&lt;i&gt;/);
+  assert.match(h, /&lt;b&gt;&amp;/);
+  assert.match(h, /AI（&lt;m&gt;）/);
+});
+
+test('截图卡片（cardInner）：没有原文提示，标题行带方式，有换用按钮（M26 规则 5、16）', () => {
+  const t = { kind: 'done', source: '', engine: 'system', text: 'x', noAccess: false, other: 'openai' } as const;
+  const h = cardInner(t);
+  assert.doesNotMatch(h, /c-src|role="dialog"/);
+  assert.match(h, /class="c-title" title="译文 · 系统翻译">译文 · 系统翻译</);
+  assert.match(h, /data-act="switch" data-engine="openai">换用 AI 翻译</);
+  assert.doesNotMatch(h, /data-act="wide"/); // 截图卡片旁边就是原图，不给对照
+});
+
+test('划词卡片对照原文（M26 规则 19）：收起时原文前 40 个字＋“对照原文”，展开时原文整段在左栏、译文在右栏', () => {
+  const source = 'Hello   world\n' + 'x'.repeat(60);
+  const narrow = cardHTML(st({ kind: 'done', source, text: '你好' }));
+  assert.match(narrow, /class="c-src" data-tauri-drag-region>Hello world x+…</);
+  assert.match(narrow, /data-act="wide" aria-pressed="false">对照原文</);
+  assert.doesNotMatch(narrow, /c-cols/);
+  const wide = cardHTML(st({ kind: 'done', source, text: '你好' }), true);
+  assert.match(wide, /^<div class="card wide"/);
+  assert.match(wide, /data-act="wide" aria-pressed="true">收起</);
+  assert.doesNotMatch(wide, /c-src/);
+  assert.ok(wide.includes(`<div class="c-cols"><textarea class="c-body c-orig" data-act="src" aria-label="原文" placeholder="输入要翻译的文字" spellcheck="false">Hello   world\n${'x'.repeat(60)}</textarea><div class="c-body">你好</div></div>`));
+  // 翻译中右栏是占位，失败没收到译文时右栏留空
+  assert.match(cardHTML(st({ kind: 'busy' }), true), /c-orig"[^>]*>Hello<\/textarea><div class="c-body c-wait">翻译中…/);
+  assert.match(cardHTML(st({ kind: 'fail', error: 'x' }), true), /c-orig"[^>]*>Hello<\/textarea><div class="c-body c-wait"><\/div><\/div>/);
+});
+
+test('输入卡片（M26 规则 20）：空原文框、目标语言自动、“翻译”在原文为空时不可用，没有收起与换用', () => {
+  const h = cardHTML(st({ kind: 'idle', source: '', engine: '', other: 'openai' }), true, 'Ctrl ↵');
+  assert.match(h, /class="c-title" title="翻译" data-tauri-drag-region>翻译</);
+  assert.match(h, /<select data-act="lang" aria-label="目标语言"><option value="" selected>自动<\/option><option value="zh-Hans">简体中文/);
+  assert.match(h, /placeholder="输入要翻译的文字" spellcheck="false"><\/textarea><div class="c-body c-wait">译文显示在这里/);
+  assert.match(h, /data-act="go" aria-disabled="true">翻译<kbd>Ctrl ↵<\/kbd>/);
+  assert.doesNotMatch(h, /data-act="(wide|switch|copy)"/);
+  assert.match(cardHTML(st({ kind: 'idle', source: '你好' }), true), /data-act="go" aria-disabled="false">翻译<kbd>⌘↵/);
+});
+
+test('展开后改了原文或语言：主按钮换成“翻译”；收完没改时是“复制译文 ⌘↵”，标题带实际语言', () => {
+  const done = cardHTML(st({ kind: 'done', text: '你好', lang: 'zh-Hans', pick: 'ja' }), true);
+  assert.match(done, /译文 · 简体中文 · 系统翻译/);
+  assert.match(done, /<option value="ja" selected>日本語/);
+  assert.match(done, /data-act="copy" aria-disabled="false">复制译文<kbd>⌘↵/);
+  const dirty = cardHTML(st({ kind: 'done', text: '你好', dirty: true }), true);
+  assert.match(dirty, /data-act="go" aria-disabled="false">翻译<kbd>⌘↵/);
+  assert.doesNotMatch(dirty, /data-act="copy"/);
+  // 收起时不带语言，回车复制
+  assert.match(cardHTML(st({ kind: 'done', text: '你好', lang: 'en' })), /title="译文 · 系统翻译"[\s\S]*复制译文<kbd>↵/);
+});
+
+test('截图卡片缺语言包：不给下载语言包，原因与换用照常（截图遮罩挂不了系统的下载确认）', () => {
+  const h = cardInner({ kind: 'fail', source: '', engine: 'system', text: '', noAccess: false, other: 'openai', error: '系统翻译还没有English和简体中文的语言包', errorKind: undefined });
+  assert.match(h, /翻译失败 · 系统翻译/);
+  assert.match(h, /class="c-err">系统翻译还没有English和简体中文的语言包/);
+  assert.match(h, /data-act="switch" data-engine="openai">换用 AI 翻译</);
+  assert.doesNotMatch(h, /下载语言包<|data-act="(pack|settings)"/);
+});

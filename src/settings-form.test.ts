@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Settings } from './api/types';
 import {
-  addIgnored, formToSettings, optionFromRetention, parseFrequent, parseIgnored, parseLimit, pickerOptions, removeIgnored, retentionFromOption,
+  addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFrequent, parseIgnored, parseLimit, pickerOptions, removeIgnored, retentionFromOption,
 } from './settings-form.ts';
 
 test('parseLimit 只接受 50–5000 的 50 倍数', () => {
@@ -53,6 +53,8 @@ test('formToSettings 只改表单字段，其余（含外观：点选即保存�
     shotHotkey: 'Alt+Shift+A', shotDir: '', shotSaveCopy: true,
     recHotkey: 'Alt+Shift+R', recDir: '', recSystemAudio: false, recMicrophone: false, recCopy: true,
     recQuality: 'standard', recFps: 30,
+    translateEngine: '', translateBaseUrl: 'https://api.openai.com/v1', translateApiKey: '', translateModel: '', translateLang: 'zh-Hans',
+    translateHotkey: 'Alt+Shift+T',
   };
   assert.deepEqual(
     formToSettings(base, {
@@ -69,6 +71,15 @@ test('formToSettings 只改表单字段，其余（含外观：点选即保存�
       shotHotkey: 'Alt+Shift+S', shotDir: '/x', shotSaveCopy: false,
       recHotkey: 'Alt+Shift+T', recDir: '/y', recSystemAudio: true, recMicrophone: true, recCopy: false,
       recQuality: 'small', recFps: 60,
+      translateEngine: '', translateBaseUrl: 'https://api.openai.com/v1', translateApiKey: '', translateModel: '', translateLang: 'zh-Hans',
+    translateHotkey: 'Alt+Shift+T',
     },
   );
+});
+
+test('Base URL 校验', () => {
+  assert.equal(baseUrlError(''), null);
+  assert.equal(baseUrlError(' https://api.openai.com/v1 '), null);
+  assert.equal(baseUrlError('HTTP://localhost:11434/v1'), null);
+  assert.equal(baseUrlError('api.openai.com/v1'), '请输入 http:// 或 https:// 开头的地址');
 });

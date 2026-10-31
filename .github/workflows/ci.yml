@@ -26,6 +26,17 @@ jobs:
         with: { save-if: "${{ github.ref == 'refs/heads/main' }}" }
       - if: runner.os == 'Windows'
         run: command -v make || choco install make -y
+      # 系统翻译的 Swift 桥接要 Xcode 26 及以上的 SDK（M26 规则 7）：默认 Xcode 低于 26 时切到 runner 上装的新版
+      - if: runner.os == 'macOS'
+        name: Xcode 26 及以上
+        run: |
+          xcodebuild -version
+          if [ "$(xcodebuild -version | awk 'NR==1 { split($2, v, "."); print v[1] }')" -lt 26 ]; then
+            x=$(ls -d /Applications/Xcode_2[6-9]*.app 2>/dev/null | sort -V | tail -1)
+            [ -n "$x" ] || { echo "runner 上没有 Xcode 26 及以上，系统翻译桥接编译不了：把 macOS 任务的 runs-on 换成 macos-26" >&2; exit 1; }
+            sudo xcode-select -s "$x"
+            xcodebuild -version
+          fi
       - run: make install
       - run: make check
       # PR 不做发布版完整编译（LTO、单编译单元，一次 4–6 分钟）：发布版代码已由 make check 里的 clippy --release 检查；

@@ -58,6 +58,7 @@
           <header class="phead">
             <div class="ptype" id="ptype"></div>
             <div class="pact">
+              <button class="btn icon" type="button" id="trBtn" aria-label="翻译" hidden><span data-icon="translate"></span></button>
               <button class="btn icon" type="button" id="pinBtn" aria-label="置顶" aria-pressed="false">
                 <span class="swap" data-state="a"><span data-s="a" data-icon="pin"></span><span data-s="b" data-icon="pinFill"></span></span>
               </button>
@@ -79,6 +80,7 @@
         <span class="k"><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
         <span class="k"><kbd class="mod"></kbd><kbd>1–9</kbd> <span data-verb="快速">快速复制</span></span>
         <span class="k"><kbd class="mod"></kbd><kbd>P</kbd> 置顶</span>
+        <span class="k" id="trHint" hidden><kbd class="mod"></kbd><kbd>T</kbd> 翻译</span>
         <span class="k"><kbd class="mod"></kbd><kbd>←→</kbd> 切换分类</span>
         <span class="k" id="multiHint" hidden><kbd class="mod"></kbd> 点击 多选</span>
         <span class="k"><kbd class="delmod" hidden>⌘</kbd><kbd class="del">Del</kbd> 删除</span>
@@ -91,9 +93,10 @@
         <button type="button" role="menuitem" data-m="pin" style="--i:1"><span data-icon="pin"></span><span id="mPin">置顶</span><kbd class="modp"></kbd></button>
         <button type="button" role="menuitem" data-m="editSnippet" style="--i:2" hidden><span data-icon="pencil"></span>编辑片段…<kbd data-modk="E"></kbd></button>
         <button type="button" role="menuitem" data-m="open" style="--i:3" hidden><span data-icon="link"></span><span id="mOpen"></span></button>
-        <button type="button" role="menuitem" data-m="saveSnippet" style="--i:4"><span data-icon="snip"></span>存为片段…<kbd data-modk="S"></kbd></button>
+        <button type="button" role="menuitem" data-m="translate" style="--i:4" hidden><span data-icon="translate"></span>翻译<kbd data-modk="T"></kbd></button>
+        <button type="button" role="menuitem" data-m="saveSnippet" style="--i:5"><span data-icon="snip"></span>存为片段…<kbd data-modk="S"></kbd></button>
         <div class="sep" role="separator"></div>
-        <button type="button" role="menuitem" data-m="del" class="danger" style="--i:5"><span data-icon="trash"></span><span id="mDel">删除</span><kbd class="del">Del</kbd></button>
+        <button type="button" role="menuitem" data-m="del" class="danger" style="--i:6"><span data-icon="trash"></span><span id="mDel">删除</span><kbd class="del">Del</kbd></button>
       </div>
 
       <div class="toast" id="toast" data-open="false">
@@ -118,6 +121,7 @@
           <button type="button" role="tab" id="st-tab-records" aria-controls="st-records" aria-selected="false" tabindex="-1">记录</button>
           <button type="button" role="tab" id="st-tab-search" aria-controls="st-search" aria-selected="false" tabindex="-1">搜索</button>
           <button type="button" role="tab" id="st-tab-shot" aria-controls="st-shot" aria-selected="false" tabindex="-1">截图</button>
+          <button type="button" role="tab" id="st-tab-translate" aria-controls="st-translate" aria-selected="false" tabindex="-1">翻译</button>
           <span class="st-ind" aria-hidden="true"></span>
         </div>
         <div class="st-panes">
@@ -232,6 +236,58 @@
                 <span><b>屏幕录制权限</b><small>截图和录屏都需要</small></span>
                 <span class="ok" id="shotPermOk" hidden><span data-icon="check"></span>已授权</span>
                 <button class="btn sm" type="button" id="shotPermBtn" hidden>前往授权</button>
+              </div>
+            </div>
+          </section>
+          <section class="dlg-body" role="tabpanel" id="st-translate" aria-labelledby="st-tab-translate" inert>
+            <div class="field" style="--i:0">
+              <label for="trHotkey">翻译快捷键</label>
+              <input id="trHotkey" readonly autocomplete="off" spellcheck="false" placeholder="未启用" aria-describedby="trHotkeyHelp">
+              <p class="help" id="trHotkeyHelp">在任何应用里选中文字后按下，译文显示在鼠标旁</p>
+            </div>
+            <div class="field" id="trEngineBox" style="--i:1">
+              <span class="lbl" id="trEngineLabel">默认翻译方式</span>
+              <div class="tr-pick" id="trEngine" role="radiogroup" aria-labelledby="trEngineLabel" aria-describedby="trEngineHelp">
+                <label><input type="radio" name="trEngine" value="system"><span><b>系统翻译</b><small>本机完成，不上传</small></span></label>
+                <label><input type="radio" name="trEngine" value="openai"><span><b>AI 翻译</b><small>用下方配置的接口</small></span></label>
+              </div>
+              <p class="help" id="trEngineHelp">面板、截图、划词翻译都默认用这一种；译文旁会标出用的是哪种，翻译中和翻译后都可以临时换用另一种</p>
+            </div>
+            <div class="field" style="--i:2">
+              <label for="trLang">目标语言</label>
+              <select id="trLang">
+                <option value="zh-Hans">简体中文</option><option value="zh-Hant">繁體中文</option><option value="en">English</option><option value="ja">日本語</option><option value="ko">한국어</option>
+              </select>
+            </div>
+            <div class="tr-group" id="trSys" style="--i:3">
+              <h3>系统翻译</h3>
+              <p class="help">使用 macOS 自带的翻译，在本机完成，不上传，不需要配置接口</p>
+              <div class="line" id="trPackRow" hidden>
+                <span><b>语言包</b><small id="trPack" aria-live="polite"></small></span>
+                <button class="btn sm" type="button" id="trPackBtn" hidden>下载语言包</button>
+              </div>
+            </div>
+            <div class="tr-group" id="trApi" style="--i:4">
+              <h3 id="trApiTitle">AI 翻译（OpenAI 兼容接口）</h3>
+              <p class="help" id="trPrivacy">翻译时，只把你选中要翻译的那段文字发送到下面的接口；不按翻译就不会发送任何内容。请求按系统代理设置发出，可能经过你在系统里设置的代理</p>
+              <div class="field">
+                <label for="trBaseUrl">接口地址（Base URL）</label>
+                <input id="trBaseUrl" autocomplete="off" spellcheck="false" placeholder="https://api.openai.com/v1" aria-describedby="trBaseUrlHelp trBaseUrlErr">
+                <p class="help" id="trBaseUrlHelp">兼容 OpenAI 接口的地址。用本机的 Ollama 可填 http://localhost:11434/v1，翻译不出本机</p>
+                <p class="err" id="trBaseUrlErr" hidden></p>
+              </div>
+              <div class="field">
+                <label for="trApiKey">API Key</label>
+                <div class="pick"><input id="trApiKey" type="password" autocomplete="off" spellcheck="false" aria-describedby="trApiKeyHelp"><button class="btn" type="button" id="trKeyBtn" aria-controls="trApiKey">显示</button></div>
+                <p class="help" id="trApiKeyHelp">只保存在本机</p>
+              </div>
+              <div class="field">
+                <label for="trModel">模型 ID</label>
+                <input id="trModel" autocomplete="off" spellcheck="false" placeholder="gpt-4o-mini">
+              </div>
+              <div class="line">
+                <span class="help tr-result" id="trTestResult" role="status" aria-live="polite"></span>
+                <button class="btn" type="button" id="trTestBtn">测试翻译</button>
               </div>
             </div>
           </section>

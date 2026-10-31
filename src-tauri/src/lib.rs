@@ -12,7 +12,9 @@ mod panel;
 mod rec;
 mod shot;
 pub mod state;
+mod translate;
 mod tray;
+mod trcard;
 
 use state::AppState;
 use std::path::PathBuf;
@@ -91,10 +93,11 @@ pub fn run() {
             let store = Store::open(&data_dir)?;
             let first_run = matches!(store.kv_get("onboarded"), Ok(None));
             let settings = store.load_settings();
-            let (hotkey, shot_hotkey, rec_hotkey, appearance) = (
+            let (hotkey, shot_hotkey, rec_hotkey, tr_hotkey, appearance) = (
                 settings.hotkey.clone(),
                 settings.shot_hotkey.clone(),
                 settings.rec_hotkey.clone(),
+                settings.translate_hotkey.clone(),
                 settings.appearance,
             );
             let enrich = enrich::start(app.handle().clone());
@@ -116,13 +119,17 @@ pub fn run() {
             if let Err(e) = tray::setup(app) {
                 log::warn!("托盘图标创建失败：{e}");
             }
-            if let Err(e) = hotkey::register(app.handle(), &hotkey, &shot_hotkey, &rec_hotkey) {
+            if let Err(e) =
+                hotkey::register(app.handle(), &hotkey, &shot_hotkey, &rec_hotkey, &tr_hotkey)
+            {
                 log::warn!("快捷键注册失败：{e}");
-                // register 只报第一个失败，截图、录屏是否注册上另查；它们失败只提示，不标记托盘
+                // register 只报第一个失败，截图、录屏、翻译是否注册上另查；它们失败只提示，不标记托盘
                 let panel_failed = matches!(e, error::AppError::HotkeyTaken);
-                let (shot_failed, rec_failed) =
-                    hotkey::unregistered(app.handle(), &shot_hotkey, &rec_hotkey);
-                if let Some(body) = hotkey::failure_notice(panel_failed, shot_failed, rec_failed) {
+                let (shot_failed, rec_failed, tr_failed) =
+                    hotkey::unregistered(app.handle(), &shot_hotkey, &rec_hotkey, &tr_hotkey);
+                if let Some(body) =
+                    hotkey::failure_notice(panel_failed, shot_failed, rec_failed, tr_failed)
+                {
                     notify(app.handle(), &body);
                 }
                 if panel_failed {
@@ -131,6 +138,7 @@ pub fn run() {
             }
             clipboard::start(app.handle().clone());
             shot::prewarm(app.handle());
+            trcard::prewarm(app.handle());
             // 首次启动直接显示面板与引导（AC-M18-01）
             if first_run {
                 app.state::<AppState>()
@@ -154,21 +162,23 @@ pub fn run() {
                     if event.state() != ShortcutState::Pressed {
                         return;
                     }
-                    let (p, s, r) = {
+                    let (p, s, r, t) = {
                         let st = app.state::<AppState>();
                         let s = st.settings();
                         (
                             s.hotkey.clone(),
                             s.shot_hotkey.clone(),
                             s.rec_hotkey.clone(),
+                            s.translate_hotkey.clone(),
                         )
                     };
-                    match hotkey::role_of(shortcut, &p, &s, &r) {
+                    match hotkey::role_of(shortcut, &p, &s, &r, &t) {
                         Some(hotkey::Role::Panel) => {
                             panel::toggle(app, timing.then(now_unix_ms), panel::Trigger::Hotkey)
                         }
                         Some(hotkey::Role::Shot) => hotkey::shot_pressed(app),
                         Some(hotkey::Role::Rec) => hotkey::rec_pressed(app),
+                        Some(hotkey::Role::Translate) => hotkey::translate_pressed(app),
                         None => {}
                     }
                 })
@@ -182,19 +192,23 @@ pub fn run() {
                 api.prevent_close();
                 shot::end(window.app_handle());
             }
+            // 卡片同理不能被关掉（Windows 上 Alt+F4），否则之后按翻译快捷键没有窗口可用：当作 Esc
+            if window.label() == trcard::LABEL
+                && let WindowEvent::CloseRequested { api, .. } = event
+            {
+                api.prevent_close();
+                let app = window.app_handle();
+                trcard::close(app, trcard::current(app));
+            }
             // 截图遮罩（shot-*）与贴图（pin-*）失焦不处理
             if window.label() != "panel" {
                 return;
             }
             match event {
-                // 对话框打开时（例如设置里切去别的应用查东西）失焦不隐藏
+                // 失焦即隐藏，设置、确认框开着也一样；例外见 panel::blur_hides（M04 规则 3）
                 WindowEvent::Focused(false) => {
                     let app = window.app_handle();
-                    if !app
-                        .state::<AppState>()
-                        .dialog_open
-                        .load(std::sync::atomic::Ordering::SeqCst)
-                    {
+                    if panel::blur_hides(app) {
                         panel::hide(app);
                     }
                 }
@@ -218,6 +232,7 @@ pub fn run() {
             commands::panel::request_screen_capture,
             commands::panel::open_url,
             commands::panel::reveal_file,
+            commands::panel::open_panel_settings,
             commands::records::get_record,
             commands::records::search,
             commands::records::set_pinned,
@@ -239,13 +254,28 @@ pub fn run() {
             commands::shot::shot_cancel,
             commands::shot::overlay_begin,
             commands::shot::shot_finish,
+            commands::shot::shot_copy_text,
+            commands::shot::shot_translate_again,
             commands::shot::pin_close,
             commands::shot::pin_copy,
             commands::shot::pin_save,
             commands::shot::pin_set_bounds,
             commands::shot::pin_button_down,
             commands::shot::rec_start,
-            commands::shot::rec_frame
+            commands::shot::rec_frame,
+            commands::translate::translate_record,
+            commands::translate::translate_test,
+            commands::translate::translate_status,
+            commands::translate::translate_download,
+            commands::translate::translate_engines,
+            commands::translate::open_translation_settings,
+            commands::translate::trcard_press,
+            commands::translate::trcard_translate,
+            commands::translate::trcard_copy,
+            commands::translate::trcard_close,
+            commands::translate::trcard_blur,
+            commands::translate::trcard_focus,
+            commands::translate::trcard_resize
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

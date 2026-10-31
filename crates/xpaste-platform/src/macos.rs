@@ -1,5 +1,7 @@
 use std::collections::HashSet;
+use std::ffi::{CStr, CString, c_char, c_void};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
@@ -23,8 +25,8 @@ use objc2_core_graphics::{
 };
 use objc2_core_media::{CMFormatDescription, CMTime};
 use objc2_foundation::{
-    NSArray, NSData, NSDictionary, NSFileManager, NSIndexSet, NSNumber, NSPoint, NSProcessInfo,
-    NSRect, NSSize, NSString, NSURL, ns_string,
+    NSArray, NSData, NSDictionary, NSFileManager, NSIndexSet, NSLocale, NSNumber,
+    NSOperatingSystemVersion, NSPoint, NSProcessInfo, NSRect, NSSize, NSString, NSURL, ns_string,
 };
 use objc2_vision::{
     VNImageRequestHandler, VNRecognizeTextRequest, VNRequest, VNRequestTextRecognitionLevel,
@@ -37,7 +39,10 @@ pub use macos_record::{
     Recorder, file_flavors, microphone_access, request_microphone, start_recording, window_number,
 };
 
-use crate::{Frame, OcrError, OcrText, PIN_TITLE_PREFIX, PasteBlock, PlatformError, WinRect};
+use crate::{
+    Frame, OcrError, OcrText, PIN_TITLE_PREFIX, PackStatus, PasteBlock, PlatformError,
+    SysTranslateError, WinRect,
+};
 
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
@@ -48,6 +53,30 @@ unsafe extern "C" {
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
     fn CGEventSourceButtonState(state_id: i32, button: u32) -> u8;
+    fn CGEventSourceFlagsState(state_id: i32) -> u64;
+}
+
+/// 回调：`code` 0 成功（`out` 为译文），1 缺语言包（`out` 为源语言代码），2 不支持，3 其他失败。
+/// 可能在任意线程上调用，`out` 只在回调期间有效。
+type TrCallback = extern "C" fn(ctx: *mut c_void, code: i32, out: *const c_char);
+
+// swift/translate.swift 编成的静态库，由 build.rs 链接（M26 规则 7）
+unsafe extern "C" {
+    fn xp_tr_pack(target: *const c_char) -> i32;
+    fn xp_tr_translate(
+        text: *const c_char,
+        target: *const c_char,
+        ctx: *mut c_void,
+        cb: TrCallback,
+    );
+    fn xp_tr_prepare(
+        source: *const c_char,
+        target: *const c_char,
+        window: *mut c_void,
+        ctx: *mut c_void,
+        cb: extern "C" fn(ctx: *mut c_void, code: i32),
+    );
+    fn xp_tr_prepare_cancel(window: usize);
 }
 
 // libSystem，总是链接
@@ -63,6 +92,8 @@ const QOS_CLASS_UTILITY: u32 = 0x11;
 
 /// `kVK_ANSI_V`
 const KEY_V: u16 = 9;
+/// `kVK_ANSI_C`
+const KEY_C: u16 = 8;
 
 pub const OS: &str = "macos";
 
@@ -632,6 +663,132 @@ pub fn ocr_png_bytes(png: &[u8], max_side_px: u32) -> Result<Option<OcrText>, Oc
     })
 }
 
+/// 系统翻译（`TranslationSession(installedSource:target:)`）需要 macOS 26（M26 规则 7）。
+pub fn translate_supported() -> bool {
+    NSProcessInfo::processInfo().isOperatingSystemAtLeastVersion(NSOperatingSystemVersion {
+        majorVersion: 26,
+        minorVersion: 0,
+        patchVersion: 0,
+    })
+}
+
+/// 英语 ↔ `target` 的语言包状态；`target` 为 `en` 时查简体中文 ↔ 英语。阻塞（本机查询，很快）。
+/// Translation 框架要靠主队列回调：只在工作线程调用，且主线程在跑事件循环；在主线程上调用会等 10 秒后返回 `Unsupported`。
+pub fn translate_pack(target: &str) -> PackStatus {
+    let Ok(target) = CString::new(target) else {
+        return PackStatus::Unsupported;
+    };
+    if !translate_supported() {
+        return PackStatus::Unsupported;
+    }
+    // SAFETY: 以 NUL 结尾的字符串，调用期间有效
+    match unsafe { xp_tr_pack(target.as_ptr()) } {
+        0 => PackStatus::Installed,
+        1 => PackStatus::Download,
+        _ => PackStatus::Unsupported,
+    }
+}
+
+/// 系统翻译超时（M26 规则 10）
+const TRANSLATE_TIMEOUT: Duration = Duration::from_secs(30);
+
+type TrSender = mpsc::Sender<Result<String, SysTranslateError>>;
+
+extern "C" fn on_translated(ctx: *mut c_void, code: i32, out: *const c_char) {
+    // SAFETY: ctx 是 translate_text 里 Box::into_raw 的发送端，Swift 侧恰好回调一次，这里收回所有权
+    let tx = unsafe { Box::from_raw(ctx.cast::<TrSender>()) };
+    // SAFETY: out 非空时为回调期间有效的 C 字符串
+    let s = || {
+        unsafe { CStr::from_ptr(out) }
+            .to_string_lossy()
+            .into_owned()
+    };
+    let r = match code {
+        0 if !out.is_null() => Ok(s()),
+        1 if !out.is_null() => Err(SysTranslateError::NotInstalled { source: s() }),
+        2 => Err(SysTranslateError::Unsupported),
+        _ => Err(SysTranslateError::Failed),
+    };
+    // 已超时则接收端已丢弃，send 失败忽略
+    let _ = tx.send(r);
+}
+
+/// 用系统翻译把 `text` 译成 `target`（源语言由系统识别）。阻塞，最多 30 秒。
+/// 同 `translate_pack`，只在工作线程调用且主线程在跑事件循环，否则只会等到 `Timeout`。
+pub fn translate_text(text: &str, target: &str) -> Result<String, SysTranslateError> {
+    if !translate_supported() {
+        return Err(SysTranslateError::OsTooOld);
+    }
+    let (Ok(text), Ok(target)) = (CString::new(text), CString::new(target)) else {
+        return Err(SysTranslateError::Failed);
+    };
+    let (tx, rx) = mpsc::channel();
+    let ctx = Box::into_raw(Box::new(tx)).cast::<c_void>();
+    // SAFETY: 字符串在调用期间有效（Swift 侧同步复制）；ctx 由 on_translated 收回
+    unsafe { xp_tr_translate(text.as_ptr(), target.as_ptr(), ctx, on_translated) };
+    rx.recv_timeout(TRANSLATE_TIMEOUT)
+        .unwrap_or(Err(SysTranslateError::Timeout))
+}
+
+extern "C" fn on_prepared(ctx: *mut c_void, code: i32) {
+    // SAFETY: ctx 是 translate_prepare 里 Box::into_raw 的发送端，Swift 侧恰好回调一次，这里收回所有权
+    let tx = unsafe { Box::from_raw(ctx.cast::<mpsc::Sender<i32>>()) };
+    let _ = tx.send(code);
+}
+
+/// 弹出系统“下载翻译语言”确认，等用户选择及下载结束（M26 规则 17）。`source` 为空串时同 `translate_pack` 的语言对。
+/// `window` 是正在显示的 xPaste 窗口的 `NSWindow` 指针：确认框靠挂进它的 SwiftUI 视图弹出，隐藏窗口弹不出来。
+/// 阻塞、不设超时（下载时长由系统决定）；视图在主队列上挂，所以**只在工作线程调用**，且主线程在跑事件循环。
+/// 返回下载后的状态：装好了为 `Installed`，取消为 `Download`；确认框弹不出来为 `Err(Failed)`。
+///
+/// # Safety
+/// `window` 为空或是有效的 `NSWindow` 指针，且在本函数返回前窗口不被释放。
+pub unsafe fn translate_prepare(
+    source: &str,
+    target: &str,
+    window: *mut c_void,
+) -> Result<PackStatus, SysTranslateError> {
+    if !translate_supported() {
+        return Err(SysTranslateError::OsTooOld);
+    }
+    let (Ok(source), Ok(target)) = (CString::new(source), CString::new(target)) else {
+        return Err(SysTranslateError::Failed);
+    };
+    let (tx, rx) = mpsc::channel::<i32>();
+    let ctx = Box::into_raw(Box::new(tx)).cast::<c_void>();
+    // SAFETY: 字符串在调用期间有效（Swift 侧同步复制）；window 见函数的 Safety；ctx 由 on_prepared 收回
+    unsafe { xp_tr_prepare(source.as_ptr(), target.as_ptr(), window, ctx, on_prepared) };
+    prepare_status(rx.recv().ok())
+}
+
+/// Swift 回调码 → 结果：0 装好了；1 用户取消、仍未下载或窗口隐藏时被取消；2 或收不到回调为失败。
+fn prepare_status(code: Option<i32>) -> Result<PackStatus, SysTranslateError> {
+    match code {
+        Some(0) => Ok(PackStatus::Installed),
+        Some(1) => Ok(PackStatus::Download),
+        _ => Err(SysTranslateError::Failed),
+    }
+}
+
+/// 隐藏窗口前调用（M26 规则 17）：`window`（`NSWindow` 指针的数值）里有进行中的 `translate_prepare` 时取消它，
+/// 那边按用户取消返回 `Download`。隐藏的窗口里确认框不弹也不返回，不取消就会一直等。只比较数值、不解引用；
+/// 任意线程可调，没有进行中的下载时什么都不做。
+pub fn translate_prepare_cancel(window: usize) {
+    if translate_supported() {
+        // SAFETY: 只传一个整数，Swift 侧派到主队列处理
+        unsafe { xp_tr_prepare_cancel(window) };
+    }
+}
+
+/// 语言代码按系统语言的本地化名（如 `fr` → “法语”），认不出时为 None。
+pub fn language_name(code: &str) -> Option<String> {
+    autoreleasepool(|_| {
+        NSLocale::currentLocale()
+            .localizedStringForLanguageCode(&NSString::from_str(code))
+            .map(|s| s.to_string())
+    })
+}
+
 /// 当前线程降到 utility QoS（后台识别用）。尽力而为。
 pub fn lower_thread_priority() {
     // SAFETY: 只改本线程的 QoS
@@ -712,6 +869,28 @@ pub fn paste(_target: Option<isize>) -> Result<(), PlatformError> {
     Ok(())
 }
 
+/// Command、Option、Shift、Control 中有没有按着的（M26 规则 18）。
+pub(crate) fn modifiers_down() -> bool {
+    let mask = CGEventFlags::MaskCommand
+        | CGEventFlags::MaskAlternate
+        | CGEventFlags::MaskShift
+        | CGEventFlags::MaskControl;
+    // kCGEventSourceStateCombinedSessionState = 0
+    // SAFETY: 纯查询，无指针参数
+    unsafe { CGEventSourceFlagsState(0) & mask.0 != 0 }
+}
+
+/// 向前台应用发 ⌘C，标志显式只带 Command（不叠上还按着的 ⌥⇧）。调用方已查过辅助功能权限。
+pub(crate) fn send_copy() -> Result<(), PlatformError> {
+    for down in [true, false] {
+        let event = CGEvent::new_keyboard_event(None, KEY_C, down)
+            .ok_or_else(|| PlatformError::Clipboard("创建按键事件失败".into()))?;
+        CGEvent::set_flags(Some(&event), CGEventFlags::MaskCommand);
+        CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&event));
+    }
+    Ok(())
+}
+
 /// 未授权时先请求系统授权对话框（无 TCC 记录时弹出并把本应用加入列表），再打开系统设置的
 /// 辅助功能页：拒绝过或在设置里撤销过时对话框通常不再弹出，只靠前者按钮会没反应。
 /// 已授权时无操作。须在主线程调用。
@@ -754,10 +933,27 @@ pub fn foreground_window() -> Option<isize> {
 /// Windows 上把窗口切到前台；macOS 没有窗口句柄的概念（`foreground_window` 恒为 `None`），无操作。
 pub fn activate_window(_hwnd: isize) {}
 
+/// Windows 上显示窗口但不激活；macOS 上不激活应用的 NSPanel 用 `orderFrontRegardless` 即可，无操作。
+pub fn show_no_activate(_hwnd: isize) {}
+
+/// Windows 上收起经 `show_no_activate` 显示的窗口；macOS 无操作。
+pub fn hide_window(_hwnd: isize) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use objc2_core_graphics::kCGColorSpaceLinearSRGB;
+
+    /// 隐藏窗口时取消（code 1）与用户取消一样返回 Download：命令照常结束、下载标记经守卫复位，前端按取消处理（M26 规则 17）。
+    #[test]
+    fn prepare_cancel_maps_to_download() {
+        assert_eq!(prepare_status(Some(0)), Ok(PackStatus::Installed));
+        assert_eq!(prepare_status(Some(1)), Ok(PackStatus::Download));
+        assert_eq!(prepare_status(Some(2)), Err(SysTranslateError::Failed));
+        assert_eq!(prepare_status(None), Err(SysTranslateError::Failed));
+        // 没有进行中的下载时取消什么都不做
+        translate_prepare_cancel(0);
+    }
 
     #[test]
     fn unreadable_file_paths_fall_back_to_bitmap() {

@@ -72,6 +72,10 @@ INSERT INTO fts_py(fts_py) VALUES ('rebuild');
 ",
     // 阶段 14 片段：snippet_body 不为 NULL 即片段，库里按置顶存（旧版本也跳过置顶，不会清掉它），M25 规则 10
     "ALTER TABLE records ADD COLUMN snippet_body TEXT;",
+    // 阶段 15 翻译：每条记录只存最新一份译文，见 M26 规则 12
+    "ALTER TABLE records ADD COLUMN translation TEXT;\nALTER TABLE records ADD COLUMN translation_lang TEXT;",
+    // 阶段 15.1 译文标注翻译方式（`system` / `openai:{模型}`），M26 规则 12、16
+    "ALTER TABLE records ADD COLUMN translation_engine TEXT;",
 ];
 
 const SUBDIRS: [&str; 4] = ["blobs", "images", "thumbs", "icons"];
@@ -101,6 +105,25 @@ const SUMMARY_SQL: &str = "SELECT r.id, r.kind, r.title, a.name, a.icon_path, r.
 pub enum Upsert {
     Added(i64),
     Merged(i64),
+}
+
+/// 存着的译文（`Store::stored_translation`）：升级前存的没有语言与翻译方式（库迁移 8、9）。
+#[derive(Clone, PartialEq)]
+pub struct StoredTranslation {
+    pub text: String,
+    pub lang: Option<String>,
+    pub engine: Option<String>,
+}
+
+/// 译文是剪切板内容的翻译，调试输出只给字数。
+impl std::fmt::Debug for StoredTranslation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StoredTranslation")
+            .field("text_chars", &self.text.chars().count())
+            .field("lang", &self.lang)
+            .field("engine", &self.engine)
+            .finish()
+    }
 }
 
 pub struct Store {
@@ -321,14 +344,17 @@ impl Store {
         let Some(summary) = self.summary(id)? else {
             return Ok(None);
         };
-        let (text, link_title, paths, meta, ocr_text): (
+        let (text, link_title, paths, meta, ocr_text, translation, translation_lang, translation_engine): (
             Option<String>,
             _,
             Option<String>,
             Option<String>,
+            _,
+            _,
+            _,
             _,
         ) = self.conn.query_row(
-            "SELECT text, link_title, paths, meta, ocr_text FROM records WHERE id = ?1",
+            "SELECT text, link_title, paths, meta, ocr_text, translation, translation_lang, translation_engine FROM records WHERE id = ?1",
             [id],
             |row| {
                 Ok((
@@ -337,6 +363,9 @@ impl Store {
                     row.get(2)?,
                     row.get(3)?,
                     row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
                 ))
             },
         )?;
@@ -411,7 +440,64 @@ impl Store {
             image,
             video,
             ocr_text,
+            translation,
+            translation_lang,
+            translation_engine,
         }))
+    }
+
+    /// 写最新一份译文（M26 规则 12）；只写未删除的记录，返回是否写入。
+    pub fn set_translation(
+        &self,
+        id: i64,
+        text: &str,
+        lang: &str,
+        engine: &str,
+    ) -> Result<bool, CoreError> {
+        let n = self.conn.execute(
+            "UPDATE records SET translation = ?1, translation_lang = ?2, translation_engine = ?4 WHERE id = ?3 AND deleted_at IS NULL",
+            params![text, lang, id, engine],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// 存着的译文与它的语言、翻译方式（M26 规则 4、12、16）；没有译文、已删除、不存在为 None。
+    /// 翻译入口只要这三列，不跑整条记录的 `detail`。
+    pub fn stored_translation(&self, id: i64) -> Result<Option<StoredTranslation>, CoreError> {
+        let row: Option<(Option<String>, Option<String>, Option<String>)> = self
+            .conn
+            .query_row(
+                "SELECT translation, translation_lang, translation_engine FROM records WHERE id = ?1 AND deleted_at IS NULL",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        Ok(row.and_then(|(t, lang, engine)| {
+            Some(StoredTranslation {
+                text: t?,
+                lang,
+                engine,
+            })
+        }))
+    }
+
+    /// 可翻译的原文（M26 规则 1）：文本、代码取全文，图片、文件在识别出文字时取识别结果；其余、已删除、不存在为 None。
+    pub fn translate_source(&self, id: i64) -> Result<Option<String>, CoreError> {
+        let row: Option<(String, Option<String>, Option<String>, u8)> = self
+            .conn
+            .query_row(
+                "SELECT kind, text, ocr_text, ocr_state FROM records WHERE id = ?1 AND deleted_at IS NULL",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional()?;
+        Ok(
+            row.and_then(|(kind, text, ocr, state)| match Kind::parse(&kind)? {
+                Kind::Text | Kind::Code => text,
+                Kind::Image | Kind::File if state == ocr_state::TEXT => ocr,
+                _ => None,
+            }),
+        )
     }
 
     /// 读回原始 flavor 数据（大块从 blobs 读）。
@@ -509,7 +595,10 @@ impl Store {
         let n = self.conn.execute(
             "UPDATE records SET ocr_state = ?1, ocr_text = ?2,
                search_text = CASE WHEN ?3 IS NULL OR ocr_text IS NOT NULL THEN search_text ELSE search_text || char(10) || ?3 END,
-               py_text = CASE WHEN ?5 IS NULL OR ocr_text IS NOT NULL THEN py_text ELSE coalesce(py_text, '') || char(10) || ?5 END
+               py_text = CASE WHEN ?5 IS NULL OR ocr_text IS NOT NULL THEN py_text ELSE coalesce(py_text, '') || char(10) || ?5 END,
+               translation = CASE WHEN ?1 = 1 THEN NULL ELSE translation END,
+               translation_lang = CASE WHEN ?1 = 1 THEN NULL ELSE translation_lang END,
+               translation_engine = CASE WHEN ?1 = 1 THEN NULL ELSE translation_engine END
              WHERE id = ?4 AND deleted_at IS NULL",
             params![state, text, text.map(str::to_lowercase), id, py],
         )?;
@@ -740,7 +829,7 @@ impl Store {
         if let Some(r) = &new {
             tx.execute(
                 "UPDATE records SET kind = ?1, text = ?2, lang = ?3, size = ?4, snippet_body = ?5,
-                   link_title = NULL WHERE id = ?6",
+                   link_title = NULL, translation = NULL, translation_lang = NULL, translation_engine = NULL WHERE id = ?6",
                 params![r.kind.as_str(), r.text, r.lang, r.size as i64, r.title, id],
             )?;
             old_files = blob_files(&tx, id)?;
@@ -1249,7 +1338,7 @@ pub(crate) mod tests {
     fn open_creates_schema_and_dirs() {
         let dir = tmp();
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 7);
+        assert_eq!(s.schema_version().unwrap(), 9);
         for sub in ["blobs", "images", "thumbs", "icons"] {
             assert!(dir.join(sub).is_dir());
         }
@@ -1291,7 +1380,7 @@ pub(crate) mod tests {
         .unwrap();
         drop(old);
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 7);
+        assert_eq!(s.schema_version().unwrap(), 9);
         let row: (String, String) = s
             .conn
             .query_row("SELECT kind, title FROM records", [], |r| {
@@ -1316,7 +1405,7 @@ pub(crate) mod tests {
         .unwrap();
         drop(old);
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 7);
+        assert_eq!(s.schema_version().unwrap(), 9);
         let l = s.list_summaries().unwrap();
         assert_eq!(
             (l[0].kind, l[0].ocr_state),
@@ -1330,7 +1419,7 @@ pub(crate) mod tests {
         let dir = tmp();
         drop(Store::open(&dir).unwrap());
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 7);
+        assert_eq!(s.schema_version().unwrap(), 9);
     }
 
     #[test]
@@ -1439,7 +1528,7 @@ pub(crate) mod tests {
     fn backfill_is_part_of_migration() {
         let dir = v5_db_with_old_record();
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 7);
+        assert_eq!(s.schema_version().unwrap(), 9);
         let nulls: i64 = s
             .conn
             .query_row(
@@ -1601,6 +1690,15 @@ pub(crate) mod tests {
         assert_eq!(cfg.rec_quality, d.rec_quality);
         assert_eq!(cfg.rec_fps, d.rec_fps);
         assert_eq!(cfg.retention_days, d.retention_days);
+
+        // 译文语言不在支持范围：只回落这一项
+        s.kv_set("settings", r#"{"maxRecords":1000,"translateLang":"fr"}"#)
+            .unwrap();
+        let cfg = s.load_settings();
+        assert_eq!(
+            (cfg.max_records, cfg.translate_lang),
+            (1000, d.translate_lang)
+        );
     }
 
     #[test]
@@ -2385,7 +2483,7 @@ pub(crate) mod tests {
         .unwrap();
         drop(old);
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 7);
+        assert_eq!(s.schema_version().unwrap(), 9);
         let id = s.list_summaries().unwrap()[0].id;
         let nulls: i64 = s
             .conn
@@ -2397,6 +2495,128 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(nulls, 1);
         assert_eq!(s.summary(id).unwrap().unwrap().snippet_body, None);
+    }
+
+    #[test]
+    fn migrates_v7_to_translation_columns() {
+        let dir = tmp();
+        make_dirs(&dir).unwrap();
+        let old = Connection::open(dir.join("xpaste.db")).unwrap();
+        for m in &MIGRATIONS[..7] {
+            old.execute_batch(m).unwrap();
+        }
+        old.pragma_update(None, "user_version", 7).unwrap();
+        old.execute(
+            "INSERT INTO records (hash, kind, title, text, copied_at, size, search_text, py_text) VALUES
+               (x'07', 'text', '旧记录', 'x', 1, 1, '旧记录', '')",
+            [],
+        )
+        .unwrap();
+        drop(old);
+        let s = Store::open(&dir).unwrap();
+        assert_eq!(s.schema_version().unwrap(), 9);
+        let id = s.list_summaries().unwrap()[0].id;
+        let d = s.detail(id).unwrap().unwrap();
+        assert_eq!((d.translation, d.translation_lang), (None, None));
+    }
+
+    #[test]
+    fn migrates_v8_to_translation_engine() {
+        let dir = tmp();
+        make_dirs(&dir).unwrap();
+        let old = Connection::open(dir.join("xpaste.db")).unwrap();
+        for m in &MIGRATIONS[..8] {
+            old.execute_batch(m).unwrap();
+        }
+        old.pragma_update(None, "user_version", 8).unwrap();
+        old.execute(
+            "INSERT INTO records (hash, kind, title, text, copied_at, size, search_text, py_text) VALUES
+               (x'08', 'text', '旧记录', 'x', 1, 1, '旧记录', '')",
+            [],
+        )
+        .unwrap();
+        drop(old);
+        let s = Store::open(&dir).unwrap();
+        assert_eq!(s.schema_version().unwrap(), 9);
+        let id = s.list_summaries().unwrap()[0].id;
+        assert_eq!(s.detail(id).unwrap().unwrap().translation_engine, None);
+    }
+
+    #[test]
+    fn engine_cleared_with_translation() {
+        let mut s = mem();
+        let sid = s.create_snippet("n", "hi", 1).unwrap();
+        s.set_translation(sid, "你好", "zh-Hans", "system").unwrap();
+        let d = s.detail(sid).unwrap().unwrap();
+        assert_eq!(d.translation_engine.as_deref(), Some("system"));
+        s.update_snippet(sid, "n", Some("bye")).unwrap();
+        let d = s.detail(sid).unwrap().unwrap();
+        assert_eq!(
+            (d.translation, d.translation_lang, d.translation_engine),
+            (None, None, None)
+        );
+
+        let id = added(&mut s, &rec_image(1), 2);
+        s.set_ocr(id, ocr_state::TEXT, Some("Error")).unwrap();
+        s.set_translation(id, "错误", "zh-Hans", "openai:m")
+            .unwrap();
+        s.set_ocr(id, ocr_state::TEXT, Some("Other")).unwrap();
+        let d = s.detail(id).unwrap().unwrap();
+        assert_eq!(
+            (d.translation, d.translation_lang, d.translation_engine),
+            (None, None, None)
+        );
+    }
+
+    #[test]
+    fn translation_roundtrip_and_invalidation() {
+        let mut s = mem();
+        let id = added(&mut s, &rec("hello"), 1);
+        assert_eq!(s.translate_source(id).unwrap().as_deref(), Some("hello"));
+        assert!(s.set_translation(id, "你好", "zh-Hans", "system").unwrap());
+        let d = s.detail(id).unwrap().unwrap();
+        assert_eq!(
+            (d.translation.as_deref(), d.translation_lang.as_deref()),
+            (Some("你好"), Some("zh-Hans"))
+        );
+        assert_eq!(
+            s.stored_translation(id).unwrap(),
+            Some(StoredTranslation {
+                text: "你好".into(),
+                lang: Some("zh-Hans".into()),
+                engine: Some("system".into())
+            })
+        );
+        assert_eq!(s.stored_translation(id + 100).unwrap(), None);
+        // 片段改内容会清掉译文；只改名不清
+        let sid = s.create_snippet("n", "hi", 2).unwrap();
+        s.set_translation(sid, "嗨", "zh-Hans", "system").unwrap();
+        s.update_snippet(sid, "m", None).unwrap();
+        assert!(s.detail(sid).unwrap().unwrap().translation.is_some());
+        s.update_snippet(sid, "m", Some("bye")).unwrap();
+        let d = s.detail(sid).unwrap().unwrap();
+        assert_eq!((d.translation, d.translation_lang), (None, None));
+    }
+
+    #[test]
+    fn ocr_text_change_clears_translation_and_source_follows_ocr() {
+        let mut s = mem();
+        let id = added(&mut s, &rec_image(1), 1);
+        assert_eq!(s.translate_source(id).unwrap(), None);
+        assert!(s.set_ocr(id, ocr_state::TEXT, Some("Error")).unwrap());
+        assert_eq!(s.translate_source(id).unwrap().as_deref(), Some("Error"));
+        s.set_translation(id, "错误", "zh-Hans", "system").unwrap();
+        s.set_ocr(id, ocr_state::TEXT, Some("Other")).unwrap();
+        assert_eq!(s.detail(id).unwrap().unwrap().translation, None);
+    }
+
+    #[test]
+    fn deleted_record_is_not_translatable() {
+        let mut s = mem();
+        let id = added(&mut s, &rec("hello"), 1);
+        s.soft_delete(&[id], 5).unwrap();
+        assert_eq!(s.translate_source(id).unwrap(), None);
+        assert!(!s.set_translation(id, "你好", "zh-Hans", "system").unwrap());
     }
 
     /// 带真实 flavor 的图片记录：内联 flavor + 大 blob flavor。

@@ -111,6 +111,9 @@ mod tests {
                 codec: String::new(),
             }),
             ocr_text: None,
+            translation: None,
+            translation_lang: None,
+            translation_engine: None,
         };
         let src = |s| detail_dto(d(s)).video.unwrap().src;
         assert_eq!(

@@ -19,17 +19,19 @@ pub fn frontend_ready(app: AppHandle) {
     crate::panel::frontend_ready(&app);
 }
 
-/// 前端在对话框打开 / 全部关闭时同步；只写原子变量，同步命令即可。
+/// 前端在对话框打开 / 全部关闭时同步；只写原子变量，同步命令即可。`open`：设置、确认框或片段对话框开着
+/// （快捷键不隐藏面板，M04 规则 3）；`keep`：片段对话框开着或正在选文件夹（失焦也不隐藏）。
 ///
-/// 只在 true→false 的转变时补一次 `hide_if_unfocused`：对话框在用户切走之后才关（Esc 收起计时、异步保存），
-/// 当时的失焦已被忽略，这里补隐藏，免得面板浮在别的应用上。原本就是 false 时（前端启动时的 `syncDialogOpen()`）
+/// 只在 `keep` true→false 的转变时补一次 `hide_if_unfocused`：片段对话框在用户切走之后才关、选文件夹的窗口关掉时
+/// 面板已失焦，当时的失焦被忽略，这里补隐藏，免得面板浮在别的应用上。原本就是 false 时（前端启动时的同步）
 /// 不隐藏，否则首次运行时可见但未取得焦点的引导面板会被藏起来。
 #[tauri::command]
-pub fn set_dialog_open(app: AppHandle, open: bool) {
+pub fn set_dialog_open(app: AppHandle, open: bool, keep: bool) {
     let state = app.state::<AppState>();
-    if open {
-        state.dialog_open.store(true, Ordering::SeqCst);
-    } else if state.dialog_open.swap(false, Ordering::SeqCst) {
+    state.dialog_open.store(open, Ordering::SeqCst);
+    if keep {
+        state.blur_keeps.store(true, Ordering::SeqCst);
+    } else if state.blur_keeps.swap(false, Ordering::SeqCst) {
         crate::panel::hide_if_unfocused(&app);
     }
 }
@@ -58,6 +60,13 @@ pub fn request_screen_capture(app: AppHandle) -> Result<(), AppError> {
 #[tauri::command(async)]
 pub fn screen_capture_granted() -> Result<bool, AppError> {
     Ok(xpaste_platform::screen_capture_granted())
+}
+
+/// 划词卡片“去设置”：唤起面板并打开设置的 `tab` 标签（如 `translate`，M26 规则 19）。同托盘“设置…”，在主线程上跑。
+#[tauri::command]
+pub fn open_panel_settings(app: AppHandle, tab: Option<String>) {
+    crate::panel::show(&app, None, crate::panel::Trigger::Tray);
+    crate::events::emit(&app, crate::events::OPEN_SETTINGS, tab);
 }
 
 /// 只认小写 http/https 前缀（与 detect 的链接判定一致）。

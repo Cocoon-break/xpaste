@@ -18,6 +18,7 @@ use crate::error::AppError;
 use crate::events;
 use crate::panel::on_main;
 use crate::state::AppState;
+use crate::translate::{self, Delta, Fail};
 
 const LABEL_PREFIX: &str = "shot-";
 /// 按下快捷键后这么久还没全部上屏，视为卡住（某块屏的遮罩出错或没收到载荷），下次快捷键重新开始
@@ -116,6 +117,18 @@ pub struct Session {
     finishing: bool,
     /// 遮罩页最后一次心跳（`shot_alive`，就绪也算一次），看门狗据此判断页面是否卡死
     alive: Option<Instant>,
+    /// 截图翻译识别出的原文，换用另一种翻译方式时重翻，不再识别（M26 规则 16）；截图结束或复制译文后清掉
+    tr_text: Option<String>,
+    /// 这次截图里第几次翻译：翻译中“换用…”加一，旧请求见它变了就中止、不再发增量（M26 规则 16）
+    tr_seq: u64,
+}
+
+impl Session {
+    /// 开始一次翻译（识别后首次或换用），返回它的序号。
+    fn next_tr(&mut self) -> u64 {
+        self.tr_seq += 1;
+        self.tr_seq
+    }
 }
 
 /// 按下截图快捷键时怎么处理（M23 规则 1）。
@@ -294,6 +307,7 @@ impl Session {
         self.started = Some(now);
         // 冻结图已释放，之后的 shot_finish 因取不到帧被拒绝
         self.finishing = false;
+        self.tr_text = None;
         self.previous_window.take()
     }
 }
@@ -622,6 +636,10 @@ pub(crate) fn place(w: &WebviewWindow, origin: (f64, f64), size: (f64, f64)) -> 
     Ok(())
 }
 
+/// 遮罩与录屏边框的层级：在菜单栏之上
+#[cfg(target_os = "macos")]
+pub(crate) const NS_SCREEN_SAVER_WINDOW_LEVEL: i32 = 1000;
+
 /// 补齐 `shot-0` … `shot-<n-1>`；返回新建窗口的页面加载完成信号。
 fn ensure_overlays(app: &AppHandle, n: usize) -> Vec<mpsc::Receiver<()>> {
     (0..n)
@@ -662,7 +680,7 @@ fn build_overlay(app: &AppHandle, i: usize, loaded: mpsc::Sender<()>) -> tauri::
         .build()?;
     #[cfg(target_os = "macos")]
     on_main(app, move |_| {
-        if let Err(e) = to_overlay_panel(&w) {
+        if let Err(e) = to_overlay_panel(&w, NS_SCREEN_SAVER_WINDOW_LEVEL) {
             log::warn!("遮罩转换 NSPanel 失败：{e}");
         }
     });
@@ -671,20 +689,20 @@ fn build_overlay(app: &AppHandle, i: usize, loaded: mpsc::Sender<()>) -> tauri::
     Ok(())
 }
 
-/// 不激活应用的 NSPanel，层级在菜单栏之上（录屏边框同），进入任何空间与全屏应用。主线程调用；每个窗口只能调一次。
+/// 不激活应用的 NSPanel，进入任何空间与全屏应用；`level` 为窗口层级：遮罩与录屏边框在菜单栏之上
+/// （`NS_SCREEN_SAVER_WINDOW_LEVEL`），划词卡片同贴图（`NSFloatingWindowLevel`，3）。主线程调用；每个窗口只能调一次。
 #[cfg(target_os = "macos")]
 #[allow(deprecated)] // cocoa 已弃用，但 tauri-nspanel 公开的就是它的类型
-pub(crate) fn to_overlay_panel(w: &WebviewWindow) -> tauri::Result<()> {
+pub(crate) fn to_overlay_panel(w: &WebviewWindow, level: i32) -> tauri::Result<()> {
     use tauri_nspanel::WebviewWindowExt;
     use tauri_nspanel::cocoa::{
         appkit::{NSWindow, NSWindowCollectionBehavior as B},
         base::id,
     };
-    const NS_SCREEN_SAVER_WINDOW_LEVEL: i32 = 1000;
     let mask = unsafe { (w.ns_window()? as id).styleMask() }.bits() as i32;
     let panel = w.to_panel()?;
     panel.set_style_mask(mask | crate::panel::NS_WINDOW_STYLE_MASK_NONACTIVATING_PANEL);
-    panel.set_level(NS_SCREEN_SAVER_WINDOW_LEVEL);
+    panel.set_level(level);
     panel.set_collection_behaviour(
         B::NSWindowCollectionBehaviorCanJoinAllSpaces
             | B::NSWindowCollectionBehaviorFullScreenAuxiliary
@@ -851,6 +869,11 @@ fn after_end(app: &AppHandle, generation: u64, previous: Option<isize>) {
     }
 }
 
+/// 截图（含录屏的选区与倒计时）进行中：期间面板失焦不隐藏（设置开着时面板留着，M15 交互规则 4）。
+pub fn active(app: &AppHandle) -> bool {
+    session(app).is_active()
+}
+
 /// 面板上开着设置或确认框：截图不隐藏面板。
 fn keeps_panel(app: &AppHandle) -> bool {
     app.state::<AppState>().dialog_open.load(Ordering::SeqCst)
@@ -873,13 +896,14 @@ fn hide_overlays(app: &AppHandle) {
     });
 }
 
-/// 遮罩的四种输出（M23 规则 7）。
+/// 遮罩的输出（M23 规则 7）；翻译见 M26 规则 5。
 #[derive(Debug, Clone, Copy)]
 pub enum Action {
     Copy,
     Save,
     Ocr,
     Pin,
+    Translate,
 }
 
 pub fn parse_action(h: &str) -> Option<Action> {
@@ -888,6 +912,7 @@ pub fn parse_action(h: &str) -> Option<Action> {
         "save" => Action::Save,
         "ocr" => Action::Ocr,
         "pin" => Action::Pin,
+        "translate" => Action::Translate,
         _ => return None,
     })
 }
@@ -984,6 +1009,10 @@ pub struct ShotOutcome {
     pub file: Option<String>,
     /// 是否写了剪切板（保存时看“保存截图时同时复制”，识别没有文字时为 false）
     pub copied: bool,
+    /// 完整译文，只有翻译动作有值（M26 规则 5）
+    pub text: Option<String>,
+    /// 翻译方式标签（`Cfg::tag`），只有翻译动作有值（M26 规则 16）
+    pub engine: Option<String>,
 }
 
 /// 贴图图片目录；启动时清空（贴图只在本次运行内有效）。
@@ -1021,11 +1050,13 @@ pub fn pin_bounds(
     ((origin.0 + r.x * k, origin.1 + r.y * k), (r.w * k, r.h * k))
 }
 
-/// `shot_finish`：在后台线程执行。成功后遮罩进入提示条模式，前端显示提示条后调 `shot_cancel`。
+/// `shot_finish`：在后台线程执行。成功后遮罩进入提示条模式，前端显示提示条后调 `shot_cancel`；
+/// 翻译例外，成功后停在译文卡片，复制译文时（`copy_text`）才进入（M26 规则 5）。`label` 为发起的遮罩窗口。
 pub fn finish(
     app: &AppHandle,
     action: Action,
     i: usize,
+    label: &str,
     rect: Option<LRect>,
     png: Vec<u8>,
 ) -> Result<ShotOutcome, AppError> {
@@ -1038,19 +1069,20 @@ pub fn finish(
         }
     };
     log::info!("shot 输出 {action:?} 屏 {i} {} 字节", png.len());
-    match run_action(app, generation, action, origin, scale, rect, png) {
-        Ok(outcome) => {
-            enter_toast(app, generation);
-            Ok(outcome)
-        }
-        Err(e) => {
-            let mut s = session(app);
-            if s.is_current(generation) {
-                s.release_finish();
-            }
-            Err(e)
+    let r = match action {
+        Action::Translate => run_translate(app, generation, label, &png),
+        _ => run_action(app, generation, action, origin, scale, rect, png)
+            .inspect(|_| enter_toast(app, generation)),
+    };
+    // 失败一律交还输出：卡片还没出现的遮罩回到选区可以重试；已出现的卡片上只能关闭，由遮罩自己挡住第二个动作
+    // （增量与失败返回到达遮罩的先后不定，后端判断不了卡片是否已出现）。被换用接替的不算：接替的翻译还占着输出
+    if r.as_ref().is_err_and(|e| !translate::is_superseded(e)) {
+        let mut s = session(app);
+        if s.is_current(generation) {
+            s.release_finish();
         }
     }
+    r
 }
 
 fn run_action(
@@ -1070,10 +1102,14 @@ fn run_action(
                 chars: None,
                 file: None,
                 copied: true,
+                text: None,
+                engine: None,
             }
         }
         Action::Save => save(app, png)?,
         Action::Ocr => ocr(app, generation, png)?,
+        // 翻译在 finish 里单独处理，走不到这里
+        Action::Translate => return Err(AppError::Invalid("截图处理中断".into())),
         Action::Pin => {
             let r = rect.ok_or_else(|| AppError::Invalid("贴图缺少选区".into()))?;
             open_pin(app, origin, scale, r, &png)?;
@@ -1082,6 +1118,8 @@ fn run_action(
                 chars: None,
                 file: None,
                 copied: false,
+                text: None,
+                engine: None,
             }
         }
     })
@@ -1122,18 +1160,20 @@ fn save(app: &AppHandle, png: Vec<u8>) -> Result<ShotOutcome, AppError> {
         chars: None,
         file: Some(name),
         copied,
+        text: None,
+        engine: None,
     })
 }
 
-/// 识别文字：PNG 字节直接交给系统识别（不落盘）；有文字就按普通写入写纯文本，由监听器作为文字记录入库（M23 规则 7）。
-fn ocr(app: &AppHandle, generation: u64, png: Vec<u8>) -> Result<ShotOutcome, AppError> {
+/// 识别选区文字：PNG 字节直接交给系统识别（不落盘），长边缩到 `SHOT_OCR_SIDE`；没有文字为 `None`。
+pub fn ocr_text(png: &[u8]) -> Result<Option<String>, AppError> {
     let t = Instant::now();
-    let text = match xpaste_platform::ocr_png_bytes(&png, SHOT_OCR_SIDE) {
+    let text = match xpaste_platform::ocr_png_bytes(png, SHOT_OCR_SIDE) {
         Ok(Some(t)) if !t.text.trim().is_empty() => Some(t.text),
         Ok(_) => None,
         Err(e) => {
             // 真机偶发 CRImageReaderError（读图阶段），没能复现：记下选区尺寸供排查
-            let dims = image::ImageReader::new(std::io::Cursor::new(&png))
+            let dims = image::ImageReader::new(std::io::Cursor::new(png))
                 .with_guessed_format()
                 .ok()
                 .and_then(|r| r.into_dimensions().ok());
@@ -1146,23 +1186,136 @@ fn ocr(app: &AppHandle, generation: u64, png: Vec<u8>) -> Result<ShotOutcome, Ap
     };
     let chars = text.as_ref().map_or(0, |t| t.chars().count());
     log::info!("shot 识别 {chars} 字 {}ms", t.elapsed().as_millis());
+    Ok(text)
+}
+
+/// 识别文字：有文字就按普通写入写纯文本，由监听器作为文字记录入库（M23 规则 7）。
+fn ocr(app: &AppHandle, generation: u64, png: Vec<u8>) -> Result<ShotOutcome, AppError> {
+    let text = ocr_text(&png)?;
+    let chars = text.as_ref().map_or(0, |t| t.chars().count());
     // 识别期间用户已按 Esc 关掉遮罩：不再写剪切板
     if !session(app).is_current(generation) {
         return Err(AppError::Invalid("截图已结束".into()));
     }
     if let Some(text) = &text {
         // 不经过 write_marked：同“复制截图”，要进历史
-        xpaste_platform::write(&[xpaste_core::text_flavor(text)]).map_err(|e| {
-            log::warn!("识别文字写剪切板失败 {chars} 字：{e}");
-            AppError::ClipboardWrite
-        })?;
+        crate::clipboard::write_text(text, "识别文字")?;
     }
     Ok(ShotOutcome {
         action: "ocr",
         chars: Some(chars),
         file: None,
         copied: text.is_some(),
+        text: None,
+        engine: None,
     })
+}
+
+/// 截图翻译（M26 规则 5）：识别 → 翻译，增量合并后只发给发起的遮罩 `label`。不写剪切板、不进提示条模式。
+/// 识别后与每段增量发出前都看一次截图是否已结束（Esc、快捷键），已结束就中止请求、不再发事件。
+fn run_translate(
+    app: &AppHandle,
+    generation: u64,
+    label: &str,
+    png: &[u8],
+) -> Result<ShotOutcome, AppError> {
+    // 先看配置：没配置时不必等识别文字（M26 规则 5）
+    let cfg = translate::cfg(&app.state::<AppState>().settings());
+    if translate::unconfigured(&cfg) {
+        log::info!("translate shot 失败 config");
+        return Err(Fail::Config.into());
+    }
+    let Some(text) = ocr_text(png)? else {
+        return Err(AppError::Invalid("选区里没有识别到文字".into()));
+    };
+    let tr = {
+        let mut s = session(app);
+        if !s.is_current(generation) {
+            return Err(AppError::Invalid("截图已结束".into()));
+        }
+        s.tr_text = Some(text.clone());
+        s.next_tr()
+    };
+    stream(app, generation, tr, label, &cfg, &text)
+}
+
+/// 译文卡片“换用…”（M26 规则 16）：用会话里的原文按 `engine`（None 按设置）重翻，不再识别；翻译中换用时旧请求中止；
+/// 增量照旧只发给第 `i` 块屏的遮罩。输出保持认领（卡片上失败后放开过的也重新认领），不能出第二个动作。
+/// 不是当前这次截图时报“截图已结束”。
+pub fn translate_again(
+    app: &AppHandle,
+    generation: u64,
+    i: usize,
+    engine: Option<translate::Engine>,
+) -> Result<ShotOutcome, AppError> {
+    let (text, tr) = {
+        let mut s = session(app);
+        let Some(t) = s.tr_text.clone().filter(|_| s.is_current(generation)) else {
+            return Err(AppError::Invalid("截图已结束".into()));
+        };
+        s.finishing = true;
+        (t, s.next_tr())
+    };
+    let cfg = translate::cfg_for(&app.state::<AppState>().settings(), engine);
+    stream(app, generation, tr, &label(i), &cfg, &text)
+}
+
+/// 翻译 `text`，增量合并后发给 `label` 遮罩；每段发出前看一次截图是否已结束、这次翻译是否已被换用（`tr`），
+/// 是就中止请求、不再发事件；被换用的报“已换用”，前端忽略。
+fn stream(
+    app: &AppHandle,
+    generation: u64,
+    tr: u64,
+    label: &str,
+    cfg: &translate::Cfg,
+    text: &str,
+) -> Result<ShotOutcome, AppError> {
+    let t0 = Instant::now();
+    let tag = cfg.tag();
+    let live = || {
+        let s = session(app);
+        s.is_current(generation) && s.tr_seq == tr
+    };
+    let emit = |p: Delta| events::emit_to(app, label, events::TRANSLATE_DELTA, p);
+    let r =
+        tauri::async_runtime::block_on(translate::exec_streamed(cfg, text, None, None, live, emit));
+    let ms = t0.elapsed().as_millis();
+    let chars = text.chars().count();
+    if session(app).is_current(generation) && !live() {
+        log::info!("translate shot 已换用 chars={chars} ms={ms}");
+        return Err(translate::superseded());
+    }
+    match r {
+        Ok((_, out)) => {
+            log::info!(
+                "translate shot engine={} chars={chars} ms={ms} ok",
+                cfg.engine.name()
+            );
+            Ok(ShotOutcome {
+                action: "translate",
+                chars: Some(out.chars().count()),
+                file: None,
+                copied: false,
+                text: Some(out),
+                engine: Some(tag),
+            })
+        }
+        Err(f) => {
+            log::info!("translate shot 失败 {} chars={chars} ms={ms}", f.tag());
+            Err(f.into())
+        }
+    }
+}
+
+/// 译文卡片“复制译文”：按普通写入写纯文本，进历史（同识别文字，M26 规则 5），然后进入提示条模式。
+pub fn copy_text(app: &AppHandle, generation: u64, text: &str) -> Result<(), AppError> {
+    if !session(app).is_current(generation) {
+        return Err(AppError::Invalid("截图已结束".into()));
+    }
+    crate::clipboard::write_text(text, "译文")?;
+    log::info!("shot 复制译文 {} 字", text.chars().count());
+    enter_toast(app, generation);
+    Ok(())
 }
 
 /// 提示条模式：遮罩鼠标穿透、交出键盘焦点，提示条照常显示；`shot_cancel` 时撤销。
@@ -1341,6 +1494,8 @@ pub fn pin_copy(app: &AppHandle, w: &WebviewWindow) -> Result<ShotOutcome, AppEr
         chars: None,
         file: None,
         copied: true,
+        text: None,
+        engine: None,
     })
 }
 
@@ -1718,6 +1873,7 @@ mod tests {
     fn parse_action_rejects_unknown() {
         assert!(matches!(parse_action("copy"), Some(Action::Copy)));
         assert!(matches!(parse_action("pin"), Some(Action::Pin)));
+        assert!(matches!(parse_action("translate"), Some(Action::Translate)));
         assert!(parse_action("rm").is_none());
     }
 
@@ -1847,6 +2003,29 @@ mod tests {
         s.end();
         s.try_begin();
         assert!(s.claim_finish(), "新的一次截图重新可认领");
+    }
+
+    #[test]
+    fn tr_text_cleared_on_end() {
+        let mut s = Session::default();
+        s.try_begin();
+        s.tr_text = Some("原文".into());
+        s.end();
+        assert_eq!(s.tr_text, None, "截图结束后不再留着原文");
+        s.try_begin();
+        s.tr_text = Some("原文".into());
+        s.finish(Instant::now());
+        assert_eq!(s.tr_text, None, "复制译文后进入提示条模式，不能再换用");
+    }
+
+    /// 翻译中换用：序号加一，旧请求据此中止（M26 规则 16）。
+    #[test]
+    fn next_tr_supersedes() {
+        let mut s = Session::default();
+        let a = s.next_tr();
+        let b = s.next_tr();
+        assert_ne!(a, b);
+        assert_eq!(s.tr_seq, b);
     }
 
     #[test]

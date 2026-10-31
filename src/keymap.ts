@@ -15,6 +15,8 @@ export type KeyCtx = {
   inSnip: boolean;
   /** 多选条数 */
   multi: number;
+  /** 选中的记录可翻译（M26 规则 1） */
+  selTranslatable: boolean;
 };
 
 /** `mod` 是平台的 Mod 键：macOS 只认 ⌘（metaKey），Windows 只认 Ctrl；`ctrl` 是字面的 Control 键（macOS 的 ⌃），
@@ -42,6 +44,7 @@ export type Action =
   | { t: 'selectAll' }
   | { t: 'extend'; d: 1 | -1 }
   | { t: 'clearMulti' }
+  | { t: 'translate' }
   | null;
 
 export const keyAction = (e: KeyEv, c: KeyCtx): Action => {
@@ -53,8 +56,9 @@ export const keyAction = (e: KeyEv, c: KeyCtx): Action => {
     return vert ? { t: 'menuMove', d: vert } : null;
   }
   if (e.mod && k === ',') return e.repeat ? null : { t: 'settings' };
-  // 片段（M25 规则 5、6）
+  // 片段（M25 规则 5、6）；翻译（M26 规则 2，多选时不可翻译）
   if (e.mod && !e.shift && !e.alt && !e.repeat) {
+    if (lk === 't' && c.selTranslatable && c.multi < 2) return { t: 'translate' };
     if (lk === 's' && c.hasSel && !c.selIsSnip) return { t: 'saveSnippet' };
     if (lk === 'e' && c.selIsSnip && c.multi < 2) return { t: 'editSnippet' };
     if (lk === 'n') return { t: 'newSnippet' };

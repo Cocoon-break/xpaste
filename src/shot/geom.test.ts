@@ -1,7 +1,7 @@
 // 截图遮罩的选区几何（原型 docs/specs/2026-10-28-截图与录屏-原型.html 的 norm / resize / hitWin / place / update / drawLoupe）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { badgePos, hit, loupePos, norm, outputSize, placeBar, resize } from './geom.ts';
+import { badgePos, hit, loupePos, norm, outputSize, placeBar, placeCard, resize } from './geom.ts';
 
 const W = 1440, H = 900;
 
@@ -73,4 +73,13 @@ test('outputSize 与 record::output_size 同口径：× 缩放、长边不超过
   assert.deepEqual(outputSize(1440, 2560, 2), [2160, 3840]);
   assert.deepEqual(outputSize(5120, 2880, 1), [3840, 2160]);
   assert.deepEqual(outputSize(0.4, 0.4, 1), [2, 2]);
+});
+
+test('译文卡片定位：右、左、下、上，最后放在选区内', () => {
+  const card = { w: 300, h: 120 };
+  assert.deepEqual(placeCard({ x: 100, y: 100, w: 200, h: 80 }, card, 1440, 900), { x: 308, y: 100 });   // 右侧
+  assert.deepEqual(placeCard({ x: 1000, y: 100, w: 300, h: 80 }, card, 1440, 900), { x: 692, y: 100 }); // 右侧放不下，放左侧
+  assert.deepEqual(placeCard({ x: 0, y: 100, w: 1440, h: 80 }, card, 1440, 900), { x: 8, y: 188 });     // 左右都放不下，放下方
+  assert.deepEqual(placeCard({ x: 0, y: 700, w: 1440, h: 200 }, card, 1440, 900), { x: 8, y: 572 });   // 下方也放不下，放上方
+  assert.deepEqual(placeCard({ x: 0, y: 0, w: 1440, h: 900 }, card, 1440, 900), { x: 1132, y: 8 });    // 整屏选区，放在选区内右上角
 });

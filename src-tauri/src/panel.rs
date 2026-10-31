@@ -159,7 +159,7 @@ fn monitor_contains(
 }
 
 /// 鼠标所在显示器；找不到时用主显示器。
-fn cursor_monitor(app: &AppHandle) -> tauri::Result<Option<Monitor>> {
+pub(crate) fn cursor_monitor(app: &AppHandle) -> tauri::Result<Option<Monitor>> {
     let c = app.cursor_position()?;
     let primary = app.primary_monitor()?;
     let primary_sf = primary.as_ref().map_or(1.0, |m| m.scale_factor());
@@ -454,14 +454,19 @@ pub fn hide_animated(app: &AppHandle, animate: bool) {
 /// 直接隐藏（失焦、粘贴前、兜底线程、淡出播完）。打断进行中的淡出，隐藏后把 alpha 复位为 1 供下次显示。
 pub fn hide(app: &AppHandle) {
     // 隐藏时前端会关掉所有对话框；这里先复位，前端漏发（例如开发时重载页面）也不会卡住失焦隐藏
-    app.state::<AppState>()
-        .dialog_open
-        .store(false, Ordering::SeqCst);
+    let state = app.state::<AppState>();
+    state.dialog_open.store(false, Ordering::SeqCst);
+    state.blur_keeps.store(false, Ordering::SeqCst);
     HIDE_REQ.store(0, Ordering::Relaxed);
     FADING.store(0, Ordering::Relaxed);
     on_main(app, |app| {
         // NSPanel 上 hide 即 orderOut:
         let Some(w) = window(app) else { return };
+        // 隐藏前取消挂在面板里的语言包下载，否则那边一直等、下载标记卡住（M26 规则 17）
+        #[cfg(target_os = "macos")]
+        if let Ok(ns) = w.ns_window() {
+            xpaste_platform::translate_prepare_cancel(ns as usize);
+        }
         match w.hide() {
             Ok(()) => {
                 if let Err(e) = animate_alpha(&w, 1.0, 0.0) {
@@ -476,10 +481,22 @@ pub fn hide(app: &AppHandle) {
     });
 }
 
-/// 可见但已失焦时直接隐藏（对话框全部关闭时由 `set_dialog_open` 调用）。
+/// 面板失焦时能不能隐藏（M04 规则 3）：设置、确认框开着照常隐藏；片段对话框开着或正在选文件夹、
+/// 下载语言包期间（系统确认框会抢焦点）、划词卡片拿着键盘时（M26 规则 18）、截图或录屏遮罩进行中
+/// （M15 交互规则 4：面板留着一起截进去）不隐藏。失焦事件与所有补隐藏的路径都按它判断。
+pub fn blur_hides(app: &AppHandle) -> bool {
+    let state = app.state::<AppState>();
+    !state.blur_keeps.load(Ordering::SeqCst)
+        && !state.tr_downloading.load(Ordering::SeqCst)
+        && !crate::trcard::has_keyboard(app)
+        && !crate::shot::active(app)
+}
+
+/// 可见但已失焦、且 `blur_hides` 时隐藏：补上期间被忽略的失焦（片段对话框关闭、选完文件夹、下载语言包结束、
+/// 划词卡片失焦关闭）。
 pub fn hide_if_unfocused(app: &AppHandle) {
     let Some(w) = window(app) else { return };
-    if w.is_visible().unwrap_or(false) && !w.is_focused().unwrap_or(true) {
+    if blur_hides(app) && w.is_visible().unwrap_or(false) && !w.is_focused().unwrap_or(true) {
         hide(app);
     }
 }

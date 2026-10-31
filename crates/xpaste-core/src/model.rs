@@ -55,6 +55,41 @@ pub enum RecQuality {
     Small,
 }
 
+/// 不能出现在日志与调试输出里的设置值（翻译的 API Key 与接口地址，5.2 第 3 条）：`{:?}` 只显示是否为空，
+/// 序列化与普通字符串相同，读取当作 `String`。
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Secret(pub String);
+
+impl fmt::Debug for Secret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(if self.0.is_empty() {
+            "Secret(空)"
+        } else {
+            "Secret(..)"
+        })
+    }
+}
+
+impl std::ops::Deref for Secret {
+    type Target = String;
+    fn deref(&self) -> &String {
+        &self.0
+    }
+}
+
+impl From<&str> for Secret {
+    fn from(s: &str) -> Self {
+        Self(s.into())
+    }
+}
+
+impl From<String> for Secret {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -102,6 +137,16 @@ pub struct Settings {
     pub rec_quality: RecQuality,
     /// 录屏帧率，30 | 60（M24 规则 6）
     pub rec_fps: u32,
+    /// 翻译引擎：`""`（还没选，由应用层按平台决定）| `"system"` | `"openai"`（M26 规则 6）
+    pub translate_engine: String,
+    /// OpenAI 兼容接口的 Base URL
+    pub translate_base_url: Secret,
+    pub translate_api_key: Secret,
+    pub translate_model: String,
+    /// 目标语言代码，见 `translate::Lang`
+    pub translate_lang: String,
+    /// 划词翻译全局快捷键；空字符串表示不启用（M15、M26 规则 18）
+    pub translate_hotkey: String,
 }
 
 impl Default for Settings {
@@ -139,6 +184,12 @@ impl Default for Settings {
             rec_copy: true,
             rec_quality: RecQuality::Standard,
             rec_fps: 30,
+            translate_engine: String::new(),
+            translate_base_url: "https://api.openai.com/v1".into(),
+            translate_api_key: Secret::default(),
+            translate_model: String::new(),
+            translate_lang: "zh-Hans".into(),
+            translate_hotkey: "Alt+Shift+T".into(),
         }
     }
 }
@@ -241,6 +292,45 @@ impl Settings {
                 self.rec_hotkey.clear();
             }
         }
+        // 翻译快捷键同理（M15）：升级前唤起、截图、录屏已用了 Alt+Shift+T 的，读出为不启用
+        if self.translate_hotkey_clash().is_some() {
+            self.translate_hotkey.clear();
+        }
+    }
+
+    /// 翻译快捷键与哪个快捷键是同一组合（按唤起、截图、录屏的顺序）；录屏只在 macOS 上比（M24：别处不注册录屏快捷键）。
+    fn translate_hotkey_clash(&self) -> Option<&'static str> {
+        if self.translate_hotkey.is_empty() {
+            return None;
+        }
+        let tr = hotkey_key(&self.translate_hotkey);
+        [
+            ("唤起", self.hotkey.as_str()),
+            ("截图", self.shot_hotkey.as_str()),
+            (
+                "录屏",
+                if cfg!(target_os = "macos") {
+                    self.rec_hotkey.as_str()
+                } else {
+                    ""
+                },
+            ),
+        ]
+        .into_iter()
+        .find(|(_, k)| !k.is_empty() && hotkey_key(k) == tr)
+        .map(|(name, _)| name)
+    }
+
+    /// 翻译的三个文本字段去首尾空白，Base URL 再去掉末尾的 `/`（M26 规则 6）；保存设置时在 `validate` 之前调用。
+    pub fn normalize(&mut self) {
+        for f in [
+            &mut self.translate_base_url.0,
+            &mut self.translate_api_key.0,
+            &mut self.translate_model,
+        ] {
+            *f = f.trim().to_owned();
+        }
+        self.translate_base_url = self.translate_base_url.trim_end_matches('/').into();
     }
 
     /// 按顺序检查，返回第一条不满足的规则。
@@ -270,6 +360,24 @@ impl Settings {
             if !self.shot_hotkey.is_empty() && rec == hotkey_key(&self.shot_hotkey) {
                 return fail("录屏快捷键不能与截图快捷键相同");
             }
+        }
+        if !self.translate_hotkey.is_empty() && !has_modifier(&self.translate_hotkey) {
+            return fail("翻译快捷键至少需要包含 Mod 或 Alt");
+        }
+        if let Some(name) = self.translate_hotkey_clash() {
+            return fail(&format!("翻译快捷键不能与{name}快捷键相同"));
+        }
+        if !matches!(self.translate_engine.as_str(), "" | "system" | "openai") {
+            return fail("翻译引擎只能是系统翻译或 OpenAI 兼容接口");
+        }
+        if crate::translate::Lang::from_code(&self.translate_lang).is_none() {
+            return fail("不支持这种翻译目标语言");
+        }
+        // 接口地址不论默认用哪种都校验：设置里两组配置常驻显示（M26 规则 6）
+        // 协议名不分大小写（同前端 baseUrlError）
+        let url = self.translate_base_url.to_ascii_lowercase();
+        if !url.is_empty() && !url.starts_with("http://") && !url.starts_with("https://") {
+            return fail("请输入 http:// 或 https:// 开头的地址");
         }
         if !matches!(self.rec_fps, 30 | 60) {
             return fail("录屏帧率只能是 30 或 60");
@@ -467,6 +575,11 @@ pub struct RecordDetail {
     pub video: Option<VideoInfo>,
     /// 识别出的原文（未小写）
     pub ocr_text: Option<String>,
+    /// 最新一份译文及其目标语言代码（M26 规则 12）
+    pub translation: Option<String>,
+    pub translation_lang: Option<String>,
+    /// 翻译方式标签：`system` 或 `openai:{模型 ID}`（M26 规则 16）
+    pub translation_engine: Option<String>,
 }
 
 impl fmt::Debug for RecordDetail {
@@ -622,6 +735,87 @@ mod tests {
             Err(CoreError::InvalidSettings(m)) => m,
             other => panic!("expected InvalidSettings, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn translate_settings_are_trimmed_and_validated() {
+        let mut s = Settings {
+            translate_api_key: " sk-1\n".into(),
+            translate_model: " gpt ".into(),
+            translate_base_url: " http://localhost:11434/v1/ ".into(),
+            ..Default::default()
+        };
+        s.normalize();
+        assert_eq!(
+            (
+                s.translate_api_key.as_str(),
+                s.translate_model.as_str(),
+                s.translate_base_url.as_str()
+            ),
+            ("sk-1", "gpt", "http://localhost:11434/v1")
+        );
+        assert!(s.validate().is_ok());
+        assert_eq!(
+            invalid(&Settings {
+                translate_base_url: "api.openai.com".into(),
+                ..Default::default()
+            }),
+            "请输入 http:// 或 https:// 开头的地址"
+        );
+        // 默认用系统翻译时接口地址照样校验：AI 翻译的配置也显示着，可以换用（M26 规则 6、16）
+        assert!(
+            Settings {
+                translate_engine: "system".into(),
+                translate_base_url: "api.openai.com".into(),
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+        // 协议名不分大小写，同前端
+        assert!(
+            Settings {
+                translate_base_url: "HTTPS://api.openai.com/v1".into(),
+                ..Default::default()
+            }
+            .validate()
+            .is_ok()
+        );
+        // API Key 与接口地址不进调试输出
+        let dbg = format!(
+            "{:?}",
+            Settings {
+                translate_api_key: "sk-secret".into(),
+                translate_base_url: "https://key.example/v1".into(),
+                ..Default::default()
+            }
+        );
+        assert!(!dbg.contains("sk-secret") && !dbg.contains("key.example"));
+        // 空 = 未配置，不报错
+        assert!(
+            Settings {
+                translate_base_url: Secret::default(),
+                ..Default::default()
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            Settings {
+                translate_lang: "fr".into(),
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            Settings {
+                translate_engine: "deepl".into(),
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
     }
 
     #[test]
@@ -910,6 +1104,84 @@ mod tests {
     }
 
     #[test]
+    fn validate_translate_hotkey() {
+        let with = |tr: &str| Settings {
+            hotkey: "Alt+Space".into(),
+            shot_hotkey: "Alt+Shift+A".into(),
+            rec_hotkey: "Alt+Shift+R".into(),
+            translate_hotkey: tr.into(),
+            ..Default::default()
+        };
+        assert_eq!(Settings::default().translate_hotkey, "Alt+Shift+T");
+        assert!(with("").validate().is_ok());
+        assert!(with("Alt+Shift+T").validate().is_ok());
+        assert_eq!(invalid(&with("T")), "翻译快捷键至少需要包含 Mod 或 Alt");
+        assert_eq!(
+            invalid(&with(" alt+SPACE")),
+            "翻译快捷键不能与唤起快捷键相同"
+        );
+        assert_eq!(
+            invalid(&with("Option+Shift+A")),
+            "翻译快捷键不能与截图快捷键相同"
+        );
+        // 录屏只在 macOS 上注册（M24），别处不占组合
+        let rec = with("shift+Alt+R").validate();
+        if cfg!(target_os = "macos") {
+            assert_eq!(
+                invalid(&with("shift+Alt+R")),
+                "翻译快捷键不能与录屏快捷键相同"
+            );
+        } else {
+            assert!(rec.is_ok());
+        }
+        // 截图不启用时不比
+        assert!(
+            Settings {
+                shot_hotkey: String::new(),
+                translate_hotkey: "Alt+Shift+A".into(),
+                ..Default::default()
+            }
+            .validate()
+            .is_ok()
+        );
+    }
+
+    /// M15 翻译快捷键：升级前截图（或唤起、录屏）已用 Alt+Shift+T 的，翻译快捷键读出为不启用，其余设置保留。
+    #[test]
+    fn translate_hotkey_upgrade_conflict() {
+        let (s, dropped) =
+            Settings::from_json_lenient(r#"{"shotHotkey":"Alt+Shift+T","maxRecords":1000}"#)
+                .unwrap();
+        assert_eq!(s.translate_hotkey, "");
+        assert_eq!(s.shot_hotkey, "Alt+Shift+T");
+        assert_eq!(s.max_records, 1000);
+        assert!(dropped.is_empty(), "{dropped:?}");
+        let (s, _) = Settings::from_json_lenient(r#"{"hotkey":"Alt+Shift+T"}"#).unwrap();
+        assert_eq!(
+            (s.hotkey.as_str(), s.translate_hotkey.as_str()),
+            ("Alt+Shift+T", "")
+        );
+        // 录屏撞上：录屏只在 macOS 上注册，别处不让位
+        let (s, _) = Settings::from_json_lenient(r#"{"recHotkey":"Alt+Shift+T"}"#).unwrap();
+        let want = if cfg!(target_os = "macos") {
+            ""
+        } else {
+            "Alt+Shift+T"
+        };
+        assert_eq!(s.translate_hotkey, want);
+        // 不撞时不动
+        let (s, _) = Settings::from_json_lenient(r#"{"maxRecords":1000}"#).unwrap();
+        assert_eq!(s.translate_hotkey, "Alt+Shift+T");
+        // 已存的、不撞的翻译快捷键保留
+        let (s, dropped) = Settings::from_json_lenient(
+            r#"{"shotHotkey":"Alt+Shift+T","translateHotkey":"Alt+Shift+U"}"#,
+        )
+        .unwrap();
+        assert_eq!(s.translate_hotkey, "Alt+Shift+U");
+        assert!(dropped.is_empty(), "{dropped:?}");
+    }
+
+    #[test]
     fn disable_clashing_hotkeys_clears_rec() {
         let mut s = Settings {
             hotkey: "Alt+Shift+R".into(),
@@ -1032,6 +1304,9 @@ mod tests {
             image: None,
             video: None,
             ocr_text: Some("secret-ocr".into()),
+            translation: None,
+            translation_lang: None,
+            translation_engine: None,
         };
         let out = format!("{d:?} {:?}", d.summary);
         assert!(!out.contains("secret"), "{out}");

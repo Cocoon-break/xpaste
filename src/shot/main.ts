@@ -2,12 +2,14 @@
 // 状态 S、update / place、指针与键盘处理。坐标为本块屏的逻辑像素，冻结帧与标注 canvas 为物理像素。
 import './shot.css';
 import {
-  onShotBegin, onShotClaim, onShotEnd, recStart, shotAlive, shotCancel, shotClaim, shotFinish, shotFrame, shotReady,
-  type BeginPayload, type ShotAction, type ShotOutcome,
+  onShotBegin, onShotClaim, onShotEnd, onShotTranslateDelta, recStart, shotAlive, shotCancel, shotClaim, shotCopyText, shotEngines,
+  shotFinish, shotFrame, shotReady, shotTranslateAgain, type BeginPayload, type ShotAction, type ShotOutcome,
 } from '../api/shot';
 import { error as logError, info } from '../api/log';
-import type { AppError } from '../api/types';
-import { badgePos, hit, loupePos, norm, outputSize, placeBar, resize, type Handle, type Rect } from './geom';
+import type { AppError, Engines } from '../api/types';
+import { cardInner, type CardState } from '../card/view';
+import { otherEngine, staleDelta, type Engine } from '../translate';
+import { badgePos, hit, loupePos, norm, outputSize, placeBar, placeCard, resize, type Handle, type Rect } from './geom';
 import { COLORS, drawObj, FONT, nextStep, type Obj, type Tool } from './ink';
 
 // 遮罩页出错时整个截图会静默失败：报错写进日志（只记消息，不含截图内容）
@@ -24,6 +26,7 @@ const ICON = {
   step: '<circle cx="12" cy="12" r="8.5"/><path d="M10.6 9.4 12.6 8v8"/>',
   undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
   redo: '<path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/>',
+  translate: '<path d="M3.6 6h8.4M7.8 4.2V6M10.4 6c-.8 3.6-3 6.2-6.2 7.8M6.2 9.1c1.1 2 2.8 3.5 4.8 4.3"/><path d="m12.6 19.8 3.6-9 3.6 9M13.9 16.8h4.6"/>',
   ocr: '<path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16"/><path d="M8 9h8M8 12h8M8 15h5"/>',
   save: '<path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/>',
   close: '<path d="M6 6l12 12M18 6 6 18"/>',
@@ -59,8 +62,8 @@ const SWEEP_MS = 300;
 /** 动作完成后提示条停留多久再退出截图 */
 const TOAST_MS = 1600;
 
-/** `countdown`：录屏倒计时（M24）；倒计时结束到后端结束会话之间为 `done` */
-type Phase = 'off' | 'idle' | 'selected' | 'countdown' | 'busy' | 'done';
+/** `countdown`：录屏倒计时（M24）；倒计时结束到后端结束会话之间为 `done`；`card`：译文卡片（M26 规则 5） */
+type Phase = 'off' | 'idle' | 'selected' | 'countdown' | 'busy' | 'card' | 'done';
 type Drag =
   | { k: 'new'; x0: number; y0: number; moved: boolean }
   | { k: 'move' | 'resize'; h?: Handle; s: Rect; x0: number; y0: number }
@@ -92,6 +95,22 @@ let pix: HTMLCanvasElement | null = null; // 马赛克底图，第一次用马�
 let thumbUrl = '', toastT = 0, endT = 0, cdT = 0;
 /** 本屏已调用 shot_ready 的代数：只有已上屏的屏发心跳 */
 let readyGen = 0;
+/** 进行中的截图翻译：kind `done` 收完（可复制）；engine 为翻译方式标签，出第一段前先按设置猜；
+ *  seq 每次换用加一，迟到的结果按它丢弃；回到选区或开始新的一次时为 null */
+type ShotTr = Exclude<CardState, { kind: 'blocked' }> & { gen: number; seq: number; want?: Engine };
+let tr: ShotTr | null = null;
+let trSeq = 0;
+/** 两种翻译方式能不能用，每次按 T 取一次（M26 规则 16） */
+let engines: Engines | null = null;
+
+/* 译文卡片（M26 规则 5、16）：第一段译文到达（或识别后翻译失败）时出现，定一次位置后只变高；内容由 cardInner 生成 */
+const card = document.createElement('div');
+card.className = 'card';
+card.hidden = true;
+card.setAttribute('role', 'dialog');
+card.setAttribute('aria-label', '译文');
+ov.appendChild(card);
+const cardBody = () => card.querySelector<HTMLElement>('.c-body');
 
 /* —— 开始：画冻结帧，画完才让后端上屏 —— */
 async function begin(p: BeginPayload) {
@@ -122,6 +141,8 @@ async function begin(p: BeginPayload) {
   thumbUrl = '';
   toastEl.setAttribute('data-instant', ''); toastEl.dataset.open = 'false'; void toastEl.offsetWidth; toastEl.removeAttribute('data-instant');
   document.querySelectorAll('.txt, #cut .sweep').forEach((el) => el.remove());
+  tr = null;
+  card.hidden = true;
   ic.clearRect(0, 0, ink.width, ink.height);
   ov.dataset.mode = p.mode;
   ov.hidden = false;
@@ -240,6 +261,7 @@ function buildBar() {
     + `<button type="button" data-act="redo" aria-label="重做" data-tip="重做  ${isMac ? '⇧ ⌘ Z' : 'Ctrl Shift Z'}">${svg('redo')}</button>`
     + '<span class="sep"></span>'
     + `<button type="button" data-act="ocr" aria-label="识别文字并复制" data-tip="识别文字并复制  O">${svg('ocr')}</button>`
+    + `<button type="button" data-act="translate" aria-label="识别文字并翻译" data-tip="识别文字并翻译  T">${svg('translate')}</button>`
     + `<button type="button" data-act="pin" aria-label="钉在屏幕上" data-tip="钉在屏幕上  P">${svg('pin')}</button>`
     + `<button type="button" data-act="save" aria-label="保存" data-tip="保存${S.saveCopy ? '并复制' : ''}  ${MODK} S">${svg('save')}</button>`
     + `<button type="button" data-act="close" aria-label="退出" data-tip="退出  Esc">${svg('close')}</button>`
@@ -329,7 +351,7 @@ function toggleTool(t: Tool, animate: boolean) {
 /* —— 指针 —— */
 ov.addEventListener('pointerdown', (e) => {
   if (e.button !== 0) return;
-  if ((e.target as Element).closest('.bar, .txt')) return;
+  if ((e.target as Element).closest('.bar, .txt, .card')) return;
   const x = e.clientX, y = e.clientY;
   if (S.editing) { commitText(); if (S.tool === 'text') return; }
   if (S.phase === 'idle') {
@@ -403,7 +425,8 @@ ov.addEventListener('contextmenu', (e) => { e.preventDefault(); escape(); });
 
 function setCursor() {
   let c = 'crosshair';
-  if (S.phase === 'selected') {
+  if (S.phase === 'card') c = 'default';
+  else if (S.phase === 'selected') {
     const on = inside(S.mx, S.my, S.sel);
     if (S.tool) c = on ? (S.tool === 'text' ? 'text' : 'crosshair') : 'default';
     else c = on ? 'move' : 'default';
@@ -523,37 +546,51 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** 等待期间没有退出、也没有开始新的一次截图 */
 const live = (gen: number) => gen === S.gen && S.phase !== 'off';
 
-/** 复制 / 保存 / 识别文字 / 贴图。一次截图只做一个动作；识别文字期间显示“正在识别文字…”。 */
+/** 复制 / 保存 / 识别文字 / 贴图 / 翻译。一次截图只做一个动作；识别文字、翻译期间显示进行中提示。 */
 async function act(a: ShotAction) {
   if (S.phase !== 'selected' || !S.sel) return;
   commitText();
-  const gen = S.gen, sel = { ...S.sel };
-  S.phase = a === 'ocr' ? 'busy' : 'done';
+  const gen = S.gen, sel = { ...S.sel }, slow = a === 'ocr' || a === 'translate';
+  busy.lastChild!.textContent = a === 'translate' ? '正在翻译…' : '正在识别文字…';
+  S.phase = slow ? 'busy' : 'done';
+  if (a === 'translate') {
+    const t: ShotTr = tr = { gen, seq: ++trSeq, kind: 'busy', source: '', engine: '', text: '', noAccess: false, other: null };
+    // 出第一段前就失败时，标题行按设置标出方式；增量、返回值带的是实际用的方式
+    void shotEngines().then((e) => { engines = e; if (tr === t) { t.engine ||= e.current; renderCard(); } }, () => {});
+  }
   update();
   const sweep = (a === 'copy' || a === 'save') && !reduced.matches;
   if (sweep) cut.insertAdjacentHTML('beforeend', '<i class="sweep"></i>');
-  // 识别要几秒：期间其他屏不能框选、出第二个动作
-  if (a === 'ocr') void shotClaim({ generation: gen, index: S.index, state: 'busy' });
+  // 识别、翻译要几秒：期间其他屏不能框选、出第二个动作
+  if (slow) void shotClaim({ generation: gen, index: S.index, state: 'busy' });
+  const seq0 = tr?.seq;
   let out: ShotOutcome, blob: Blob;
   try {
     blob = await exportPng(sel);
     [out] = await Promise.all([shotFinish(new Uint8Array(await blob.arrayBuffer()), a, S.index, sel), sweep && sleep(SWEEP_MS)]);
   } catch (e) {
-    if (!live(gen)) return; // 识别期间已按 Esc 退出
+    const msg = (e as AppError)?.message || '截图处理失败';
+    // 期间已按 Esc 退出；截图结束时后端中止翻译，结果丢弃。翻译中换用了：结果归换用那次
+    if (!live(gen) || msg === '翻译已取消' || (a === 'translate' && tr && tr.seq !== seq0)) return;
+    // 译文卡片已出现，或识别出文字后翻译失败：卡片上显示原因（保留已收到的部分），不能复制，
+    // 可以换用另一种或关闭；不给下载语言包（M26 规则 5、16）
+    if (a === 'translate' && tr && ((S.phase as Phase) === 'card' || TR_FAIL.has((e as AppError)?.kind))) return failTr(tr, e as AppError);
     // 失败：回到选区，可以重试或换个动作
+    tr = null;
     cut.querySelector('.sweep')?.remove();
     S.phase = 'selected';
     update();
-    if (a === 'ocr') void shotClaim({ generation: gen, index: S.index, state: 'selected' });
-    toast((e as AppError)?.message || '截图处理失败', { icon: 'close', danger: true });
+    if (slow) void shotClaim({ generation: gen, index: S.index, state: 'selected' });
+    toast(msg, { icon: 'close', danger: true });
     toastT = window.setTimeout(() => (toastEl.dataset.open = 'false'), 2800);
     return;
   }
   if (!live(gen)) return;
-  // 后端已让遮罩鼠标穿透并交还键盘：其余部分淡出，只留提示条，随后退出
-  S.phase = 'done';
-  ov.classList.add('out');
-  void shotClaim({ generation: gen, index: S.index, state: 'done' });
+  if (a === 'translate') {
+    // 收完：以完整译文为准（最后一段增量可能晚于返回值到达）；后端不进提示条模式，复制时才进
+    if (tr && tr.seq === seq0) doneTr(tr, out);
+    return;
+  }
   if (a === 'copy' || a === 'save') thumbUrl = URL.createObjectURL(blob);
   const file = out.file ?? '';
   const chars = out.chars ?? 0;
@@ -562,11 +599,118 @@ async function act(a: ShotAction) {
     : a === 'save' ? [out.copied ? `已保存并复制 · ${file}` : `已保存 · ${file}`, { thumb: thumbUrl }]
     : a === 'ocr' ? (chars ? [`已复制图中文字 · ${chars} 字，已加入历史`, { icon: 'check' }] : ['选区里没有识别到文字', { icon: 'ocr' }])
     : ['已钉在屏幕上 · 拖动移动，滚轮缩放，双击关闭', { icon: 'pin' }];
+  succeed(gen, msg, lead);
+}
+
+/** 动作完成：后端已让遮罩鼠标穿透并交还键盘，其余部分淡出，只留提示条，随后退出。 */
+function succeed(gen: number, msg: string, lead: Lead) {
+  S.phase = 'done';
+  ov.classList.add('out');
+  void shotClaim({ generation: gen, index: S.index, state: 'done' });
   toast(msg, lead);
   const exit = reduced.matches ? 0 : 160;
   toastT = window.setTimeout(() => (toastEl.dataset.open = 'false'), TOAST_MS - exit);
   endT = window.setTimeout(() => { release(); void shotCancel(gen); }, TOAST_MS);
 }
+
+/* —— 译文卡片 —— */
+/** 识别出文字后翻译失败时出卡片的错误类别（没配置在识别前就报，仍回到选区） */
+const TR_FAIL = new Set(['translate', 'translatePack', 'translateOs']);
+
+/** 按 tr 重画卡片内容；另一种能用时就有换用按钮，翻译中也有（M26 规则 16）。焦点与滚动位置保留。 */
+function renderCard() {
+  if (!tr || card.hidden) return;
+  const other = engines ? otherEngine(tr.engine, engines) : null;
+  // 截图里不给“下载语言包”“去设置”（M26 规则 13）：系统的下载确认挂不到截图遮罩上，遮罩一退出它就既不弹出也不返回；
+  // 缺语言包的原因写在卡片上，AI 能用时还有“换用 AI 翻译”
+  const focused = (document.activeElement as HTMLElement | null)?.dataset.act;
+  const old = cardBody();
+  // 原来在底部（翻译中跟着最新一段）的，换成完整译文后仍到底；否则保留滚动位置
+  const atEnd = !old || old.scrollTop + old.clientHeight >= old.scrollHeight - 2, top = old?.scrollTop ?? 0;
+  card.innerHTML = cardInner({ ...tr, other, errorKind: undefined });
+  if (focused) card.querySelector<HTMLElement>(`[data-act="${focused}"]`)?.focus();
+  const b = cardBody();
+  if (b) b.scrollTop = tr.kind === 'busy' || atEnd ? b.scrollHeight : top;
+}
+
+/** 第一段译文到达（或识别后翻译失败）：工具栏与进行中提示隐藏，卡片在选区旁出现，位置只定这一次。宽 240–360。 */
+function showCard() {
+  const sel = S.sel!;
+  S.phase = 'card';
+  update(); setCursor();
+  Object.assign(card.style, { width: clamp(sel.w, 240, 360) + 'px', maxHeight: '' });
+  card.hidden = false;
+  renderCard();
+  const p = placeCard(sel, { w: card.offsetWidth, h: card.offsetHeight }, W, H);
+  // 之后随内容变高，最高到屏底，超出时卡片内滚动
+  Object.assign(card.style, { left: p.x + 'px', top: p.y + 'px', maxHeight: H - p.y - 8 + 'px' });
+  restart(card, 'pop-in');
+}
+
+function doneTr(t: ShotTr, out: ShotOutcome) {
+  Object.assign(t, { kind: 'done', text: out.text ?? '', engine: out.engine ?? t.engine });
+  if (S.phase === 'busy') showCard(); else renderCard();
+}
+
+function failTr(t: ShotTr, e: AppError) {
+  Object.assign(t, { kind: 'fail', error: e?.message || '翻译失败', errorKind: e?.kind });
+  if (S.phase === 'busy') showCard(); else renderCard();
+}
+
+void onShotTranslateDelta((d, engine) => {
+  if (tr?.kind !== 'busy' || !live(tr.gen) || staleDelta(engine, tr.want)) return;
+  const placeholder = !tr.text;
+  tr.text += d;
+  tr.engine = engine;
+  if (S.phase === 'busy') return showCard();
+  if (S.phase !== 'card') return;
+  if (placeholder) return renderCard();
+  const b = cardBody();
+  if (b) { b.append(d); b.scrollTop = b.scrollHeight; }
+});
+
+/** 用另一种重翻同一段原文，不再识别，翻译中也行（后端中止进行中的请求）；输出仍被这次翻译占着（M26 规则 16） */
+async function again(engine: Engine) {
+  const t = tr;
+  if (!t || S.phase !== 'card') return;
+  const gen = S.gen, seq = (t.seq = ++trSeq);
+  Object.assign(t, { kind: 'busy', text: '', error: undefined, errorKind: undefined, want: engine, engine: engine === 'system' ? 'system' : `openai:${engines?.model ?? ''}` });
+  renderCard();
+  const stale = () => tr !== t || t.seq !== seq || !live(gen);
+  try {
+    const out = await shotTranslateAgain(gen, engine);
+    if (!stale()) doneTr(t, out);
+  } catch (e) {
+    if (!stale()) failTr(t, e as AppError);
+  }
+}
+
+/** 复制译文（回车或按钮）：写剪切板进历史，然后走成功收尾。 */
+async function copyTranslation() {
+  if (S.phase !== 'card' || tr?.kind !== 'done') return;
+  const gen = S.gen, text = tr.text;
+  S.phase = 'done';
+  try {
+    await shotCopyText(gen, text);
+  } catch (e) {
+    if (!live(gen)) return;
+    S.phase = 'card';
+    toast((e as AppError)?.message || '复制失败', { icon: 'close', danger: true });
+    toastT = window.setTimeout(() => (toastEl.dataset.open = 'false'), 2800);
+    return;
+  }
+  if (live(gen)) succeed(gen, `已复制译文 · ${[...text].length} 字，已加入历史`, { icon: 'check' });
+}
+
+card.addEventListener('click', (e) => {
+  const b = (e.target as Element).closest<HTMLElement>('button[data-act]');
+  if (!b || b.getAttribute('aria-disabled') === 'true') return;
+  switch (b.dataset.act) {
+    case 'close': return closeOverlay();
+    case 'copy': return void copyTranslation();
+    case 'switch': return void again(b.dataset.engine as Engine);
+  }
+});
 
 /* —— 录屏：倒计时 3、2、1，数到 0 开始录制（M24） —— */
 function startCountdown() {
@@ -630,7 +774,7 @@ function escape() {
   if (S.editing) return commitText();
   if (S.phase === 'selected') return clearSelection();
   // 倒计时中右键退出遮罩，不回到选区（对计划的裁定 2）
-  if (S.phase === 'idle' || S.phase === 'busy' || S.phase === 'countdown') closeOverlay();
+  if (S.phase === 'idle' || S.phase === 'busy' || S.phase === 'countdown' || S.phase === 'card') closeOverlay();
 }
 
 /* —— 键盘（键位对照原型） —— */
@@ -641,6 +785,11 @@ addEventListener('keydown', (e) => {
   const mod = isMac ? e.metaKey : e.ctrlKey;
   // Esc 直接退出，有选区也不先取消（M23 规则 8；取消选区用右键）
   if (e.key === 'Escape') { e.preventDefault(); closeOverlay(); return; }
+  // 译文卡片：只有回车复制、Esc 关闭；卡片里选中文字后的 Mod + C 照常。焦点在卡片按钮（如“关闭”）上时回车交给按钮
+  if (S.phase === 'card') {
+    if (e.key === 'Enter' && !(e.target instanceof Element && e.target.closest('button'))) { e.preventDefault(); void copyTranslation(); }
+    return;
+  }
   if (S.phase !== 'idle' && S.phase !== 'selected') return;
   if (e.key === 'Enter') {
     e.preventDefault();
@@ -654,6 +803,7 @@ addEventListener('keydown', (e) => {
   if (mod && e.code === 'KeyZ') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return; }
   if (mod && e.code === 'KeyS') { e.preventDefault(); void act('save'); return; }
   if (!mod && e.code === 'KeyO') { e.preventDefault(); void act('ocr'); return; }
+  if (!mod && e.code === 'KeyT') { e.preventDefault(); void act('translate'); return; }
   if (!mod && e.code === 'KeyP') { e.preventDefault(); void act('pin'); return; }
   const m = /^Digit([1-7])$/.exec(e.code);
   if (!mod && m) { e.preventDefault(); toggleTool(TOOLS[+m[1] - 1][0], false); return; }

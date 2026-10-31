@@ -34,6 +34,15 @@ export interface Settings {
   recQuality: RecQuality;
   /** 30 | 60 */
   recFps: number;
+  /** '' 表示还没选 | 'system' | 'openai' */
+  translateEngine: string;
+  translateBaseUrl: string;
+  translateApiKey: string;
+  translateModel: string;
+  /** zh-Hans | zh-Hant | en | ja | ko */
+  translateLang: string;
+  /** 划词翻译全局快捷键；'' 表示不启用（M15、M26 规则 18） */
+  translateHotkey: string;
 }
 
 export interface PlatformInfo {
@@ -120,11 +129,64 @@ export interface RecordDetail extends RecordSummary {
   image: ImageInfo | null;
   video: VideoInfo | null;
   ocrText: string | null;
+  /** 最新一份译文及其目标语言代码 */
+  translation: string | null;
+  translationLang: string | null;
+  /** 翻译方式标签：`system` 或 `openai:{模型 ID}` */
+  translationEngine: string | null;
 }
 
 export interface AppError {
-  kind: 'fileMissing' | 'clipboardWrite' | 'hotkeyTaken' | 'shotHotkeyTaken' | 'recHotkeyTaken' | 'invalidSettings' | 'invalid' | 'internal';
+  kind:
+    | 'fileMissing'
+    | 'clipboardWrite'
+    | 'hotkeyTaken'
+    | 'shotHotkeyTaken'
+    | 'recHotkeyTaken'
+    | 'translateHotkeyTaken'
+    | 'invalidSettings'
+    | 'invalid'
+    | 'internal'
+    | 'translateConfig'
+    | 'translatePack'
+    | 'translateOs'
+    | 'translate';
   message: string;
+  /** 只有 translatePack：识别出的源语言代码与目标语言代码，下载语言包并重试时用（M26 规则 17） */
+  source?: string;
+  target?: string;
+}
+
+/** `translate_record` 的结果：去掉首尾空白的译文与实际翻成的语言代码（M26 规则 8、9）。 */
+export interface Translated {
+  text: string;
+  lang: string;
+  /** 翻译方式标签：`system` 或 `openai:{模型 ID}` */
+  engine: string;
+}
+
+/** `translate_engines`：两种翻译方式各自能不能用；`model` 为去掉首尾空白的模型 ID。 */
+export interface Engines {
+  system: boolean;
+  openai: boolean;
+  model: string;
+  /** 按设置会用的翻译方式标签：`system` 或 `openai:{模型 ID}` */
+  current: string;
+}
+
+/** 系统翻译可用性；`pack` 为英语 ↔ 目标语言的语言包状态，不支持系统翻译时为 null。 */
+export interface TranslateStatus {
+  supported: boolean;
+  pack: 'installed' | 'download' | 'unsupported' | null;
+}
+
+/** `translate-delta` 载荷：`id` 为记录 id，截图翻译时为 null；`text` 是本次新增的部分。 */
+export interface TranslateDelta {
+  id: number | null;
+  lang: string;
+  /** 翻译方式标签 */
+  engine: string;
+  text: string;
 }
 
 export type CopyResult =
@@ -156,6 +218,23 @@ export type BeginPayload = {
   /** 设置“录屏帧率” */
   recFps: number;
 };
-export type ShotAction = 'copy' | 'save' | 'ocr' | 'pin';
-/** 对应 `shot::ShotOutcome`。 */
-export type ShotOutcome = { action: ShotAction; chars: number | null; file: string | null; copied: boolean };
+export type ShotAction = 'copy' | 'save' | 'ocr' | 'pin' | 'translate';
+/** 对应 `shot::ShotOutcome`；`text` 为完整译文、`engine` 为翻译方式标签，只有翻译动作有值。 */
+export type ShotOutcome = { action: ShotAction; chars: number | null; file: string | null; copied: boolean; text: string | null; engine: string | null };
+
+/** 划词卡片 `trcard-show`，对应 `trcard::Show`（M26 规则 19）。`seq` 之后的命令都带它；
+ *  `source` / `engine` / `noAccess` 只对 `text` 有意义，`hotkey` 只对 `empty`。 */
+export type CardShow = {
+  kind: 'text' | 'input' | 'blocked';
+  seq: number;
+  /** 完整原文（卡片显示前 40 个字，展开对照时整段） */
+  source: string | null;
+  /** 翻译方式标签：`system` 或 `openai:{模型 ID}` */
+  engine: string | null;
+  /** 没有辅助功能权限，翻译的是剪切板里的文字 */
+  noAccess: boolean;
+};
+/** 划词卡片 `trcard-done`，对应 `trcard::Done`。已被取代或关闭的请求不发。 */
+export type CardDone = { seq: number; ok: boolean; text: string | null; lang: string | null; engine: string; error: AppError | null };
+/** `trcard_translate` 的结果：新序号（恒为传入的 + 1）与这次用的翻译方式标签，对应 `trcard::Again`。 */
+export type CardAgain = { seq: number; engine: string };

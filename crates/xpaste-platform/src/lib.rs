@@ -110,6 +110,65 @@ fn ocr_text(lines: Vec<(String, f32)>) -> OcrText {
     OcrText { text, confidence }
 }
 
+/// 系统翻译语言包状态（M26 规则 7）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackStatus {
+    /// 已下载
+    Installed,
+    /// 支持，需要用户在系统设置里下载
+    Download,
+    /// 不支持（含系统低于 macOS 26、Windows）
+    Unsupported,
+}
+
+/// 系统翻译失败原因（M26 规则 7、13）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SysTranslateError {
+    /// 系统低于 macOS 26
+    OsTooOld,
+    /// 缺语言包；`source` 为识别出的源语言代码，用来拼提示文案
+    NotInstalled { source: String },
+    /// 语言不支持或识别不出源语言
+    Unsupported,
+    /// 30 秒内没有结果
+    Timeout,
+    /// 其他失败；不带消息，日志另记错误码
+    Failed,
+}
+
+/// 每 `step_ms` 查一次 `done`，为真立即返回 true；累计等满 `max_ms` 后最后查一次仍为假返回 false。
+pub(crate) fn wait_until(mut done: impl FnMut() -> bool, step_ms: u64, max_ms: u64) -> bool {
+    let mut waited = 0;
+    loop {
+        if done() {
+            return true;
+        }
+        if waited >= max_ms {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(step_ms));
+        waited += step_ms;
+    }
+}
+
+/// 模拟一次“复制”（macOS ⌘C，Windows Ctrl+Insert），返回剪切板有没有变（M26 规则 18）。
+/// 先等修饰键松开（最多 500 ms，否则按快捷键的 ⌥⇧ 会叠进去），再发按键，最多等 400 ms 看剪切板序号。
+/// macOS 没有辅助功能权限时返回 `NoAccessibility`，调用方改为翻译剪切板。
+/// 阻塞最多约 900 ms，只在后台线程调用，不要在主线程上调。
+pub fn copy_selection() -> Result<bool, PlatformError> {
+    if can_paste(None) == PasteBlock::NeedAccessibility {
+        return Err(PlatformError::NoAccessibility);
+    }
+    // 等不到松开就不发：Windows 会变成 Ctrl+Alt+Shift+Insert（Shift+Insert 在有的应用里是粘贴），
+    // 注入的 Ctrl 松开还会把用户按着的 Ctrl 在逻辑上松掉。返回“没变”，调用方翻译剪切板
+    if !wait_until(|| !modifiers_down(), 10, 500) {
+        return Ok(false);
+    }
+    let before = change_count();
+    send_copy()?;
+    Ok(wait_until(|| change_count() != before, 20, 400))
+}
+
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
@@ -132,6 +191,35 @@ mod tests {
         assert_eq!((r.text.as_str(), r.confidence), ("a\nb", 0.75));
         let empty = super::ocr_text(vec![]);
         assert_eq!((empty.text.as_str(), empty.confidence), ("", 0.0));
+    }
+
+    #[test]
+    fn wait_until_stops_at_max() {
+        let mut calls = 0;
+        assert!(!super::wait_until(
+            || {
+                calls += 1;
+                false
+            },
+            5,
+            15
+        ));
+        // 0、5、10、15 ms 各查一次
+        assert_eq!(calls, 4);
+    }
+
+    #[test]
+    fn wait_until_returns_early() {
+        let mut calls = 0;
+        assert!(super::wait_until(
+            || {
+                calls += 1;
+                calls == 2
+            },
+            5,
+            1000
+        ));
+        assert_eq!(calls, 2);
     }
 
     #[test]

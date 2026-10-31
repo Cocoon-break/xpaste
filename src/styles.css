@@ -407,6 +407,17 @@ mark { background: var(--mark-bg); color: var(--mark-fg); border-radius: 3px; pa
 .ocr-block .muted { margin-left: 4px; font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
 .ocr-actions { position: absolute; top: 9px; right: 10px; display: flex; gap: 6px; }
 .ocr-text { margin: 0; padding: 0 14px 12px; font: 12.5px/1.7 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; cursor: text; }
+/* 有文字时右上角多一个“翻译”（M26 规则 2） */
+.ocr-block[open]:has([data-ocr="translate"]) summary { padding-right: 150px; }
+/* 译文：容器与标题行同图中文字，默认展开、不可折叠；逐段追加不加动效（M26 规则 3） */
+.tr-block { margin-top: 12px; border: 1px solid var(--line-2); border-radius: 12px; background: var(--glass-2); }
+/* 标题行带翻译方式、按钮多了“换用…”（M26 规则 16）：放不下时按钮整组换到下一行，靠右 */
+.tr-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 9px 10px 9px 14px; font-size: 13px; line-height: 26px; }
+.tr-head > span { margin-right: auto; overflow-wrap: anywhere; }
+.tr-actions { display: flex; gap: 6px; margin-left: auto; }
+.tr-text { margin: 0; padding: 0 14px 12px; font: inherit; font-size: 14px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; cursor: text; }
+.tr-text.mono { font: 12.5px/1.7 var(--font-mono); }
+.tr-err { margin: 0; padding: 0 14px 12px; font-size: 12.5px; color: var(--danger); }
 .p-video { margin: 0; display: grid; gap: 10px; }
 .poster { position: relative; border-radius: 14px; overflow: hidden; border: 1px solid var(--line-2); box-shadow: var(--shadow-pop); }
 .poster img, .p-video video { display: block; width: 100%; height: auto; }
@@ -534,7 +545,7 @@ dialog > form { display: contents; }
 }
 .field select option { background: var(--pop-solid); color: var(--fg); }
 .field input:focus-visible, .field select:focus-visible { outline: none; border-color: var(--beam); box-shadow: 0 0 0 3px color-mix(in srgb, var(--beam) 18%, transparent); }
-#hotkey, #shotHotkey { font-family: var(--font-mono); cursor: pointer; }
+#hotkey, #shotHotkey, #trHotkey { font-family: var(--font-mono); cursor: pointer; }
 /* 不记录这些应用：芯片 + 组合框，外框代替输入框描边与焦点环；候选列表在文档流内，不会被中部滚动区裁掉 */
 .apps-box {
   display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 38px; padding: 5px 6px 5px 8px; border-radius: 10px;
@@ -606,6 +617,31 @@ dialog > form { display: contents; }
 /* 外观、自动粘贴权限（仅 macOS）：说明在左、控件在右 */
 .line { display: flex; justify-content: space-between; align-items: center; gap: 16px; min-height: 26px; }
 /* 截图文件夹：只读路径 + 更改按钮；开关列表里的权限行 */
+/* 翻译标签（M26 规则 6）：默认翻译方式是两张单选卡片（圆点 + 名称 + 一句说明，选中的描边与圆点用品牌色），
+   不用分段控件：它像标签页，深色下选中的一块也看不出来；系统翻译、AI 翻译两组配置常驻，各带标题；测试结果行 */
+.field .lbl { font-size: 13px; font-weight: 500; }
+.tr-pick { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.tr-pick label {
+  display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: 10px; cursor: pointer;
+  background: var(--glass-3); border: 1px solid var(--line-2); transition: border-color 160ms ease, background-color 160ms ease;
+}
+.tr-pick label:has(:checked) { border-color: var(--beam); background: color-mix(in srgb, var(--beam) 10%, var(--glass-3)); }
+.tr-pick label:has(:focus-visible) { outline: 2px solid var(--beam); outline-offset: 2px; }
+.field .tr-pick input {
+  appearance: none; flex: none; margin: 2px 0 0; padding: 0; width: 16px; height: 16px; border-radius: 50%;
+  border: 1.5px solid var(--line-2); background: transparent; cursor: pointer; transition: border-color 160ms ease;
+}
+.field .tr-pick input:checked { border-color: var(--beam); background: radial-gradient(circle, var(--beam) 0 3.5px, transparent 4px); }
+.field .tr-pick input:focus-visible { outline: none; box-shadow: none; }
+.tr-pick b { display: block; font-weight: 500; font-size: 13px; }
+.tr-pick small { display: block; font-size: 12px; color: var(--faint); }
+@media (hover: hover) and (pointer: fine) { .tr-pick label:not(:has(:checked)):hover { border-color: var(--muted); } }
+.tr-group { display: grid; gap: 12px; padding-top: 16px; border-top: 1px solid var(--line); }
+.tr-group h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.tr-group > .help { margin: -6px 0 0; }
+.tr-result { min-width: 0; overflow-wrap: anywhere; }
+.tr-result.is-ok { color: var(--c-code); }
+.tr-result.is-err { color: var(--danger); }
 .pick { display: flex; gap: 8px; }
 .pick input { flex: 1; min-width: 0; }
 .pick .btn { height: 38px; }
@@ -629,6 +665,9 @@ dialog > form { display: contents; }
 
 /* 761–800px：Windows 上 Ctrl 较宽，撤销提示与“清空搜索”同时出现时收紧间距，最后一项不被裁掉 */
 @media (max-width: 800px) { .statusbar { gap: 12px; } }
+/* 翻译提示让位给选中项说明（M19 规则 1）：900px 以下、或撤销提示出现时不显示 */
+@media (max-width: 900px) { #trHint { display: none; } }
+.statusbar:has(#undoHint:not([hidden])) #trHint { display: none; }
 
 /* —— 窄窗口（720–760px）：列表与预览上下叠放 —— */
 @media (max-width: 760px) {

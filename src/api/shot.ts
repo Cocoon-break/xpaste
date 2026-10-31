@@ -7,7 +7,9 @@ import { emit, listen } from '@tauri-apps/api/event';
 import { Menu } from '@tauri-apps/api/menu';
 import { currentMonitor, getCurrentWindow, primaryMonitor } from '@tauri-apps/api/window';
 
-import type { BeginPayload, LRect, ShotAction, ShotOutcome } from './types';
+import { translateEngines } from './commands';
+import { TRANSLATE_DELTA } from './events';
+import type { BeginPayload, Engines, LRect, ShotAction, ShotOutcome, TranslateDelta } from './types';
 
 export type { BeginPayload, LRect, ShotAction, ShotOutcome };
 /** 冻结帧：物理像素，RGBA（非预乘）。 */
@@ -57,6 +59,23 @@ export function shotFinish(png: Uint8Array, action: ShotAction, index: number, r
   const r = [rect.x, rect.y, rect.w, rect.h].map((n) => Math.round(n * 100) / 100).join(',');
   return invoke<ShotOutcome>('shot_finish', png, { headers: { 'x-action': action, 'x-index': String(index), 'x-rect': r } });
 }
+
+/** 截图翻译的增量（M26 规则 5）：后端只发给发起的遮罩；面板翻译的广播（`id` 不为 null）不收。`engine` 为翻译方式标签。 */
+export async function onShotTranslateDelta(cb: (text: string, engine: string) => void): Promise<void> {
+  if (stub) { dev.delta = cb; return; }
+  await listen<TranslateDelta>(TRANSLATE_DELTA, (e) => { if (e.payload.id === null) cb(e.payload.text, e.payload.engine); }, { target: getCurrentWindow().label });
+}
+
+/** 译文卡片“换用…”（M26 规则 16）：用本次截图识别出的原文按 `engine` 重翻，增量照旧发给本遮罩。 */
+export const shotTranslateAgain = (generation: number, engine: 'system' | 'openai') =>
+  stub ? dev.finish('translate') : invoke<ShotOutcome>('shot_translate_again', { generation, engine });
+
+/** 两种翻译方式能不能用、按设置用哪种（M26 规则 16）。 */
+export const shotEngines = (): Promise<Engines> =>
+  stub ? Promise.resolve({ system: true, openai: true, model: 'gpt-4o-mini', current: 'system' }) : translateEngines();
+
+/** 译文卡片“复制译文”：写剪切板（进历史）后后端进入提示条模式。 */
+export const shotCopyText = (generation: number, text: string) => (stub ? Promise.resolve() : invoke<void>('shot_copy_text', { generation, text }));
 
 /** 倒计时结束，开始录屏（M24）。成功时后端已结束这次截图、隐藏遮罩；`generation`、`index` 取自载荷。 */
 export const recStart = (a: { generation: number; index: number; rect: LRect; systemAudio: boolean; microphone: boolean }) =>
@@ -137,6 +156,7 @@ export async function pinMenu(items: MenuEntry[]): Promise<void> {
 const dev = {
   gen: 0,
   begin: null as ((p: BeginPayload) => void) | null,
+  delta: null as ((text: string, engine: string) => void) | null,
   wins(): LRect[] {
     const W = innerWidth, H = innerHeight, R = (x: number, y: number, w: number, h: number) => ({ x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) });
     // 由前到后：菜单栏、浏览器、聊天、编辑器
@@ -175,10 +195,17 @@ const dev = {
     return { w: cv.width, h: cv.height, rgba: d.data };
   },
   async finish(action: ShotAction): Promise<ShotOutcome> {
-    await new Promise((r) => setTimeout(r, action === 'ocr' ? 900 : 60));
+    await new Promise((r) => setTimeout(r, action === 'ocr' || action === 'translate' ? 900 : 60));
+    if (action === 'translate') {
+      // `?trfail` 中途失败
+      const parts = ['The total budget for this quarter is ', '4.8 million yuan, ', 'an increase of 12% ', 'over the previous quarter.\n\n', 'Q4 2026 Budget'];
+      for (const p of parts) { this.delta?.(p, 'system'); await new Promise((r) => setTimeout(r, 250)); if (this.q.has('trfail')) throw { message: '翻译超时' }; }
+      const text = parts.join('');
+      return { action, chars: text.length, file: null, copied: false, text, engine: 'system' };
+    }
     const p = (n: number) => String(n).padStart(2, '0'), d = new Date();
     const file = `截图 ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}.${p(d.getMinutes())}.png`;
-    return { action, chars: action === 'ocr' ? 42 : null, file: action === 'save' ? file : null, copied: action !== 'pin' };
+    return { action, chars: action === 'ocr' ? 42 : null, file: action === 'save' ? file : null, copied: action !== 'pin', text: null, engine: null };
   },
   async cancel() {
     setTimeout(() => this.begin?.(this.payload()), 800);
@@ -216,7 +243,7 @@ const devPin = {
     document.getElementById('pin')?.remove();
   },
   async outcome(action: 'copy' | 'save'): Promise<ShotOutcome> {
-    return { action, chars: null, file: action === 'save' ? '截图 2026-10-28 10.24.png' : null, copied: true };
+    return { action, chars: null, file: action === 'save' ? '截图 2026-10-28 10.24.png' : null, copied: true, text: null, engine: null };
   },
   async menu(items: MenuEntry[]) {
     console.log('贴图菜单', items.map((it) => (it === 'sep' ? '—' : `${it.text} ${it.accel}`)).join(' | '));

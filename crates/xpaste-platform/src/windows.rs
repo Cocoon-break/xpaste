@@ -58,7 +58,9 @@ use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT,
-    KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CONTROL, VK_LBUTTON, VK_RBUTTON,
+    KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, MapVirtualKeyW, SendInput,
+    VIRTUAL_KEY, VK_CONTROL, VK_INSERT, VK_LBUTTON, VK_LWIN, VK_MENU, VK_RBUTTON, VK_RWIN,
+    VK_SHIFT,
 };
 use windows::Win32::UI::Shell::PropertiesSystem::{
     GPS_DEFAULT, IPropertyStore, SHGetPropertyStoreFromParsingName,
@@ -72,9 +74,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GWL_EXSTYLE, GetClassNameW, GetForegroundWindow, GetIconInfo, GetMessageW,
     GetWindowLongW, GetWindowTextLengthW, GetWindowThreadProcessId, HICON, HWND_MESSAGE, ICONINFO,
     InternalGetWindowText, IsIconic, IsWindow, IsWindowVisible, MONITORINFOF_PRIMARY, MSG,
-    RegisterClassW, SetForegroundWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT,
-    WINEVENT_SKIPOWNPROCESS, WM_CLIPBOARDUPDATE, WNDCLASSW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
-    WS_EX_TRANSPARENT,
+    RegisterClassW, SW_HIDE, SW_SHOWNOACTIVATE, SetForegroundWindow, ShowWindow, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_CLIPBOARDUPDATE, WNDCLASSW,
+    WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
 };
 use windows::core::{BOOL, Error, HSTRING, Interface, PCWSTR, PWSTR, w};
 use xpaste_core::capture::MAX_FLAVOR_BYTES;
@@ -88,7 +90,10 @@ use crate::winfmt::{
     formats_to_read, is_desktop_class, is_shell_tray_class, join_ocr_words, parse_hdrop,
     png_to_dib, standard_format_id, standard_format_name, video_meta_from_props, write_bytes,
 };
-use crate::{Frame, OcrError, OcrText, PIN_TITLE_PREFIX, PasteBlock, PlatformError, WinRect};
+use crate::{
+    Frame, OcrError, OcrText, PIN_TITLE_PREFIX, PackStatus, PasteBlock, PlatformError,
+    SysTranslateError, WinRect,
+};
 
 pub const OS: &str = "windows";
 
@@ -656,6 +661,24 @@ pub fn activate_window(hwnd: isize) {
     }
 }
 
+/// 显示窗口但不激活它，前台窗口与键盘不变（划词卡片的提示，M26 规则 19）。
+/// tao 只在建窗口时按 `focused(false)` 用 SW_SHOWNOACTIVATE，之后的 `show()` 都是会激活的 SW_SHOW。hwnd 失效时什么也不做。
+pub fn show_no_activate(hwnd: isize) {
+    // SAFETY: hwnd 失效时调用失败而不会崩溃；返回值是之前是否可见，不是错误
+    unsafe {
+        let _ = ShowWindow(HWND(hwnd as *mut _), SW_SHOWNOACTIVATE);
+    }
+}
+
+/// 隐藏窗口。经 `show_no_activate` 显示的窗口要用它收起：tao 不知道窗口已显示，`hide()` 比对自己的可见标记后什么也不做。
+/// hwnd 失效时什么也不做。
+pub fn hide_window(hwnd: isize) {
+    // SAFETY: 同 show_no_activate
+    unsafe {
+        let _ = ShowWindow(HWND(hwnd as *mut _), SW_HIDE);
+    }
+}
+
 /// 把 `target` 切回前台（最多等 100 ms），再发 Ctrl+V。
 pub fn paste(target: Option<isize>) -> Result<(), PlatformError> {
     if let Some(h) = target {
@@ -674,12 +697,12 @@ pub fn paste(target: Option<isize>) -> Result<(), PlatformError> {
         }
     }
     let v = VIRTUAL_KEY(u16::from(b'V'));
-    let inputs = [
-        key(VK_CONTROL, false),
-        key(v, false),
-        key(v, true),
-        key(VK_CONTROL, true),
-    ];
+    send_ctrl(key(v, false), key(v, true))
+}
+
+/// 发 Ctrl 按下、`down`、`up`、Ctrl 松开。
+fn send_ctrl(down: INPUT, up: INPUT) -> Result<(), PlatformError> {
+    let inputs = [key(VK_CONTROL, false), down, up, key(VK_CONTROL, true)];
     // SAFETY: inputs 是本地数组，cbsize 为单个 INPUT 大小
     let sent = unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) };
     if sent as usize != inputs.len() {
@@ -690,6 +713,37 @@ pub fn paste(target: Option<isize>) -> Result<(), PlatformError> {
         )));
     }
     Ok(())
+}
+
+/// 向前台窗口发 Ctrl+Insert（M26 规则 18）。不用 Ctrl+C：终端里没有选区时 Ctrl+C 是中断。
+pub(crate) fn send_copy() -> Result<(), PlatformError> {
+    // 导航区的 Insert：扫描码与扩展键标志一起带。只带扫描码会被当成小键盘 0（Ctrl+小键盘 0 在浏览器里是重置缩放）
+    // SAFETY: 纯查询
+    let scan = unsafe { MapVirtualKeyW(u32::from(VK_INSERT.0), MAPVK_VK_TO_VSC) } as u16;
+    let ins = |up: bool| INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: VK_INSERT,
+                wScan: scan,
+                dwFlags: if up {
+                    KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP
+                } else {
+                    KEYEVENTF_EXTENDEDKEY
+                },
+                ..Default::default()
+            },
+        },
+    };
+    send_ctrl(ins(false), ins(true))
+}
+
+/// Alt、Shift、Ctrl、Win 中有没有按着的（M26 规则 18）。
+pub(crate) fn modifiers_down() -> bool {
+    // SAFETY: 纯查询；最高位为 1 表示按着
+    [VK_MENU, VK_SHIFT, VK_CONTROL, VK_LWIN, VK_RWIN]
+        .iter()
+        .any(|vk| unsafe { GetAsyncKeyState(vk.0 as i32) } < 0)
 }
 
 pub fn request_accessibility() {}
@@ -923,6 +977,37 @@ pub fn ocr_png_bytes(png: &[u8], max_side_px: u32) -> Result<Option<OcrText>, Oc
         .collect::<Result<Vec<_>, Error>>()
         .map_err(err)?;
     Ok(Some(crate::ocr_text(lines)))
+}
+
+/// 系统翻译只在 macOS 26 及以上提供（M26 规则 7）。
+pub fn translate_supported() -> bool {
+    false
+}
+
+pub fn translate_pack(_target: &str) -> PackStatus {
+    PackStatus::Unsupported
+}
+
+pub fn translate_text(_text: &str, _target: &str) -> Result<String, SysTranslateError> {
+    Err(SysTranslateError::Unsupported)
+}
+
+/// 系统翻译只在 macOS 上有。
+///
+/// # Safety
+/// 同 macOS：`window` 为空或是有效的窗口指针（这里不用它）。
+pub unsafe fn translate_prepare(
+    _source: &str,
+    _target: &str,
+    _window: *mut std::ffi::c_void,
+) -> Result<PackStatus, SysTranslateError> {
+    Err(SysTranslateError::Unsupported)
+}
+
+pub fn translate_prepare_cancel(_window: usize) {}
+
+pub fn language_name(_code: &str) -> Option<String> {
+    None
 }
 
 /// 当前线程降到低于正常优先级（后台识别用）。尽力而为。

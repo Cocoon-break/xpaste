@@ -2,8 +2,8 @@ import './styles.css';
 import { attachConsole, info } from './api/log';
 import {
   accessibilityGranted, bootstrap, clearHistory, copy, copyTextPlain, countUnpinned, createSnippet, deleteRecords, finishOnboarding, frontendReady, getRecord, hidePanel, installedApps,
-  ocrProgress, openUrl, overlayBegin, pickFolder, prunePreview, reocr, requestAccessibility, requestScreenCapture, revealFile, saveSettings, saveSnippet, screenCaptureGranted, search,
-  setDialogOpen, setPaused, setPinned, undoDelete, updateSnippet,
+  ocrProgress, openUrl, overlayBegin, pickFolder, prunePreview, reocr, requestAccessibility, requestScreenCapture, revealFile, saveSettings, saveSnippet, screenCaptureGranted, search, trcardPress,
+  setDialogOpen, setPaused, setPinned, translateEngines, translateDownload, translateRecord, translateStatus, translateTest, undoDelete, updateSnippet,
 } from './api/commands';
 import {
   onConfirmClear,
@@ -19,8 +19,9 @@ import {
   onRecordUpdated,
   onSettingsChanged,
   onShotNeedPermission,
+  onTranslateDelta,
 } from './api/events';
-import type { AppError, Appearance, FileEntry, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
+import type { AppError, Appearance, Engines, FileEntry, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
 import { copyToast, needsAccessibility } from './copy-status';
 import {
   canInlinePlay, esc, FILTERS, FL, fmtBytes, fmtDateTime, fmtDur, fmtInt, hl, hlCode, host, isFav, isHttpUrl, isSnip, LABEL, rel, truncate, videoChips,
@@ -31,13 +32,15 @@ import { keyAction } from './keymap';
 import { copyVerb, escHint, openLabel } from './labels';
 import { ocrLabel, ocrProgressLabel, snippetHTML } from './ocr-label';
 import { searchGate } from './search-gate';
+import { otherEngine, staleDelta, translatable, trAfterDelta, trAfterEnd, trBlockHTML, type Engine, type Tr } from './translate';
 import { nextStep, onboardSteps, type Step } from './onboarding';
 import { applyAdded, applyRemoved, applyUpdated } from './records';
 import {
   centerWin, clampWin, DAY, followNow, HOUR, layoutBars, miniWin, panWin, sameColumns, spanOf, spectrumStat, staggerIndex,
   ticks as winTicks, winLabel, xOf, zoomWin, type Layout, type Win,
 } from './spectrum';
-import { addIgnored, formToSettings, optionFromRetention, parseFrequent, parseLimit, pickerOptions, removeIgnored } from './settings-form';
+import { addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFrequent, parseLimit, pickerOptions, removeIgnored } from './settings-form';
+import { composing, justComposed } from './ime';
 import { errorControl, revealsFocus, tabKeyTarget } from './settings-tabs';
 import {
   armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, nextSelection, pruneMulti, rangeIds, snippetTextChange, UNDO_MS, visible, type UndoState,
@@ -72,6 +75,8 @@ const I = {
   // 片段：书签与铅笔（M25 规则 2、6）
   snip: '<path d="M6 3.5h8v13l-4-3-4 3z"/>',
   pencil: '<path d="M4 16l1-4 8-8 3 3-8 8z"/><path d="M11.5 5.5l3 3"/>',
+  // 翻译：“文”与“A”（M26 规则 2）
+  translate: '<path d="M3 5h7M6.5 3.5V5M8.7 5c-.7 3-2.5 5.2-5.2 6.5M5.2 7.6c.9 1.7 2.3 2.9 4 3.6"/><path d="m10.5 16.5 3-7.5 3 7.5M11.6 14h3.8"/>',
 };
 const svg = (n: keyof typeof I, cls = '') =>
   `<svg class="ic ${cls}" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n]}</svg>`;
@@ -103,6 +108,7 @@ const win = $('#win'), list = $('#list'), rowsEl = $('#rows'), ind = $('#ind'), 
 const tabs = $('#tabs'), tabsBase = $('#tabsBase'), tabsOver = $('#tabsOver');
 const ptype = $('#ptype'), pbody = $('#pbody'), pmeta = $('#pmeta'), countEl = $('#count');
 const pinBtn = $<HTMLButtonElement>('#pinBtn'), copyBtn = $<HTMLButtonElement>('#copyBtn');
+const trBtn = $<HTMLButtonElement>('#trBtn');
 const delBtn = $<HTMLButtonElement>('#delBtn'), saveSnipBtn = $<HTMLButtonElement>('#saveSnipBtn'), editSnipBtn = $<HTMLButtonElement>('#editSnipBtn');
 const snipBar = $('#snipBar');
 const menu = $('#menu'), mOpen = $<HTMLButtonElement>('[data-m="open"]'), toastEl = $('#toast'), toastMsg = $('#toastMsg'), undoBtn = $<HTMLButtonElement>('#undoBtn'), toastAct = $<HTMLButtonElement>('#toastAct'), pauseBtn = $('#pauseBtn');
@@ -133,6 +139,8 @@ const S = {
   paused: false,
   /** macOS 已授权辅助功能 / Windows：Enter 直接粘贴 */
   canPaste: false,
+  /** 两种翻译方式能不能用：唤起时、保存设置后取（M26 规则 16）；没取到时不显示换用按钮 */
+  engines: null as Engines | null,
   cells: [] as Cell[],
   total: 0,
   /** 当前可见条数，供 aria-setsize */
@@ -474,7 +482,7 @@ function ocrBlockHTML(d: RecordDetail): string {
   const st = d.ocrState;
   if (st !== 1 && st !== 3 && st !== 4) return '';
   const act = st === 1
-    ? '<button class="btn sm" type="button" data-ocr="copy">复制文字</button>'
+    ? '<button class="btn sm" type="button" data-ocr="copy">复制文字</button><button class="btn sm" type="button" data-ocr="translate">翻译</button>'
     : '<button class="btn sm" type="button" data-ocr="again">重新识别</button>';
   return `<details class="ocr-block"><summary>图中文字 <span class="muted">${esc(ocrLabel(st, d.ocrText))}</span></summary><div class="ocr-actions">${act}</div>${st === 1 ? `<pre class="ocr-text">${esc(d.ocrText ?? '')}</pre>` : ''}</details>`;
 }
@@ -548,7 +556,8 @@ function showBody(d: RecordDetail | null, fade: boolean) {
   S.detail = d;
   pbody.style.opacity = pbody.style.filter = '';
   const cur = d && S.records.get(d.id);
-  pbody.innerHTML = d ? (cur && isSnip(cur) ? snipNameHTML(cur) : '') + bodyHTML(d) : '';
+  // 译文区块挂在正文最后：文本、代码在原文之后，图片、文件在图中文字之后（M26 规则 3）
+  pbody.innerHTML = d ? (cur && isSnip(cur) ? snipNameHTML(cur) : '') + bodyHTML(d) + `<div class="tr-slot">${trSlotHTML(d)}</div>` : '';
   pbody.scrollTop = 0;
   if (cur) pmeta.innerHTML = metaHTML(cur, d);
   if (fade) fx(pbody, [{ opacity: 0.35, transform: 'translateY(4px)', filter: 'blur(2px)' }, { opacity: 1, transform: 'none', filter: 'blur(0)' }], { duration: 180, easing: EASE_ENTER });
@@ -559,6 +568,8 @@ function renderPreview(fade = false) {
   const bulk = S.multi.size >= 2, snip = !!r && isSnip(r);
   [pinBtn, copyBtn, delBtn, saveSnipBtn, editSnipBtn].forEach((b) => (b.disabled = !r || (bulk && b !== delBtn)));
   pinBtn.hidden = saveSnipBtn.hidden = snip;
+  // 翻译入口只对可翻译的单条记录出现（M26 规则 1）
+  trBtn.hidden = $('#trHint').hidden = !r || bulk || !translatable(r);
   editSnipBtn.hidden = !snip;
   if (bulk) {
     // 批量预览：列出名字，删除与取消选择；离开多选时重取正文
@@ -647,10 +658,121 @@ function refreshOcr(id: number) {
         if (det) det.open = open;
         if (had) (det?.querySelector('summary') ?? q).focus({ preventScroll: true });
       }
+      // 识别文字变了，库里的译文已作废：译文区块跟着详情重绘
+      paintTr(id);
       const cur = S.records.get(id);
       if (cur) pmeta.innerHTML = metaHTML(cur, d);
     },
     (e: AppError) => void info(`get_record 失败 id=${id} kind=${e.kind}`),
+  );
+}
+
+// —— 翻译（M26 规则 2–4）——
+// 进行中与本次会话的结果按记录 id 存着：切走不取消请求，回来时照常显示；没有时用详情里存库的译文
+const trs = new Map<number, Tr>();
+// 每条记录最近一次请求的序号与指定的方式：翻译中换用后，被接替的请求迟到的结果与增量据此丢掉（M26 规则 16）
+const trReq = new Map<number, { n: number; want?: Engine }>();
+let trN = 0;
+const trOf = (id: number, d = S.detail?.id === id ? S.detail : details.get(id)): Tr | undefined =>
+  trs.get(id) ?? (d?.translation ? { text: d.translation, lang: d.translationLang ?? '', engine: d.translationEngine ?? '', state: 'done' } : undefined);
+function trSlotHTML(d: RecordDetail): string {
+  const t = trOf(d.id, d);
+  return t ? trBlockHTML(t, d.kind === 'code', S.engines && otherEngine(t.engine, S.engines)) : '';
+}
+// 取两种方式的可用性；变了才重画译文区块（换用按钮跟着出现或消失）
+function refreshEngines() {
+  void translateEngines().then(
+    (e) => {
+      const changed = JSON.stringify(e) !== JSON.stringify(S.engines);
+      S.engines = e;
+      if (changed && S.detail) paintTr(S.detail.id);
+    },
+    (e: AppError) => void info(`读取翻译方式失败 kind=${e.kind}`),
+  );
+}
+// 本次请求会用的方式，规则同后端：指定的 > 存库译文的方式 > 设置（设置为系统翻译但本机用不了时用 AI）。
+// 只用于翻译中先标出方式与失败时的标注；第一段增量到了以增量为准（M26 规则 16）
+function trTagFor(id: number, engine?: Engine): string {
+  const d = S.detail?.id === id ? S.detail : details.get(id);
+  const stored = d?.translation ? d.translationEngine : null;
+  const sys = S.engines?.system ?? S.platform.os === 'macos';
+  const e = engine ?? (stored === 'system' ? 'system' : stored?.startsWith('openai:') ? 'openai'
+    : S.settings.translateEngine !== 'openai' && sys ? 'system' : 'openai');
+  return e === 'system' ? 'system' : `openai:${S.settings.translateModel.trim()}`;
+}
+// 只换 .tr-slot，原文与图中文字不动；焦点在区块里时交给新区块的按钮，翻译中没有按钮就交还搜索框
+function paintTr(id: number) {
+  const d = S.detail;
+  const slot = d?.id === id && bodyFor === id ? pbody.querySelector('.tr-slot') : null;
+  if (!d || !slot) return;
+  const had = slot.contains(document.activeElement);
+  slot.innerHTML = trSlotHTML(d);
+  if (had) (slot.querySelector<HTMLElement>('[data-tr]') ?? q).focus({ preventScroll: true });
+}
+// 预览滚到让译文区块可见：区块比可视区高时让顶部可见（减少动态效果时直接跳过去，M20）
+function revealTr(id: number) {
+  const b = bodyFor === id ? pbody.querySelector('.tr-block') : null;
+  if (!b) return;
+  const pr = pbody.getBoundingClientRect(), br = b.getBoundingClientRect(), pad = 14;
+  const d = br.bottom > pr.bottom - pad ? Math.min(br.bottom - pr.bottom + pad, br.top - pr.top - pad) : br.top < pr.top ? br.top - pr.top - pad : 0;
+  if (d) pbody.scrollBy({ top: d, behavior: reduced.matches ? 'auto' : 'smooth' });
+}
+// 设置已开着时停在原来的标签（M26 规则 19）
+const openTrSettings = () => {
+  if (!dlg.classList.contains('is-shown')) stTab = stTabs.findIndex((t) => t.id === 'st-tab-translate');
+  openSettings();
+};
+// 已有译文或正在翻译：只滚到区块，不发请求；上次失败、中断时等同重新翻译。again：先丢掉旧译文再请求。
+// engine：换用按钮单次指定的方式，不改设置；翻译中也能换用，后端中止进行中的请求（M26 规则 16）
+function doTranslate(id: number, again = false, engine?: Engine) {
+  const r = S.records.get(id);
+  if (!r || !translatable(r)) return;
+  if (again) trs.delete(id);
+  const cur = again ? undefined : trOf(id);
+  if (cur?.state === 'done' || cur?.state === 'busy') return revealTr(id);
+  const tag = trTagFor(id, engine);
+  const n = ++trN;
+  trReq.set(id, { n, want: engine });
+  trs.set(id, { text: '', lang: '', engine: tag, state: 'busy' });
+  paintTr(id);
+  revealTr(id);
+  const end = (res: Parameters<typeof trAfterEnd>[1]) => {
+    if (trReq.get(id)?.n !== n) return;
+    trReq.delete(id);
+    trs.set(id, trAfterEnd(trs.get(id), res));
+    // 成功即已存库：缓存的详情跟着改，下次“重新翻译”按它的方式猜标注
+    if (res.ok) for (const d of [S.detail, details.get(id)]) {
+      if (d?.id === id) Object.assign(d, { translation: res.text, translationLang: res.lang, translationEngine: res.engine });
+    }
+    paintTr(id);
+    // 失败、中断时区块多了原因一行：再滚一次让它可见；成功时不动，免得打断正在读原文的人
+    if (!res.ok) revealTr(id);
+  };
+  // 后端：已存过译文且不是重新翻译时直接返回存库译文（详情还没回来时按 Mod + T 不会覆盖它）；上次失败、中断等同重新翻译
+  // 重新翻译不传 engine，后端沿用存库译文的方式
+  translateRecord(id, again || cur !== undefined, engine).then(
+    (t) => end({ ok: true, ...t }),
+    (err: AppError) => {
+      // 别处已在翻译这条（同一条只跑一个请求）：增量照样会到；已换用：被这次之后的请求接替
+      if (err.kind === 'invalid' && (err.message === '正在翻译' || err.message === '已换用')) return;
+      end({ ok: false, error: err.message, engine: trs.get(id)?.engine ?? tag });
+      // 未配置、系统太旧：去设置的“翻译”标签；缺语言包：就地下载，装好后用系统翻译重试（M26 规则 13、17）
+      const action = err.kind === 'translateConfig' || err.kind === 'translateOs' ? { label: '去设置', run: openTrSettings }
+        : err.kind === 'translatePack' ? { label: '下载语言包', run: () => downloadPack(id, err) }
+          : undefined;
+      if (action) toast(err.message, { action });
+    },
+  );
+}
+// 已有一个语言包在下载：后端拒绝第二个，静默忽略
+const packBusy = (e: AppError) => e.kind === 'invalid' && e.message === '正在下载语言包';
+// 面板里点“下载语言包”：用那次识别出的源语言和实际目标语言；只有最后一次点的结果触发重试
+let packSeq = 0;
+function downloadPack(id: number, err: AppError) {
+  const seq = ++packSeq;
+  void translateDownload('panel', err.source ?? '', err.target ?? S.settings.translateLang).then(
+    (r) => seq === packSeq && r === 'installed' && doTranslate(id, false, 'system'),
+    (e: AppError) => !packBusy(e) && toast(e.message),
   );
 }
 
@@ -1250,6 +1372,7 @@ function openMenu(id: number, x: number, y: number, viaKb: boolean, detail = det
   $('[data-m="pin"]').hidden = bulk || snip;
   $('[data-m="editSnippet"]').hidden = bulk || !snip;
   $('[data-m="saveSnippet"]').hidden = bulk || snip;
+  $('[data-m="translate"]').hidden = bulk || !translatable(r);
   $('#menu .sep').hidden = bulk;
   $('#mDel').textContent = bulk ? `删除 ${S.multi.size} 个片段` : '删除';
   // stagger 序号按可见项重排，隐藏的项不留空拍
@@ -1358,6 +1481,8 @@ const handlers = {
     // 片段改了名字或内容（M25 规则 5）：正文重取；搜索中重取命中集合，新名字立即可搜、旧名字搜不到
     const snipEdited = isSnip(s) && (prev?.title !== s.title || prev?.snippetBody !== s.snippetBody || prev?.kind !== s.kind || prev?.size !== s.size);
     if (s.id === bodyFor && snipEdited) bodyFor = null;
+    // 识别文字或片段内容变了，库里的译文已清掉（M26 规则 12）；进行中的请求留着，结果回来照常显示
+    if ((snipEdited || prev?.ocrState !== s.ocrState) && trs.get(s.id)?.state !== 'busy') trs.delete(s.id);
     // 去重命中会改 copiedAt，需要重新排序；选中项的头部与信息栏随 select 刷新，不重取详情
     scheduleUpdatedPaint(
       prev && prev.copiedAt !== s.copiedAt ? s.id : undefined,
@@ -1367,7 +1492,10 @@ const handlers = {
   removed: (ids: number[]) => {
     // 别处的删除（保留时长清理、清空历史）清掉了待撤销的记录：撤销已无意义
     const foreign = ids.filter((id) => !ownEcho.delete(id));
-    ids.forEach((id) => details.delete(id));
+    ids.forEach((id) => {
+      details.delete(id);
+      trs.delete(id);
+    });
     if (S.undo && S.undo.ids.some((id) => foreign.includes(id))) {
       S.undo = null;
       paintUndoHint();
@@ -1404,11 +1532,14 @@ const handlers = {
 // 结果在点击时就交出去（调用方不必等收起动画），面板隐藏时直接 close 也按 false 结算。
 // 同一时间只有一个确认框：已有一个在等待时，新的请求直接得到 false
 const cfDlg = $<HTMLDialogElement>('#confirm'), cfOk = $<HTMLButtonElement>('#cfOk');
-// 设置、确认框或片段对话框（M25 规则 5）打开时后端不因失焦或快捷键隐藏面板：每次 showModal 之后与每个 close 事件里按 DOM 实际状态同步。
-// 引导不算：其中“授权”要切去系统设置，面板浮在最上层会盖住它，照旧失焦隐藏
+// 设置、确认框或片段对话框（M25 规则 5）打开时后端不因快捷键隐藏面板；失焦时只有片段对话框开着（写了一半的内容不能丢）
+// 或正在选文件夹（系统的选择窗口会抢焦点）才不隐藏，设置、确认框开着照常隐藏（M04 规则 3）。
+// 每次 showModal 之后与每个 close 事件里按 DOM 实际状态同步。引导不算：其中“授权”要切去系统设置，照旧失焦隐藏
 const keepDlgs = [...document.querySelectorAll<HTMLDialogElement>('#settings, #confirm, #snippet')];
+let picking = false;
 const syncDialogOpen = () =>
-  void setDialogOpen(keepDlgs.some((d) => d.open)).catch((e: AppError) => void info(`同步对话框状态失败 kind=${e.kind}`));
+  void setDialogOpen(keepDlgs.some((d) => d.open), picking || $<HTMLDialogElement>('#snippet').open)
+    .catch((e: AppError) => void info(`同步对话框状态失败 kind=${e.kind}`));
 keepDlgs.forEach((d) => d.addEventListener('close', syncDialogOpen));
 let cfResolve: ((ok: boolean) => void) | null = null, cfReturn: HTMLElement | null = null, cfTimer = 0;
 function confirm({ title, body, ok, cancel = '取消', danger = false }: { title: string; body: string; ok: string; cancel?: string; danger?: boolean }) {
@@ -1446,9 +1577,10 @@ cfDlg.addEventListener('close', () => {
   if (S.shown && cfReturn?.isConnected) cfReturn.focus({ preventScroll: true });
   cfReturn = null;
 });
+// 对话框的 Esc：用来结束输入法选字的那次不关（WebKit 先结束选字再发 Esc，见 ime.ts）
 cfDlg.addEventListener('cancel', (e) => {
   e.preventDefault();
-  closeConfirm(false);
+  if (!justComposed()) closeConfirm(false);
 });
 let cfDownOnBackdrop = false;
 cfDlg.addEventListener('pointerdown', (e) => (cfDownOnBackdrop = e.target === cfDlg));
@@ -1517,8 +1649,9 @@ function showStControl(el: HTMLElement) {
 // 出错项所在标签显示红点：跟着行内错误走（.err 显示着），改正或复原后消失
 const paintStErr = () => stTabs.forEach((t, j) => t.toggleAttribute('data-err', !!stPanes[j].querySelector('.err:not([hidden])')));
 
-// 截图、录屏快捷键录制框（M15、M24）：同唤起快捷键，另可按不带修饰键的 ⌫ / Delete 清空，表示不启用
-function optHotkey(id: string) {
+// 截图、录屏、翻译快捷键录制框（M15、M24、M26 规则 18）：同唤起快捷键，另可按不带修饰键的 ⌫ / Delete 清空，表示不启用。
+// idle：不在录制时的说明
+function optHotkey(id: string, idle = OPT_IDLE) {
   const input = $<HTMLInputElement>(`#${id}`), help = $(`#${id}Help`);
   const f = {
     input,
@@ -1532,7 +1665,7 @@ function optHotkey(id: string) {
     reset(h: string) {
       f.pending = h;
       input.value = hotkeyLabel(h, S.platform.os);
-      f.setHelp(OPT_IDLE);
+      f.setHelp(idle);
     },
     record(h: string) {
       f.pending = h;
@@ -1542,7 +1675,7 @@ function optHotkey(id: string) {
     },
   };
   input.addEventListener('focus', () => f.setHelp('请按下组合键，至少包含一个修饰键；⌫ 清空…'));
-  input.addEventListener('blur', () => f.setHelp(OPT_IDLE));
+  input.addEventListener('blur', () => f.setHelp(idle));
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Tab' || e.key === 'Escape') return;
     e.preventDefault();
@@ -1559,6 +1692,7 @@ function optHotkey(id: string) {
   return f;
 }
 const shotKey = optHotkey('shotHotkey'), recKey = optHotkey('recHotkey');
+const trKey = optHotkey('trHotkey', '在任何应用里选中文字后按下，译文显示在鼠标旁');
 
 // 截图、录屏文件夹：设置里存空字符串表示默认文件夹，输入框只显示默认路径的写法。
 // 取消选择不改；选好的路径只在保存时写回。失败写在这一行下方（提示条会被设置框盖住）
@@ -1574,17 +1708,135 @@ function dirField(id: string, placeholder: () => string) {
       input.placeholder = placeholder();
     },
   };
-  $(`#${id}Btn`).addEventListener('click', () =>
+  // 系统的选择窗口会抢走面板的焦点：期间失焦不隐藏，关掉后面板没拿回焦点再补隐藏
+  $(`#${id}Btn`).addEventListener('click', () => {
+    picking = true;
+    syncDialogOpen();
     void pickFolder(f.pending || undefined).then((d) => {
       if (!d) return;
       f.pending = d;
       f.paint();
-    }, (err) => f.paint(`打开选择文件夹窗口失败：${String(err)}`)),
-  );
+    }, (err) => f.paint(`打开选择文件夹窗口失败：${String(err)}`)).finally(() => {
+      picking = false;
+      syncDialogOpen();
+    });
+  });
   return f;
 }
 const shotDir = dirField('shotDir', () => (S.platform.os === 'macos' ? '~/Pictures/xPaste' : '图片\\xPaste'));
 const recDir = dirField('recDir', () => '~/Movies/xPaste');
+// 翻译标签（M26 规则 6）：默认翻译方式与“系统翻译”一组只在本机能用系统翻译时出现，“AI 翻译”一组常驻，
+// 两组各自配置、互不隐藏。stored 为空串（未选）时按本机能力显示，用户没动就保存时原样写回
+const trEngineEl = $('#trEngine'), trEngineIns = [...trEngineEl.querySelectorAll<HTMLInputElement>('input')];
+const trBaseIn = $<HTMLInputElement>('#trBaseUrl'), trKeyIn = $<HTMLInputElement>('#trApiKey'), trModelIn = $<HTMLInputElement>('#trModel');
+const trLangIn = $<HTMLSelectElement>('#trLang'), trBaseErr = $('#trBaseUrlErr'), trTestBtn = $<HTMLButtonElement>('#trTestBtn'), trResult = $('#trTestResult');
+const trPackRow = $('#trPackRow'), trPack = $('#trPack'), trPackBtn = $('#trPackBtn');
+// trKnown：本机能否用系统翻译。第一次查到之前按 macOS 能用先画，免得常见情况（macOS 26+）打开时闪一下接口三项；查到后跨打开保留
+let trKnown: boolean | null = null, trEngine: 'system' | 'openai' = 'openai', trTouched = false, trSeq = 0, trOpenSeq = 0;
+const trSupported = () => mac && (trKnown ?? true);
+const trEffective = () => (trSupported() ? trEngine : 'openai');
+const trSave = () => (trTouched || !mac ? trEffective() : S.settings.translateEngine);
+function showTrPack(t: string, btn = false) {
+  trPackRow.hidden = !t;
+  trPack.textContent = t;
+  trPackBtn.hidden = !btn;
+}
+// 目标语言为 English 时后端查的是简体中文 ↔ English（M26 规则 6）
+const trPair = () => (trLangIn.value === 'en' ? '简体中文 ↔ English' : `英语 ↔ ${trLangIn.selectedOptions[0].text}`);
+function paintTrPack() {
+  const seq = ++trSeq;
+  const show = showTrPack, pair = trPair();
+  show('');
+  if (!trSupported()) return;
+  void translateStatus(trLangIn.value).then(
+    (r) => {
+      if (seq !== trSeq) return;
+      if (r.pack === 'installed') show(`${pair}：已下载`);
+      else if (r.pack === 'download') show(`${pair}：未下载`, true);
+      else if (r.pack === 'unsupported') show('系统翻译不支持这种语言');
+    },
+    (e: AppError) => void info(`读取翻译语言包状态失败 kind=${e.kind}`),
+  );
+}
+function paintTrEngine() {
+  $('#trEngineBox').hidden = $('#trSys').hidden = !trSupported();
+  for (const i of trEngineIns) i.checked = i.value === trEngine;
+  setTrResult('');
+  paintTrPack();
+}
+function setTrEngine(e: 'system' | 'openai') {
+  trEngine = e;
+  trTouched = true;
+  paintTrEngine();
+}
+// 原生单选：点击与方向键切换都由浏览器处理
+trEngineEl.addEventListener('change', (e) => setTrEngine((e.target as HTMLInputElement).value as 'system' | 'openai'));
+trLangIn.addEventListener('change', paintTrPack);
+// 下载语言包（M26 规则 17）：系统确认框挂在面板上弹出；结果回来重查。期间换了语言或重画过，结果丢掉
+trPackBtn.addEventListener('click', () => {
+  const seq = ++trSeq;
+  showTrPack(`${trPair()}：下载中…`);
+  void translateDownload('panel', '', trLangIn.value).then(
+    () => seq === trSeq && paintTrPack(),
+    (e: AppError) => {
+      if (!packBusy(e)) toast(e.message);
+      if (seq === trSeq) paintTrPack();
+    },
+  );
+});
+$('#trKeyBtn').addEventListener('click', () => {
+  const show = trKeyIn.type === 'password';
+  trKeyIn.type = show ? 'text' : 'password';
+  $('#trKeyBtn').textContent = show ? '隐藏' : '显示';
+});
+function paintTrUrlErr(msg: string | null) {
+  trBaseErr.textContent = msg ?? '';
+  trBaseErr.hidden = !msg;
+  trBaseIn.setAttribute('aria-invalid', String(!!msg));
+  paintStErr();
+}
+trBaseIn.addEventListener('input', () => !trBaseErr.hidden && baseUrlError(trBaseIn.value) === null && paintTrUrlErr(null));
+const setTrResult = (t: string, cls = '') => {
+  trResult.textContent = t;
+  trResult.className = `help tr-result ${cls}`;
+};
+// 用“AI 翻译”一组当前（未保存）的值测试；系统翻译看语言包一行。期间按钮不可再点
+trTestBtn.addEventListener('click', () => {
+  trTestBtn.disabled = true;
+  setTrResult('测试中…');
+  void translateTest('openai', trBaseIn.value.trim().replace(/\/+$/, ''), trKeyIn.value, trModelIn.value.trim(), trLangIn.value).then(
+    (t) => setTrResult(`✓ 可以翻译：${t}`, 'is-ok'),
+    (e: AppError) => setTrResult(e.message, 'is-err'),
+  ).finally(() => (trTestBtn.disabled = false));
+});
+// 打开设置时回填并查系统翻译可用性
+function openTranslateTab(st: Settings) {
+  trBaseIn.value = st.translateBaseUrl;
+  trKeyIn.value = st.translateApiKey;
+  trKeyIn.type = 'password';
+  $('#trKeyBtn').textContent = '显示';
+  trModelIn.value = st.translateModel;
+  trLangIn.value = st.translateLang;
+  trTouched = false;
+  paintTrUrlErr(null);
+  setTrResult('');
+  trTestBtn.disabled = false;
+  trEngine = st.translateEngine === 'openai' ? 'openai' : 'system';
+  paintTrEngine();
+  if (!mac) return;
+  const seq = ++trOpenSeq;
+  void translateStatus(st.translateLang).then(
+    (r) => {
+      // 上一次打开设置的迟到回复丢掉；结果跨打开保留，只在能力和先前假设不同时重画
+      if (seq !== trOpenSeq) return;
+      const changed = trSupported() !== r.supported;
+      trKnown = r.supported;
+      if (changed) paintTrEngine();
+    },
+    (e: AppError) => void info(`读取翻译状态失败 kind=${e.kind}`),
+  );
+}
+
 $('#stTabs').addEventListener('click', (e) => {
   const t = (e.target as Element).closest<HTMLElement>('[role="tab"]');
   if (t) selectStTab(stTabs.indexOf(t), false);
@@ -1640,7 +1892,7 @@ ignoreIn.addEventListener('input', () => paintAppList(true));
 ignoreIn.addEventListener('blur', () => paintAppList(false));
 ignoreIn.addEventListener('keydown', (e) => {
   // 输入法组字中的回车 / 方向键归输入法
-  if (e.isComposing || e.keyCode === 229) return;
+  if (composing(e)) return;
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
     e.preventDefault();
     if (ignoreList.hidden) paintAppList(true);
@@ -1806,6 +2058,7 @@ function openSettings() {
   setHotkeyHelp(HOTKEY_IDLE);
   shotKey.reset(st.shotHotkey);
   recKey.reset(st.recHotkey);
+  trKey.reset(st.translateHotkey);
   shotDir.pending = st.shotDir;
   shotDir.paint();
   recDir.pending = st.recDir;
@@ -1823,6 +2076,7 @@ function openSettings() {
   frequentIn.value = String(st.frequentMinUses);
   frequentErr.hidden = true;
   frequentIn.removeAttribute('aria-invalid');
+  openTranslateTab(st);
   paintStErr();
   draftIgnored = [...st.ignoredApps];
   ignoreIn.value = '';
@@ -1878,7 +2132,7 @@ dlg.addEventListener('close', () => {
 });
 dlg.addEventListener('cancel', (e) => {
   e.preventDefault();
-  if (!escClosedList) closeSettings();
+  if (!escClosedList && !justComposed()) closeSettings();
 });
 // 遮罩点击才关：在输入框里拖选文字、松手落到遮罩上不算（那次 click 的目标也是 dialog）
 let downOnBackdrop = false;
@@ -1919,14 +2173,22 @@ async function submitSettings() {
   frequentErr.hidden = frequent !== null;
   frequentIn.setAttribute('aria-invalid', String(frequent === null));
   paintStErr();
+  // 接口地址不论默认用哪种都校验：“AI 翻译”一组常驻显示（M26 规则 6）
+  const urlErr = baseUrlError(trBaseIn.value);
+  paintTrUrlErr(urlErr);
   // 切到第一个出错的标签（按标签顺序），聚焦其中出错的控件
-  if (limit === null || frequent === null) return showStControl(stPanes.map((p) => p.querySelector<HTMLElement>('[aria-invalid="true"]')).find(Boolean)!);
+  if (limit === null || frequent === null || urlErr) return showStControl(stPanes.map((p) => p.querySelector<HTMLElement>('[aria-invalid="true"]')).find(Boolean)!);
   const s = formToSettings(S.settings, {
     hotkey: pendingHotkey, retain: retainIn.value, limit, frequent, ignored: addIgnored(draftIgnored, ignoreIn.value), skipSensitive: sensitiveIn.checked,
     moveToTop: moveTopIn.checked, launchAtLogin: autostartIn.checked, ocrEnabled: ocrOnIn.checked, ocrBackfill: ocrBackfillIn.checked, searchFileText: fileTextIn.checked,
     shotHotkey: shotKey.pending, shotDir: shotDir.pending, shotSaveCopy: shotSaveCopyIn.checked,
     recHotkey: recKey.pending, recDir: recDir.pending, recSystemAudio: recSystemAudioIn.checked, recMicrophone: recMicIn.checked, recCopy: recCopyIn.checked,
     recQuality: recQualityIn.value, recFps: recFpsIn.value,
+  });
+  // 翻译字段不经 SettingsForm；末尾的 / 由后端去掉。engine 没动过就原样写回（可能是空串）
+  Object.assign(s, {
+    translateEngine: trSave(), translateBaseUrl: trBaseIn.value.trim(), translateApiKey: trKeyIn.value, translateModel: trModelIn.value.trim(), translateLang: trLangIn.value,
+    translateHotkey: trKey.pending,
   });
   saving = true;
   try {
@@ -1938,6 +2200,7 @@ async function submitSettings() {
     await saveSettings(s);
     const favChanged = s.frequentMinUses !== S.settings.frequentMinUses;
     S.settings = s;
+    refreshEngines();
     // 常用阈值只在前端用：立即按新阈值重算分类计数、列表与预览标签
     if (favChanged) {
       renderTabs(true);
@@ -1955,7 +2218,7 @@ async function submitSettings() {
       showStControl(hotkeyIn);
       setHotkeyHelp(err.message, true);
     } else if (at) {
-      const f = at === 'shotHotkey' ? shotKey : recKey;
+      const f = { shotHotkey: shotKey, recHotkey: recKey, trHotkey: trKey }[at];
       showStControl(f.input);
       f.setHelp(err.message, true);
     } else toast(err.message);
@@ -2038,7 +2301,7 @@ snipDlg.addEventListener('close', () => {
 });
 snipDlg.addEventListener('cancel', (e) => {
   e.preventDefault();
-  closeSnippet();
+  if (!justComposed()) closeSnippet();
 });
 let snipDownOnBackdrop = false;
 snipDlg.addEventListener('pointerdown', (e) => (snipDownOnBackdrop = e.target === snipDlg));
@@ -2220,6 +2483,7 @@ const shown = (t0: number | null, trigger?: PanelShown['trigger']) => {
   S.shown = true;
   // 授权可能在隐藏期间变化；bootstrap 之前平台未知，由 bootstrap 后那一次负责
   if (S.platform.os) void paintVerb();
+  refreshEngines();
   // 淡出途中又被唤起：取消待发的隐藏
   clearTimeout(hideTimer);
   // 键盘唤起几乎即时（90 / 120ms）；托盘单击是鼠标唤起，按原型 240 / 320ms 弹性回位
@@ -2278,10 +2542,12 @@ const hide = () => {
 
 // —— 键盘 ——
 document.addEventListener('keydown', (e) => {
-  if (e.isComposing) return;
+  // 搜索框里用输入法选字时按 Esc / 回车只收起候选、上屏，不清空搜索、不收起面板、不粘贴
+  if (composing(e)) return;
   const t = e.target as Element, inSearch = t === q;
   // 其他输入控件（设置里的快捷键、保留时长）自己处理按键
   if (!inSearch && t.closest?.('input, textarea, select')) return;
+  const selR = S.sel === null ? undefined : S.records.get(S.sel);
   const a = keyAction(
     // Mod 按平台：macOS 只认 ⌘，⌃ 单独传入只作排除；Windows 只认 Ctrl，Win 键不参与
     { key: e.key, code: e.code, mod: S.platform.os === 'macos' ? e.metaKey : e.ctrlKey, ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey, repeat: e.repeat },
@@ -2296,6 +2562,7 @@ document.addEventListener('keydown', (e) => {
       selIsSnip: S.sel !== null && S.records.get(S.sel)?.snippetBody != null,
       inSnip: S.filter === 'snip',
       multi: S.multi.size,
+      selTranslatable: !!selR && translatable(selR),
     },
   );
   if (!a) return;
@@ -2332,6 +2599,7 @@ document.addEventListener('keydown', (e) => {
     case 'saveSnippet': return void (sel !== null && openSnippet('save', sel));
     case 'editSnippet': return void (sel !== null && openSnippet('edit', sel));
     case 'newSnippet': return void openSnippet('new');
+    case 'translate': return void (sel !== null && doTranslate(sel));
     case 'selectAll': {
       S.multi = new Set(vis().filter((r) => !S.removing.has(r.id)).map((r) => r.id));
       return setMulti();
@@ -2357,11 +2625,17 @@ await onPanelHideRequested(hide);
 await onRecordAdded((s) => handlers.added(s));
 await onRecordUpdated((s) => handlers.updated(s));
 await onRecordsRemoved((ids) => handlers.removed(ids));
+// 面板翻译的增量（截图翻译的 id 为 null）；只接进行中的那条，结果先于最后一段到达时不把完成态改回翻译中
+await onTranslateDelta(({ id, lang, engine, text }) => {
+  if (id === null || trs.get(id)?.state !== 'busy' || staleDelta(engine, trReq.get(id)?.want)) return;
+  trs.set(id, trAfterDelta(trs.get(id), lang, engine, text));
+  paintTr(id);
+});
 await onPausedChanged((p) => handlers.paused(p));
 // 录屏遮罩的声音开关写回了设置（M24）：换掉手里的副本，之后保存设置或界面状态才不会把它改回去
 await onSettingsChanged((s) => void (S.settings = s));
 // 托盘“设置…”：后端已先唤起面板
-await onOpenSettings(openSettings);
+await onOpenSettings((tab) => (tab === 'translate' ? openTrSettings() : openSettings()));
 // 设置对话框开着时提示条被它盖住，结果同样写进“历史记录”行内：先切到“记录”标签，
 // 如同点了行内的“清空历史…”（确认框关闭后焦点回到这个按钮）
 await onConfirmClear(() => {
@@ -2379,20 +2653,24 @@ await onShotNeedPermission(({ pane, mode }) =>
 );
 // 引导中按唤起快捷键：可见时面板不隐藏，隐藏时先 panel-shown 再到这里；只在“试按快捷键”这一步算成功
 // 设置对话框打开时按唤起快捷键：面板同样不隐藏；录制框有焦点就当作按下了当前快捷键（网页收不到被全局注册拦下的按键）
-// 截图、录屏快捷键同理：对话框开着且面板有焦点时后端先发到这里（role = shot / rec），焦点不在录制框里就照常开始
+// 截图、录屏、翻译快捷键同理：对话框开着且面板有焦点时后端先发到这里（role = shot / rec / translate），
+// 焦点不在录制框里时截图、录屏照常开始，翻译照常弹卡片（M15 交互规则 4、M26 规则 18；在录制框里时写入，不翻译）
 await onHotkeyPressed((role) => {
   // 只认面板有焦点时的按键：失焦时后端不发到这里，这里再防一道
   const on = (el: Element) => document.activeElement === el && document.hasFocus();
+  const opts = [[shotKey, '截图', 'shot'], [recKey, '录屏', 'rec'], [trKey, '翻译', 'translate']] as const;
   if (role !== 'panel') {
-    const [self, other, name, otherName] = role === 'shot' ? [shotKey, recKey, '截图', '录屏'] : [recKey, shotKey, '录屏', '截图'];
-    if (on(self.input)) self.record(role === 'shot' ? S.settings.shotHotkey : S.settings.recHotkey);
+    const [self, name] = opts.find((o) => o[2] === role)!;
+    const other = opts.find(([f]) => f !== self && on(f.input));
+    const pressed = { shot: S.settings.shotHotkey, rec: S.settings.recHotkey, translate: S.settings.translateHotkey }[role];
+    if (on(self.input)) self.record(pressed);
     else if (on(hotkeyIn)) setHotkeyHelp(`不能与${name}快捷键相同`, true);
-    else if (on(other.input)) other.setHelp(`${otherName}快捷键不能与${name}快捷键相同`, true);
-    else void overlayBegin(role === 'rec').catch((err: AppError) => toast(err.message));
+    else if (other) other[0].setHelp(`${other[1]}快捷键不能与${name}快捷键相同`, true);
+    else void (role === 'translate' ? trcardPress() : overlayBegin(role === 'rec')).catch((err: AppError) => toast(err.message));
     return;
   }
   if (on(hotkeyIn)) return recordHotkey(S.settings.hotkey);
-  for (const [f, name] of [[shotKey, '截图'], [recKey, '录屏']] as const) if (on(f.input)) return f.setHelp(`${name}快捷键不能与唤起快捷键相同`, true);
+  for (const [f, name] of opts) if (on(f.input)) return f.setHelp(`${name}快捷键不能与唤起快捷键相同`, true);
   if (obStep === 'hotkey' && obDlg.open) obSucceed();
 });
 
@@ -2423,6 +2701,7 @@ const MOD = b.platform.os === 'macos' ? '⌘' : 'Ctrl';
 document.querySelectorAll('.mod').forEach((k) => (k.textContent = MOD));
 $('.modp').textContent = `${MOD} P`;
 document.querySelectorAll<HTMLElement>('[data-modk]').forEach((k) => (k.textContent = `${MOD} ${k.dataset.modk}`));
+trBtn.title = b.platform.os === 'macos' ? '翻译 ⌘T' : '翻译 Ctrl+T';
 const mac = b.platform.os === 'macos';
 // 录屏只在 macOS 上做（M24）；麦克风要 macOS 15 起
 document.querySelectorAll<HTMLElement>('.os-mac').forEach((el) => (el.hidden = !mac));
@@ -2436,6 +2715,7 @@ $('.statusbar .del').textContent = mac ? '⌫' : 'Del';
 $('.statusbar .delmod').hidden = !mac;
 $('#menu .del').textContent = mac ? '⌘ ⌫' : 'Del';
 void paintVerb();
+refreshEngines();
 await info(`bootstrap 完成，平台 ${b.platform.os}，材质 ${b.platform.material}`);
 // 首次启动后端在 setup 里就要显示面板，但会等到下面的 frontendReady() 才真正上屏；
 // 随后到的 panel-shown 走 shown()，末尾打开引导
@@ -2528,6 +2808,7 @@ list.addEventListener('contextmenu', (e) => {
 
 pinBtn.addEventListener('click', (e) => S.sel !== null && togglePin(S.sel, e.detail !== 0));
 copyBtn.addEventListener('click', () => S.sel !== null && copyRecord(S.sel));
+trBtn.addEventListener('click', () => S.sel !== null && doTranslate(S.sel));
 // 设置对话框留在确认框下面；列表与频谱由 records-removed 刷新
 $('#clearBtn').addEventListener('click', () => void confirmClear().then((m) => m && (clearNote.textContent = m)));
 delBtn.addEventListener('click', () => (S.multi.size >= 2 ? remove([...S.multi]) : S.sel !== null && remove([S.sel])));
@@ -2544,6 +2825,7 @@ menu.addEventListener('click', (e) => {
   if (m === 'open') openFromMenu(id);
   if (m === 'saveSnippet') void openSnippet('save', id);
   if (m === 'editSnippet') void openSnippet('edit', id);
+  if (m === 'translate') doTranslate(id);
   if (m === 'del') remove(S.multi.size >= 2 && S.multi.has(id) ? [...S.multi] : [id]);
 });
 document.addEventListener('pointerdown', (e) => {
@@ -2595,6 +2877,7 @@ pbody.addEventListener('click', (e) => {
       copyTextPlain(d.ocrText ?? '').then(() => toast('已复制图中文字'), (err: AppError) => toast(err.message, { icon: 'copy' }));
       return;
     }
+    if (oc.dataset.ocr === 'translate') return doTranslate(d.id);
     // 先改成“识别中…”并收起操作；之后的 record-updated 按真实状态重绘，失败时重取一次还原
     const block = oc.closest('.ocr-block')!;
     block.querySelector('.muted')!.textContent = '识别中…';
@@ -2606,6 +2889,15 @@ pbody.addEventListener('click', (e) => {
       toast(err.message);
       refreshOcr(d.id);
     });
+    return;
+  }
+  // 译文区块：复制译文不进历史（同“复制文字”）；重新翻译丢掉旧译文再请求（M26 规则 4）
+  const tb = t.closest<HTMLElement>('[data-tr]'), tid = S.detail?.id;
+  if (tb && tid !== undefined) {
+    if (tb.dataset.tr === 'again') return doTranslate(tid, true);
+    if (tb.dataset.tr === 'switch') return doTranslate(tid, true, tb.dataset.engine as Engine);
+    const tr = trOf(tid);
+    if (tr) copyTextPlain(tr.text).then(() => toast('已复制译文'), (err: AppError) => toast(err.message, { icon: 'copy' }));
     return;
   }
   const play = t.closest<HTMLElement>('[data-play]');

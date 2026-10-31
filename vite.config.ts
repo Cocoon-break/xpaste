@@ -10,10 +10,10 @@ export default defineConfig(() => ({
   //
   // 1. prevent Vite from obscuring rust errors
   clearScreen: false,
-  // 面板、截图遮罩（每屏一个）、贴图、录屏边框各一个页面
+  // 面板、截图遮罩（每屏一个）、贴图、录屏边框、划词卡片各一个页面
   build: {
     rollupOptions: {
-      input: { main: "index.html", shot: "shot.html", pin: "pin.html", recFrame: "rec-frame.html" },
+      input: { main: "index.html", shot: "shot.html", pin: "pin.html", recFrame: "rec-frame.html", card: "card.html" },
     },
   },
   // 2. tauri expects a fixed port, fail if that port is not available
