@@ -350,8 +350,8 @@ fn client(loopback: bool) -> Result<reqwest::Client, Fail> {
     Ok(LOOPBACK.get_or_init(|| c).clone())
 }
 
-/// 连接阶段的失败（含 10 秒连接超时：Windows 连不上的端口会重试到超时，不立即拒绝）算连不上；
-/// 连上之后的读超时算超时；其余（DNS 失败、读到一半连接断开）也算连不上（M26 规则 13）。
+/// 连接阶段的失败（含 10 秒内连不上的连接超时）算连不上；连上之后的读超时算超时；
+/// 其余（DNS 失败、读到一半连接断开）也算连不上（M26 规则 13）。
 fn net(e: reqwest::Error) -> Fail {
     if !e.is_connect() && e.is_timeout() {
         Fail::Timeout
@@ -608,8 +608,18 @@ pub(crate) mod tests {
             .local_addr()
             .unwrap()
             .port();
-        let (r, _) = go(&openai(&format!("http://127.0.0.1:{port}/v1")), "hello");
-        assert_eq!(err_msg(r), "连不上翻译接口，请检查网络或接口地址");
+        // 读超时要长于连接：Windows 连没人监听的端口会先重试约 2 秒才拒绝，FAST 的 300 ms 读超时会先到
+        // （正式的读超时 30 秒、连接 10 秒，不会这样）
+        let slow = Timeouts {
+            connect: Duration::from_secs(5),
+            read: Duration::from_secs(10),
+        };
+        let cfg = openai(&format!("http://127.0.0.1:{port}/v1"));
+        let r = tauri::async_runtime::block_on(exec(&cfg, "hello", Some(slow), |_, _| true));
+        assert_eq!(
+            err_msg(r.map_err(AppError::from)),
+            "连不上翻译接口，请检查网络或接口地址"
+        );
     }
 
     #[test]
