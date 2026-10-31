@@ -254,11 +254,17 @@ root.addEventListener('change', (e) => {
   render();
 });
 
+// 输入法选字中的按键。WebKit 用 Esc / 回车结束选字时先发 compositionend、再发这次 keydown，keydown 的 isComposing
+// 已是 false：再看 keyCode 229（选字中的按键）和刚结束选字的 100 ms
+let composedAt = -Infinity;
+addEventListener('compositionend', () => (composedAt = performance.now()), true);
+const composing = (e: KeyboardEvent) => e.isComposing || e.keyCode === 229 || performance.now() - composedAt < 100;
+
 // ⌘↵（Windows Ctrl + 回车）：没翻译过或改过原文、语言时翻译，否则复制译文；回车复制（在原文框里是换行）；Esc 关闭。
 // 卡片里选中文字后的 Mod + C 照常。焦点在按钮上时回车交给按钮（同截图卡片）
 addEventListener('keydown', (e) => {
   // 输入法选字时 Esc 只收起候选、回车只上屏，都不归卡片
-  if (e.isComposing) return;
+  if (composing(e)) return;
   if (e.key === 'Escape') { e.preventDefault(); void cardClose(seq); return; }
   if (e.key !== 'Enter') return;
   const s = tr();
