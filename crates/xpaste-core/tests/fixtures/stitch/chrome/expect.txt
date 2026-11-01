@@ -1,0 +1,2 @@
+lost=0
+height=1240
