@@ -3,7 +3,7 @@
 import './shot.css';
 import {
   onShotBegin, onShotClaim, onShotEnd, onShotTranslateDelta, recStart, shotAlive, shotCancel, shotClaim, shotCopyText, shotEngines,
-  shotFinish, shotFrame, shotReady, shotTranslateAgain, type BeginPayload, type ShotAction, type ShotOutcome,
+  shotFinish, shotFrame, shotLongStart, shotReady, shotTranslateAgain, type BeginPayload, type ShotAction, type ShotOutcome,
 } from '../api/shot';
 import { error as logError, info } from '../api/log';
 import type { AppError, Engines } from '../api/types';
@@ -27,6 +27,7 @@ const ICON = {
   undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
   redo: '<path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/>',
   translate: '<path d="M3.6 6h8.4M7.8 4.2V6M10.4 6c-.8 3.6-3 6.2-6.2 7.8M6.2 9.1c1.1 2 2.8 3.5 4.8 4.3"/><path d="m12.6 19.8 3.6-9 3.6 9M13.9 16.8h4.6"/>',
+  long: '<rect x="6" y="3.5" width="12" height="17" rx="2"/><path d="M12 7.5v9M9.6 9.9 12 7.5l2.4 2.4M9.6 14.1 12 16.5l2.4-2.4"/>',
   ocr: '<path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16"/><path d="M8 9h8M8 12h8M8 15h5"/>',
   save: '<path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/>',
   close: '<path d="M6 6l12 12M18 6 6 18"/>',
@@ -57,8 +58,6 @@ const toastEl = $('#toast'), toastLead = $('#toastLead'), toastMsg = $('#toastMs
 
 const TOOLS: [Tool, string][] = [['rect', '矩形'], ['ellipse', '椭圆'], ['arrow', '箭头'], ['pen', '画笔'], ['mosaic', '马赛克'], ['text', '文字'], ['step', '序号']];
 const COLOR_NAMES = ['红', '橙', '绿', '蓝', '紫', '白'];
-/** 复制成功的光扫时长（原型 300 ms 后退出，光扫 320 ms 收尾） */
-const SWEEP_MS = 300;
 /** 动作完成后提示条停留多久再退出截图 */
 const TOAST_MS = 1600;
 
@@ -140,7 +139,7 @@ async function begin(p: BeginPayload) {
   if (thumbUrl) URL.revokeObjectURL(thumbUrl);
   thumbUrl = '';
   toastEl.setAttribute('data-instant', ''); toastEl.dataset.open = 'false'; void toastEl.offsetWidth; toastEl.removeAttribute('data-instant');
-  document.querySelectorAll('.txt, #cut .sweep').forEach((el) => el.remove());
+  document.querySelectorAll('.txt').forEach((el) => el.remove());
   tr = null;
   card.hidden = true;
   ic.clearRect(0, 0, ink.width, ink.height);
@@ -260,6 +259,7 @@ function buildBar() {
     + `<button type="button" data-act="undo" aria-label="撤销" data-tip="撤销  ${MODK} Z">${svg('undo')}</button>`
     + `<button type="button" data-act="redo" aria-label="重做" data-tip="重做  ${isMac ? '⇧ ⌘ Z' : 'Ctrl Shift Z'}">${svg('redo')}</button>`
     + '<span class="sep"></span>'
+    + `<button type="button" data-act="long" aria-label="长截图" data-tip="长截图  L">${svg('long')}</button>`
     + `<button type="button" data-act="ocr" aria-label="识别文字并复制" data-tip="识别文字并复制  O">${svg('ocr')}</button>`
     + `<button type="button" data-act="translate" aria-label="识别文字并翻译" data-tip="识别文字并翻译  T">${svg('translate')}</button>`
     + `<button type="button" data-act="pin" aria-label="钉在屏幕上" data-tip="钉在屏幕上  P">${svg('pin')}</button>`
@@ -273,6 +273,12 @@ function syncBar() {
   tb.querySelectorAll<HTMLElement>('[data-tool]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.tool === S.tool)));
   tb.querySelector('[data-act="undo"]')?.setAttribute('aria-disabled', String(!S.objs.length));
   tb.querySelector('[data-act="redo"]')?.setAttribute('aria-disabled', String(!S.redo.length));
+  // 长截图截的是滚动中的实时画面，带不上标注（M23 规则 13）
+  const long = tb.querySelector<HTMLElement>('[data-act="long"]');
+  if (long) {
+    long.setAttribute('aria-disabled', String(S.objs.length > 0));
+    long.dataset.tip = S.objs.length ? '长截图不带标注，先撤销标注' : '长截图  L';
+  }
   if (!S.tool) { sub.innerHTML = ''; return; }
   const colors = S.tool !== 'mosaic'
     ? COLORS.map((c, i) => `<button type="button" class="sw" data-color="${i}" aria-pressed="${i === S.color}" aria-label="${COLOR_NAMES[i]}色" style="--c:${c}"><i></i></button>`).join('') + '<span class="sep"></span>'
@@ -331,6 +337,7 @@ tb.addEventListener('click', (e) => {
   else if (a === 'sys') { S.sys = !S.sys; buildBar(); }
   else if (a === 'mic') { S.mic = !S.mic; buildBar(); }
   else if (a === 'start') startCountdown();
+  else if (a === 'long') void startLong();
   else if (a) void act(a as ShotAction);
 });
 sub.addEventListener('click', (e) => {
@@ -542,7 +549,6 @@ async function exportPng(sel: Rect): Promise<Blob> {
   return blob;
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** 等待期间没有退出、也没有开始新的一次截图 */
 const live = (gen: number) => gen === S.gen && S.phase !== 'off';
 
@@ -559,15 +565,17 @@ async function act(a: ShotAction) {
     void shotEngines().then((e) => { engines = e; if (tr === t) { t.engine ||= e.current; renderCard(); } }, () => {});
   }
   update();
-  const sweep = (a === 'copy' || a === 'save') && !reduced.matches;
-  if (sweep) cut.insertAdjacentHTML('beforeend', '<i class="sweep"></i>');
+  // 复制、保存、贴图：确认的一刻遮罩就开始淡出，不等编码与写剪切板（整屏 5K 编码要几百毫秒），
+  // 也不再播光扫：光扫、停顿、再淡出叠在一起，真机反馈像“抖一下”（M23 规则 7）。失败时恢复
+  // 其他屏的蒙层一起淡出（succeed 时再广播一次也无妨）；万一失败，其他屏留着透明遮罩直到这次截图结束
+  if (!slow) { ov.classList.add('out'); void shotClaim({ generation: gen, index: S.index, state: 'done' }); }
   // 识别、翻译要几秒：期间其他屏不能框选、出第二个动作
   if (slow) void shotClaim({ generation: gen, index: S.index, state: 'busy' });
   const seq0 = tr?.seq;
   let out: ShotOutcome, blob: Blob;
   try {
     blob = await exportPng(sel);
-    [out] = await Promise.all([shotFinish(new Uint8Array(await blob.arrayBuffer()), a, S.index, sel), sweep && sleep(SWEEP_MS)]);
+    out = await shotFinish(new Uint8Array(await blob.arrayBuffer()), a, S.index, sel);
   } catch (e) {
     const msg = (e as AppError)?.message || '截图处理失败';
     // 期间已按 Esc 退出；截图结束时后端中止翻译，结果丢弃。翻译中换用了：结果归换用那次
@@ -577,7 +585,7 @@ async function act(a: ShotAction) {
     if (a === 'translate' && tr && ((S.phase as Phase) === 'card' || TR_FAIL.has((e as AppError)?.kind))) return failTr(tr, e as AppError);
     // 失败：回到选区，可以重试或换个动作
     tr = null;
-    cut.querySelector('.sweep')?.remove();
+    ov.classList.remove('out');
     S.phase = 'selected';
     update();
     if (slow) void shotClaim({ generation: gen, index: S.index, state: 'selected' });
@@ -753,6 +761,29 @@ async function startRecording() {
   if (live(gen)) release();
 }
 
+/* —— 长截图（M23 规则 13）：遮罩撤下，后端在选区四角显示边框、不停截这块区域并拼接，用户自己滚动 —— */
+async function startLong() {
+  if (S.phase !== 'selected' || !S.sel || S.mode !== 'shot' || S.objs.length) return;
+  commitText();
+  if (S.objs.length) return;
+  const gen = S.gen, sel = { ...S.sel };
+  S.phase = 'done';
+  update();
+  ov.classList.add('out');
+  try {
+    await shotLongStart({ generation: gen, index: S.index, rect: sel });
+  } catch (e) {
+    if (!live(gen)) return;
+    ov.classList.remove('out');
+    S.phase = 'selected';
+    update();
+    toast((e as AppError)?.message || '长截图没有开始', { icon: 'close', danger: true });
+    toastT = window.setTimeout(() => (toastEl.dataset.open = 'false'), 2800);
+    return;
+  }
+  if (live(gen)) release();
+}
+
 /* —— 提示条 —— */
 type Lead = { thumb?: string; icon?: Icon; danger?: boolean };
 function toast(msg: string, lead: Lead) {
@@ -805,6 +836,7 @@ addEventListener('keydown', (e) => {
   if (!mod && e.code === 'KeyO') { e.preventDefault(); void act('ocr'); return; }
   if (!mod && e.code === 'KeyT') { e.preventDefault(); void act('translate'); return; }
   if (!mod && e.code === 'KeyP') { e.preventDefault(); void act('pin'); return; }
+  if (!mod && e.code === 'KeyL') { e.preventDefault(); void startLong(); return; }
   const m = /^Digit([1-7])$/.exec(e.code);
   if (!mod && m) { e.preventDefault(); toggleTool(TOOLS[+m[1] - 1][0], false); return; }
   const dir = ({ ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] } as Record<string, number[]>)[e.key];

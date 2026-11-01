@@ -81,6 +81,10 @@ export const shotCopyText = (generation: number, text: string) => (stub ? Promis
 export const recStart = (a: { generation: number; index: number; rect: LRect; systemAudio: boolean; microphone: boolean }) =>
   stub ? dev.recStart() : invoke<void>('rec_start', a);
 
+/** 开始长截图（M23 规则 13）。成功时后端已结束这次截图、隐藏遮罩；`generation`、`index` 取自载荷。 */
+export const shotLongStart = (a: { generation: number; index: number; rect: LRect }) =>
+  stub ? dev.recStart() : invoke<void>('shot_long_start', a);
+
 /** 后端结束了这次截图（载荷为代数）：再按快捷键、看门狗、Alt+F4 等，页面自己不知道。 */
 export const onShotEnd = async (cb: (generation: number) => void) => {
   if (!stub) await listen<number>(SHOT_END, (e) => cb(e.payload));
@@ -101,6 +105,40 @@ export async function onRecFrame(cb: (r: LRect | null) => void): Promise<void> {
   }
   await listen<LRect | null>(REC_FRAME, (e) => cb(e.payload));
   cb(await invoke<LRect | null>('rec_frame'));
+}
+
+/** 录屏、长截图的结果提示条（M23 规则 13、M24 规则 9）：显示在边框窗口左下角，之后后端隐藏窗口。 */
+export async function onFrameToast(cb: (t: { text: string; ok: boolean }) => void): Promise<void> {
+  if (stub) {
+    if (new URLSearchParams(location.search).has('toast')) setTimeout(() => cb({ text: '长截图已复制，已加入历史 · 2880 × 9120', ok: true }), 600);
+    return;
+  }
+  await listen<{ text: string; ok: boolean }>('frame-toast', (e) => cb(e.payload));
+}
+
+/** 长截图拼接结果的预览：缩到宽 `w`、最多高 `h`（物理像素），只含最下面最新接上的部分。 */
+export async function longPreview(w: number, h: number): Promise<Frame> {
+  if (stub) {
+    // 替身：一张带行号的“长页面”底部
+    const cv = Object.assign(document.createElement('canvas'), { width: w, height: h }), c = cv.getContext('2d')!;
+    c.fillStyle = '#fff'; c.fillRect(0, 0, w, h); c.fillStyle = '#333'; c.font = `${Math.round(w / 14)}px sans-serif`;
+    for (let y = 0, n = 40; y < h; y += w / 9, n++) c.fillText(`第 ${n} 行 长截图预览`, 8, y + w / 12);
+    return { w, h, rgba: c.getImageData(0, 0, w, h).data };
+  }
+  const buf = await invoke<ArrayBuffer>('long_preview', { width: Math.round(w), height: Math.round(h) });
+  const v = new DataView(buf);
+  const pw = v.getUint32(0, true), ph = v.getUint32(4, true);
+  return { w: pw, h: ph, rgba: new Uint8ClampedArray(buf, 8, pw * ph * 4) };
+}
+
+/** 长截图进度（同一个边框窗口）：已拼接的高度（物理像素）；`lost` 这一帧没对上，`full` 已到长度上限。 */
+export type LongProgress = { height: number; state: 'run' | 'lost' | 'stuck' | 'full' };
+export async function onLongShot(cb: (p: LongProgress) => void): Promise<void> {
+  if (stub) {
+    if (new URLSearchParams(location.search).has('long')) setTimeout(() => cb({ height: 1800, state: 'run' }));
+    return;
+  }
+  await listen<LongProgress>('long-shot', (e) => cb(e.payload));
 }
 
 /* —— 贴图：每张一个窗口 pin-<n>，命令都作用于调用方窗口；坐标为屏幕逻辑坐标 —— */

@@ -142,10 +142,40 @@ pub async fn rec_start(
     .map_err(|_| AppError::Invalid("录屏开始中断".into()))?
 }
 
-/// 录屏边框页注册好监听后拉一次当前位置（刚建的窗口可能错过推送）；不在录制时为 `null`。
+/// 录屏边框页注册好监听后拉一次当前位置（刚建的窗口可能错过推送）；不在录制、长截图时为 `null`。
 #[tauri::command]
 pub fn rec_frame(app: AppHandle) -> Option<shot::LRect> {
-    rec::frame_rect(&app)
+    rec::frame_rect(&app).or_else(crate::longshot::frame_rect)
+}
+
+/// 长截图拼接结果的预览（M23 规则 13）：宽 `width`、最多高 `height`（物理像素），响应体同 `shot_frame`
+/// （前 8 字节宽、高，其后 RGBA）。不在长截图时报错。
+#[tauri::command(async)]
+pub fn long_preview(width: u32, height: u32) -> Result<Response, AppError> {
+    crate::longshot::preview(width, height)
+        .map(Response::new)
+        .ok_or_else(|| AppError::Invalid("长截图已结束".into()))
+}
+
+/// 开始长截图（M23 规则 13）。`generation`、`index` 取自 `shot-begin` 载荷，`rect` 为该屏内逻辑像素。
+/// 成功时后端已结束这次截图、隐藏遮罩。
+#[tauri::command]
+pub async fn shot_long_start(
+    app: AppHandle,
+    window: WebviewWindow,
+    generation: u64,
+    index: usize,
+    rect: shot::LRect,
+) -> Result<(), AppError> {
+    if index_of(&window)? != index {
+        return Err(AppError::Invalid("显示器序号与遮罩不符".into()));
+    }
+    // 要等主线程显示边框
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::longshot::start(&app, generation, index, rect)
+    })
+    .await
+    .map_err(|_| AppError::Invalid("长截图开始中断".into()))?
 }
 
 /// 关闭调用方贴图（双击、Esc、右键“关闭”）。

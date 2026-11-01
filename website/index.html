@@ -24,6 +24,7 @@
 {"@type":"Question","name":"识别图片里的文字需要联网或者下载模型吗？","acceptedAnswer":{"@type":"Answer","text":"不需要。xPaste 用系统自带的离线文字识别（macOS Vision、Windows.Media.Ocr），不联网、不上传，也不增加安装体积。"}},
 {"@type":"Question","name":"截图要什么权限？","acceptedAnswer":{"@type":"Answer","text":"macOS 上第一次截图前，要在系统设置 → 隐私与安全性 → 屏幕录制（macOS 15 起叫“录屏与系统录音”）里打开 xPaste，再退出并重新打开 xPaste。录屏用同一个权限，开着麦克风录制时系统会再问一次麦克风权限。Windows 不需要额外权限。"}},
 {"@type":"Question","name":"录屏为什么只有 macOS？","acceptedAnswer":{"@type":"Answer","text":"录屏先在 macOS 13 及以上做完，Windows 要换一套系统接口（Windows.Graphics.Capture 加 Media Foundation 编码），另做一期。现在 Windows 上没有录屏快捷键，设置里也没有录屏选项；截图和贴图两个系统都有。"}},
+{"@type":"Question","name":"支持哪些系统？","acceptedAnswer":{"@type":"Answer","text":"macOS 13 及以上（Apple 芯片与 Intel 各有安装包；13.0 个别样式不显示，建议 13.1 起），Windows 10 21H2 与 Windows 11（x64）。Windows 上没有录屏；翻译已在 Windows 实机上验收，截图、贴图、长截图还在验收中。Windows 11 on ARM 靠 x64 模拟运行、没测过；Windows 10 on ARM 不能运行，安装程序会说明原因。录屏带麦克风要 macOS 15，系统翻译要 macOS 26。"}},
 {"@type":"Question","name":"支持拼音或首字母搜索吗？","acceptedAnswer":{"@type":"Answer","text":"支持。关掉输入法直接打 huiyi 或 hy 就能找到“会议”，多音字也照顾到了（yinhang 能找到“银行”）。"}},
 {"@type":"Question","name":"macOS 提示“xPaste 已损坏，无法打开”怎么办？","acceptedAnswer":{"@type":"Answer","text":"安装包还没有签名，从浏览器下载后带隔离属性。在终端运行 xattr -dr com.apple.quarantine /Applications/xPaste.app，再正常打开即可。"}}
 ]}
@@ -360,10 +361,9 @@ mark { background: var(--mark-bg); color: var(--mark-fg); border-radius: 2px; pa
 @keyframes blink { 50% { opacity: .25; } }
 .hintbar { z-index: 4; left: 1.6%; bottom: 2.6%; display: flex; gap: 1.4cqw; padding: .8cqw 1.2cqw; border-radius: 1cqw; background: rgb(18 22 40 / .92); border: 1px solid var(--ui-line); color: var(--ui-muted); white-space: nowrap; }
 .hintbar b { color: var(--ui-fg); font-weight: 500; }
-.notif { z-index: 6; right: 1.6%; top: 6.4%; width: 30cqw; display: flex; gap: 1cqw; align-items: center; padding: 1.2cqw; border-radius: 1.4cqw; background: rgb(24 28 48 / .92); border: 1px solid var(--ui-line); box-shadow: 0 1.6cqw 4cqw -1.6cqw rgb(0 0 0 / .9); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
-.notif img { width: 3.6cqw; height: 3.6cqw; flex: none; }
-.notif b { display: block; font-weight: 600; }
-.notif span { color: var(--ui-muted); white-space: nowrap; }
+.notif { z-index: 6; left: 1.6%; bottom: 3.2%; display: flex; gap: 1cqw; align-items: center; padding: 1cqw 1.6cqw 1cqw 1.2cqw; border-radius: 1.4cqw; background: rgb(24 28 48 / .92); border: 1px solid var(--ui-line); box-shadow: 0 1.6cqw 4cqw -1.6cqw rgb(0 0 0 / .9); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
+.notif i { color: var(--c-code); font-size: 2.2cqw; flex: none; }
+.notif span { white-space: nowrap; }
 .keys { z-index: 7; right: 2%; bottom: 3.2%; display: flex; align-items: center; gap: .6cqw; padding: .6cqw 1.2cqw .6cqw .6cqw; border-radius: 9999px; background: rgb(6 8 15 / .82); border: 1px solid rgb(143 227 255 / .3); box-shadow: 0 0 2.4cqw -.8cqw rgb(143 227 255 / .7); white-space: nowrap; }
 .keys kbd { min-width: 2.8cqw; padding: .2cqw .7cqw; border-radius: .6cqw; text-align: center; background: rgb(143 227 255 / .14); color: var(--beam); box-shadow: inset 0 0 0 1px rgb(143 227 255 / .45); }
 .keys span { margin-left: .4cqw; color: var(--ui-muted); }
@@ -488,6 +488,7 @@ mark { background: var(--mark-bg); color: var(--mark-fg); border-radius: 2px; pa
 .faq details[open] summary i { transform: rotate(45deg); }
 .faq summary:focus-visible { border-radius: 16px; }
 .faq .a { padding: 0 24px 24px; color: var(--muted); }
+.faq .a a { color: var(--fg); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: rgb(255 255 255 / .3); }
 .faq details[open] .a { animation: fadeUp .5s var(--base); }
 .faq code { font: 14px/20px ui-monospace, "SF Mono", Menlo, monospace; color: var(--fg); }
 @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
@@ -849,7 +850,7 @@ footer::before { content: ""; position: absolute; top: 0; left: 0; right: 0; hei
         <p>截图、贴图和录屏都在 xPaste 里。截下的图进入历史，图里的字随后就能搜到；录下的视频也作为一条记录进入历史，可以直接粘贴。全部在本机处理。</p>
       </div>
 
-      <div class="cap-stage reveal" id="cap" role="img" aria-label="演示：冻结屏幕后框选一张图表，加上矩形、箭头和序号标注，按 P 钉在屏幕上并缩放；再按录屏快捷键选中窗口，倒计时 3 秒后开始录制，菜单栏显示计时，停止后系统通知录屏已保存。">
+      <div class="cap-stage reveal" id="cap" role="img" aria-label="演示：冻结屏幕后框选一张图表，加上矩形、箭头和序号标注，按 P 钉在屏幕上并缩放；再按录屏快捷键选中窗口，倒计时 3 秒后开始录制，菜单栏显示计时，停止后屏幕左下角提示录屏已保存。">
         <div class="desk" aria-hidden="true">
           <div class="mbar"><i class="ph-fill ph-apple-logo"></i><b>备忘录</b><span class="mi">文件</span><span class="mi">编辑</span><span class="mi">格式</span><span class="mi">显示</span>
             <span class="r"><span class="recpill">00:00</span><img src="assets/logo.svg" alt=""><i class="ph ph-wifi-high"></i><i class="ph ph-battery-full"></i><time>10月29日 周四 14:32</time></span></div>
@@ -876,14 +877,14 @@ footer::before { content: ""; position: absolute; top: 0; left: 0; right: 0; hei
           <div class="count"><svg viewBox="0 0 150 150"><circle cx="75" cy="75" r="68"></circle><circle class="prg" cx="75" cy="75" r="68"></circle></svg><b>3</b><small>按 Esc 取消</small></div>
           <div class="recb"><i></i></div>
           <div class="hintbar"></div>
-          <div class="notif"><img src="assets/logo.svg" alt=""><div><b>xPaste</b><span>录屏已保存并复制 · 00:12</span></div></div>
+          <div class="notif"><i class="ph ph-check"></i><span>录屏已保存并复制 · 00:12</span></div>
           <div class="keys"></div>
           <svg class="cur" viewBox="0 0 24 24"><path d="M5 3l14 8.2-6.1 1.3 3.6 6.9-2.6 1.4-3.6-7L5 18z" fill="#fff" stroke="#0B0E1A" stroke-width="1.4" stroke-linejoin="round"/></svg>
         </div>
       </div>
 
       <div class="cap-steps">
-        <div class="cap-step reveal" style="--sc:var(--c-image)"><h3><i class="ph ph-selection"></i>截图与标注</h3><p>按 <kbd>⌥</kbd> <kbd>Shift</kbd> <kbd>A</kbd> 冻结所有屏幕，单击选中窗口、拖动框选，或按 F 选整块屏。<span class="nb"><kbd>1</kbd>–<kbd>7</kbd></span> 依次是矩形、椭圆、箭头、画笔、马赛克、文字、序号。回车复制，截图进入历史；<kbd>⌘</kbd> <kbd>S</kbd> 存到截图文件夹，<kbd>O</kbd> 只复制图里的文字。</p></div>
+        <div class="cap-step reveal" style="--sc:var(--c-image)"><h3><i class="ph ph-selection"></i>截图与标注</h3><p>按 <kbd>⌥</kbd> <kbd>Shift</kbd> <kbd>A</kbd> 冻结所有屏幕，单击选中窗口、拖动框选，或按 F 选整块屏。<span class="nb"><kbd>1</kbd>–<kbd>7</kbd></span> 依次是矩形、椭圆、箭头、画笔、马赛克、文字、序号。回车复制，截图进入历史；<kbd>⌘</kbd> <kbd>S</kbd> 存到截图文件夹，<kbd>O</kbd> 只复制图里的文字，<kbd>L</kbd> 长截图：自己往下滚，旁边有预览，回车完成。</p></div>
         <div class="cap-step reveal" style="--sc:var(--c-text);transition-delay:80ms"><h3><i class="ph ph-push-pin"></i>贴图</h3><p>按 <kbd>P</kbd> 把截图钉在屏幕上，浮在其他窗口之上当参考。拖动换位置，滚轮缩放 20%–400%，双击关闭；右键可以复制、保存。退出 xPaste 后贴图不保留。</p></div>
         <div class="cap-step reveal" style="--sc:var(--c-video);transition-delay:160ms"><h3><i class="ph ph-record"></i>录屏<small>仅 macOS</small></h3><p>按 <kbd>⌥</kbd> <kbd>Shift</kbd> <kbd>R</kbd>，用同样的方式选区域，倒计时 3 秒后录成 MP4（30 或 60 fps，清晰度可选），可以带系统声音和麦克风（麦克风要 macOS 15）。菜单栏显示计时，再按一次停止，视频存进 <code>~/Movies/xPaste</code> 并进入历史。</p></div>
       </div>
@@ -1023,7 +1024,7 @@ added 34 packages in 2s
         <details><summary>按 Enter 为什么没有直接粘贴？<i class="ph ph-plus"></i></summary><div class="a">macOS 上自动粘贴需要“辅助功能”权限，在系统设置 → 隐私与安全性 → 辅助功能里打开 xPaste。没授权时 Enter 会复制好并提示，到目标应用里按 ⌘ V 就行。</div></details>
         <details><summary>截图要什么权限？<i class="ph ph-plus"></i></summary><div class="a">macOS 上第一次截图前，要在系统设置 → 隐私与安全性 → 屏幕录制（macOS 15 起叫“录屏与系统录音”）里打开 xPaste，再退出并重新打开 xPaste。macOS 15 起系统会定期再问一次是否继续允许，这是系统行为。录屏用同一个权限，开着麦克风录制时系统会再问一次麦克风权限。Windows 不需要额外权限。</div></details>
         <details><summary>录屏为什么只有 macOS？<i class="ph ph-plus"></i></summary><div class="a">录屏先在 macOS 13 及以上做完，Windows 要换一套系统接口（Windows.Graphics.Capture 加 Media Foundation 编码），另做一期。现在 Windows 上没有录屏快捷键，设置里也没有录屏选项；截图和贴图两个系统都有。</div></details>
-        <details><summary>支持哪些系统？<i class="ph ph-plus"></i></summary><div class="a">macOS 13 及以上（Apple 芯片与 Intel 各有安装包），Windows 10 21H2 与 Windows 11（x64）。Windows 版还没有在真机上完整验证，遇到问题欢迎在 GitHub 提 issue。</div></details>
+        <details><summary>支持哪些系统？<i class="ph ph-plus"></i></summary><div class="a">macOS 13 及以上（Apple 芯片与 Intel 各有安装包；13.0 个别样式不显示，建议 13.1 起），Windows 10 21H2 与 Windows 11（x64）。Windows 上没有录屏；翻译已在 Windows 实机上验收，截图、贴图、长截图还在验收中，遇到问题欢迎在 GitHub 提 issue。Windows 11 on ARM 靠 x64 模拟运行、没测过；Windows 10 on ARM 不能运行，安装程序会说明原因。录屏带麦克风要 macOS 15，系统翻译要 macOS 26，不满足时对应选项不显示或不可用。完整的支持情况见 <a href="https://github.com/Cocoon-break/xpaste/blob/main/docs/%E8%AE%BE%E5%A4%87%E6%94%AF%E6%8C%81.md">设备支持</a>。</div></details>
         <details><summary>能在两台电脑之间同步吗？<i class="ph ph-plus"></i></summary><div class="a">不能，也不打算做。同步和“数据不离开本机”冲突。</div></details>
         <details><summary>支持拼音或首字母搜索吗？<i class="ph ph-plus"></i></summary><div class="a">支持。关掉输入法直接打 huiyi 或 hy 就能找到“会议”，多音字也照顾到了（yinhang 能找到“银行”）。</div></details>
         <details><summary>历史记录会占多少磁盘？<i class="ph ph-plus"></i></summary><div class="a">取决于你复制了多少图片和文件。全文索引会让数据库增大约一半。设置里可以“清空历史…”，置顶的记录会保留。</div></details>
@@ -1448,7 +1449,7 @@ added 34 packages in 2s
       const sec = Math.floor(track([[12.8, 0], [15.2, 12]], t, lin));
       s.pill.textContent = '00:' + String(sec).padStart(2, '0');
       const nf = win(15.7, 16.1, 17.6, 17.9);
-      vis(s.notif, nf); s.notif.style.transform = `translateX(${(1 - track([[15.7, 0], [16.1, 1]], t)) * 4}cqw)`;
+      vis(s.notif, nf); s.notif.style.transform = `translateY(${(1 - track([[15.7, 0], [16.1, 1]], t)) * 1}cqw)`;
 
       // overlay hint, keystrokes, cursor
       const hint = t >= .75 && t < 1.65 ? 1 : t >= 9.0 && t < 9.4 ? 2 : 0;

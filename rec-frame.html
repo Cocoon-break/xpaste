@@ -7,6 +7,8 @@
     <script type="module" src="/src/rec-frame.ts"></script>
   </head>
   <body>
-    <div id="frame" class="out" aria-hidden="true"><i class="tl"></i><i class="tr"></i><i class="bl"></i><i class="br"></i></div>
+    <div id="frame" class="out" aria-hidden="true"><i class="tl"></i><i class="tr"></i><i class="bl"></i><i class="br"></i><div id="info" role="status" hidden></div></div>
+    <div id="toast" role="status" aria-live="polite"><span class="t-ic" id="toastIc"></span><span class="t-msg" id="toastMsg"></span></div>
+    <div id="pv" class="out" hidden aria-hidden="true"><span class="pv-t">预览</span><canvas id="pvc"></canvas></div>
   </body>
 </html>

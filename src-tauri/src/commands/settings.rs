@@ -694,3 +694,32 @@ mod tests {
             .expect("app should build");
     }
 }
+
+/// 哪些快捷键设了却没注册上（启动时被其他应用占用）。打开设置时取，在对应录制框下标红：
+/// 启动时只发了系统通知，系统里关掉了 xPaste 的通知时用户不知道快捷键为什么没反应（M15 交互规则 3）。
+#[derive(Serialize)]
+pub struct HotkeyStatus {
+    panel: bool,
+    shot: bool,
+    rec: bool,
+    translate: bool,
+}
+
+#[tauri::command]
+pub fn hotkey_status(app: AppHandle, state: State<'_, AppState>) -> HotkeyStatus {
+    let (shot, rec, tr) = {
+        let s = state.settings();
+        (
+            s.shot_hotkey.clone(),
+            s.rec_hotkey.clone(),
+            s.translate_hotkey.clone(),
+        )
+    };
+    let (shot, rec, translate) = crate::hotkey::unregistered(&app, &shot, &rec, &tr);
+    HotkeyStatus {
+        panel: crate::tray::hotkey_failed(),
+        shot,
+        rec,
+        translate,
+    }
+}

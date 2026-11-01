@@ -19,8 +19,8 @@ use windows::Win32::Graphics::Dwm::{
 use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CAPTUREBLT, CreateCompatibleDC,
     CreateDIBSection, DIB_RGB_COLORS, DeleteDC, DeleteObject, EnumDisplayMonitors, GdiFlush, GetDC,
-    GetDIBits, GetMonitorInfoW, GetObjectW, HBITMAP, HDC, HMONITOR, MONITORINFO, ReleaseDC,
-    SRCCOPY, SelectObject,
+    GetDIBits, GetMonitorInfoW, GetObjectW, HBITMAP, HDC, HMONITOR, MONITORINFO, ROP_CODE,
+    ReleaseDC, SRCCOPY, SelectObject,
 };
 use windows::Win32::Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation};
 use windows::Win32::Storage::EnhancedStorage::{
@@ -1150,6 +1150,21 @@ fn freeze_monitor(screen: HDC, id: u32, m: HMONITOR, r: RECT) -> Result<Frame, P
     let (mut dpi, mut dpi_y) = (96u32, 96u32);
     // SAFETY: 输出参数指向本地变量；失败时保持 96（100%）
     let _ = unsafe { GetDpiForMonitor(m, MDT_EFFECTIVE_DPI, &mut dpi, &mut dpi_y) };
+    let rgba =
+        blit(screen, r.left, r.top, w, h, SRCCOPY | CAPTUREBLT).ok_or_else(|| err("截屏失败"))?;
+    Ok(Frame {
+        id,
+        origin: (f64::from(r.left), f64::from(r.top)),
+        size: (f64::from(w), f64::from(h)),
+        scale: f64::from(dpi) / 96.0,
+        px: (pw, ph),
+        rgba,
+    })
+}
+
+/// 把屏幕上 `(x, y)` 起 `w` × `h`（物理像素）`BitBlt` 到自上而下的 32 位 DIB section，再转 RGBA。
+fn blit(screen: HDC, x: i32, y: i32, w: i32, h: i32, rop: ROP_CODE) -> Option<Vec<u8>> {
+    let (pw, ph) = (u32::try_from(w).ok()?, u32::try_from(h).ok()?);
     let bmi = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
             biSize: size_of::<BITMAPINFOHEADER>() as u32,
@@ -1165,25 +1180,15 @@ fn freeze_monitor(screen: HDC, id: u32, m: HMONITOR, r: RECT) -> Result<Frame, P
     let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
     // SAFETY: 内存 DC、DIB section 都在本块内创建并释放；BitBlt 完成并 GdiFlush 后 bits 指向
     // pw * ph * 4 字节的像素，在 DeleteObject 之前读完
-    let rgba = unsafe {
+    unsafe {
         let mem = CreateCompatibleDC(Some(screen));
         if mem.is_invalid() {
-            return Err(err("创建内存 DC 失败"));
+            return None;
         }
         let rgba = match CreateDIBSection(Some(screen), &bmi, DIB_RGB_COLORS, &mut bits, None, 0) {
             Ok(bmp) => {
                 let old = SelectObject(mem, bmp.into());
-                let blt = BitBlt(
-                    mem,
-                    0,
-                    0,
-                    w,
-                    h,
-                    Some(screen),
-                    r.left,
-                    r.top,
-                    SRCCOPY | CAPTUREBLT,
-                );
+                let blt = BitBlt(mem, 0, 0, w, h, Some(screen), x, y, rop);
                 let _ = GdiFlush();
                 let rgba = blt.ok().and_then(|()| {
                     let len = pw as usize * ph as usize * 4;
@@ -1199,15 +1204,25 @@ fn freeze_monitor(screen: HDC, id: u32, m: HMONITOR, r: RECT) -> Result<Frame, P
         let _ = DeleteDC(mem);
         rgba
     }
-    .ok_or_else(|| err("截屏失败"))?;
-    Ok(Frame {
-        id,
-        origin: (f64::from(r.left), f64::from(r.top)),
-        size: (f64::from(w), f64::from(h)),
-        scale: f64::from(dpi) / 96.0,
-        px: (pw, ph),
-        rgba,
-    })
+}
+
+/// 长截图（M23 规则 13）：截虚拟桌面上 `r`（物理像素）这块区域。不带 `CAPTUREBLT`：每秒截好几次，带上它光标会闪；
+/// 长截图的边框窗口另用 `WDA_EXCLUDEFROMCAPTURE` 排除，`below` 在 Windows 上不用。返回宽、高、RGBA。
+pub fn capture_rect(r: WinRect, _below: Option<u32>) -> Result<(u32, u32, Vec<u8>), PlatformError> {
+    let (x, y, w, h) = (r.x as i32, r.y as i32, r.w as i32, r.h as i32);
+    if w <= 0 || h <= 0 {
+        return Err(PlatformError::Capture("区域尺寸无效".into()));
+    }
+    // SAFETY: 屏幕 DC 用完即释放
+    let screen = unsafe { GetDC(None) };
+    if screen.is_invalid() {
+        return Err(PlatformError::Capture("取屏幕 DC 失败".into()));
+    }
+    let rgba = blit(screen, x, y, w, h, SRCCOPY);
+    // SAFETY: 上面取得的屏幕 DC
+    unsafe { ReleaseDC(None, screen) };
+    let rgba = rgba.ok_or_else(|| PlatformError::Capture("截屏失败".into()))?;
+    Ok((w as u32, h as u32, rgba))
 }
 
 /// 屏上窗口外框（DWM 扩展边框，不含阴影），由前到后：别的进程取可见、未最小化、非 cloaked、非工具窗口、非桌面、非鼠标穿透的分层窗口；

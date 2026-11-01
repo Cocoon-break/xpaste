@@ -1,7 +1,7 @@
 import './styles.css';
 import { attachConsole, info } from './api/log';
 import {
-  accessibilityGranted, bootstrap, clearHistory, copy, copyTextPlain, countUnpinned, createSnippet, deleteRecords, finishOnboarding, frontendReady, getRecord, hidePanel, installedApps,
+  accessibilityGranted, bootstrap, clearHistory, copy, copyTextPlain, countUnpinned, createSnippet, deleteRecords, finishOnboarding, frontendReady, getRecord, hidePanel, hotkeyStatus, installedApps,
   ocrProgress, openUrl, overlayBegin, pickFolder, prunePreview, reocr, requestAccessibility, requestScreenCapture, revealFile, saveSettings, saveSnippet, screenCaptureGranted, search, trcardPress,
   setDialogOpen, setPaused, setPinned, translateEngines, translateDownload, translateRecord, translateStatus, translateTest, undoDelete, updateSnippet,
 } from './api/commands';
@@ -2059,6 +2059,14 @@ function openSettings() {
   shotKey.reset(st.shotHotkey);
   recKey.reset(st.recHotkey);
   trKey.reset(st.translateHotkey);
+  // 启动时被其他应用占用、没注册上的快捷键：只发过系统通知（可能被关掉），这里在录制框下标红、标签上出红点
+  void hotkeyStatus().then((h) => {
+    const taken = (name: string) => `${name}快捷键被其他应用占用，没有生效，请换一个`;
+    if (h.panel) setHotkeyHelp(taken('唤起'), true);
+    if (h.shot) shotKey.setHelp(taken('截图'), true);
+    if (h.rec && S.platform.os === 'macos') recKey.setHelp(taken('录屏'), true);
+    if (h.translate) trKey.setHelp(taken('翻译'), true);
+  }, (e: AppError) => void info(`读取快捷键状态失败 kind=${e.kind}`));
   shotDir.pending = st.shotDir;
   shotDir.paint();
   recDir.pending = st.recDir;

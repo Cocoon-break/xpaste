@@ -7,6 +7,7 @@ pub mod error;
 mod events;
 mod hotkey;
 mod housekeeping;
+mod longshot;
 mod ocr;
 mod panel;
 mod rec;
@@ -162,6 +163,10 @@ pub fn run() {
                     if event.state() != ShortcutState::Pressed {
                         return;
                     }
+                    // 长截图期间临时注册的回车、Esc（M23 规则 13）
+                    if longshot::key(shortcut) {
+                        return;
+                    }
                     let (p, s, r, t) = {
                         let st = app.state::<AppState>();
                         let s = st.settings();
@@ -219,6 +224,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::settings::bootstrap,
             commands::settings::save_settings,
+            commands::settings::hotkey_status,
             commands::settings::prune_preview,
             commands::settings::set_paused,
             commands::settings::finish_onboarding,
@@ -263,6 +269,8 @@ pub fn run() {
             commands::shot::pin_button_down,
             commands::shot::rec_start,
             commands::shot::rec_frame,
+            commands::shot::shot_long_start,
+            commands::shot::long_preview,
             commands::translate::translate_record,
             commands::translate::translate_test,
             commands::translate::translate_status,
