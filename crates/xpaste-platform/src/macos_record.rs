@@ -36,8 +36,8 @@ use crate::record::{
 
 #[link(name = "CoreMedia", kind = "framework")]
 unsafe extern "C" {
-    // objc2-core-media 的 image_buffer() 要再开 objc2-core-video；这里只判空，手写声明即可
-    fn CMSampleBufferGetImageBuffer(sbuf: &CMSampleBuffer) -> *const c_void;
+    // objc2-core-media 的 image_buffer() 要再开 objc2-core-video；手写声明即可（长截图画面流也用）
+    pub(super) fn CMSampleBufferGetImageBuffer(sbuf: &CMSampleBuffer) -> *const c_void;
 }
 
 /// kAudioFormatMPEG4AAC（'aac '）
@@ -58,13 +58,13 @@ fn record_err(what: impl Into<String>) -> PlatformError {
 }
 
 /// 错误只记域和码：AVFoundation 的描述里可能带文件名
-fn ns_err(e: &NSError) -> String {
+pub(super) fn ns_err(e: &NSError) -> String {
     format!("{} {}", e.domain(), e.code())
 }
 
 /// 调用带 `NSError *` 完成回调的接口并阻塞到回调，最多 `CALLBACK_WAIT`。
 /// 超时后回调仍可能到来：系统复制并持有 block，里面的发送端随之存活，接收端已丢弃时发送只是返回错误。
-fn wait_done(call: impl FnOnce(&DynBlock<dyn Fn(*mut NSError)>)) -> Result<(), String> {
+pub(super) fn wait_done(call: impl FnOnce(&DynBlock<dyn Fn(*mut NSError)>)) -> Result<(), String> {
     let (tx, rx) = mpsc::channel();
     let block = RcBlock::new(move |e: *mut NSError| {
         // SAFETY: 回调期间 e 为空或指向有效的 NSError
@@ -75,7 +75,7 @@ fn wait_done(call: impl FnOnce(&DynBlock<dyn Fn(*mut NSError)>)) -> Result<(), S
         Ok(None) => Ok(()),
         Ok(Some(e)) => Err(e),
         Err(_) => {
-            log::warn!("录屏：等系统回调超时");
+            log::warn!("ScreenCaptureKit：等系统回调超时");
             Err("系统未回调".into())
         }
     }
@@ -401,22 +401,33 @@ pub fn start_recording(opts: RecordOptions) -> Result<Recorder, PlatformError> {
     autoreleasepool(|_| start(opts))
 }
 
-fn start(opts: RecordOptions) -> Result<Recorder, PlatformError> {
+/// 显示器 `display` 的内容过滤器，排除 `exclude` 这个窗口（找不到就不排除）。录屏与长截图画面流共用。
+pub(super) fn content_filter(
+    display: u32,
+    exclude: Option<u32>,
+) -> Result<Retained<SCContentFilter>, PlatformError> {
     let content = shareable_content()?;
-    // SAFETY: 以下都是只读属性
-    let (display, exclude) = unsafe {
+    // SAFETY: 以下都是只读属性与普通构造
+    unsafe {
         let display = content
             .displays()
             .iter()
-            .find(|d| d.displayID() == opts.display)
+            .find(|d| d.displayID() == display)
             .ok_or_else(|| record_err("找不到显示器"))?;
-        let exclude: Vec<_> = opts
-            .exclude_window
+        let exclude: Vec<_> = exclude
             .and_then(|id| content.windows().iter().find(|w| w.windowID() == id))
             .into_iter()
             .collect();
-        (display, exclude)
-    };
+        Ok(SCContentFilter::initWithDisplay_excludingWindows(
+            SCContentFilter::alloc(),
+            &display,
+            &NSArray::from_retained_slice(&exclude),
+        ))
+    }
+}
+
+fn start(opts: RecordOptions) -> Result<Recorder, PlatformError> {
+    let filter = content_filter(opts.display, opts.exclude_window)?;
     let (x, y, w, h) = opts.rect;
     // 清晰度与帧率（M24 规则 6）：只有小文件指定码率，其余用编码器默认
     let (pw, ph) = output_size(w, h, output_scale(opts.quality, opts.scale));
@@ -424,12 +435,7 @@ fn start(opts: RecordOptions) -> Result<Recorder, PlatformError> {
     let mic = opts.microphone && crate::macos_version().is_some_and(|v| v >= 15);
 
     // SAFETY: 以下设置都是 macOS 12.3 / 13 起就有的属性；captureMicrophone 只在 15 起设置
-    let (filter, config) = unsafe {
-        let filter = SCContentFilter::initWithDisplay_excludingWindows(
-            SCContentFilter::alloc(),
-            &display,
-            &NSArray::from_retained_slice(&exclude),
-        );
+    let config = unsafe {
         let config = SCStreamConfiguration::new();
         config.setSourceRect(CGRect::new(CGPoint::new(x, y), CGSize::new(w, h)));
         config.setWidth(pw as usize);
@@ -442,7 +448,7 @@ fn start(opts: RecordOptions) -> Result<Recorder, PlatformError> {
         if mic {
             config.setCaptureMicrophone(true);
         }
-        (filter, config)
+        config
     };
 
     let state = writer_state(&opts.path, (pw, ph), bitrate, opts.system_audio, mic)?;

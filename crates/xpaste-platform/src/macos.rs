@@ -35,9 +35,12 @@ use xpaste_core::{AppInfo, Flavor, Snapshot, VideoMeta};
 
 #[path = "macos_record.rs"]
 mod macos_record;
+#[path = "macos_stream.rs"]
+mod macos_stream;
 pub use macos_record::{
     Recorder, file_flavors, microphone_access, request_microphone, start_recording, window_number,
 };
+pub(crate) use macos_stream::start_native_stream;
 
 use crate::{
     Frame, OcrError, OcrText, PIN_TITLE_PREFIX, PackStatus, PasteBlock, PlatformError,
@@ -961,14 +964,6 @@ pub fn show_no_activate(_hwnd: isize) {}
 
 /// Windows 上收起经 `show_no_activate` 显示的窗口；macOS 无操作。
 pub fn hide_window(_hwnd: isize) {}
-
-/// 原生画面流桩：任务 4 / 5 替换；先让 `start_area_stream` 回退逐帧截屏。
-pub(crate) fn start_native_stream(
-    _opts: &crate::AreaOptions,
-    _latest: std::sync::Arc<crate::stream::Latest>,
-) -> Result<Box<dyn FnOnce() + Send>, PlatformError> {
-    Err(PlatformError::Unsupported)
-}
 
 #[cfg(test)]
 mod tests {
