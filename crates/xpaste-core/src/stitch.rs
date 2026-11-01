@@ -179,13 +179,19 @@ impl Stitch {
             self.follow(&cur, lo, hi, ds)
                 .and_then(|d| (done + lo + d).checked_sub(end))
         };
-        // 预期附近：p 在 near + lo 附近；d = near + end - done，换算不出（预期在上次那帧之上）时不用近似比对
+        // 预期附近：p 在 near + lo ± tol；d 在 near + end - done ± tol。范围有一部分落在能核对的范围外（含负数）时
+        // 不用预期：被截掉的那部分里可能就是真实位置，剩下的范围里“像”的位置会不经比较就胜出
         let tol = (h / 20).max(4);
-        let around = |c: usize| Some(c.saturating_sub(tol)..=c + tol);
-        let hinted = near.and_then(|n| {
-            exact(around(n + lo)).or_else(|| approx(around((n + end).checked_sub(done)?)))
-        });
-        let Some(p) = hinted.or_else(|| exact(None)).or_else(|| approx(None)) else {
+        let around = |c: usize| Some(c.checked_sub(tol)?..=c + tol);
+        let near_p = near.and_then(|n| around(n + lo));
+        let near_d = near.and_then(|n| around((n + end).checked_sub(done)?));
+        // 先精确（预期附近、全范围），再近似（预期附近、全范围）：预期偏得远时，全范围的精确比对比附近的近似比对可靠
+        let found = near_p
+            .and_then(|r| exact(Some(r)))
+            .or_else(|| exact(None))
+            .or_else(|| near_d.and_then(|r| approx(Some(r))))
+            .or_else(|| approx(None));
+        let Some(p) = found else {
             return Step::Lost;
         };
         self.pos = p.saturating_sub(lo);
@@ -223,7 +229,7 @@ impl Stitch {
     /// 背景不动、文字滚动时，对的位置比错开的位置小得多（真实终端截屏约 0.07–0.23 倍）；内容甩出了上次那帧时
     /// 各个位置差不多（约 0.98 倍）；一行行很像时错开整行的几个位置都不错。这些都报没接上。
     /// 只往下找，往回滚时报没接上，滚回来接着拼。`around`：只在这些位移里挑位置（预期附近），“毫不相干的位置”
-    /// 仍按全范围算。
+    /// 仍按全范围算；`around` 超出能核对的位移（重叠不够）时不找。
     fn follow(
         &self,
         cur: &[u8],
@@ -233,6 +239,9 @@ impl Stitch {
     ) -> Option<usize> {
         let m = hi - lo;
         let min = min_overlap(m);
+        if around.as_ref().is_some_and(|r| *r.end() > m - min) {
+            return None;
+        }
         let cw = self.cmp_w;
         let (a, pa) = self.last_edges.get_or_init(|| {
             let e = edges(&self.last, self.w, cw);
@@ -276,7 +285,7 @@ impl Stitch {
             // 预期附近：每个位移都逐像素核对。范围窄，按粗筛隔 3 行挑会把近处“像”的位置挡掉、不参与比较
             // （不随滚动的背景每隔几行就一样好），那就分不出是不是只有一个像样的位置了
             // ponytail: 范围内逐个核对，约 选区高度 / 10 次 diff；嫌慢时改成粗筛取前若干个、不按间隔挡
-            picks.extend(r.clone().filter(|&d| d <= m - min));
+            picks.extend(r.clone());
         } else {
             for &(_, d) in &rough {
                 if picks.iter().all(|q| q.abs_diff(d) > 3) {
@@ -392,7 +401,7 @@ fn profile(e: &[i16], cmp_w: usize) -> Vec<[u32; SEGS]> {
 /// 至少 4 行非空白行对上；取对上的非空白行最多的位置，一样多取靠后的（离当前滚动位置最近）。
 /// 还要明显胜出：对上的非空白行至少是离它 3 行以外的次好位置的 2 倍。一行行很像的内容（代码、表格、
 /// 每行只差几个字的列表）错开整行也能对上不少行，重叠又少时分不清，宁可报没接上，不能接错。
-/// `around`：只在这些位置里找（预期附近），规则不变。
+/// `around`：只在这些位置里找（预期附近），规则不变；`around` 有一部分超出能找的范围时不找。
 /// ponytail: 逐位置比对，最坏约 窗口行数 × 帧高 次比较（2 倍屏整屏约千万次、十几毫秒）；不够快时先按非空白行的哈希找候选位置。
 fn locate(
     len: usize,
@@ -405,7 +414,10 @@ fn locate(
     let min = min_overlap(m);
     let (mut a, mut z) = (len.saturating_sub(window), len.saturating_sub(min));
     if let Some(r) = around {
-        (a, z) = (a.max(*r.start()), z.min(*r.end()));
+        if *r.start() < a || *r.end() > z {
+            return None;
+        }
+        (a, z) = (*r.start(), *r.end());
     }
     let mut ok = Vec::new();
     for p in a..=z {
@@ -710,6 +722,23 @@ mod tests {
         out
     }
 
+    /// 每行完全一样（`lines_shot` 去掉最左两列的行号），每 8 行一个周期；宽 64、高 `h`
+    fn same_lines(y: usize, h: usize) -> Vec<u8> {
+        let glyph: [u8; 8] = [0, 200, 60, 200, 120, 30, 200, 0];
+        let mut out = Vec::new();
+        for r in 0..h {
+            for c in 0..64u8 {
+                let v = if c < 2 {
+                    0
+                } else {
+                    glyph[(y + r) % 8].wrapping_add(c % 3)
+                };
+                out.extend_from_slice(&[v, v, v, 255]);
+            }
+        }
+        out
+    }
+
     /// 甩过已拼好的部分时不能错开整行接上，滚回来后正常接
     #[test]
     fn repetitive_lines_never_misjoin() {
@@ -754,13 +783,7 @@ mod tests {
     /// 给了预期，范围内只剩一个对得上的位置，按同样的规则接上，结果与一次截下相同
     #[test]
     fn hint_disambiguates_repetitive_lines() {
-        let same_lines = |y: usize| -> Vec<u8> {
-            let mut v = lines_shot(y, false);
-            for r in v.as_chunks_mut::<{ 64 * 4 }>().0 {
-                r[..8].copy_from_slice(&[0, 0, 0, 255, 0, 0, 0, 255]);
-            }
-            v
-        };
+        let same_lines = |y| same_lines(y, 60);
         let mut s = Stitch::new(64, 60, &same_lines(0), 0, 4);
         assert_eq!(s.push(same_lines(44)), Step::Lost);
         assert_eq!(s.height(), 60);
@@ -779,10 +802,20 @@ mod tests {
     /// 预期指向一个“像”的位置、真实位置已超出拼好的部分：仍报没接上，不接错
     #[test]
     fn wrong_hint_never_misjoins() {
-        let mut s = Stitch::new(64, 60, &lines_shot(0, false), 0, 4);
-        assert_eq!(s.push_near(lines_shot(130, false), Some(52)), Step::Lost);
-        assert_eq!(s.height(), 60);
-        assert_eq!(s.position(), 0);
+        // 预期本身对，但真实位置刚好超出能核对的范围（重叠不够）：预期附近有一部分核对不了，剩下部分里错开一个周期的
+        // 位置“像”。不给预期报没接上，给了也要报没接上（高 200，tol = 10，周期 8 落在范围内）
+        for y in [164, 166] {
+            let mut s = Stitch::new(64, 200, &same_lines(0, 200), 0, 4);
+            assert_eq!(s.push(same_lines(y, 200)), Step::Lost, "y = {y}");
+            let mut s = Stitch::new(64, 200, &same_lines(0, 200), 0, 4);
+            assert_eq!(
+                s.push_near(same_lines(y, 200), Some(y)),
+                Step::Lost,
+                "y = {y}"
+            );
+            assert_eq!(s.height(), 200);
+            assert_eq!(s.position(), 0);
+        }
         // 带噪点（噪点不随内容滚动，每隔 3 行就一样好）：预期附近有好几个像样的位置，分不清，不接错
         for (y, near) in [(20, 20), (44, 44), (40, 43)] {
             let mut s = Stitch::new(64, 60, &lines_shot(0, true), 0, 4);
