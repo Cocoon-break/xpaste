@@ -1,30 +1,33 @@
 //! 长截图（M23 规则 13）：截图选好区域后按 L，遮罩撤下，选区四角显示边框（录屏边框窗口 `rec-frame`）与提示；
-//! 用户自己滚动区域里的内容，后台线程不停截这块区域、拼接（`xpaste_core::stitch`）。回车或再按截图快捷键完成，
+//! 用户自己滚动区域里的内容，后台线程从这块区域的画面流（`xpaste_platform::start_area_stream`）取帧、拼接
+//! （`xpaste_core::stitch`）。回车或再按截图快捷键完成，
 //! 拼好的图按普通写入写剪切板（同截图复制，进历史），系统通知结果；Esc 取消。
 //!
 //! 选区旁有拼接结果的预览（最下面最新接上的部分），边框页收到进度后用 `long_preview` 拉取，看接缝对不对。
 //!
 //! 期间临时把回车、Esc 注册成全局快捷键（键盘已还给原应用，否则收不到），结束时注销。
-//! 截屏排除边框窗口：macOS 只截它之下的窗口，Windows 上它带 `WDA_EXCLUDEFROMCAPTURE`（见 `rec::show_frame`）。
+//! 画面排除边框窗口：macOS 由画面流排除它的窗口编号，Windows 上它带 `WDA_EXCLUDEFROMCAPTURE`（见 `rec::show_frame`）。
+//!
+//! 开发构建里设了 `XPASTE_LONG_DUMP=<目录>` 时，每帧另存为 `NNNNN.png`（第一帧为 00000），用来重放排查接不上。
 
+use std::cell::RefCell;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::AppHandle;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 use xpaste_core::stitch::{Step, Stitch};
-use xpaste_platform::WinRect;
+use xpaste_platform::{AreaOptions, AreaStream, WinRect};
 
 use crate::error::AppError;
 use crate::events;
 use crate::rec;
 use crate::shot::{self, LRect};
 
-/// 两次截屏的最小间隔。截一次本身要 50–80 ms（macOS 2 倍屏 800 × 600 到 1440 × 900 点），实际几乎是截完就截：
-/// 间隔越短，滚得快时两帧之间越不容易超过一屏（真机验收时 100 ms 间隔常常接不上）
-const TICK: Duration = Duration::from_millis(40);
+/// 等下一帧最多这么久：画面不变时画面流不出新帧，等不到就回头看回车、Esc（按下后 0.2 秒内生效）
+const WAIT: Duration = Duration::from_millis(100);
 /// 比对时忽略区域右侧这么宽（逻辑像素）：滚动条随滚动移动，整列对不上
 const SCROLLBAR: f64 = 24.0;
 /// 每帧底部这么高（逻辑像素）先不接，滚上来再接：选中整个窗口时底部有圆角，列表底部常有渐隐
@@ -80,10 +83,14 @@ pub fn start(app: &AppHandle, generation: u64, index: usize, rect: LRect) -> Res
         return Err(AppError::Invalid("长截图区域无效".into()));
     }
     // 结束会话会清掉屏幕信息：先在同一次加锁里核对代数并取出
-    let (origin, scale, bounds) = {
+    let (origin, scale, display, bounds) = {
         let s = shot::session(app);
-        match (s.screen(index), s.screen_bounds(index)) {
-            (Some((o, k)), Some(b)) if s.is_current(generation) => (o, k, b),
+        match (
+            s.screen(index),
+            s.screen_target(index),
+            s.screen_bounds(index),
+        ) {
+            (Some((o, k)), Some((id, _)), Some(b)) if s.is_current(generation) => (o, k, id, b),
             _ => return Err(AppError::Invalid("截图已结束".into())),
         }
     };
@@ -111,15 +118,21 @@ pub fn start(app: &AppHandle, generation: u64, index: usize, rect: LRect) -> Res
         }
     }
     let (o, size) = shot::pin_bounds(origin, scale, rect, shot::POINTS);
-    let native = WinRect {
-        x: o.0,
-        y: o.1,
-        w: size.0,
-        h: size.1,
+    let opts = AreaOptions {
+        display,
+        rect: (rect.x, rect.y, rect.w, rect.h),
+        scale,
+        exclude_window: below,
+        native: WinRect {
+            x: o.0,
+            y: o.1,
+            w: size.0,
+            h: size.1,
+        },
     };
     log::info!("long 开始 屏 {index} {}x{}", rect.w, rect.h);
     let app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || run(&app, &cmd, &st, native, below, scale));
+    tauri::async_runtime::spawn_blocking(move || run(&app, &cmd, &st, opts));
     Ok(())
 }
 
@@ -164,17 +177,18 @@ pub fn key(pressed: &Shortcut) -> bool {
     true
 }
 
-/// 截屏线程：第一帧作为开头，之后每 `TICK` 截一次、拼接，直到完成或取消。
-fn run(
-    app: &AppHandle,
-    cmd: &AtomicU8,
-    shared: &Mutex<Option<Stitch>>,
-    r: WinRect,
-    below: Option<u32>,
-    scale: f64,
-) {
-    let grab = || xpaste_platform::capture_rect(r, below);
-    let (w, h, first) = match settled(grab) {
+/// 截屏线程：画面流的第一帧作为开头，之后来一帧拼一帧，直到完成或取消（M23 规则 13）。
+fn run(app: &AppHandle, cmd: &AtomicU8, shared: &Mutex<Option<Stitch>>, opts: AreaOptions) {
+    let scale = opts.scale;
+    let stream = match xpaste_platform::start_area_stream(opts) {
+        Ok(s) => s,
+        Err(e) => {
+            log::warn!("long 画面流失败：{e}");
+            end(app);
+            return rec::frame_result(app, "长截图失败", false);
+        }
+    };
+    let (w, h, first) = match settled(first_grab(&stream)) {
         Ok(f) => f,
         Err(e) => {
             log::warn!("long 截屏失败：{e}");
@@ -182,10 +196,14 @@ fn run(
             return rec::frame_result(app, "长截图失败", false);
         }
     };
+    let dump = dump_frames();
     let (w, h) = (w as usize, h as usize);
     let px = |v: f64| (v * scale).round() as usize;
     let stitch = || shared.lock().unwrap_or_else(PoisonError::into_inner);
     *stitch() = Some(Stitch::new(w, h, &first, px(SCROLLBAR), px(GUARD)));
+    if let Some((tx, _)) = &dump {
+        let _ = tx.send((w as u32, h as u32, first));
+    }
     let height = || stitch().as_ref().map_or(0, Stitch::height);
     let progress = |height, state| {
         events::emit_to(
@@ -195,28 +213,34 @@ fn run(
             Progress { height, state },
         );
     };
-    // 进度在高度或状态变了时发，另外每秒补发一次：边框页刚建好时可能错过第一条
     let (mut sent, mut state) = (None, "run");
     // 从哪一刻起一直没接上
     let mut lost_since: Option<Instant> = None;
-    let mut warned = false;
-    // 排查用：截了几帧、几帧没接上、截屏累计耗时
-    let (mut frames, mut lost, mut grab_ms) = (0u32, 0u32, 0u128);
-    for tick in 0u32.. {
-        let t = Instant::now();
+    // 排查用：拼了几帧、几帧没接上、拼接累计耗时
+    let (mut frames, mut lost, mut busy) = (0u32, 0u32, Duration::ZERO);
+    loop {
         let c = cmd.load(Ordering::SeqCst);
         if c == CANCEL {
             end(app);
+            join_dump(dump);
             return rec::hide_frame_after_fade(app, Instant::now());
         }
-        // 按回车时也再截一帧：最后滚进来的内容不能漏
-        let g = grab();
-        frames += 1;
-        grab_ms += t.elapsed().as_millis();
-        match g {
+        // 按回车时再多等一会儿取最后一帧：最后滚进来的内容不能漏
+        let wait = if c == DONE {
+            Duration::from_millis(150)
+        } else {
+            WAIT
+        };
+        match stream.next(wait) {
             // 尺寸变了（如分辨率切换）：这一帧跳过
-            Ok((fw, fh, px)) if fw as usize == w && fh as usize == h => {
-                let step = stitch().as_mut().map(|st| st.push(px));
+            Some(f) if f.w as usize == w && f.h as usize == h => {
+                frames += 1;
+                if let Some((tx, _)) = &dump {
+                    let _ = tx.send((f.w, f.h, f.rgba.clone()));
+                }
+                // 处理耗时不算存图的拷贝
+                let t = Instant::now();
+                let step = stitch().as_mut().map(|st| st.push(f.rgba));
                 state = match step.unwrap_or(Step::Same) {
                     // 滚回接上的位置：画面与上次接上的一样，“没接上”的提示要撤掉
                     Step::Same | Step::Added(_) => "run",
@@ -234,25 +258,31 @@ fn run(
                 if state != "lost" && state != "stuck" {
                     lost_since = None;
                 }
+                busy += t.elapsed();
             }
-            Ok(_) => {}
-            Err(e) if !warned => {
-                warned = true;
-                log::warn!("long 截屏失败：{e}");
+            Some(_) => {}
+            // 画面流中途断了：按完成收尾，已拼好的部分照样复制
+            None if stream.failed() => {
+                log::warn!("long 画面流中断，保留已拼好的部分");
+                break;
             }
-            Err(_) => {}
+            // 画面没变，画面流不出新帧：不算没接上，状态不变
+            None => {}
         }
         if c == DONE {
             break;
         }
-        let now = (height(), state);
-        if sent != Some(now) || tick % 10 == 0 {
-            sent = Some(now);
-            progress(now.0, now.1);
+        let cur = (height(), state);
+        let now = Instant::now();
+        if should_emit(sent, now, cur) {
+            sent = Some((now, cur));
+            progress(cur.0, cur.1);
         }
-        std::thread::sleep(TICK.saturating_sub(t.elapsed()));
     }
+    let mode = stream.mode();
+    stream.stop();
     end(app);
+    join_dump(dump);
     let Some(st) = stitch().take() else {
         return;
     };
@@ -264,9 +294,9 @@ fn run(
     }) {
         Ok(bytes) => {
             log::info!(
-                "long 完成 {w}x{h} {bytes} 字节 编码与写剪切板 {}ms；截屏 {frames} 帧 平均 {}ms，没接上 {lost} 帧",
+                "long 完成 {w}x{h} {bytes} 字节 编码与写剪切板 {}ms；{mode} {frames} 帧 平均处理 {}ms，没接上 {lost} 帧",
                 t.elapsed().as_millis(),
-                grab_ms / u128::from(frames.max(1))
+                (busy / frames.max(1)).as_millis()
             );
             // 超过 M01 的大小上限，监听器不入库
             let text = if bytes > xpaste_core::capture::MAX_BITMAP_BYTES {
@@ -284,6 +314,78 @@ fn run(
     rec::frame_result(app, &notice, ok);
 }
 
+/// 进度什么时候发给边框页：状态变了立即发；高度变了至少隔 100 ms 发一次（画面流一秒最多 60 帧，不必每帧都发）；
+/// 什么都没变时每秒补发一次（边框页刚建好时可能错过第一条）。`last` 为上次发的时刻与内容。
+fn should_emit(last: Option<(Instant, (usize, &str))>, now: Instant, cur: (usize, &str)) -> bool {
+    let Some((at, (height, state))) = last else {
+        return true;
+    };
+    let gap = now.saturating_duration_since(at);
+    state != cur.1
+        || (height != cur.0 && gap >= Duration::from_millis(100))
+        || gap >= Duration::from_secs(1)
+}
+
+/// `settled` 用的取帧：第一帧最多等 0.5 秒；之后 `WAIT` 内没有新帧说明画面没变，返回上一帧
+/// （画面流只在画面变了时出帧，否则静止的画面永远等不到“连续两帧相同”）。
+fn first_grab(stream: &AreaStream) -> impl Fn() -> Result<(u32, u32, Vec<u8>), &'static str> + '_ {
+    let last = RefCell::new(None::<(u32, u32, Vec<u8>)>);
+    move || {
+        let wait = if last.borrow().is_some() {
+            WAIT
+        } else {
+            Duration::from_millis(500)
+        };
+        match stream.next(wait) {
+            Some(f) => {
+                let f = (f.w, f.h, f.rgba);
+                *last.borrow_mut() = Some(f.clone());
+                Ok(f)
+            }
+            None if stream.failed() => Err("画面流中断"),
+            None => last.borrow().clone().ok_or("画面流没有画面"),
+        }
+    }
+}
+
+type Dump = (
+    mpsc::Sender<(u32, u32, Vec<u8>)>,
+    std::thread::JoinHandle<()>,
+);
+
+/// 开发构建、设了 `XPASTE_LONG_DUMP=<目录>` 时，后台线程把每帧存成 `NNNNN.png`；正式构建永远是 `None`。
+// 通道不限长：写盘慢于 60 帧/秒时帧在内存里排队；只在开发构建里，可以接受
+fn dump_frames() -> Option<Dump> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+    let dir = std::path::PathBuf::from(std::env::var_os("XPASTE_LONG_DUMP")?);
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        log::warn!("long 存帧目录创建失败：{e}");
+        return None;
+    }
+    let (tx, rx) = mpsc::channel::<(u32, u32, Vec<u8>)>();
+    let h = std::thread::spawn(move || {
+        for (i, (w, h, rgba)) in rx.into_iter().enumerate() {
+            let saved = image::RgbaImage::from_raw(w, h, rgba)
+                .map(|img| img.save(dir.join(format!("{i:05}.png"))));
+            if let Some(Err(e)) = saved {
+                log::debug!("long 存第 {i} 帧失败：{e}");
+            }
+        }
+    });
+    log::info!("long 逐帧存图已开启");
+    Some((tx, h))
+}
+
+/// 丢掉发送端，等写盘线程把排队的帧写完
+fn join_dump(dump: Option<Dump>) {
+    if let Some((tx, h)) = dump {
+        drop(tx);
+        let _ = h.join();
+    }
+}
+
 /// 长图的第一帧。遮罩刚撤下，窗口服务器还在把它淡出：这时截到的是遮罩里的冻结画面，看着一样、每个像素的颜色
 /// 都差一点，之后每一帧都和它对不上，怎么滚都“没接上”。所以等到连续两帧完全相同（画面稳定）再用；
 /// 用户一开始就在滚、一直不稳定时，最多等 `SETTLE`，用最后一帧。
@@ -292,7 +394,7 @@ fn settled<E>(grab: impl Fn() -> Result<(u32, u32, Vec<u8>), E>) -> Result<(u32,
     std::thread::sleep(Duration::from_millis(50));
     let mut f = grab()?;
     while t.elapsed() < SETTLE {
-        std::thread::sleep(TICK);
+        // 取帧本身会等下一帧，不用再睡
         let next = grab()?;
         if next == f {
             break;
@@ -348,5 +450,22 @@ mod tests {
         let t = Instant::now();
         assert!(settled(moving).is_ok());
         assert!(t.elapsed() < SETTLE + Duration::from_millis(200));
+    }
+
+    #[test]
+    fn progress_throttle() {
+        let t0 = Instant::now();
+        let ms = |n| t0 + Duration::from_millis(n);
+        let last = Some((t0, (100, "run")));
+        // 还没发过：发
+        assert!(should_emit(None, t0, (0, "run")));
+        // 状态变了：立即发
+        assert!(should_emit(last, ms(1), (100, "lost")));
+        // 高度变了：至少隔 100 ms
+        assert!(!should_emit(last, ms(50), (200, "run")));
+        assert!(should_emit(last, ms(100), (200, "run")));
+        // 什么都没变：每 1 秒补发一次
+        assert!(!should_emit(last, ms(999), (100, "run")));
+        assert!(should_emit(last, ms(1000), (100, "run")));
     }
 }
