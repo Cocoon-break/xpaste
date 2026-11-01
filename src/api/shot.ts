@@ -133,10 +133,11 @@ export async function longPreview(w: number, h: number): Promise<Frame> {
 
 /** 长截图进度（同一个边框窗口）：已拼接的高度（物理像素）；`lost` 这一帧没对上，`full` 已到长度上限。
  *  自动滚动（M23 规则 13）：`auto` 滚动中，`paused` 空格暂停，`pointer` 指针移出了选区，`noperm` 没有辅助功能权限，
- *  `noresponse` 窗口不响应自动滚动（后两者手动滚）。 */
+ *  `noresponse` 窗口不响应自动滚动（后两者手动滚），`autostuck` 自动滚动连续 3 次恢复不了、已暂停（空格重试）。
+ *  用户接手时为手动的 `run`、`lost`、`stuck`。 */
 export type LongProgress = {
   height: number;
-  state: 'run' | 'lost' | 'stuck' | 'full' | 'auto' | 'paused' | 'noperm' | 'noresponse' | 'pointer';
+  state: 'run' | 'lost' | 'stuck' | 'full' | 'auto' | 'paused' | 'noperm' | 'noresponse' | 'pointer' | 'autostuck';
 };
 export async function onLongShot(cb: (p: LongProgress) => void): Promise<void> {
   if (stub) {

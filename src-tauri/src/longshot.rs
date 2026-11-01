@@ -88,7 +88,8 @@ pub struct Progress {
     /// `run` 正常；`lost` 这一帧没对上（滚得太快）；`stuck` 连续 `STUCK` 都没对上（画面一直在变，或这个应用的滚动
     /// 落在小数像素上，见已知限制），自动滚动时为连续 3 次恢复不了；`full` 已到长度上限。
     /// 自动滚动（M23 规则 13）：`auto` 滚动中；`paused` 空格暂停；`pointer` 指针移出了选区（只在滚动跟着指针走的
-    /// 平台上）；`noperm` 没有辅助功能权限，手动滚；`noresponse` 窗口不响应自动滚动，手动滚
+    /// 平台上）；`noperm` 没有辅助功能权限，手动滚；`noresponse` 窗口不响应自动滚动，手动滚；`autostuck` 自动滚动
+    /// 连续 3 次恢复不了、已暂停（空格重试）。用户接手时显示手动的 `run`、`lost`、`stuck`
     state: &'static str,
 }
 
@@ -225,8 +226,10 @@ pub fn key(pressed: &Shortcut) -> bool {
 
 /// 自动滚动发出、还没报给节奏的一步（M23 规则 13）
 struct Flight {
-    /// 发出时长图上的位置；当时画面没定位到（没接上）时为 None，这一步的位移无从算起
+    /// 发出时长图上的位置；当时画面没定位到（没接上）时为 None
     from: Option<usize>,
+    /// 往回滚的恢复步
+    back: bool,
     /// 交给拼接的预期位置（比例已测出、往下滚、发出时定位到时才有）
     near: Option<usize>,
     sent: Instant,
@@ -239,9 +242,9 @@ struct Auto {
     /// 选区的原生坐标：滚动事件发在中心，指针在不在里面
     rect: WinRect,
     flight: Option<Flight>,
-    /// 暂停的原因：`paused` 空格，`stuck` 一直接不上；空格继续
+    /// 暂停的原因：`paused` 空格，`autostuck` 一直接不上；空格继续
     hold: Option<&'static str>,
-    /// 给边框页的状态：`auto`、`paused`、`stuck`、`pointer`
+    /// 给边框页的状态：`auto`、`paused`、`autostuck`、`pointer`
     state: &'static str,
     /// 用户正在接手：显示拼接自己的 `lost`、`stuck` 提示
     user: bool,
@@ -406,6 +409,8 @@ fn run(
                 ratio = next.ratio;
             }
             match next.act {
+                // 等帧期间按了回车或 Esc：不再往用户的应用里多滚一步，下一轮收尾
+                Some(Act::Scroll { .. }) if cmd.load(Ordering::SeqCst) != RUN => {}
                 Some(Act::Scroll { units, expect_px }) => {
                     let (x, y) = (a.rect.x + a.rect.w / 2.0, a.rect.y + a.rect.h / 2.0);
                     if let Err(e) = xpaste_platform::scroll_at(x, y, units) {
@@ -415,6 +420,7 @@ fn run(
                         steps += 1;
                         a.flight = Some(Flight {
                             from: pos,
+                            back: units < 0,
                             // 比例测出来之后、往下滚、当前位置可信时才给预期；往回滚没有预期
                             near: pos
                                 .filter(|_| a.pacer.measured() && units > 0)
@@ -429,7 +435,7 @@ fn run(
                     let _ = cmd.compare_exchange(RUN, DONE, Ordering::SeqCst, Ordering::SeqCst);
                 }
                 Some(Act::NoResponse) => to_manual = true,
-                Some(Act::Stuck) => a.hold = Some("stuck"),
+                Some(Act::Stuck) => a.hold = Some("autostuck"),
                 None => {}
             }
         }
@@ -441,7 +447,9 @@ fn run(
         }
         let shown = match (&auto, state) {
             (_, "full") => "full",
+            // 用户接手：按手动拼接显示（没暂停时不说“自动滚动中”）
             (Some(a), s @ ("lost" | "stuck")) if a.user => s,
+            (Some(a), "run") if a.user && a.hold.is_none() => "run",
             (Some(a), _) => a.state,
             (None, "run") => manual,
             (None, s) => s,
@@ -544,9 +552,7 @@ fn drive(a: &mut Auto, keys: &Mutex<Keys>, pos: Option<usize>, changed: Instant)
         Gate::Go => {
             next.act = Some(match a.flight.take() {
                 Some(f) => {
-                    // 停下时没接上（或发出时就没定位到）：报没接上，节奏往回滚恢复
-                    let moved = f.from.zip(pos).map(|(x, y)| y as i64 - x as i64);
-                    let act = a.pacer.settled(moved);
+                    let act = a.pacer.settled(report(&f, pos));
                     next.ratio = a.pacer.measured().then(|| a.pacer.px_per_unit());
                     act
                 }
@@ -555,6 +561,16 @@ fn drive(a: &mut Auto, keys: &Mutex<Keys>, pos: Option<usize>, changed: Instant)
         }
     }
     next
+}
+
+/// 在途的一步停下后报给节奏的位移（M23 规则 13）。往下滚：发出与停下时都定位到才有位移，否则报没接上，
+/// 节奏往回滚恢复。往回滚的恢复步：停下时定位到就算接上（节奏不看大小），发出时多半正因没接上而没定位到。
+fn report(f: &Flight, pos: Option<usize>) -> Option<i64> {
+    if f.back {
+        pos.map(|y| f.from.map_or(0, |x| y as i64 - x as i64))
+    } else {
+        f.from.zip(pos).map(|(x, y)| y as i64 - x as i64)
+    }
 }
 
 /// 要不要发下一步自动滚动（M23 规则 13）
@@ -811,6 +827,25 @@ mod tests {
         assert_eq!(auto_gate(false, None, None, false, true), Gate::Pointer);
         // 画面还没停下
         assert_eq!(auto_gate(false, None, None, true, false), Gate::Wait);
+    }
+
+    #[test]
+    fn report_to_pacer() {
+        let f = |from, back| Flight {
+            from,
+            back,
+            near: None,
+            sent: Instant::now(),
+        };
+        // 往下滚：接上报位移，没接上报 None
+        assert_eq!(report(&f(Some(100), false), Some(400)), Some(300));
+        assert_eq!(report(&f(Some(100), false), None), None);
+        assert_eq!(report(&f(None, false), Some(400)), None);
+        // 往回滚：发出时没定位到，停下时重新定位到也算接上
+        assert!(report(&f(None, true), Some(250)).is_some());
+        assert_eq!(report(&f(Some(400), true), Some(250)), Some(-150));
+        // 往回滚仍没接上
+        assert_eq!(report(&f(None, true), None), None);
     }
 
     #[test]

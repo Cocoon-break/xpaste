@@ -933,6 +933,8 @@ pub const PX_PER_SCROLL_UNIT: f64 = 1.0;
 pub fn scroll_at(x: f64, y: f64, amount: i32) -> Result<(), PlatformError> {
     let source = CGEventSource::new(CGEventSourceStateID::Private)
         .ok_or_else(|| PlatformError::Input("创建事件源失败".into()))?;
+    // 合成事件默认会让本地硬件事件被压住约 0.25 秒：设为 0，自动滚动时用户的指针不卡顿
+    CGEventSource::set_local_events_suppression_interval(Some(&source), 0.0);
     // 滚轮增量为正是往上滚（露出上面的内容），所以取反
     let event = CGEvent::new_scroll_wheel_event2(
         Some(&source),
@@ -1050,7 +1052,6 @@ mod tests {
     use super::*;
     use objc2_core_graphics::kCGColorSpaceLinearSRGB;
 
-    /// 隐藏窗口时取消（code 1）与用户取消一样返回 Download：命令照常结束、下载标记经守卫复位，前端按取消处理（M26 规则 17）。
     /// 取各类事件里最近的一次；从没有过（系统报极大值）或无效值不算（M23 规则 13）
     #[test]
     fn input_age_takes_the_most_recent_valid() {
@@ -1061,6 +1062,7 @@ mod tests {
         assert_eq!(input_age([1e10, f64::INFINITY]), None);
     }
 
+    /// 隐藏窗口时取消（code 1）与用户取消一样返回 Download：命令照常结束、下载标记经守卫复位，前端按取消处理（M26 规则 17）。
     #[test]
     fn prepare_cancel_maps_to_download() {
         assert_eq!(prepare_status(Some(0)), Ok(PackStatus::Installed));

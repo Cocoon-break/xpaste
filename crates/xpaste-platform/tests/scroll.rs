@@ -52,10 +52,13 @@ fn scroll_at_moves_content() {
     let watch = watch_user_input();
     let before = capture_rect(r, None).unwrap();
     let age0 = watch.age();
+    let p0 = pointer_position();
     scroll_at(r.x + r.w / 2.0, r.y + r.h / 2.0, 200).unwrap();
     thread::sleep(Duration::from_millis(200));
     let after = capture_rect(r, None).unwrap();
     let age1 = watch.age();
+    // 设计反目标：发滚动不移动用户的指针
+    assert_eq!(p0, pointer_position(), "发滚动后指针动了");
     assert_ne!(before.2, after.2, "滚动后画面没变");
     // 本进程的滚动不算用户输入：距最近一次用户输入的时间只会变长
     if let Some(a1) = age1 {

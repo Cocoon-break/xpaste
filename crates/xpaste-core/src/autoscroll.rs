@@ -41,6 +41,8 @@ pub struct Pacer {
     moved_ever: bool,
     /// 比例是否已由真实的一步学过
     measured: bool,
+    /// 上一个偏离比例一倍以上、没学的样本：下一个也偏离且与它相符时，说明比例本身错了（第一步测偏）
+    odd: Option<f64>,
     /// 上一步是往回滚的恢复步
     backward: bool,
     /// 上一步往下滚的单位数
@@ -59,6 +61,7 @@ impl Pacer {
             fails: 0,
             moved_ever: false,
             measured: false,
+            odd: None,
             backward: false,
             last_units: 1,
         }
@@ -104,9 +107,15 @@ impl Pacer {
                 // 第一次实测直接取代初始猜测（猜测只是平台的提示）
                 self.ratio = obs;
                 self.measured = true;
-            } else if (0.5..=2.0).contains(&(obs / self.ratio)) {
+            } else if near(obs, self.ratio) {
                 // 之后新值权重 0.5；偏离预期一半以上（到底前的半步、一次性跳变）算动过但不学
                 self.ratio = (self.ratio + obs) / 2.0;
+                self.odd = None;
+            } else if let Some(prev) = self.odd.take().filter(|&p| near(obs, p)) {
+                // 连续两个偏离的样本彼此相符：第一步测偏了，改用两者的平均
+                self.ratio = (prev + obs) / 2.0;
+            } else {
+                self.odd = Some(obs);
             }
             self.step = (self.step * GROW).min(self.frame_h * 2.0 / 3.0);
         } else if m < 0 {
@@ -148,6 +157,11 @@ impl Pacer {
             expect_px: (units as f64 * self.ratio).round() as usize,
         }
     }
+}
+
+/// 两个比例相差不到一倍
+fn near(a: f64, b: f64) -> bool {
+    (0.5..=2.0).contains(&(a / b))
 }
 
 #[cfg(test)]
@@ -234,6 +248,21 @@ mod tests {
     }
 
     #[test]
+    fn bad_first_sample_corrects_after_two_agreeing_samples() {
+        let mut p = pacer(2.0);
+        let a = p.start();
+        // 第一步测得 30（真实是 3）
+        let a = p.settled(Some(units(a) as i64 * 30));
+        assert!((p.px_per_unit() - 30.0).abs() < 0.01);
+        // 一个偏离的样本还不改
+        let a = feed(&mut p, a, 3.0);
+        assert!((p.px_per_unit() - 30.0).abs() < 0.01);
+        // 第二个偏离且与上一个相符：改用两者的平均
+        feed(&mut p, a, 3.0);
+        assert!((p.px_per_unit() - 3.0).abs() < 0.1);
+    }
+
+    #[test]
     fn upward_jump_is_not_the_bottom() {
         let mut p = pacer(2.0);
         let a = p.start();
@@ -278,6 +307,19 @@ mod tests {
     fn three_failed_recoveries_are_stuck() {
         let mut p = pacer(2.0);
         p.start();
+        assert!(matches!(p.settled(None), Act::Scroll { .. }));
+        assert!(matches!(p.settled(None), Act::Scroll { .. }));
+        assert_eq!(p.settled(None), Act::Stuck);
+    }
+
+    #[test]
+    fn lost_again_after_recovery_counts_from_zero() {
+        let mut p = pacer(2.0);
+        p.start();
+        assert!(matches!(p.settled(None), Act::Scroll { .. }));
+        // 恢复步接上
+        assert!(matches!(p.settled(Some(0)), Act::Scroll { units, .. } if units > 0));
+        // 又没接上：重新从 0 数，第 3 次才算一直接不上
         assert!(matches!(p.settled(None), Act::Scroll { .. }));
         assert!(matches!(p.settled(None), Act::Scroll { .. }));
         assert_eq!(p.settled(None), Act::Stuck);

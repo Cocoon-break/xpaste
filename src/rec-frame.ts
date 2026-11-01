@@ -56,6 +56,7 @@ const TEXT = {
   noperm: '滚动选区里的内容 · 授权辅助功能后可自动滚动',
   noresponse: '这个窗口不响应自动滚动，请自己滚动',
   pointer: '把指针移回选区继续',
+  autostuck: '这里一直接不上（画面在变？），空格重试，↩ 保留已拼好的部分',
 };
 /** 预览：同一高度与状态只拉一次；拉取中又有变化时，拉完再拉一次 */
 let pvKey = '', pvBusy = false, pvAgain = false;

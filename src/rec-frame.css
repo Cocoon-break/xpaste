@@ -36,7 +36,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: transparent;
   transition: opacity 200ms ease-out, border-color 160ms ease-out;
 }
 #pv.out { opacity: 0; }
-#pv:is([data-state="lost"], [data-state="stuck"]) { border-color: var(--danger); }
+#pv:is([data-state="lost"], [data-state="stuck"], [data-state="autostuck"]) { border-color: var(--danger); }
 #pv .pv-t { flex: none; padding: 6px 10px; font: 500 11px/1 var(--font-ui); color: var(--muted); }
 #pv canvas { display: block; width: 240px; flex: none; }
 #info[data-side="below"] { top: calc(100% + 10px); }
@@ -45,7 +45,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: transparent;
 #info b { font-weight: 600; color: var(--fg); }
 #info .px { font: 500 11px/1 var(--font-display); color: var(--fg); font-variant-numeric: tabular-nums; }
 #info .tip { margin-right: 4px; }
-#info:is([data-state="lost"], [data-state="stuck"]) .tip { color: var(--danger); }
+#info:is([data-state="lost"], [data-state="stuck"], [data-state="autostuck"]) .tip { color: var(--danger); }
 #info kbd {
   font: 500 11px/1 var(--font-mono); display: inline-flex; align-items: center; justify-content: center;
   min-width: 18px; height: 18px; padding: 0 5px; border-radius: 5px;
