@@ -98,8 +98,13 @@ impl Pacer {
         if m > 0 {
             self.still = 0;
             self.moved_ever = true;
-            // 新值权重 0.5
-            self.ratio = (self.ratio + m as f64 / self.last_units as f64) / 2.0;
+            // 第一次实测直接取代初始猜测（猜测只是平台的提示），之后新值权重 0.5
+            let obs = m as f64 / self.last_units as f64;
+            self.ratio = if self.measured {
+                (self.ratio + obs) / 2.0
+            } else {
+                obs
+            };
             self.measured = true;
             self.step = (self.step * GROW).min(self.frame_h * 2.0 / 3.0);
         } else {
@@ -190,6 +195,16 @@ mod tests {
             a = feed(&mut p, a, 3.0);
         }
         assert!((p.px_per_unit() - 3.0).abs() < 0.1);
+        let want = units(a) as f64 * 3.0;
+        assert!((expect(a) as f64 - want).abs() / want < 0.05);
+    }
+
+    #[test]
+    fn first_measurement_replaces_the_guess() {
+        let mut p = pacer(2.0);
+        let a = p.start();
+        let a = feed(&mut p, a, 3.0);
+        assert!((p.px_per_unit() - 3.0).abs() < 0.01);
         let want = units(a) as f64 * 3.0;
         assert!((expect(a) as f64 - want).abs() / want < 0.05);
     }
