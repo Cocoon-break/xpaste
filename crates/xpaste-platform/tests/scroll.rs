@@ -9,11 +9,28 @@ use xpaste_platform::{
     watch_user_input,
 };
 
+/// 同应用（tao 设置的 Per-Monitor-v2）：Windows 上 `capture_rect` 与 `GetCursorPos` 才是物理像素
+fn per_monitor_dpi() {
+    #[cfg(windows)]
+    // SAFETY: 只改本测试进程的 DPI 感知，无指针参数；已设置过时返回错误，忽略
+    let _ = unsafe {
+        windows::Win32::UI::HiDpi::SetProcessDpiAwarenessContext(
+            windows::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        )
+    };
+}
+
 /// 只读查询，不发事件。
 #[test]
 fn pointer_and_input_age_are_readable() {
-    assert!(pointer_position().is_some());
+    per_monitor_dpi();
     let _ = watch_user_input().age();
+    // CI 的托管机器可能没有交互式桌面，取不到指针：CI 里只打印，本机照常严格
+    if pointer_position().is_none() && std::env::var_os("CI").is_some() {
+        eprintln!("跳过：CI 环境取不到指针位置");
+        return;
+    }
+    assert!(pointer_position().is_some());
 }
 
 /// 会向主屏左上 (200, 200)–(600, 500) 处的窗口发真实滚动，只在本机手动跑：
@@ -23,6 +40,7 @@ fn pointer_and_input_age_are_readable() {
 #[test]
 #[ignore = "向前台窗口发真实滚动，只手动跑"]
 fn scroll_at_moves_content() {
+    per_monitor_dpi();
     assert!(can_auto_scroll(), "需要辅助功能权限");
     assert!(screen_capture_granted(), "需要屏幕录制权限");
     let r = WinRect {

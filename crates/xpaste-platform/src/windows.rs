@@ -56,6 +56,7 @@ use windows::Win32::System::Threading::{
     GetCurrentProcess, GetCurrentProcessId, GetCurrentThread, GetThreadId, OpenProcess,
     OpenProcessToken, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
     QueryFullProcessImageNameW, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
+    THREAD_PRIORITY_HIGHEST,
 };
 use windows::Win32::System::Variant::VT_EMPTY;
 use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
@@ -1482,6 +1483,12 @@ fn hook_input(last: Arc<Mutex<Option<Instant>>>, ready: mpsc::Sender<()>) {
     INPUT_LAST.with(|c| {
         let _ = c.set(last);
     });
+    // 回调屡次超过 LowLevelHooksTimeout 时系统会悄悄摘掉低层钩子：拼接吃满 CPU 时也要及时响应，先提优先级。
+    // 线程几乎总睡在 GetMessageW 里，回调只做一次判断，提高优先级不占 CPU
+    // SAFETY: 只改当前线程的优先级，伪句柄无需关闭
+    if let Err(e) = unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST) } {
+        log::warn!("用户输入观察线程提优先级失败：{e}");
+    }
     // SAFETY: 钩子过程是本模块的函数，进程存活期间有效；钩子句柄只在本线程使用、退出前卸掉；msg 是本地变量
     unsafe {
         let instance: Option<HINSTANCE> = GetModuleHandleW(PCWSTR::null()).ok().map(Into::into);
