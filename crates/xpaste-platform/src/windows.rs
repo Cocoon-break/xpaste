@@ -1379,6 +1379,41 @@ pub fn mouse_button_down() -> bool {
     }
 }
 
+// 长截图自动滚动（M23 规则 13）：以下是与 macOS 同名的桩，待实现
+
+/// Windows 的滚轮作用于指针下的窗口
+pub const SCROLL_FOLLOWS_POINTER: bool = true;
+/// 一格（120）约滚 100 像素
+pub const PX_PER_SCROLL_UNIT: f64 = 100.0 / 120.0;
+
+/// 桩：尚未实现
+pub fn scroll_at(_x: f64, _y: f64, _amount: i32) -> Result<(), PlatformError> {
+    Err(PlatformError::Unsupported)
+}
+
+/// 桩：不观察，`age` 恒为 None
+pub struct InputWatch;
+
+pub fn watch_user_input() -> InputWatch {
+    InputWatch
+}
+
+impl InputWatch {
+    pub fn age(&self) -> Option<std::time::Duration> {
+        None
+    }
+}
+
+/// 桩：尚未实现
+pub fn pointer_position() -> Option<(f64, f64)> {
+    None
+}
+
+/// 桩：实现前不自动滚动
+pub fn can_auto_scroll() -> bool {
+    false
+}
+
 /// 开始菜单（全体用户与当前用户）里 `.lnk` 指向的、存在的 `.exe`。调用方已初始化 COM。
 fn start_menu_targets() -> Vec<String> {
     let mut links = Vec::new();

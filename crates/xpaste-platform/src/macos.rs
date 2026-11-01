@@ -14,14 +14,15 @@ use objc2_app_kit::{
     NSWorkspace,
 };
 use objc2_av_foundation::{AVAssetImageGenerator, AVAssetTrack, AVMediaTypeVideo, AVURLAsset};
-use objc2_core_foundation::CFData;
+use objc2_core_foundation::{CFData, CGPoint};
 use objc2_core_graphics::{
     CGBitmapContextCreate, CGBitmapInfo, CGBlendMode, CGColorRenderingIntent, CGColorSpace,
     CGContext, CGDataProvider, CGDirectDisplayID, CGDisplayBounds, CGDisplayMirrorsDisplay,
-    CGError, CGEvent, CGEventFlags, CGEventTapLocation, CGGetActiveDisplayList, CGImage,
-    CGImageAlphaInfo, CGImageByteOrderInfo, CGPreflightScreenCaptureAccess,
-    CGRequestScreenCaptureAccess, CGWindowListCopyWindowInfo, CGWindowListOption,
-    kCGColorSpaceSRGB, kCGNullWindowID,
+    CGError, CGEvent, CGEventField, CGEventFlags, CGEventSource, CGEventSourceStateID,
+    CGEventTapLocation, CGEventType, CGGetActiveDisplayList, CGImage, CGImageAlphaInfo,
+    CGImageByteOrderInfo, CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess,
+    CGScrollEventUnit, CGWindowListCopyWindowInfo, CGWindowListOption, kCGColorSpaceSRGB,
+    kCGNullWindowID,
 };
 use objc2_core_media::{CMFormatDescription, CMTime};
 use objc2_foundation::{
@@ -917,6 +918,85 @@ pub(crate) fn send_copy() -> Result<(), PlatformError> {
     Ok(())
 }
 
+/// 本进程发的滚动事件带的标记（`kCGEventSourceUserData`，"xpas"），事件监听方据此认出不是用户滚的（M23 规则 13）
+const SCROLL_MARK: i64 = 0x7870_6173;
+
+/// 滚动是否只作用于指针下的窗口（M23 规则 13）。事件带了位置，先按“按位置投递、不跟指针”处理；
+/// 尚未实测：须在真机验收里确认，若带位置的滚动仍只作用于指针下的窗口，改为 true。
+pub const SCROLL_FOLLOWS_POINTER: bool = false;
+/// 滚动单位的初始像素猜测：像素单位的滚轮事件一个单位约一点（M23 规则 13）
+pub const PX_PER_SCROLL_UNIT: f64 = 1.0;
+
+/// 在全局坐标 (x, y)（点，主屏左上为原点）处发一次像素单位的滚动，`amount` 为正时露出下面的内容（M23 规则 13）。
+/// 用私有事件源发到会话：不并入 HID 系统状态，`InputWatch::age` 不把它算作用户输入；不移动指针。
+/// 需要辅助功能权限（调用方先查 `can_auto_scroll`），没有时系统静默丢弃。
+pub fn scroll_at(x: f64, y: f64, amount: i32) -> Result<(), PlatformError> {
+    let source = CGEventSource::new(CGEventSourceStateID::Private)
+        .ok_or_else(|| PlatformError::Input("创建事件源失败".into()))?;
+    // 滚轮增量为正是往上滚（露出上面的内容），所以取反
+    let event = CGEvent::new_scroll_wheel_event2(
+        Some(&source),
+        CGScrollEventUnit::Pixel,
+        1,
+        amount.saturating_neg(),
+        0,
+        0,
+    )
+    .ok_or_else(|| PlatformError::Input("创建滚动事件失败".into()))?;
+    CGEvent::set_integer_value_field(Some(&event), CGEventField::EventSourceUserData, SCROLL_MARK);
+    CGEvent::set_location(Some(&event), CGPoint { x, y });
+    CGEvent::post(CGEventTapLocation::SessionEventTap, Some(&event));
+    Ok(())
+}
+
+/// 长截图期间观察用户输入（M23 规则 13）。macOS 直接查 HID 系统状态，不用装钩子，所以是空结构。
+pub struct InputWatch;
+
+pub fn watch_user_input() -> InputWatch {
+    InputWatch
+}
+
+impl InputWatch {
+    /// 距用户最近一次滚动、按键或鼠标按下过了多久；单纯移动指针不算（M23 规则 13）
+    pub fn age(&self) -> Option<Duration> {
+        input_age(
+            [
+                CGEventType::ScrollWheel,
+                CGEventType::KeyDown,
+                CGEventType::LeftMouseDown,
+                CGEventType::RightMouseDown,
+                CGEventType::OtherMouseDown,
+            ]
+            .map(|t| {
+                CGEventSource::seconds_since_last_event_type(
+                    CGEventSourceStateID::HIDSystemState,
+                    t,
+                )
+            }),
+        )
+    }
+}
+
+/// 各类事件距今的秒数取最小；系统对“从没有过”报一个极大值，超过一天或不是有效数时当作不知道。
+fn input_age(secs: impl IntoIterator<Item = f64>) -> Option<Duration> {
+    secs.into_iter()
+        .filter(|s| s.is_finite() && (0.0..86_400.0).contains(s))
+        .reduce(f64::min)
+        .map(Duration::from_secs_f64)
+}
+
+/// 指针的全局坐标（点，主屏左上为原点）。
+pub fn pointer_position() -> Option<(f64, f64)> {
+    let event = CGEvent::new(None)?;
+    let p = CGEvent::location(Some(&event));
+    Some((p.x, p.y))
+}
+
+/// 能否自动滚动：要辅助功能权限，同模拟粘贴（M23 规则 13）。
+pub fn can_auto_scroll() -> bool {
+    can_paste(None) == PasteBlock::None
+}
+
 /// 未授权时先请求系统授权对话框（无 TCC 记录时弹出并把本应用加入列表），再打开系统设置的
 /// 辅助功能页：拒绝过或在设置里撤销过时对话框通常不再弹出，只靠前者按钮会没反应。
 /// 已授权时无操作。须在主线程调用。
@@ -971,6 +1051,16 @@ mod tests {
     use objc2_core_graphics::kCGColorSpaceLinearSRGB;
 
     /// 隐藏窗口时取消（code 1）与用户取消一样返回 Download：命令照常结束、下载标记经守卫复位，前端按取消处理（M26 规则 17）。
+    /// 取各类事件里最近的一次；从没有过（系统报极大值）或无效值不算（M23 规则 13）
+    #[test]
+    fn input_age_takes_the_most_recent_valid() {
+        assert_eq!(
+            input_age([5.0, 1e10, 0.5, f64::NAN, -1.0]),
+            Some(Duration::from_millis(500))
+        );
+        assert_eq!(input_age([1e10, f64::INFINITY]), None);
+    }
+
     #[test]
     fn prepare_cancel_maps_to_download() {
         assert_eq!(prepare_status(Some(0)), Ok(PackStatus::Installed));
