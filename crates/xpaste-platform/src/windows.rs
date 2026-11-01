@@ -1,7 +1,9 @@
 use std::cell::OnceCell;
 use std::os::windows::ffi::OsStrExt;
+use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -11,8 +13,8 @@ use windows::Media::Ocr::OcrEngine;
 use windows::Storage::Streams::DataWriter;
 use windows::Wdk::System::SystemServices::RtlGetVersion;
 use windows::Win32::Foundation::{
-    CloseHandle, GlobalFree, HANDLE, HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, PROPERTYKEY, RECT,
-    RPC_E_CHANGED_MODE, SIZE, WPARAM,
+    CloseHandle, GlobalFree, HANDLE, HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, POINT, PROPERTYKEY,
+    RECT, RPC_E_CHANGED_MODE, SIZE, WPARAM,
 };
 use windows::Win32::Graphics::Dwm::{
     DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute,
@@ -51,18 +53,18 @@ use windows::Win32::System::Memory::{
 use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
 use windows::Win32::System::Threading::{
-    GetCurrentProcess, GetCurrentProcessId, GetCurrentThread, OpenProcess, OpenProcessToken,
-    PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
-    SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
+    GetCurrentProcess, GetCurrentProcessId, GetCurrentThread, GetThreadId, OpenProcess,
+    OpenProcessToken, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    QueryFullProcessImageNameW, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
 };
 use windows::Win32::System::Variant::VT_EMPTY;
 use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT,
-    KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, MapVirtualKeyW, SendInput,
-    VIRTUAL_KEY, VK_CONTROL, VK_INSERT, VK_LBUTTON, VK_LWIN, VK_MENU, VK_RBUTTON, VK_RWIN,
-    VK_SHIFT,
+    GetAsyncKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT,
+    KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, MOUSEEVENTF_WHEEL, MOUSEINPUT,
+    MapVirtualKeyW, SendInput, VIRTUAL_KEY, VK_CONTROL, VK_INSERT, VK_LBUTTON, VK_LWIN, VK_MENU,
+    VK_RBUTTON, VK_RWIN, VK_SHIFT,
 };
 use windows::Win32::UI::Shell::PropertiesSystem::{
     GPS_DEFAULT, IPropertyStore, SHGetPropertyStoreFromParsingName,
@@ -72,13 +74,16 @@ use windows::Win32::UI::Shell::{
     SIIGBF_THUMBNAILONLY, ShellLink,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyIcon, DispatchMessageW, EVENT_SYSTEM_FOREGROUND,
-    EnumWindows, GWL_EXSTYLE, GetClassNameW, GetForegroundWindow, GetIconInfo, GetMessageW,
-    GetWindowLongW, GetWindowTextLengthW, GetWindowThreadProcessId, HICON, HWND_MESSAGE, ICONINFO,
-    InternalGetWindowText, IsIconic, IsWindow, IsWindowVisible, MONITORINFOF_PRIMARY, MSG,
-    RegisterClassW, SW_HIDE, SW_SHOWNOACTIVATE, SetForegroundWindow, ShowWindow, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_CLIPBOARDUPDATE, WNDCLASSW,
-    WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
+    CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyIcon, DispatchMessageW,
+    EVENT_SYSTEM_FOREGROUND, EnumWindows, GWL_EXSTYLE, GetClassNameW, GetCursorPos,
+    GetForegroundWindow, GetIconInfo, GetMessageW, GetWindowLongW, GetWindowTextLengthW,
+    GetWindowThreadProcessId, HC_ACTION, HICON, HWND_MESSAGE, ICONINFO, InternalGetWindowText,
+    IsIconic, IsWindow, IsWindowVisible, KBDLLHOOKSTRUCT, LLKHF_INJECTED, LLMHF_INJECTED,
+    MONITORINFOF_PRIMARY, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW, PostThreadMessageW,
+    RegisterClassW, SW_HIDE, SW_SHOWNOACTIVATE, SetForegroundWindow, SetWindowsHookExW, ShowWindow,
+    UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WINDOW_EX_STYLE, WINDOW_STYLE,
+    WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_CLIPBOARDUPDATE, WM_QUIT, WM_USER,
+    WNDCLASSW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
 };
 use windows::core::{BOOL, Error, HSTRING, Interface, PCWSTR, PWSTR, w};
 use xpaste_core::capture::MAX_FLAVOR_BYTES;
@@ -91,10 +96,11 @@ pub(crate) use windows_stream::start_native_stream;
 use crate::decode::normalize_newlines;
 use crate::record::{MicAccess, RecordOptions, RecordOutcome};
 use crate::winfmt::{
-    Foreground, VideoProps, bgra_to_opaque_rgba, bgra_to_png, bgra_to_png_within,
+    Foreground, SCROLL_MARK, VideoProps, bgra_to_opaque_rgba, bgra_to_png, bgra_to_png_within,
     bitmap_from_flavors, cf_html_fragment, file_description_query, foreground_target,
-    formats_to_read, is_desktop_class, is_shell_tray_class, join_ocr_words, parse_hdrop,
-    png_to_dib, standard_format_id, standard_format_name, video_meta_from_props, write_bytes,
+    formats_to_read, is_desktop_class, is_shell_tray_class, is_user_input, join_ocr_words,
+    parse_hdrop, png_to_dib, standard_format_id, standard_format_name, video_meta_from_props,
+    write_bytes,
 };
 use crate::{
     Frame, OcrError, OcrText, PIN_TITLE_PREFIX, PackStatus, PasteBlock, PlatformError,
@@ -1379,39 +1385,181 @@ pub fn mouse_button_down() -> bool {
     }
 }
 
-// 长截图自动滚动（M23 规则 13）：以下是与 macOS 同名的桩，待实现
+// 长截图自动滚动（M23 规则 13）
 
-/// Windows 的滚轮作用于指针下的窗口
+/// Windows 的滚轮作用于指针下的窗口：`scroll_at` 的 (x, y) 只供调用方判断指针在不在选区里
 pub const SCROLL_FOLLOWS_POINTER: bool = true;
-/// 一格（120）约滚 100 像素
+/// 一格（120）约滚 100 像素，只是初始猜测
 pub const PX_PER_SCROLL_UNIT: f64 = 100.0 / 120.0;
 
-/// 桩：尚未实现
-pub fn scroll_at(_x: f64, _y: f64, _amount: i32) -> Result<(), PlatformError> {
-    Err(PlatformError::Unsupported)
+/// 发一次滚轮事件，`amount` 是滚轮增量（120 为一格），为正时露出下面的内容（M23 规则 13）。
+/// 作用于指针下的窗口，(x, y) 不用；不移动指针。带 `SCROLL_MARK`，`InputWatch` 不把它算作用户输入。
+/// 目标窗口权限高于本进程时系统照样报发出但丢弃事件（UIPI），由调用方按“画面不动”处理。
+pub fn scroll_at(_x: f64, _y: f64, amount: i32) -> Result<(), PlatformError> {
+    let input = INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                // 滚轮增量为正是往上滚（露出上面的内容），所以取反；字段是 DWORD，按位存有符号数
+                mouseData: amount.saturating_neg() as u32,
+                dwFlags: MOUSEEVENTF_WHEEL,
+                dwExtraInfo: SCROLL_MARK,
+                ..Default::default()
+            },
+        },
+    };
+    // SAFETY: input 是本地值，cbsize 为单个 INPUT 大小
+    let sent = unsafe { SendInput(&[input], size_of::<INPUT>() as i32) };
+    if sent != 1 {
+        return Err(PlatformError::Input(format!(
+            "滚动事件没有发出：{}",
+            Error::from_thread()
+        )));
+    }
+    Ok(())
 }
 
-/// 桩：不观察，`age` 恒为 None
-pub struct InputWatch;
+thread_local! {
+    /// 用户最近一次输入的时刻。只在 `InputWatch` 的钩子线程里设置一次，供低层钩子回调写入（M23 规则 13）。
+    static INPUT_LAST: OnceCell<Arc<Mutex<Option<Instant>>>> = const { OnceCell::new() };
+}
+
+/// 长截图期间观察用户输入（M23 规则 13）。专用线程装低层鼠标、键盘钩子并跑消息循环（低层钩子的回调
+/// 在装它的线程上、由消息循环分发），记下用户最近一次滚动、按键或鼠标按下的时刻。
+/// 每个 `InputWatch` 各有线程、钩子和时刻，同时存在几个也互不影响。丢弃时让线程卸钩退出，最多等 500 ms。
+pub struct InputWatch {
+    last: Arc<Mutex<Option<Instant>>>,
+    thread: Option<thread::JoinHandle<()>>,
+}
 
 pub fn watch_user_input() -> InputWatch {
-    InputWatch
+    let last = Arc::new(Mutex::new(None));
+    let shared = Arc::clone(&last);
+    let (ready_tx, ready) = mpsc::channel();
+    let thread = thread::Builder::new()
+        .name("xpaste-input-watch".into())
+        .spawn(move || hook_input(shared, ready_tx))
+        .inspect_err(|e| log::warn!("用户输入观察线程启动失败：{e}"))
+        .ok();
+    // 等钩子装好再返回，免得紧接着的输入漏记；装不上或线程没起来时发送端已丢弃，这里立刻返回
+    let _ = ready.recv_timeout(Duration::from_millis(500));
+    InputWatch { last, thread }
 }
 
 impl InputWatch {
-    pub fn age(&self) -> Option<std::time::Duration> {
-        None
+    /// 距用户最近一次滚动、按键或鼠标按下过了多久；单纯移动指针不算（M23 规则 13）。
+    /// 观察开始后还没有过、或钩子没装上时为 None。
+    pub fn age(&self) -> Option<Duration> {
+        self.last.lock().ok()?.map(|t| t.elapsed())
     }
 }
 
-/// 桩：尚未实现
-pub fn pointer_position() -> Option<(f64, f64)> {
-    None
+impl Drop for InputWatch {
+    fn drop(&mut self) {
+        let Some(handle) = self.thread.take() else {
+            return;
+        };
+        // SAFETY: JoinHandle 持有线程句柄，join 或丢弃前一直有效
+        let tid = unsafe { GetThreadId(HANDLE(handle.as_raw_handle())) };
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while Instant::now() < deadline {
+            // 线程的消息队列可能还没建好（投递失败），没退出就隔一会儿再投
+            // SAFETY: 只向本模块起的线程投递 WM_QUIT；线程已退出时投递失败而不会崩溃
+            let _ = unsafe { PostThreadMessageW(tid, WM_QUIT, WPARAM(0), LPARAM(0)) };
+            if handle.is_finished() {
+                let _ = handle.join();
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        // 放手不等：线程若之后退出会自己卸钩，最坏是钩子留到进程结束，只记时刻、原样放行，不影响输入
+        log::warn!("用户输入观察线程没有按时退出，不再等待");
+    }
 }
 
-/// 桩：实现前不自动滚动
+/// 钩子线程主体：装钩子、建消息队列、通知就绪，跑消息循环直到 `WM_QUIT`，最后卸钩（M23 规则 13）。
+fn hook_input(last: Arc<Mutex<Option<Instant>>>, ready: mpsc::Sender<()>) {
+    INPUT_LAST.with(|c| {
+        let _ = c.set(last);
+    });
+    // SAFETY: 钩子过程是本模块的函数，进程存活期间有效；钩子句柄只在本线程使用、退出前卸掉；msg 是本地变量
+    unsafe {
+        let instance: Option<HINSTANCE> = GetModuleHandleW(PCWSTR::null()).ok().map(Into::into);
+        let hooks = [
+            SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), instance, 0),
+            SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), instance, 0),
+        ];
+        if let Some(Err(e)) = hooks.iter().find(|h| h.is_err()) {
+            log::warn!("用户输入钩子安装失败：{e}");
+        } else {
+            let mut msg = MSG::default();
+            // 先建好本线程的消息队列，Drop 投递的 WM_QUIT 才有处可去
+            let _ = PeekMessageW(&mut msg, None, WM_USER, WM_USER, PM_NOREMOVE);
+            let _ = ready.send(());
+            // 低层钩子的回调在 GetMessageW 里分发；收到 WM_QUIT 返回 0，出错返回 -1
+            while GetMessageW(&mut msg, None, 0, 0).0 > 0 {}
+        }
+        for h in hooks.into_iter().flatten() {
+            let _ = UnhookWindowsHookEx(h);
+        }
+    }
+}
+
+/// 是用户输入就记下此刻（只在钩子线程里调用）。回调里不能 panic：锁中毒时跳过。
+fn note_input(msg: u32, injected: bool, extra_info: usize) {
+    if !is_user_input(msg, injected, extra_info) {
+        return;
+    }
+    INPUT_LAST.with(|c| {
+        if let Some(last) = c.get()
+            && let Ok(mut t) = last.lock()
+        {
+            *t = Some(Instant::now());
+        }
+    });
+}
+
+/// 低层鼠标钩子：只记时刻，事件一律放行（M23 规则 13）
+extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code == HC_ACTION as i32 {
+        // SAFETY: code 为 HC_ACTION 时 lparam 指向系统提供的 MSLLHOOKSTRUCT，回调期间有效
+        let info = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
+        note_input(
+            wparam.0 as u32,
+            (info.flags & LLMHF_INJECTED) != 0,
+            info.dwExtraInfo,
+        );
+    }
+    // SAFETY: 参数原样交给下一个钩子
+    unsafe { CallNextHookEx(None, code, wparam, lparam) }
+}
+
+/// 低层键盘钩子：只记时刻，事件一律放行（M23 规则 13）
+extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code == HC_ACTION as i32 {
+        // SAFETY: code 为 HC_ACTION 时 lparam 指向系统提供的 KBDLLHOOKSTRUCT，回调期间有效
+        let info = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
+        note_input(
+            wparam.0 as u32,
+            info.flags.contains(LLKHF_INJECTED),
+            info.dwExtraInfo,
+        );
+    }
+    // SAFETY: 参数原样交给下一个钩子
+    unsafe { CallNextHookEx(None, code, wparam, lparam) }
+}
+
+/// 指针的屏幕坐标（物理像素，与 `capture_rect` 同一坐标系：进程是 Per-Monitor-v2）。
+pub fn pointer_position() -> Option<(f64, f64)> {
+    let mut p = POINT::default();
+    // SAFETY: p 是本地变量
+    unsafe { GetCursorPos(&mut p) }.ok()?;
+    Some((f64::from(p.x), f64::from(p.y)))
+}
+
+/// Windows 发滚动不需要权限（M23 规则 13）
 pub fn can_auto_scroll() -> bool {
-    false
+    true
 }
 
 /// 开始菜单（全体用户与当前用户）里 `.lnk` 指向的、存在的 `.exe`。调用方已初始化 COM。

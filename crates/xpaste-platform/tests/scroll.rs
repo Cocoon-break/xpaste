@@ -1,5 +1,5 @@
-//! 长截图自动滚动的平台接口（M23 规则 13）。只在 macOS 跑。
-#![cfg(target_os = "macos")]
+//! 长截图自动滚动的平台接口（M23 规则 13）。在 macOS 与 Windows 上跑。
+#![cfg(any(target_os = "macos", windows))]
 
 use std::thread;
 use std::time::Duration;
@@ -19,6 +19,7 @@ fn pointer_and_input_age_are_readable() {
 /// 会向主屏左上 (200, 200)–(600, 500) 处的窗口发真实滚动，只在本机手动跑：
 /// 前台放一个铺满这块区域、能往下滚的窗口（如终端），跑的时候别碰键盘鼠标，
 /// `cargo test -p xpaste-platform --test scroll -- --ignored`。
+/// Windows 上坐标是物理像素，滚轮作用于指针下的窗口：先把指针停在这块区域里的那个窗口上。
 #[test]
 #[ignore = "向前台窗口发真实滚动，只手动跑"]
 fn scroll_at_moves_content() {
