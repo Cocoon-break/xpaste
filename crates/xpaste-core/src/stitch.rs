@@ -750,22 +750,28 @@ mod tests {
         assert_eq!(s.position(), 10);
     }
 
-    /// 给了预期位移：在预期附近按同样的规则找到位置并接上
+    /// 每行完全一样（去掉 `lines_shot` 最左两列的行号）：错开整行的位置都对得上、分不出明显胜者，不给预期时报没接上；
+    /// 给了预期，范围内只剩一个对得上的位置，按同样的规则接上，结果与一次截下相同
     #[test]
     fn hint_disambiguates_repetitive_lines() {
-        let mut s = Stitch::new(64, 60, &lines_shot(0, false), 0, 4);
-        let _r0 = s.push(lines_shot(44, false));
-        let mut s = Stitch::new(64, 60, &lines_shot(0, false), 0, 4);
-        assert_eq!(
-            s.push_near(lines_shot(44, false), Some(44)),
-            Step::Added(44)
-        );
+        let same_lines = |y: usize| -> Vec<u8> {
+            let mut v = lines_shot(y, false);
+            for r in v.as_chunks_mut::<{ 64 * 4 }>().0 {
+                r[..8].copy_from_slice(&[0, 0, 0, 255, 0, 0, 0, 255]);
+            }
+            v
+        };
+        let mut s = Stitch::new(64, 60, &same_lines(0), 0, 4);
+        assert_eq!(s.push(same_lines(44)), Step::Lost);
+        assert_eq!(s.height(), 60);
+        let mut s = Stitch::new(64, 60, &same_lines(0), 0, 4);
+        assert_eq!(s.push_near(same_lines(44), Some(44)), Step::Added(44));
         assert_eq!(s.position(), 44);
         let (_, rows, px) = s.finish();
         assert_eq!(rows, 104);
         // 等于一次截下第 0..104 行
         let whole: Vec<u8> = (0..13)
-            .flat_map(|i| lines_shot(i * 8, false)[..8 * 64 * 4].to_vec())
+            .flat_map(|i| same_lines(i * 8)[..8 * 64 * 4].to_vec())
             .collect();
         assert_eq!(px, whole);
     }
