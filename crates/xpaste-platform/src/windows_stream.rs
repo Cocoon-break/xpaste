@@ -8,7 +8,6 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{Duration, Instant};
 
 use windows::Foundation::{TimeSpan, TypedEventHandler};
 use windows::Graphics::Capture::{
@@ -38,13 +37,12 @@ use crate::{AreaOptions, PlatformError};
 
 /// 能关掉系统黄色截屏边框（`IsBorderRequired`）的最低版本；更早的 Windows 10 回退逐帧截屏（M23 规则 13）
 const MIN_BUILD: u32 = 20348;
-/// 画面流帧率上限 60 帧/秒（M23 规则 13）：TimeSpan 以 100 ns 为单位。只有 Windows 11 24H2 起认这个设置
+/// 画面流帧率上限 60 帧/秒（M23 规则 13）：TimeSpan 以 100 ns 为单位。只有 Windows 11 24H2 起认这个设置；
+/// 更早的系统故意按屏幕刷新率送帧、不在回调里丢帧：WGC 只在画面变化时送帧，滚动停下前的最后一帧丢了就不会再来。
+/// 槽位只留最新一帧，不积压，多花的只是 CPU（设计文档第 7 节允许“60 或屏幕刷新率”）
 const MIN_INTERVAL: TimeSpan = TimeSpan {
     Duration: 10_000_000 / 60,
 };
-/// 更早的系统按屏幕刷新率送帧：离上次处理的帧不到这么久就丢掉（M23 规则 13）。取 16 ms 而不是 16.67 ms，
-/// 60 Hz 屏上帧间隔的抖动不至于把正常的帧也丢掉
-const FRAME_GAP: Duration = Duration::from_millis(16);
 
 /// 把 WinRT / D3D 的错误记成 HRESULT（不带画面内容）。
 fn hr(what: &'static str) -> impl Fn(windows::core::Error) -> PlatformError {
@@ -59,21 +57,10 @@ struct Crop {
     rect: (u32, u32, u32, u32),
     /// 开始时显示器的物理像素尺寸（= 帧池缓冲尺寸）
     size: SizeInt32,
-    /// 上次处理的帧的时刻（帧率上限用）
-    last: Option<Instant>,
 }
 
 impl Crop {
-    /// 裁出选区；离上一帧太近时为 `Ok(None)`（丢掉这一帧）。
-    fn grab(
-        &mut self,
-        frame: &Direct3D11CaptureFrame,
-    ) -> windows::core::Result<Option<StreamFrame>> {
-        let now = Instant::now();
-        if self.last.is_some_and(|t| now.duration_since(t) < FRAME_GAP) {
-            return Ok(None);
-        }
-        self.last = Some(now);
+    fn grab(&self, frame: &Direct3D11CaptureFrame) -> windows::core::Result<StreamFrame> {
         // 显示器分辨率或缩放中途变了：帧池缓冲不跟着变（没有 Recreate），新画面只写进缓冲左上角，
         // 选区对不上。交给调用方结束画面流，用已拼好的部分收尾
         let content = frame.ContentSize()?;
@@ -118,12 +105,10 @@ impl Crop {
                 bgra_to_rgba(src, w, h, stride)
             });
             self.ctx.Unmap(&self.staging, 0);
-            rgba.map(|rgba| {
-                Some(StreamFrame {
-                    w: w as u32,
-                    h: h as u32,
-                    rgba,
-                })
+            rgba.map(|rgba| StreamFrame {
+                w: w as u32,
+                h: h as u32,
+                rgba,
             })
             .ok_or_else(|| E_BOUNDS.into())
         }
@@ -268,7 +253,6 @@ pub(crate) fn start_native_stream(
         staging,
         rect,
         size,
-        last: None,
     });
     // 出错后只报一次失败，之后的帧不再取：帧池缓冲满了系统就不再送帧
     let dead = AtomicBool::new(false);
@@ -286,11 +270,10 @@ pub(crate) fn start_native_stream(
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .grab(&frame);
-            // 尽快把缓冲还给帧池（丢掉的帧也要取出来再释放，否则帧池不再送帧）
+            // 尽快把缓冲还给帧池
             drop(frame);
             match got {
-                Ok(Some(f)) => l.push(f),
-                Ok(None) => {}
+                Ok(f) => l.push(f),
                 Err(e) if !dead.swap(true, Ordering::Relaxed) => {
                     log::warn!("long 画面流：取帧失败 {:?}", e.code());
                     l.fail();
