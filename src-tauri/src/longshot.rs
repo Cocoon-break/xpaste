@@ -266,8 +266,8 @@ fn run(app: &AppHandle, cmd: &AtomicU8, shared: &Mutex<Option<Stitch>>, opts: Ar
                 log::warn!("long 画面流中断，保留已拼好的部分");
                 break;
             }
-            // 画面没变，画面流不出新帧：不算没接上，状态不变
-            None => {}
+            // 画面没变，画面流不出新帧：不算没接上，只看没接上是否已满 `STUCK`
+            None => state = idle_state(state, lost_since, Instant::now()),
         }
         if c == DONE {
             break;
@@ -312,6 +312,15 @@ fn run(app: &AppHandle, cmd: &AtomicU8, shared: &Mutex<Option<Stitch>>, opts: Ar
         }
     };
     rec::frame_result(app, &notice, ok);
+}
+
+/// 空闲（画面流没有新帧）时的状态：没接上已满 `STUCK` 时改为 `stuck`（M23 规则 13 按时间算，停住不滚也要提示），
+/// 其余不变；空闲不算一次没接上，也不清 `lost_since`。
+fn idle_state(state: &'static str, lost_since: Option<Instant>, now: Instant) -> &'static str {
+    match lost_since {
+        Some(since) if state == "lost" && now.saturating_duration_since(since) >= STUCK => "stuck",
+        _ => state,
+    }
 }
 
 /// 进度什么时候发给边框页：状态变了立即发；高度变了至少隔 100 ms 发一次（画面流一秒最多 60 帧，不必每帧都发）；
@@ -467,5 +476,19 @@ mod tests {
         // 什么都没变：每 1 秒补发一次
         assert!(!should_emit(last, ms(999), (100, "run")));
         assert!(should_emit(last, ms(1000), (100, "run")));
+    }
+
+    #[test]
+    fn idle_turns_lost_into_stuck_after_stuck_time() {
+        let t0 = Instant::now();
+        // 没接上后停住不滚，画面流不出帧：满 STUCK 改为 stuck
+        assert_eq!(idle_state("lost", Some(t0), t0 + STUCK), "stuck");
+        assert_eq!(
+            idle_state("lost", Some(t0), t0 + Duration::from_secs(1)),
+            "lost"
+        );
+        // 其余状态空闲时不变
+        assert_eq!(idle_state("run", None, t0 + STUCK), "run");
+        assert_eq!(idle_state("full", None, t0 + STUCK), "full");
     }
 }
