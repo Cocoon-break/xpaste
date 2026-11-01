@@ -131,11 +131,18 @@ export async function longPreview(w: number, h: number): Promise<Frame> {
   return { w: pw, h: ph, rgba: new Uint8ClampedArray(buf, 8, pw * ph * 4) };
 }
 
-/** 长截图进度（同一个边框窗口）：已拼接的高度（物理像素）；`lost` 这一帧没对上，`full` 已到长度上限。 */
-export type LongProgress = { height: number; state: 'run' | 'lost' | 'stuck' | 'full' };
+/** 长截图进度（同一个边框窗口）：已拼接的高度（物理像素）；`lost` 这一帧没对上，`full` 已到长度上限。
+ *  自动滚动（M23 规则 13）：`auto` 滚动中，`paused` 空格暂停，`pointer` 指针移出了选区，`noperm` 没有辅助功能权限，
+ *  `noresponse` 窗口不响应自动滚动（后两者手动滚）。 */
+export type LongProgress = {
+  height: number;
+  state: 'run' | 'lost' | 'stuck' | 'full' | 'auto' | 'paused' | 'noperm' | 'noresponse' | 'pointer';
+};
 export async function onLongShot(cb: (p: LongProgress) => void): Promise<void> {
   if (stub) {
-    if (new URLSearchParams(location.search).has('long')) setTimeout(() => cb({ height: 1800, state: 'run' }));
+    // 替身：`?long` 为自动滚动中，`?long=<状态>` 看各状态的提示
+    const q = new URLSearchParams(location.search).get('long');
+    if (q !== null) setTimeout(() => cb({ height: 1800, state: (q || 'auto') as LongProgress['state'] }));
     return;
   }
   await listen<LongProgress>('long-shot', (e) => cb(e.payload));
