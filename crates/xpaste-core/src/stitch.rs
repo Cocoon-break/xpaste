@@ -70,6 +70,8 @@ pub struct Stitch {
     full: bool,
     /// 最近一次定位到的帧，第 0 行在长图里的行号
     pos: usize,
+    /// 最近一次变了的帧定位到了（见 `located`）
+    located: bool,
 }
 
 impl Stitch {
@@ -96,6 +98,7 @@ impl Stitch {
             max_rows: (MAX_PIXELS / w.max(1)).min(MAX_ROWS).max(h),
             full: false,
             pos: 0,
+            located: true,
         }
     }
 
@@ -103,6 +106,12 @@ impl Stitch {
     /// 自动滚动据此量出一步实际滚了多少（M23 规则 13）
     pub fn position(&self) -> usize {
         self.pos
+    }
+
+    /// 最近一次与上一帧不同的帧定位到了没有（Added、定位到已拼好部分的 Same、Full 为真，Lost 为假；
+    /// 与上一帧一样或只有零星几行变化的帧不改）。`position` 只在为真时是当前画面的位置（M23 规则 13）
+    pub fn located(&self) -> bool {
+        self.located
     }
 
     /// 结果当前的行数（含结束时才补上的最后一帧底部）
@@ -192,8 +201,10 @@ impl Stitch {
             .or_else(|| near_d.and_then(|r| approx(Some(r))))
             .or_else(|| approx(None));
         let Some(p) = found else {
+            self.located = false;
             return Step::Lost;
         };
+        self.located = true;
         self.pos = p.saturating_sub(lo);
         let to = hi.saturating_sub(self.guard).max(lo);
         // 长图的末尾是这一帧的第 lo + len - p 行；这一帧可靠的部分没超出它：没有新内容（往回滚了，或没动）
@@ -777,6 +788,25 @@ mod tests {
         // 没接上：位置不变
         assert_eq!(s.push(f(200)), Step::Lost);
         assert_eq!(s.position(), 10);
+    }
+
+    #[test]
+    fn located_tracks_the_latest_changed_frame() {
+        let p = page(400);
+        let f = |y| shot(&p, y, 40, 0, 0, 0);
+        let mut s = Stitch::new(W, 40, &f(0), 1, 4);
+        assert!(s.located(), "第一帧就是定位");
+        assert_eq!(s.push(f(10)), Step::Added(10));
+        assert!(s.located());
+        assert_eq!(s.push(f(200)), Step::Lost);
+        assert!(!s.located());
+        // 和上一帧完全一样：不改
+        assert_eq!(s.push(f(200)), Step::Same);
+        assert!(!s.located());
+        // 回到同一位置：Same 且位置没变，但已定位（自动滚动据此不把这一步报成没接上）
+        assert_eq!(s.push(f(10)), Step::Same);
+        assert_eq!(s.position(), 10);
+        assert!(s.located());
     }
 
     /// 每行完全一样（去掉 `lines_shot` 最左两列的行号）：错开整行的位置都对得上、分不出明显胜者，不给预期时报没接上；

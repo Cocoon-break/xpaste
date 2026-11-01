@@ -50,6 +50,8 @@ const AUTO_WAIT: Duration = Duration::from_millis(20);
 const QUIET: Duration = Duration::from_millis(120);
 /// 发出一步后画面一直没变，这么久后才算“没动”：应用处理滚动要一点时间
 const NO_MOVE: Duration = Duration::from_millis(300);
+/// 发出一步后画面一直在变（自动播放的视频、轮播），最多等这么久也算停下，否则节奏永远等不到结果
+const STEP_MAX: Duration = Duration::from_secs(1);
 /// 用户这么久内有过输入算接手；停手满这么久后恢复〔建议值，真机按手感调〕
 const TAKEOVER: Duration = Duration::from_secs(1);
 /// 自己的快捷键（空格、回车、Esc）也会被当成用户输入：按下后这么久内的输入不算接手
@@ -223,13 +225,11 @@ pub fn key(pressed: &Shortcut) -> bool {
 
 /// 自动滚动发出、还没报给节奏的一步（M23 规则 13）
 struct Flight {
-    /// 发出时长图上的位置
-    from: usize,
-    /// 交给拼接的预期位置（比例已测出、往下滚时才有）
+    /// 发出时长图上的位置；当时画面没定位到（没接上）时为 None，这一步的位移无从算起
+    from: Option<usize>,
+    /// 交给拼接的预期位置（比例已测出、往下滚、发出时定位到时才有）
     near: Option<usize>,
     sent: Instant,
-    /// 发出后最近一次变化的帧没接上
-    lost: bool,
 }
 
 /// 自动滚动的状态（M23 规则 13）
@@ -243,6 +243,8 @@ struct Auto {
     hold: Option<&'static str>,
     /// 给边框页的状态：`auto`、`paused`、`stuck`、`pointer`
     state: &'static str,
+    /// 用户正在接手：显示拼接自己的 `lost`、`stuck` 提示
+    user: bool,
 }
 
 /// 截屏线程：画面流的第一帧作为开头，之后来一帧拼一帧，直到完成或取消（M23 规则 13）。
@@ -306,6 +308,7 @@ fn run(
         flight: None,
         hold: None,
         state: "auto",
+        user: false,
     });
     // 没在自动滚动时，拼接状态 `run` 显示成什么：`run`、`noperm`、`noresponse`
     let mut manual = if auto.is_some() { "run" } else { "noperm" };
@@ -329,7 +332,7 @@ fn run(
         // 按回车时再多等一会儿取最后一帧：最后滚进来的内容不能漏
         let wait = if c == DONE {
             Duration::from_millis(150)
-        } else if auto.is_some() {
+        } else if auto.as_ref().is_some_and(|a| a.hold.is_none()) {
             AUTO_WAIT
         } else {
             WAIT
@@ -343,19 +346,18 @@ fn run(
                 }
                 // 处理耗时不算存图的拷贝
                 let t = Instant::now();
-                let flight = auto.as_mut().and_then(|a| a.flight.as_mut());
-                let near = flight.as_ref().and_then(|f| f.near);
+                let near = auto
+                    .as_ref()
+                    .and_then(|a| a.flight.as_ref())
+                    .and_then(|f| f.near);
                 let (step, moved) = stitch().as_mut().map_or((Step::Same, false), |st| {
-                    let from = st.position();
+                    let (from, was) = (st.position(), st.located());
                     let step = st.push_near(f.rgba, near);
-                    (step, st.position() != from)
+                    (step, st.position() != from || st.located() != was)
                 });
-                // 画面停下的判断看这里：接上了新内容、没接上、或定位到了别处都算变化
+                // 画面停下的判断看这里：接上了新内容、没接上、定位到了别处或重新定位到都算变化
                 if step != Step::Same || moved {
                     changed = t;
-                    if let Some(f) = flight {
-                        f.lost = step == Step::Lost;
-                    }
                 }
                 state = match step {
                     // 滚回接上的位置：画面与上次接上的一样，“没接上”的提示要撤掉
@@ -391,10 +393,14 @@ fn run(
         // 到上限：不再自动滚，等用户回车
         if state == "full" && auto.take().is_some() {
             ended = "到上限";
+            release_space(app);
         }
         let mut to_manual = false;
         if let Some(a) = auto.as_mut() {
-            let pos = stitch().as_ref().map_or(0, Stitch::position);
+            // 当前画面在长图上的位置；最近一帧没接上时为 None
+            let pos = stitch()
+                .as_ref()
+                .and_then(|st| st.located().then(|| st.position()));
             let next = drive(a, keys, pos, changed);
             if next.ratio.is_some() {
                 ratio = next.ratio;
@@ -409,10 +415,11 @@ fn run(
                         steps += 1;
                         a.flight = Some(Flight {
                             from: pos,
-                            // 比例测出来之后、往下滚时才给预期；往回滚没有预期
-                            near: (a.pacer.measured() && units > 0).then_some(pos + expect_px),
+                            // 比例测出来之后、往下滚、当前位置可信时才给预期；往回滚没有预期
+                            near: pos
+                                .filter(|_| a.pacer.measured() && units > 0)
+                                .map(|p| p + expect_px),
                             sent: Instant::now(),
-                            lost: false,
                         });
                     }
                 }
@@ -430,13 +437,11 @@ fn run(
             log::info!("long 窗口不响应自动滚动，转手动");
             auto = None;
             (manual, ended) = ("noresponse", "不响应");
-            // 手动滚时空格还给应用（可能用它翻页）
-            if let Err(e) = app.global_shortcut().unregister(SPACE) {
-                log::debug!("long 注销 {SPACE} 失败：{e}");
-            }
+            release_space(app);
         }
         let shown = match (&auto, state) {
             (_, "full") => "full",
+            (Some(a), s @ ("lost" | "stuck")) if a.user => s,
             (Some(a), _) => a.state,
             (None, "run") => manual,
             (None, s) => s,
@@ -494,8 +499,9 @@ struct Next {
 }
 
 /// 自动滚动的一拍（每取一次帧后调用）：处理空格，看 `auto_gate` 要不要发下一步，要发时把在途一步的位移报给节奏。
-/// `pos` 为长图上的当前位置，`changed` 为画面最近一次变化的时刻。发事件由调用方做（M23 规则 13）。
-fn drive(a: &mut Auto, keys: &Mutex<Keys>, pos: usize, changed: Instant) -> Next {
+/// `pos` 为长图上的当前位置（最近一帧没接上时为 None），`changed` 为画面最近一次变化的时刻。
+/// 发事件由调用方做（M23 规则 13）。
+fn drive(a: &mut Auto, keys: &Mutex<Keys>, pos: Option<usize>, changed: Instant) -> Next {
     let (space, key_at) = {
         let mut k = keys.lock().unwrap_or_else(PoisonError::into_inner);
         (std::mem::take(&mut k.space), k.at)
@@ -521,6 +527,7 @@ fn drive(a: &mut Auto, keys: &Mutex<Keys>, pos: usize, changed: Instant) -> Next
         pointer_in,
         quiet(now, changed, a.flight.as_ref().map(|f| f.sent)),
     );
+    a.user = gate == Gate::User;
     a.state = a.hold.unwrap_or(if gate == Gate::Pointer {
         "pointer"
     } else {
@@ -537,9 +544,10 @@ fn drive(a: &mut Auto, keys: &Mutex<Keys>, pos: usize, changed: Instant) -> Next
         Gate::Go => {
             next.act = Some(match a.flight.take() {
                 Some(f) => {
-                    let moved = (!f.lost).then(|| pos as i64 - f.from as i64);
+                    // 停下时没接上（或发出时就没定位到）：报没接上，节奏往回滚恢复
+                    let moved = f.from.zip(pos).map(|(x, y)| y as i64 - x as i64);
                     let act = a.pacer.settled(moved);
-                    next.ratio = Some(a.pacer.px_per_unit());
+                    next.ratio = a.pacer.measured().then(|| a.pacer.px_per_unit());
                     act
                 }
                 None => a.pacer.start(),
@@ -585,9 +593,10 @@ fn auto_gate(
 }
 
 /// 画面停下了没有：在途的一步（`sent` 发出）之后变过，距最近一次变化满 `QUIET`；之后一直没变，距发出满
-/// `NO_MOVE`；没有在途的一步时，距最近一次变化满 `QUIET`（M23 规则 13）。
+/// `NO_MOVE`；一直在变时距发出满 `STEP_MAX` 也算；没有在途的一步时，距最近一次变化满 `QUIET`（M23 规则 13）。
 fn quiet(now: Instant, changed: Instant, sent: Option<Instant>) -> bool {
     match sent {
+        Some(s) if now.saturating_duration_since(s) >= STEP_MAX => true,
         Some(s) if changed < s => now.saturating_duration_since(s) >= NO_MOVE,
         _ => now.saturating_duration_since(changed) >= QUIET,
     }
@@ -706,6 +715,13 @@ fn encode(w: usize, h: usize, rgba: Vec<u8>) -> Result<Vec<u8>, AppError> {
     Ok(png)
 }
 
+/// 不再自动滚动（转手动、到上限）：空格还给应用（可能用它翻页）
+fn release_space(app: &AppHandle) {
+    if let Err(e) = app.global_shortcut().unregister(SPACE) {
+        log::debug!("long 注销 {SPACE} 失败：{e}");
+    }
+}
+
 /// 撤下边框（淡出，窗口留着显示结果；取消时由调用方隐藏）、注销回车、Esc 与空格、回到空闲。
 fn end(app: &AppHandle) {
     rec::frame_out(app);
@@ -807,6 +823,9 @@ mod tests {
         // 发出后一直没变：距发出满 NO_MOVE（应用还没来得及动，不能算没动）
         assert!(!quiet(ms(200), t0, Some(ms(10))));
         assert!(quiet(ms(10) + NO_MOVE, t0, Some(ms(10))));
+        // 一直在变（视频、轮播）：距发出满 STEP_MAX 也算停下
+        assert!(!quiet(ms(999), ms(990), Some(t0)));
+        assert!(quiet(t0 + STEP_MAX, t0 + STEP_MAX, Some(t0)));
         // 没有在途的一步：距最近一次变化满 QUIET
         assert!(!quiet(ms(50), t0, None));
         assert!(quiet(t0 + QUIET, t0, None));
