@@ -8,6 +8,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use windows::Foundation::{TimeSpan, TypedEventHandler};
 use windows::Graphics::Capture::{
@@ -15,6 +16,7 @@ use windows::Graphics::Capture::{
 };
 use windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
 use windows::Graphics::DirectX::DirectXPixelFormat;
+use windows::Graphics::SizeInt32;
 use windows::Win32::Foundation::{E_BOUNDS, HMODULE};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::{
@@ -36,11 +38,13 @@ use crate::{AreaOptions, PlatformError};
 
 /// 能关掉系统黄色截屏边框（`IsBorderRequired`）的最低版本；更早的 Windows 10 回退逐帧截屏（M23 规则 13）
 const MIN_BUILD: u32 = 20348;
-/// 画面流帧率上限 60 帧/秒（M23 规则 13）：TimeSpan 以 100 ns 为单位。只有 Windows 11 24H2 起认这个设置，
-/// 更早的系统按屏幕刷新率送帧，槽位只留最新一帧，不积压
+/// 画面流帧率上限 60 帧/秒（M23 规则 13）：TimeSpan 以 100 ns 为单位。只有 Windows 11 24H2 起认这个设置
 const MIN_INTERVAL: TimeSpan = TimeSpan {
     Duration: 10_000_000 / 60,
 };
+/// 更早的系统按屏幕刷新率送帧：离上次处理的帧不到这么久就丢掉（M23 规则 13）。取 16 ms 而不是 16.67 ms，
+/// 60 Hz 屏上帧间隔的抖动不至于把正常的帧也丢掉
+const FRAME_GAP: Duration = Duration::from_millis(16);
 
 /// 把 WinRT / D3D 的错误记成 HRESULT（不带画面内容）。
 fn hr(what: &'static str) -> impl Fn(windows::core::Error) -> PlatformError {
@@ -53,10 +57,29 @@ struct Crop {
     staging: ID3D11Texture2D,
     /// 显示器本地物理像素：x, y, w, h
     rect: (u32, u32, u32, u32),
+    /// 开始时显示器的物理像素尺寸（= 帧池缓冲尺寸）
+    size: SizeInt32,
+    /// 上次处理的帧的时刻（帧率上限用）
+    last: Option<Instant>,
 }
 
 impl Crop {
-    fn grab(&self, frame: &Direct3D11CaptureFrame) -> windows::core::Result<StreamFrame> {
+    /// 裁出选区；离上一帧太近时为 `Ok(None)`（丢掉这一帧）。
+    fn grab(
+        &mut self,
+        frame: &Direct3D11CaptureFrame,
+    ) -> windows::core::Result<Option<StreamFrame>> {
+        let now = Instant::now();
+        if self.last.is_some_and(|t| now.duration_since(t) < FRAME_GAP) {
+            return Ok(None);
+        }
+        self.last = Some(now);
+        // 显示器分辨率或缩放中途变了：帧池缓冲不跟着变（没有 Recreate），新画面只写进缓冲左上角，
+        // 选区对不上。交给调用方结束画面流，用已拼好的部分收尾
+        let content = frame.ContentSize()?;
+        if (content.Width, content.Height) != (self.size.Width, self.size.Height) {
+            return Err(E_BOUNDS.into());
+        }
         let (x, y, w, h) = self.rect;
         // SAFETY: 帧的表面在 frame 存活期间有效；GetInterface 返回带引用计数的纹理
         let tex: ID3D11Texture2D = unsafe {
@@ -68,7 +91,7 @@ impl Crop {
         let mut desc = D3D11_TEXTURE2D_DESC::default();
         // SAFETY: desc 是本地变量
         unsafe { tex.GetDesc(&mut desc) };
-        // 显示器分辨率中途变了：选区对不上，交给调用方结束画面流
+        // 缓冲尺寸固定为开始时的显示器尺寸，选区在开始时已核对过；这里只是防御，保证下面的拷贝不越界
         if x + w > desc.Width || y + h > desc.Height {
             return Err(E_BOUNDS.into());
         }
@@ -95,10 +118,12 @@ impl Crop {
                 bgra_to_rgba(src, w, h, stride)
             });
             self.ctx.Unmap(&self.staging, 0);
-            rgba.map(|rgba| StreamFrame {
-                w: w as u32,
-                h: h as u32,
-                rgba,
+            rgba.map(|rgba| {
+                Some(StreamFrame {
+                    w: w as u32,
+                    h: h as u32,
+                    rgba,
+                })
             })
             .ok_or_else(|| E_BOUNDS.into())
         }
@@ -238,7 +263,13 @@ pub(crate) fn start_native_stream(
         log::debug!("long 画面流：系统不支持帧率上限 {:?}", e.code());
     }
 
-    let crop = Mutex::new(Crop { ctx, staging, rect });
+    let crop = Mutex::new(Crop {
+        ctx,
+        staging,
+        rect,
+        size,
+        last: None,
+    });
     // 出错后只报一次失败，之后的帧不再取：帧池缓冲满了系统就不再送帧
     let dead = AtomicBool::new(false);
     let l = latest.clone();
@@ -255,10 +286,11 @@ pub(crate) fn start_native_stream(
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .grab(&frame);
-            // 尽快把缓冲还给帧池
+            // 尽快把缓冲还给帧池（丢掉的帧也要取出来再释放，否则帧池不再送帧）
             drop(frame);
             match got {
-                Ok(f) => l.push(f),
+                Ok(Some(f)) => l.push(f),
+                Ok(None) => {}
                 Err(e) if !dead.swap(true, Ordering::Relaxed) => {
                     log::warn!("long 画面流：取帧失败 {:?}", e.code());
                     l.fail();
