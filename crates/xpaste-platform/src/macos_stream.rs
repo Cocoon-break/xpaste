@@ -18,7 +18,7 @@ use objc2_screen_capture_kit::{
 };
 
 use super::macos_record::{CMSampleBufferGetImageBuffer, content_filter, ns_err, wait_done};
-use crate::stream::{Latest, StreamFrame};
+use crate::stream::{Latest, StreamFrame, bgra_to_rgba};
 use crate::{AreaOptions, PlatformError};
 
 #[link(name = "CoreMedia", kind = "framework")]
@@ -132,18 +132,6 @@ fn frame(sb: &CMSampleBuffer) -> Option<StreamFrame> {
     }
 }
 
-/// BGRA（每行 `stride` 字节，可能有补齐）转成行紧密排列的 RGBA。屏幕画面不透明：alpha 置 255，
-/// 预乘与否没有区别，即非预乘。
-fn bgra_to_rgba(src: &[u8], w: usize, h: usize, stride: usize) -> Vec<u8> {
-    let mut out = Vec::with_capacity(w * h * 4);
-    for row in src.chunks(stride).take(h) {
-        for p in row[..w * 4].as_chunks::<4>().0 {
-            out.extend_from_slice(&[p[2], p[1], p[0], 255]);
-        }
-    }
-    out
-}
-
 /// 正在跑的画面流。停止闭包持有它。
 struct Running {
     stream: Retained<SCStream>,
@@ -238,22 +226,4 @@ fn start(
         _queue: queue,
     };
     Ok(Box::new(move || running.stop()))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn bgra_to_rgba_swaps_channels_and_drops_row_padding() {
-        // 2×2，每行补齐到 12 字节，最后一行不带补齐
-        let src = [
-            1, 2, 3, 255, 4, 5, 6, 255, 9, 9, 9, 9, //
-            7, 8, 9, 254, 10, 11, 12, 255,
-        ];
-        assert_eq!(
-            bgra_to_rgba(&src, 2, 2, 12),
-            [3, 2, 1, 255, 6, 5, 4, 255, 9, 8, 7, 255, 12, 11, 10, 255]
-        );
-    }
 }

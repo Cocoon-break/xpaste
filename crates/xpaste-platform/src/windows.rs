@@ -9,6 +9,7 @@ use windows::Globalization::Language;
 use windows::Graphics::Imaging::{BitmapPixelFormat, SoftwareBitmap};
 use windows::Media::Ocr::OcrEngine;
 use windows::Storage::Streams::DataWriter;
+use windows::Wdk::System::SystemServices::RtlGetVersion;
 use windows::Win32::Foundation::{
     CloseHandle, GlobalFree, HANDLE, HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, PROPERTYKEY, RECT,
     RPC_E_CHANGED_MODE, SIZE, WPARAM,
@@ -48,6 +49,7 @@ use windows::Win32::System::Memory::{
     GMEM_MOVEABLE, GMEM_ZEROINIT, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock,
 };
 use windows::Win32::System::Ole::CF_UNICODETEXT;
+use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
 use windows::Win32::System::Threading::{
     GetCurrentProcess, GetCurrentProcessId, GetCurrentThread, OpenProcess, OpenProcessToken,
     PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
@@ -81,6 +83,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{BOOL, Error, HSTRING, Interface, PCWSTR, PWSTR, w};
 use xpaste_core::capture::MAX_FLAVOR_BYTES;
 use xpaste_core::{AppInfo, Flavor, Snapshot};
+
+#[path = "windows_stream.rs"]
+mod windows_stream;
+pub(crate) use windows_stream::start_native_stream;
 
 use crate::decode::normalize_newlines;
 use crate::record::{MicAccess, RecordOptions, RecordOutcome};
@@ -1095,19 +1101,7 @@ pub fn png_flavors(png: Vec<u8>) -> Vec<Flavor> {
 /// 前提：进程是 Per-Monitor-v2 DPI 感知（tao 在事件循环建立后设置）。否则显示器矩形与 `BitBlt`
 /// 按缩放后的逻辑坐标计算，而 `window_rects` 的 DWM 边框仍是物理像素，两者对不上。
 pub fn freeze_displays() -> Result<Vec<Frame>, PlatformError> {
-    let mut monitors: Vec<(HMONITOR, RECT)> = Vec::new();
-    // SAFETY: 回调只在 EnumDisplayMonitors 返回前经 lparam 访问 monitors
-    unsafe {
-        EnumDisplayMonitors(
-            None,
-            None,
-            Some(push_monitor),
-            LPARAM(&mut monitors as *mut Vec<(HMONITOR, RECT)> as isize),
-        )
-    }
-    .ok()
-    .map_err(|e| PlatformError::Capture(format!("枚举显示器失败：{e}")))?;
-    monitors.sort_by_key(|&(m, _)| !is_primary(m));
+    let monitors = monitors()?;
     // SAFETY: 屏幕 DC 用完即释放
     let screen = unsafe { GetDC(None) };
     if screen.is_invalid() {
@@ -1121,6 +1115,24 @@ pub fn freeze_displays() -> Result<Vec<Frame>, PlatformError> {
     // SAFETY: 上面取得的屏幕 DC
     unsafe { ReleaseDC(None, screen) };
     frames
+}
+
+/// 显示器及其矩形（虚拟桌面物理像素），主屏在前；下标即 `Frame.id`（`AreaOptions::display`）。
+fn monitors() -> Result<Vec<(HMONITOR, RECT)>, PlatformError> {
+    let mut monitors: Vec<(HMONITOR, RECT)> = Vec::new();
+    // SAFETY: 回调只在 EnumDisplayMonitors 返回前经 lparam 访问 monitors
+    unsafe {
+        EnumDisplayMonitors(
+            None,
+            None,
+            Some(push_monitor),
+            LPARAM(&mut monitors as *mut Vec<(HMONITOR, RECT)> as isize),
+        )
+    }
+    .ok()
+    .map_err(|e| PlatformError::Capture(format!("枚举显示器失败：{e}")))?;
+    monitors.sort_by_key(|&(m, _)| !is_primary(m));
+    Ok(monitors)
 }
 
 extern "system" fn push_monitor(m: HMONITOR, _dc: HDC, rect: *mut RECT, lparam: LPARAM) -> BOOL {
@@ -1305,6 +1317,20 @@ pub fn macos_version() -> Option<u32> {
     None
 }
 
+/// Windows 内部版本号（如 22631）；读不到时为 0。`RtlGetVersion` 不受兼容性清单影响，`GetVersionExW` 会。
+pub fn windows_build() -> u32 {
+    let mut v = OSVERSIONINFOW {
+        dwOSVersionInfoSize: size_of::<OSVERSIONINFOW>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: v 是本地变量，大小已填
+    if unsafe { RtlGetVersion(&mut v) }.is_ok() {
+        v.dwBuildNumber
+    } else {
+        0
+    }
+}
+
 /// 录屏（M24）只做了 macOS；以下是同名桩，让应用层两端都能编译。
 pub struct Recorder;
 
@@ -1404,12 +1430,4 @@ fn link_target(lnk: &Path) -> Option<String> {
         .is_some_and(|x| x.eq_ignore_ascii_case("exe"))
         && path.is_file())
     .then_some(target)
-}
-
-/// 原生画面流桩：任务 4 / 5 替换；先让 `start_area_stream` 回退逐帧截屏。
-pub(crate) fn start_native_stream(
-    _opts: &crate::AreaOptions,
-    _latest: std::sync::Arc<crate::stream::Latest>,
-) -> Result<Box<dyn FnOnce() + Send>, PlatformError> {
-    Err(PlatformError::Unsupported)
 }
