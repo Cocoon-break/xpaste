@@ -5792,7 +5792,7 @@ checksum = "b9cc00251562a284751c9973bace760d86c0276c471b4be569fe6b068ee97a56"
 
 [[package]]
 name = "xpaste"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "embed-resource",
  "image",
@@ -5820,7 +5820,7 @@ dependencies = [
 
 [[package]]
 name = "xpaste-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "log",
@@ -5834,7 +5834,7 @@ dependencies = [
 
 [[package]]
 name = "xpaste-platform"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "block2",
  "dispatch2",
