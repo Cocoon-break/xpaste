@@ -5,8 +5,9 @@
 //!
 //! 新帧在长图最后几屏里找位置，而不只和上一帧比：滚得太快接不上时，往回滚到预览里已有的任何位置都能接着拼。
 //!
-//! 只按行哈希精确比对。试过对不上时按亮度轮廓近似比对、再逐像素核对（应对小数像素滚动、每帧带噪点的画面），
-//! 一行行很像的内容（每行只差几个字）在真实截屏上会错开整行接上、悄悄弄坏长图，所以不做：宁可报没接上（见已知限制）。
+//! 先按行哈希精确比对。找不到时退一步，只和上次接上的那帧近似比对（`follow`）：背景图不随文字滚动的终端、
+//! 半透明窗口、小数像素滚动，滚过之后没有一行完全相同。近似比对要明显胜出才接（见 `follow`），
+//! 一行行很像的内容错开整行时各个位置差不多好，分不出胜负，报没接上，不接错。
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 
@@ -15,6 +16,10 @@ pub const MAX_PIXELS: usize = 48_000_000;
 pub const MAX_ROWS: usize = 32_000;
 /// 新帧在长图最后这么多屏里找位置
 const SEARCH_SCREENS: usize = 4;
+/// 近似比对时每行按亮度分成这么多段求和，粗筛位置
+const SEGS: usize = 8;
+/// 粗筛后逐像素核对的位置数
+const PICKS: usize = 6;
 
 #[derive(Debug, Clone, Copy)]
 struct Row {
@@ -143,8 +148,16 @@ impl Stitch {
         };
         // 这一帧第 lo 行落在长图第 p 行
         let window = SEARCH_SCREENS * h;
-        let Some(p) = locate(len, at, &b[lo..hi], window) else {
-            return Step::Lost;
+        let p = match locate(len, at, &b[lo..hi], window) {
+            Some(p) => p,
+            // 这一帧第 lo 行是上次接上那帧的第 lo + d 行，那一行在长图第 done - end + lo + d 行
+            None => match self.follow(&cur, lo, hi) {
+                Some(d) => match (done + lo + d).checked_sub(self.end) {
+                    Some(p) => p,
+                    None => return Step::Lost,
+                },
+                None => return Step::Lost,
+            },
         };
         let to = hi.saturating_sub(self.guard).max(lo);
         // 长图的末尾是这一帧的第 lo + len - p 行；这一帧可靠的部分没超出它：没有新内容（往回滚了，或没动）
@@ -170,6 +183,67 @@ impl Stitch {
         self.last_rows = b;
         self.end = to;
         Step::Added(self.height().saturating_sub(before))
+    }
+
+    /// 精确比对找不到时：这一帧（不动的顶部、底部之间的 `lo..hi` 行）相对上次接上的那帧往下滚了几行。
+    /// 比的是横向边缘（每个像素与左边像素的亮度差），不是颜色：文字是锐利的边，背景图平滑，不随文字滚动的背景
+    /// 几乎不影响结果。先按每行分段的边缘强度粗筛出几个彼此相隔 3 行以上的位置，再逐像素（每 4 列取 1 列）算平均差；
+    /// 最好的位置的差要不到次好的一半，次好的又不能好过毫不相干的位置的一半，才算数：只有一个像样的位置。
+    /// 背景不动、文字滚动时，对的位置比错开的位置小得多（真实终端截屏约 0.07–0.23 倍）；内容甩出了上次那帧时
+    /// 各个位置差不多（约 0.98 倍）；一行行很像时错开整行的几个位置都不错。这些都报没接上。
+    /// 只往下找，往回滚时报没接上，滚回来接着拼。
+    fn follow(&self, cur: &[u8], lo: usize, hi: usize) -> Option<usize> {
+        let m = hi - lo;
+        let min = min_overlap(m);
+        let cw = self.cmp_w;
+        let (a, b) = (edges(&self.last, self.w, cw), edges(cur, self.w, cw));
+        let (pa, pb) = (profile(&a, cw), profile(&b, cw));
+        let mut rough: Vec<(u64, usize)> = (0..=m - min)
+            .map(|d| {
+                let n = m - d;
+                let s: u64 = (lo..lo + n)
+                    .map(|r| {
+                        pa[r + d]
+                            .iter()
+                            .zip(&pb[r])
+                            .map(|(x, y)| u64::from(x.abs_diff(*y)))
+                            .sum::<u64>()
+                    })
+                    .sum();
+                (s / n as u64, d)
+            })
+            .collect();
+        rough.sort_unstable();
+        // 两帧第 r 行对第 r + d 行的平均边缘差，每 4 列取 1 列
+        let diff = |d: usize| {
+            let (mut s, mut k) = (0u64, 0u64);
+            for r in lo..hi - d {
+                let (x, y) = (&a[(r + d) * cw..][..cw], &b[r * cw..][..cw]);
+                for (p, q) in x.iter().zip(y).step_by(4) {
+                    s += u64::from(p.abs_diff(*q));
+                    k += 1;
+                }
+            }
+            s as f64 / k.max(1) as f64
+        };
+        // 粗筛排在正中的位置：当作“错开、毫不相干”的典型差别
+        let typical = diff(rough[rough.len() / 2].1);
+        let mut picks: Vec<usize> = Vec::with_capacity(PICKS);
+        for &(_, d) in &rough {
+            if picks.iter().all(|q| q.abs_diff(d) > 3) {
+                picks.push(d);
+                if picks.len() == PICKS {
+                    break;
+                }
+            }
+        }
+        let mut fine: Vec<(f64, usize)> = picks.into_iter().map(|d| (diff(d), d)).collect();
+        fine.sort_by(|x, y| x.0.total_cmp(&y.0));
+        let (best, d) = *fine.first()?;
+        let second = fine.get(1)?.0;
+        // 次好的也几乎没差别：整片空白，分不出位置。次好的明显好过毫不相干的位置：有不止一个像样的位置
+        // （一行行很像的内容错开整行），分不清
+        (second >= 1.0 && best * 2.0 < second && second * 2.0 >= typical).then_some(d)
     }
 
     /// 长截图期间旁边的预览（M23 规则 13）：把拼好的图缩到宽 `pw`，只取最下面最多 `max_ph` 行（最新接上的部分，
@@ -231,6 +305,33 @@ fn rows(px: &[u8], w: usize, cmp_w: usize) -> Vec<Row> {
                 hash: s.finish(),
                 plain: px.windows(2).all(|p| p[0] == p[1]),
             }
+        })
+        .collect()
+}
+
+/// 每个像素与左边像素的亮度差（每行比对宽度内，第 0 列为 0），行紧密排列
+fn edges(px: &[u8], w: usize, cmp_w: usize) -> Vec<i16> {
+    let mut e = Vec::with_capacity(px.len() / 4 / w * cmp_w);
+    for r in px.chunks_exact(w * 4) {
+        let mut left = None;
+        for c in r[..cmp_w * 4].as_chunks::<4>().0 {
+            let l = i16::from(c[0]) + 2 * i16::from(c[1]) + i16::from(c[2]);
+            e.push(left.map_or(0, |x| l - x));
+            left = Some(l);
+        }
+    }
+    e
+}
+
+/// 每行分成 `SEGS` 段，各段的边缘强度和
+fn profile(e: &[i16], cmp_w: usize) -> Vec<[u32; SEGS]> {
+    e.chunks_exact(cmp_w)
+        .map(|r| {
+            let mut p = [0u32; SEGS];
+            for (x, v) in r.iter().enumerate() {
+                p[x * SEGS / cmp_w] += u32::from(v.unsigned_abs());
+            }
+            p
         })
         .collect()
 }
@@ -475,21 +576,45 @@ mod tests {
         }
     }
 
-    /// 已知限制：小数像素滚动、每帧带噪点时精确比对接不上，但一定报没接上，不会接错
+    /// 小数像素滚动、每帧带噪点时精确比对接不上，近似比对按最近的整行接上
     #[test]
-    fn fractional_or_noisy_frames_are_lost_not_misjoined() {
+    fn fractional_or_noisy_frames_join_at_the_nearest_row() {
         let d = Dev::new(600, 7);
         let mut s = Stitch::new(64, 60, &d.shot(0.0, 60, 0, 1), 0, 4);
-        for y in [13.5, 37.25, 61.75] {
-            assert_eq!(s.push(d.shot(y, 60, 0, 2)), Step::Lost, "y = {y}");
+        for (i, y) in [13.5, 37.25, 61.75].into_iter().enumerate() {
+            assert!(
+                matches!(s.push(d.shot(y, 60, 0, 2)), Step::Added(_)),
+                "y = {y}"
+            );
+            // 每次只能接到相邻的整行上（差不到 1 行），相对上次那帧，会累积
+            assert!(
+                (s.height() as f32 - 60.0 - y).abs() <= (i + 1) as f32,
+                "y = {y}"
+            );
         }
-        // 整数像素、没有噪点时照常接上
-        assert_eq!(s.push(d.shot(20.0, 60, 0, 3)), Step::Added(20));
         let mut s = Stitch::new(64, 60, &d.shot(0.0, 60, 2, 1), 0, 4);
-        for (i, y) in [10.0, 30.0].into_iter().enumerate() {
-            assert_eq!(s.push(d.shot(y, 60, 2, 10 + i as u32)), Step::Lost);
-        }
-        assert_eq!(s.height(), 60);
+        assert_eq!(s.push(d.shot(10.0, 60, 2, 10)), Step::Added(10));
+        assert_eq!(s.push(d.shot(30.0, 60, 2, 11)), Step::Added(20));
+        assert_eq!(s.height(), 90);
+    }
+
+    /// 背景图不随文字滚动（终端的背景图、半透明窗口）：没有一行完全相同，近似比对接上；甩出上次那帧时报没接上
+    #[test]
+    fn text_over_a_fixed_background() {
+        let (text, bg) = (Dev::new(600, 5), Dev::new(70, 6).shot(0.0, 60, 0, 1));
+        let shot = |y: f32| -> Vec<u8> {
+            let t = text.shot(y, 60, 0, 1);
+            t.iter()
+                .zip(&bg)
+                .map(|(a, b)| ((u16::from(*a) * 3 + u16::from(*b)) / 4) as u8)
+                .collect()
+        };
+        let mut s = Stitch::new(64, 60, &shot(0.0), 0, 4);
+        assert_eq!(s.push(shot(15.0)), Step::Added(15));
+        assert_eq!(s.push(shot(33.0)), Step::Added(18));
+        assert_eq!(s.push(shot(200.0)), Step::Lost);
+        assert_eq!(s.push(shot(50.0)), Step::Added(17));
+        assert_eq!(s.height(), 110);
     }
 
     #[test]
