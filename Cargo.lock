@@ -5823,6 +5823,7 @@ name = "xpaste-core"
 version = "0.5.1"
 dependencies = [
  "chrono",
+ "image",
  "log",
  "pinyin",
  "rusqlite",

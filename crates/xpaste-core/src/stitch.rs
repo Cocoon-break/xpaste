@@ -9,6 +9,7 @@
 //! 半透明窗口、小数像素滚动，滚过之后没有一行完全相同。近似比对要明显胜出才接（见 `follow`），
 //! 一行行很像的内容错开整行时各个位置差不多好，分不出胜负，报没接上，不接错。
 
+use std::cell::OnceCell;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 /// 结果最多这么多像素（约 190 MB 的 RGBA）；行数另有上限。到上限后不再接
@@ -54,6 +55,8 @@ pub struct Stitch {
     /// 上一次接上的那一帧，结束时补上它从 `end` 行起的部分（底部不随滚动变化的行也在里面）
     last: Vec<u8>,
     last_rows: Vec<Row>,
+    /// `last` 的横向边缘与分段轮廓（近似比对用）：`last` 换了才重算，没接上的帧接连到来时不必每帧都算
+    last_edges: OnceCell<(Vec<i16>, Vec<[u32; SEGS]>)>,
     out: Vec<u8>,
     out_rows: Vec<Row>,
     /// `out` 的最后一行是 `last` 的第 `end - 1` 行
@@ -82,6 +85,7 @@ impl Stitch {
             prev: r.clone(),
             last: first.to_vec(),
             last_rows: r,
+            last_edges: OnceCell::new(),
             end,
             max_rows: (MAX_PIXELS / w.max(1)).min(MAX_ROWS).max(h),
             full: false,
@@ -181,6 +185,7 @@ impl Stitch {
         self.out_rows.extend_from_slice(&b[from..to]);
         self.last = cur;
         self.last_rows = b;
+        self.last_edges = OnceCell::new();
         self.end = to;
         Step::Added(self.height().saturating_sub(before))
     }
@@ -196,8 +201,13 @@ impl Stitch {
         let m = hi - lo;
         let min = min_overlap(m);
         let cw = self.cmp_w;
-        let (a, b) = (edges(&self.last, self.w, cw), edges(cur, self.w, cw));
-        let (pa, pb) = (profile(&a, cw), profile(&b, cw));
+        let (a, pa) = self.last_edges.get_or_init(|| {
+            let e = edges(&self.last, self.w, cw);
+            let p = profile(&e, cw);
+            (e, p)
+        });
+        let b = edges(cur, self.w, cw);
+        let pb = profile(&b, cw);
         let mut rough: Vec<(u64, usize)> = (0..=m - min)
             .map(|d| {
                 let n = m - d;

@@ -25,6 +25,10 @@ make release-x64   # 在 Apple 芯片 Mac 上打 Intel 版 .dmg（需 rustup tar
 make release-win   # 在 macOS 上交叉打 Windows 安装程序（见下文）
 ```
 
+## 排查长截图
+
+开发构建里设 `XPASTE_LONG_DUMP=<目录> make dev-isolated`，长截图时每一帧按序号存成 PNG（正式构建不存）；用 `cargo run -p xpaste-core --example stitch_replay -- <目录> [--scale 2] [--out x.png]` 离线重放拼接，输出没接上的帧数、长图高度和最慢一帧的耗时，`--out` 把长图存成文件。存下的帧含屏幕内容，别提交进仓库。
+
 ## 目录结构
 
 | 目录 | 内容 |

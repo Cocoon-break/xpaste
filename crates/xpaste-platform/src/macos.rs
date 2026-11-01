@@ -35,9 +35,12 @@ use xpaste_core::{AppInfo, Flavor, Snapshot, VideoMeta};
 
 #[path = "macos_record.rs"]
 mod macos_record;
+#[path = "macos_stream.rs"]
+mod macos_stream;
 pub use macos_record::{
     Recorder, file_flavors, microphone_access, request_microphone, start_recording, window_number,
 };
+pub(crate) use macos_stream::start_native_stream;
 
 use crate::{
     Frame, OcrError, OcrText, PIN_TITLE_PREFIX, PackStatus, PasteBlock, PlatformError,

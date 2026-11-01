@@ -14,6 +14,9 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 rusqlite = { workspace = true, optional = true }
 pinyin = { version = "0.10", default-features = false, features = ["plain", "heteronym"] }
 
+[dev-dependencies]
+image.workspace = true
+
 [features]
 default = ["store"]
 store = ["dep:rusqlite"]

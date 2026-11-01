@@ -3,8 +3,10 @@
 pub mod decode;
 pub mod error;
 pub mod record;
+pub mod stream;
 pub mod winfmt;
 pub use error::PlatformError;
+pub use stream::{AreaOptions, AreaStream, StreamFrame, start_area_stream};
 
 use std::path::Path;
 
