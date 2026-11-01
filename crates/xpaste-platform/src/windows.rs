@@ -1136,7 +1136,7 @@ fn monitors() -> Result<Vec<(HMONITOR, RECT)>, PlatformError> {
 }
 
 extern "system" fn push_monitor(m: HMONITOR, _dc: HDC, rect: *mut RECT, lparam: LPARAM) -> BOOL {
-    // SAFETY: lparam 是 freeze_displays 传入的 &mut Vec，rect 由系统给出，都在回调期间有效
+    // SAFETY: lparam 是 monitors() 传入的 &mut Vec，rect 由系统给出，都在回调期间有效
     unsafe { (*(lparam.0 as *mut Vec<(HMONITOR, RECT)>)).push((m, *rect)) };
     true.into()
 }

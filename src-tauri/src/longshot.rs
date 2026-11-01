@@ -193,6 +193,7 @@ fn run(app: &AppHandle, cmd: &AtomicU8, shared: &Mutex<Option<Stitch>>, opts: Ar
         Err(e) => {
             log::warn!("long 截屏失败：{e}");
             end(app);
+            stream.stop();
             return rec::frame_result(app, "长截图失败", false);
         }
     };
@@ -222,6 +223,7 @@ fn run(app: &AppHandle, cmd: &AtomicU8, shared: &Mutex<Option<Stitch>>, opts: Ar
         let c = cmd.load(Ordering::SeqCst);
         if c == CANCEL {
             end(app);
+            stream.stop();
             join_dump(dump);
             return rec::hide_frame_after_fade(app, Instant::now());
         }
@@ -279,9 +281,10 @@ fn run(app: &AppHandle, cmd: &AtomicU8, shared: &Mutex<Option<Stitch>>, opts: Ar
             progress(cur.0, cur.1);
         }
     }
+    // 先收边框和快捷键，再停画面流（macOS 上停止最多等 10 秒）
+    end(app);
     let mode = stream.mode();
     stream.stop();
-    end(app);
     join_dump(dump);
     let Some(st) = stitch().take() else {
         return;

@@ -225,5 +225,6 @@ fn start(
         _output: output,
         _queue: queue,
     };
+    log::info!("long 画面流开始 {pw}x{ph}");
     Ok(Box::new(move || running.stop()))
 }
