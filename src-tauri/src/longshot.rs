@@ -29,6 +29,8 @@ const TICK: Duration = Duration::from_millis(40);
 const SCROLLBAR: f64 = 24.0;
 /// 每帧底部这么高（逻辑像素）先不接，滚上来再接：选中整个窗口时底部有圆角，列表底部常有渐隐
 const GUARD: f64 = 40.0;
+/// 第一帧最多等这么久画面稳定（见 `settled`）
+const SETTLE: Duration = Duration::from_millis(600);
 /// 连续这么久都没接上，提示改为“这里接不上”，告诉用户回车可以保留已拼好的部分
 const STUCK: Duration = Duration::from_secs(3);
 const ENTER: &str = "Enter";
@@ -172,9 +174,7 @@ fn run(
     scale: f64,
 ) {
     let grab = || xpaste_platform::capture_rect(r, below);
-    // 遮罩刚撤下：等窗口服务器真正撤掉它，第一帧里不能有蒙层（同截图的 settle）
-    std::thread::sleep(Duration::from_millis(50));
-    let (w, h, first) = match grab() {
+    let (w, h, first) = match settled(grab) {
         Ok(f) => f,
         Err(e) => {
             log::warn!("long 截屏失败：{e}");
@@ -284,6 +284,24 @@ fn run(
     rec::frame_result(app, &notice, ok);
 }
 
+/// 长图的第一帧。遮罩刚撤下，窗口服务器还在把它淡出：这时截到的是遮罩里的冻结画面，看着一样、每个像素的颜色
+/// 都差一点，之后每一帧都和它对不上，怎么滚都“没接上”。所以等到连续两帧完全相同（画面稳定）再用；
+/// 用户一开始就在滚、一直不稳定时，最多等 `SETTLE`，用最后一帧。
+fn settled<E>(grab: impl Fn() -> Result<(u32, u32, Vec<u8>), E>) -> Result<(u32, u32, Vec<u8>), E> {
+    let t = Instant::now();
+    std::thread::sleep(Duration::from_millis(50));
+    let mut f = grab()?;
+    while t.elapsed() < SETTLE {
+        std::thread::sleep(TICK);
+        let next = grab()?;
+        if next == f {
+            break;
+        }
+        f = next;
+    }
+    Ok(f)
+}
+
 fn encode(w: usize, h: usize, rgba: Vec<u8>) -> Result<Vec<u8>, AppError> {
     let img = image::RgbaImage::from_raw(w as u32, h as u32, rgba)
         .ok_or_else(|| AppError::Invalid("长截图尺寸无效".into()))?;
@@ -303,4 +321,32 @@ fn end(app: &AppHandle) {
         }
     }
     *running() = None;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn first_frame_waits_until_the_overlay_is_gone() {
+        // 前两帧还带着淡出中的遮罩，之后画面稳定
+        let frames = [1u8, 2, 3, 3, 3];
+        let i = Cell::new(0);
+        let grab = || {
+            let k = frames[i.get().min(frames.len() - 1)];
+            i.set(i.get() + 1);
+            Ok::<_, ()>((1, 1, vec![k; 4]))
+        };
+        assert_eq!(settled(grab), Ok((1, 1, vec![3; 4])));
+        // 一直在变：最多等 SETTLE，用最后一帧
+        let n = Cell::new(0u8);
+        let moving = || {
+            n.set(n.get().wrapping_add(1));
+            Ok::<_, ()>((1, 1, vec![n.get(); 4]))
+        };
+        let t = Instant::now();
+        assert!(settled(moving).is_ok());
+        assert!(t.elapsed() < SETTLE + Duration::from_millis(200));
+    }
 }
