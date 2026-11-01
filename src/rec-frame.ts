@@ -13,6 +13,9 @@ const pv = document.getElementById('pv')!, pvc = document.getElementById('pvc') 
 let pvBox: Box | null = null;
 /** 当前显示的位置；推送与拉取可能各到一次，同一位置不重播淡入 */
 let shown: string | null = null;
+/** 选区矮于这么多逻辑像素时，提示慢一点滚：甩一下就超过整个选区，接不上（M23 规则 13） */
+const SHORT = 250;
+let short = false;
 
 void onRecFrame((r: LRect | null) => {
   const key = r && [r.x, r.y, r.w, r.h].join(',');
@@ -23,6 +26,7 @@ void onRecFrame((r: LRect | null) => {
     pv.classList.add('out');
     return;
   }
+  short = r.h < SHORT;
   const b = frameBox(r, innerWidth, innerHeight);
   Object.assign(frame.style, { left: `${b.x}px`, top: `${b.y}px`, width: `${b.w}px`, height: `${b.h}px` });
   // 录屏与长截图共用窗口：新的一次先回到录屏的样子，长截图的进度随后才到
@@ -81,7 +85,8 @@ void onLongShot((p) => {
   void refreshPreview(curKey);
   info.hidden = false;
   info.dataset.state = p.state;
-  info.innerHTML = `<b>长截图</b><span class="px">${p.height} px</span><span class="tip">${TEXT[p.state]}</span><kbd>↩</kbd>完成<kbd>Esc</kbd>取消`;
+  const tip = p.state === 'run' && short ? '选区较矮，慢一点滚' : TEXT[p.state];
+  info.innerHTML = `<b>长截图</b><span class="px">${p.height} px</span><span class="tip">${tip}</span><kbd>↩</kbd>完成<kbd>Esc</kbd>取消`;
 });
 
 /* 结果提示条：边框与预览淡出，提示条在左下角淡入；停留后后端隐藏窗口 */
