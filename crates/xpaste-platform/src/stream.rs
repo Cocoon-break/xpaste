@@ -1,12 +1,11 @@
 //! 长截图画面流：平台回调把最新一帧写进槽位，消费者只取比上次更新的那一帧（M23 规则 11）。
 //! 中间的帧直接覆盖丢弃，不积压。
 
-// ponytail: 任务 3–5 接入平台回调后删掉这行
-#![allow(dead_code)]
-
-use crate::WinRect;
+use crate::{PlatformError, WinRect};
 use std::cell::Cell;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::thread;
 use std::time::{Duration, Instant};
 
 /// 一帧画面：RGBA、sRGB、非预乘、行紧密排列。
@@ -133,10 +132,61 @@ impl Drop for AreaStream {
     }
 }
 
+/// 长截图的区域画面流（M23 规则 13）：先试原生画面流，失败或不支持时回退逐帧截屏（每 40 ms 一帧）
+pub fn start_area_stream(opts: AreaOptions) -> Result<AreaStream, PlatformError> {
+    let latest = Latest::new();
+    match crate::start_native_stream(&opts, latest.clone()) {
+        Ok(stop) => return Ok(AreaStream::new(latest, stop, "画面流")),
+        Err(e) => log::warn!("long 画面流不可用，改用逐帧截屏：{e}"),
+    }
+    let (native, below) = (opts.native, opts.exclude_window);
+    Ok(poll_stream(
+        move || crate::capture_rect(native, below),
+        Duration::from_millis(40),
+    ))
+}
+
+/// 逐帧截屏回退：后台线程循环调用 `grab`，至少间隔 `tick`，放进槽位；`grab` 连续失败 5 次时 fail()
+pub(crate) fn poll_stream(
+    grab: impl Fn() -> Result<(u32, u32, Vec<u8>), PlatformError> + Send + 'static,
+    tick: Duration,
+) -> AreaStream {
+    let latest = Latest::new();
+    let quit = Arc::new(AtomicBool::new(false));
+    let (l, q) = (latest.clone(), quit.clone());
+    let h = thread::spawn(move || {
+        let mut errs = 0;
+        while !q.load(Ordering::Relaxed) {
+            let t = Instant::now();
+            match grab() {
+                Ok((w, h, rgba)) => {
+                    errs = 0;
+                    l.push(StreamFrame { w, h, rgba });
+                }
+                Err(e) => {
+                    errs += 1;
+                    log::debug!("逐帧截屏失败（连续 {errs} 次）：{e}");
+                    if errs >= 5 {
+                        l.fail();
+                        break;
+                    }
+                }
+            }
+            thread::sleep(tick.saturating_sub(t.elapsed()));
+        }
+    });
+    let stop = Box::new(move || {
+        quit.store(true, Ordering::Relaxed);
+        // Drop 里不能 panic：忽略线程 join 错误
+        let _ = h.join();
+    });
+    AreaStream::new(latest, stop, "逐帧")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use std::thread;
 
     fn frame(w: u32) -> StreamFrame {
@@ -222,5 +272,43 @@ mod tests {
         assert_eq!(n.load(Ordering::SeqCst), 1);
         drop(mk());
         assert_eq!(n.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn poll_stream_delivers_grabbed_frames() {
+        let n = Arc::new(AtomicU32::new(0));
+        let n2 = n.clone();
+        let alive = Arc::new(AtomicBool::new(false));
+        let a2 = alive.clone();
+        let s = poll_stream(
+            move || {
+                a2.store(true, Ordering::SeqCst);
+                let w = n2.fetch_add(1, Ordering::SeqCst) + 1;
+                Ok((w, 1, vec![0; 4 * w as usize]))
+            },
+            Duration::from_millis(10),
+        );
+        let f = s.next(Duration::from_millis(200)).expect("应有帧");
+        assert_eq!((f.h, f.rgba.len()), (1, 4 * f.w as usize));
+        assert_eq!(s.mode(), "逐帧");
+        s.stop();
+        // stop 已 join 线程：之后不再有 grab 调用
+        let after = n.load(Ordering::SeqCst);
+        thread::sleep(Duration::from_millis(50));
+        assert_eq!(n.load(Ordering::SeqCst), after);
+        assert!(alive.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn poll_stream_fails_after_repeated_errors() {
+        let s = poll_stream(
+            || Err(PlatformError::Capture("x".into())),
+            Duration::from_millis(10),
+        );
+        let t = Instant::now();
+        while !s.failed() && t.elapsed() < Duration::from_millis(200) {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(s.failed());
     }
 }

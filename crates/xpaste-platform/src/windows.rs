@@ -1405,3 +1405,11 @@ fn link_target(lnk: &Path) -> Option<String> {
         && path.is_file())
     .then_some(target)
 }
+
+/// 原生画面流桩：任务 4 / 5 替换；先让 `start_area_stream` 回退逐帧截屏。
+pub(crate) fn start_native_stream(
+    _opts: &crate::AreaOptions,
+    _latest: std::sync::Arc<crate::stream::Latest>,
+) -> Result<Box<dyn FnOnce() + Send>, PlatformError> {
+    Err(PlatformError::Unsupported)
+}
