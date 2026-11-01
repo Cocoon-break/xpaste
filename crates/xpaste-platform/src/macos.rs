@@ -346,6 +346,29 @@ fn freeze_display(id: CGDirectDisplayID) -> Result<Frame, PlatformError> {
     })
 }
 
+/// 长截图（M23 规则 13）：截屏幕上 `r`（全局点坐标）这块区域，按该屏的物理像素，像素转成 sRGB。
+/// `below`：只截这个窗口之下的内容（长截图的边框与提示在它里面，不进截图）。返回宽、高、RGBA。
+#[allow(deprecated)] // 同 freeze_displays：CGWindowListCreateImage 在 macOS 14 SDK 起标记废弃，运行时仍可用
+pub fn capture_rect(r: WinRect, below: Option<u32>) -> Result<(u32, u32, Vec<u8>), PlatformError> {
+    use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+    use objc2_core_graphics::{CGWindowImageOption, CGWindowListCreateImage};
+    let err = |what: &str| PlatformError::Capture(what.into());
+    let rect = CGRect::new(CGPoint::new(r.x, r.y), CGSize::new(r.w, r.h));
+    let (option, id) = match below {
+        Some(n) => (CGWindowListOption::OptionOnScreenBelowWindow, n),
+        None => (CGWindowListOption::OptionOnScreenOnly, kCGNullWindowID),
+    };
+    let img = CGWindowListCreateImage(rect, option, id, CGWindowImageOption::BestResolution)
+        .ok_or_else(|| err("截屏失败"))?;
+    let (w, h) = (CGImage::width(Some(&img)), CGImage::height(Some(&img)));
+    let (w32, h32) = match (u32::try_from(w), u32::try_from(h)) {
+        (Ok(a), Ok(b)) if a > 0 && b > 0 => (a, b),
+        _ => return Err(err("截屏尺寸无效")),
+    };
+    let rgba = srgb_rgba(&img, w, h).ok_or_else(|| err("像素转换失败"))?;
+    Ok((w32, h32, rgba))
+}
+
 /// 把图像画进 sRGB、RGBA8 的位图上下文，返回非预乘、行紧密排列的像素。屏幕图带的是显示器的色彩描述
 /// （如 P3），前端画布与 PNG 都按 sRGB 解读，不转换的话颜色发灰。任意位深（10 位、HDR）都由 Quartz 转成 8 位。
 fn srgb_rgba(img: &CGImage, w: usize, h: usize) -> Option<Vec<u8>> {

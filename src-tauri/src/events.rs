@@ -32,6 +32,10 @@ pub const SHOT_NEED_PERMISSION: &str = "shot-need-permission";
 
 /// 录屏边框，发给 `rec-frame` 窗口：`{ x, y, w, h }`（该屏内逻辑像素）或 `null`（淡出）。
 pub const REC_FRAME: &str = "rec-frame";
+/// 长截图进度，发给 `rec-frame` 窗口（M23 规则 13）：`{ height, state }`，见 `longshot::Progress`。
+pub const LONG_SHOT: &str = "long-shot";
+/// 录屏、长截图的结果提示条，发给 `rec-frame` 窗口：`{ text, ok }`（M23 规则 13、M24 规则 9）。
+pub const FRAME_TOAST: &str = "frame-toast";
 
 /// 翻译增量（M26 规则 3、5），载荷 `translate::Delta`：面板翻译时广播，截图翻译时只发给发起的遮罩窗口，划词翻译时只发给 `tr-card`（`id` 为 null）。
 pub const TRANSLATE_DELTA: &str = "translate-delta";

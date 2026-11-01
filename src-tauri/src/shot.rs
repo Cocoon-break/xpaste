@@ -24,7 +24,7 @@ const LABEL_PREFIX: &str = "shot-";
 /// 按下快捷键后这么久还没全部上屏，视为卡住（某块屏的遮罩出错或没收到载荷），下次快捷键重新开始
 const STALE: Duration = Duration::from_secs(3);
 /// 原生单位：macOS 为点，Windows 为物理像素
-const POINTS: bool = cfg!(target_os = "macos");
+pub(crate) const POINTS: bool = cfg!(target_os = "macos");
 /// 截图识别文字交给引擎前缩到的长边。历史图片识别缩到 2000 px（`ocr.rs`），整屏截图（5K 屏 5120 px）
 /// 缩那么多会丢掉界面上的小字；这里取历史识别的跳过阈值。Windows 另受引擎上限 `MaxImageDimension` 限制。
 const SHOT_OCR_SIDE: u32 = 8000;
@@ -393,10 +393,14 @@ pub fn screen_capture_pane(macos_major: Option<u32>) -> &'static str {
 
 /// 快捷键入口。主线程调用。
 pub fn begin(app: &AppHandle, mode: Mode) {
+    // 长截图进行中：截图（录屏）快捷键等同回车，完成长截图（M23 规则 13）
+    if crate::longshot::active() {
+        return crate::longshot::stop(true);
+    }
     // 录制中不开遮罩（M24）：录屏快捷键在录制中已改为停止，到这里的只有截图快捷键
     if crate::rec::is_recording(app) {
         log::info!("{} 录屏中，不开始", mode.as_str());
-        crate::notify(app, "正在录屏，停止录制后再截图");
+        crate::rec::frame_note(app, "正在录屏，停止录制后再截图");
         return;
     }
     let granted = xpaste_platform::screen_capture_granted();
@@ -1126,7 +1130,7 @@ fn run_action(
 }
 
 /// 写 PNG 到剪切板，不标记为自身写入：监听器照常把它作为图片记录入库（M23 规则 7、M01 规则 5）。
-fn copy_png(png: Vec<u8>) -> Result<(), AppError> {
+pub(crate) fn copy_png(png: Vec<u8>) -> Result<(), AppError> {
     let bytes = png.len();
     xpaste_platform::write(&xpaste_platform::png_flavors(png))
         .map(drop)

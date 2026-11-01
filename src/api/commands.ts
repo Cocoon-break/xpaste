@@ -56,6 +56,8 @@ export const saveSettings = (settings: Settings) => invoke<void>('save_settings'
 export const setPaused = (on: boolean) => invoke<void>('set_paused', { on });
 export const finishOnboarding = () => invoke<void>('finish_onboarding');
 export const installedApps = () => invoke<string[]>('installed_apps');
+/** 哪些快捷键设了却没注册上（启动时被其他应用占用），打开设置时在录制框下标红 */
+export const hotkeyStatus = () => invoke<{ panel: boolean; shot: boolean; rec: boolean; translate: boolean }>('hotkey_status');
 
 /** again 为 false 且已有存库译文时直接返回它，不发请求；只有“重新翻译”传 true（M26 规则 4）。 */
 export const translateRecord = (id: number, again: boolean, engine?: 'system' | 'openai') =>

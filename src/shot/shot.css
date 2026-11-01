@@ -52,14 +52,6 @@ kbd {
 .h[data-h="s"]  { left: 50%; top: 100%; cursor: ns-resize; }
 .h[data-h="sw"] { left: 0; top: 100%; cursor: nesw-resize; }
 .h[data-h="w"]  { left: 0; top: 50%; cursor: ew-resize; }
-/* 复制成功：一道类型色光扫过选区（M20“复制成功”的同一语言，缩短到 320 ms 以便尽快退出） */
-#cut .sweep { position: absolute; inset: 0; overflow: hidden; }
-#cut .sweep::before {
-  content: ""; position: absolute; top: 0; bottom: 0; width: 45%; left: -45%;
-  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--tc) 55%, transparent), transparent);
-  animation: sweep 320ms var(--ease-move) forwards;
-}
-@keyframes sweep { to { left: 100%; } }
 
 /* 尺寸标签：数字用品牌字 Unbounded（M16 规则 4），物理像素 */
 .badge {
@@ -198,17 +190,18 @@ kbd {
   font-family: var(--font-ui); font-weight: 600; line-height: 1.25; caret-color: currentColor;
 }
 
-/* 提示条（M20：弹性进入、同方向退出）。放在左下角操作提示的位置；动作完成后遮罩其余部分淡出、鼠标穿透 */
+/* 提示条：放在左下角操作提示的位置；动作完成后遮罩其余部分淡出、鼠标穿透。
+   与面板的提示条（M20 弹性进入）不同，这里不回弹、不缩放：它和整屏蒙层淡出同时出现，回弹叠在上面像“抖一下”（M23 规则 7） */
 .toast {
   position: fixed; left: 16px; bottom: 16px;
   display: flex; align-items: center; gap: 10px; max-width: calc(100% - 32px);
   padding: 7px 14px 7px 7px; border-radius: 12px; font-size: 13px;
   background: var(--pop); border: 1px solid var(--line-2); box-shadow: var(--shadow-pop);
   -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
-  opacity: 0; transform: translateY(8px) scale(.96); visibility: hidden; pointer-events: none;
+  opacity: 0; transform: translateY(6px); visibility: hidden; pointer-events: none;
   transition: opacity 160ms ease-out, transform 160ms ease-out, visibility 0s 160ms;
 }
-.toast[data-open="true"] { opacity: 1; transform: none; visibility: visible; transition: opacity 220ms var(--ease-enter), transform 420ms var(--ease-spring), visibility 0s; }
+.toast[data-open="true"] { opacity: 1; transform: none; visibility: visible; transition: opacity 200ms var(--ease-enter), transform 240ms var(--ease-enter), visibility 0s; }
 .toast[data-instant] { transition: none; }
 .toast .t-th { width: 40px; height: 28px; border-radius: 6px; object-fit: cover; box-shadow: inset 0 0 0 1px var(--line-2); flex: none; display: block; }
 .toast .t-ic { width: 28px; height: 28px; display: grid; place-items: center; color: var(--c-code); flex: none; }

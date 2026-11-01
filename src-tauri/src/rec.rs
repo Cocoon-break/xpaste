@@ -28,10 +28,12 @@ use crate::shot::{self, LRect};
 use crate::state::AppState;
 use crate::tray;
 
-/// 录屏边框窗口，只建一次、永不销毁（同截图遮罩）
-const FRAME: &str = "rec-frame";
+/// 录屏边框窗口，只建一次、永不销毁（同截图遮罩）；长截图也用它（M23 规则 13）
+pub(crate) const FRAME: &str = "rec-frame";
 /// 边框淡出时长（同 `src/rec-frame.css`），淡出后再隐藏窗口
 const FADE: Duration = Duration::from_millis(200);
+/// 结果提示条在边框窗口里停留多久，之后隐藏窗口
+const TOAST: Duration = Duration::from_millis(2400);
 /// 退出时最多等录屏回到空闲这么久，超时照常退出。要盖住停止的最坏情况：停止采集等回调 10 s
 /// （平台层 `CALLBACK_WAIT`）加写完文件 30 s（`FINISH_WAIT`）；回到空闲后另等 `EXIT_GRACE`，最坏约 46 s。
 /// 开始阶段的回调（最多 20 s）再叠上停止时盖不住，可能留下没写完的文件（设计 §8 第 16 条）。开始中还在等麦克风
@@ -417,10 +419,8 @@ fn wrap_up(app: &AppHandle, (recorder, path, copy): Taken<Recorder>, interrupted
     // 先撤掉本次的边框与菜单栏，再回到空闲：done() 之后马上就能开始新的一次，迟到的清理会落到新录制上。
     // 隐藏边框经主线程排队，排在新一次显示边框之前
     frame_out(app);
-    let faded = Instant::now();
     tray::set_recording(app, None);
     tray::show_stop_item(app, false);
-    hide_frame_after_fade(app, faded);
     state(app).done();
     // 写剪切板与通知不碰新一次的界面，放在回到空闲之后
     let notice = match result {
@@ -438,7 +438,9 @@ fn wrap_up(app: &AppHandle, (recorder, path, copy): Taken<Recorder>, interrupted
             "录屏失败".into()
         }
     };
-    notify(app, &notice);
+    // 中断多半是显示器拔掉了，边框所在的屏可能已经不在：同失败一样另发系统通知
+    let ok = !interrupted && notice != "录屏失败";
+    frame_result(app, &notice, ok);
 }
 
 /// 文件引用写剪切板，不标记为自身写入：监听器照常把它作为视频记录入库（M01 规则 5 的例外，同截图复制）。
@@ -457,8 +459,9 @@ fn copy_file(path: &Path) -> bool {
     }
 }
 
-/// 摆好并显示边框窗口（铺满该屏、鼠标穿透、不抢焦点），返回它的窗口编号供录制排除。
-fn show_frame(app: &AppHandle, (origin, size): ((f64, f64), (f64, f64))) -> Option<u32> {
+/// 摆好并显示边框窗口（铺满该屏、鼠标穿透、不抢焦点），返回它的窗口编号供录制排除（macOS）。
+/// Windows 上不激活地显示，并用 `WDA_EXCLUDEFROMCAPTURE` 把它排除在截屏之外（长截图逐帧截屏）。
+pub(crate) fn show_frame(app: &AppHandle, (origin, size): ((f64, f64), (f64, f64))) -> Option<u32> {
     let w = match app.get_webview_window(FRAME) {
         Some(w) => w,
         None => match build_frame(app) {
@@ -487,7 +490,9 @@ fn show_frame(app: &AppHandle, (origin, size): ((f64, f64), (f64, f64))) -> Opti
             #[cfg(not(target_os = "macos"))]
             {
                 let _ = app;
-                w.show()?;
+                // show() 用 SW_SHOW 会激活它、抢走原应用的键盘
+                w.set_content_protected(true)?;
+                xpaste_platform::show_no_activate(w.hwnd()?.0 as isize);
                 Ok(None)
             }
         })();
@@ -498,7 +503,8 @@ fn show_frame(app: &AppHandle, (origin, size): ((f64, f64), (f64, f64))) -> Opti
     });
     // 主线程卡住时不能一直等它
     let n = rx.recv_timeout(Duration::from_secs(2)).ok().flatten();
-    if n.is_none() {
+    // Windows 上没有窗口编号，边框靠 WDA_EXCLUDEFROMCAPTURE 排除
+    if cfg!(target_os = "macos") && n.is_none() {
         log::warn!("rec 取不到边框窗口编号，边框会被录进去");
     }
     n
@@ -538,17 +544,53 @@ fn build_frame(app: &AppHandle) -> tauri::Result<WebviewWindow> {
 }
 
 /// 边框淡出。
-fn frame_out(app: &AppHandle) {
+pub(crate) fn frame_out(app: &AppHandle) {
     events::emit_to(app, FRAME, events::REC_FRAME, None::<LRect>);
 }
 
+/// 录屏、长截图的结果显示在边框窗口左下角（M23 规则 13、M24 规则 9），不只靠系统通知：没签名的应用、
+/// 系统里关掉了 xPaste 通知时，通知看不到。`ok` 为假（失败、中断）时另发系统通知：边框所在的屏可能已经拔掉。
+/// 停留 `TOAST` 后隐藏窗口；期间又开始了录屏或长截图就不隐藏。阻塞调用方线程。
+pub(crate) fn frame_result(app: &AppHandle, text: &str, ok: bool) {
+    events::emit_to(app, FRAME, events::FRAME_TOAST, Toast { text, ok });
+    if !ok {
+        notify(app, text);
+    }
+    std::thread::sleep(TOAST);
+    if !is_busy(app) && !crate::longshot::active() {
+        hide_frame(app);
+    }
+}
+
+/// 录制中的提示（如按了截图快捷键，M24 规则 10）：显示在正录着的边框窗口里，同时发系统通知。不隐藏窗口。
+pub(crate) fn frame_note(app: &AppHandle, text: &str) {
+    events::emit_to(app, FRAME, events::FRAME_TOAST, Toast { text, ok: false });
+    notify(app, text);
+}
+
+#[derive(serde::Serialize, Clone)]
+struct Toast<'a> {
+    text: &'a str,
+    ok: bool,
+}
+
 /// 淡出播完后隐藏边框窗口。
-fn hide_frame_after_fade(app: &AppHandle, since: Instant) {
+pub(crate) fn hide_frame_after_fade(app: &AppHandle, since: Instant) {
     std::thread::sleep(FADE.saturating_sub(since.elapsed()));
+    hide_frame(app);
+}
+
+fn hide_frame(app: &AppHandle) {
     on_main(app, |app| {
-        if let Some(w) = app.get_webview_window(FRAME)
-            && let Err(e) = w.hide()
-        {
+        let Some(w) = app.get_webview_window(FRAME) else {
+            return;
+        };
+        // Windows 上是 show_no_activate 显示的，tao 不知道它可见，hide() 什么也不做
+        #[cfg(not(target_os = "macos"))]
+        let hidden = w.hwnd().map(|h| xpaste_platform::hide_window(h.0 as isize));
+        #[cfg(target_os = "macos")]
+        let hidden = w.hide();
+        if let Err(e) = hidden {
             log::warn!("隐藏录屏边框失败：{e}");
         }
     });

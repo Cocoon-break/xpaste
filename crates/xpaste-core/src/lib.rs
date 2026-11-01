@@ -5,6 +5,7 @@ pub mod detect;
 pub mod error;
 pub mod model;
 pub mod pinyin;
+pub mod stitch;
 #[cfg(feature = "store")]
 pub mod store;
 pub mod translate;
