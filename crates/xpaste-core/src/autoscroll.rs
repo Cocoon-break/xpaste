@@ -49,6 +49,7 @@ pub struct Pacer {
 
 impl Pacer {
     pub fn new(cfg: PacerCfg) -> Self {
+        debug_assert!(cfg.px_per_unit > 0.0);
         let frame_h = cfg.frame_h as f64;
         Pacer {
             frame_h,
@@ -98,15 +99,19 @@ impl Pacer {
         if m > 0 {
             self.still = 0;
             self.moved_ever = true;
-            // 第一次实测直接取代初始猜测（猜测只是平台的提示），之后新值权重 0.5
             let obs = m as f64 / self.last_units as f64;
-            self.ratio = if self.measured {
-                (self.ratio + obs) / 2.0
-            } else {
-                obs
-            };
-            self.measured = true;
+            if !self.measured {
+                // 第一次实测直接取代初始猜测（猜测只是平台的提示）
+                self.ratio = obs;
+                self.measured = true;
+            } else if (0.5..=2.0).contains(&(obs / self.ratio)) {
+                // 之后新值权重 0.5；偏离预期一半以上（到底前的半步、一次性跳变）算动过但不学
+                self.ratio = (self.ratio + obs) / 2.0;
+            }
             self.step = (self.step * GROW).min(self.frame_h * 2.0 / 3.0);
+        } else if m < 0 {
+            // 往下滚却往上跳：画面在动，不是到底，也不学
+            self.still = 0;
         } else {
             self.still += 1;
             if self.still >= LIMIT {
@@ -207,6 +212,40 @@ mod tests {
         assert!((p.px_per_unit() - 3.0).abs() < 0.01);
         let want = units(a) as f64 * 3.0;
         assert!((expect(a) as f64 - want).abs() / want < 0.05);
+    }
+
+    #[test]
+    fn partial_last_step_does_not_poison_ratio() {
+        let mut p = pacer(2.0);
+        let a = p.start();
+        let a = feed(&mut p, a, 3.0);
+        p.settled(Some(10));
+        assert!((p.px_per_unit() - 3.0).abs() < 0.01);
+        let _ = a;
+    }
+
+    #[test]
+    fn outlier_jump_does_not_poison_ratio() {
+        let mut p = pacer(2.0);
+        let a = p.start();
+        let a = feed(&mut p, a, 3.0);
+        p.settled(Some(units(a) as i64 * 30));
+        assert!((p.px_per_unit() - 3.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn upward_jump_is_not_the_bottom() {
+        let mut p = pacer(2.0);
+        let a = p.start();
+        feed(&mut p, a, 2.0);
+        p.settled(Some(0));
+        p.settled(Some(0));
+        let r = p.px_per_unit();
+        assert!(matches!(p.settled(Some(-50)), Act::Scroll { .. }));
+        assert_eq!(p.px_per_unit(), r);
+        assert!(matches!(p.settled(Some(0)), Act::Scroll { .. }));
+        assert!(matches!(p.settled(Some(0)), Act::Scroll { .. }));
+        assert_eq!(p.settled(Some(0)), Act::Finish);
     }
 
     #[test]
