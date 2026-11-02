@@ -1,7 +1,7 @@
 import './styles.css';
 import { attachConsole, info } from './api/log';
 import {
-  accessibilityGranted, bootstrap, clearHistory, copy, copyTextPlain, countUnpinned, createSnippet, deleteRecords, finishOnboarding, frontendReady, getRecord, hidePanel, hotkeyStatus, installedApps,
+  accessibilityGranted, bootstrap, clearHistory, exportLogs, copy, copyTextPlain, countUnpinned, createSnippet, deleteRecords, finishOnboarding, frontendReady, getRecord, hidePanel, hotkeyStatus, installedApps,
   ocrProgress, openUrl, overlayBegin, pickFolder, prunePreview, reocr, requestAccessibility, requestScreenCapture, revealFile, saveSettings, saveSnippet, screenCaptureGranted, search, trcardPress,
   setDialogOpen, setPaused, setPinned, translateEngines, translateDownload, translateRecord, translateStatus, translateTest, undoDelete, updateSnippet,
 } from './api/commands';
@@ -1606,7 +1606,8 @@ async function confirmClear(): Promise<string | null> {
 }
 
 // —— 设置 ——
-const clearNote = $('#clearNote');
+const clearNote = $('#clearNote'), logNote = $('#logNote');
+const LOG_NOTE = '遇到问题时导出，发给开发者协助排查；不含剪切板内容';
 const dlg = $<HTMLDialogElement>('#settings'), form = $<HTMLFormElement>('#settingsForm'), hotkeyIn = $<HTMLInputElement>('#hotkey');
 const hotkeyHelp = $('#hotkeyHelp'), retainIn = $<HTMLSelectElement>('#retain'), limitIn = $<HTMLInputElement>('#limit'), limitErr = $('#limitErr');
 const frequentIn = $<HTMLInputElement>('#frequentIn'), frequentErr = $('#frequentErr');
@@ -2051,6 +2052,7 @@ function openSettings() {
   clearTimeout(closeTimer);
   if (!dlg.open) dlgReturn = document.activeElement as HTMLElement | null;
   clearNote.textContent = '置顶记录与片段会保留';
+  logNote.textContent = LOG_NOTE;
   snipNote.textContent = SNIP_NOTE;
   const st = S.settings;
   pendingHotkey = st.hotkey;
@@ -2820,6 +2822,11 @@ copyBtn.addEventListener('click', () => S.sel !== null && copyRecord(S.sel));
 trBtn.addEventListener('click', () => S.sel !== null && doTranslate(S.sel));
 // 设置对话框留在确认框下面；列表与频谱由 records-removed 刷新
 $('#clearBtn').addEventListener('click', () => void confirmClear().then((m) => m && (clearNote.textContent = m)));
+// 成功时后端已在访达 / 资源管理器里选中文件，面板随之失焦隐藏；结果仍写进行内，下次打开设置时复原
+$('#logBtn').addEventListener('click', () => void exportLogs().then(
+  (name) => (logNote.textContent = `已导出到“下载”文件夹：${name}`),
+  (e) => (logNote.textContent = `导出失败：${(e as AppError).message}`),
+));
 delBtn.addEventListener('click', () => (S.multi.size >= 2 ? remove([...S.multi]) : S.sel !== null && remove([S.sel])));
 saveSnipBtn.addEventListener('click', () => S.sel !== null && void openSnippet('save', S.sel));
 editSnipBtn.addEventListener('click', () => S.sel !== null && void openSnippet('edit', S.sel));

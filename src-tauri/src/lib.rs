@@ -2,6 +2,7 @@ mod assets;
 mod clipboard;
 mod clock;
 mod commands;
+mod diag;
 mod enrich;
 pub mod error;
 mod events;
@@ -27,6 +28,7 @@ use xpaste_core::Store;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    log_panics();
     let override_ = data_dir_override(std::env::var_os("XPASTE_DATA_DIR"));
     let timing = timing_enabled(std::env::var_os("XPASTE_TIMING"));
     let builder = tauri::Builder::default();
@@ -91,7 +93,9 @@ pub fn run() {
                     }
                 }
             }
-            let store = Store::open(&data_dir)?;
+            // setup 出错时 tauri 直接 panic，panic 钩子不写格式化的消息，原因在这里先记下
+            let store =
+                Store::open(&data_dir).inspect_err(|e| log::error!("打开数据库失败：{e}"))?;
             let first_run = matches!(store.kv_get("onboarded"), Ok(None));
             let settings = store.load_settings();
             let (hotkey, shot_hotkey, rec_hotkey, tr_hotkey, appearance) = (
@@ -113,7 +117,7 @@ pub fn run() {
             ocr.schedule_backfill(app.handle(), ocr::BACKFILL_DELAY);
             housekeeping::start(app.handle().clone());
             #[cfg(target_os = "macos")]
-            panel::setup_macos(app)?;
+            panel::setup_macos(app).inspect_err(|e| log::error!("面板初始化失败：{e}"))?;
             #[cfg(windows)]
             panel::setup_windows(app);
             panel::apply_theme(app.handle(), appearance);
@@ -238,6 +242,7 @@ pub fn run() {
             commands::panel::request_screen_capture,
             commands::panel::open_url,
             commands::panel::reveal_file,
+            commands::panel::export_logs,
             commands::panel::open_panel_settings,
             commands::records::get_record,
             commands::records::search,
@@ -296,6 +301,27 @@ pub fn run() {
             tauri::RunEvent::ExitRequested { api, .. } if rec::hold_exit(app) => api.prevent_exit(),
             _ => {}
         });
+}
+
+/// panic 写进日志：发布版 panic=abort，不记就只剩“突然退出”（5.3 第 4 条）。位置总记；消息只记字面量
+/// （`panic!("…")`、`expect("…")`），格式化出来的消息可能带剪切板内容（如字符串切片越界会附上原文），只进 debug。
+fn log_panics() {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let at = info
+            .location()
+            .map_or("?".into(), |l| format!("{}:{}", l.file(), l.line()));
+        let thread = std::thread::current().name().unwrap_or("?").to_string();
+        match info.payload().downcast_ref::<&'static str>() {
+            Some(msg) => log::error!("panic 线程 {thread} 位置 {at}：{msg}"),
+            None => {
+                log::error!("panic 线程 {thread} 位置 {at}");
+                log::debug!("panic 消息：{info}");
+            }
+        }
+        log::logger().flush();
+        prev(info);
+    }));
 }
 
 /// 系统通知，标题“xPaste”；发送失败只记日志。
