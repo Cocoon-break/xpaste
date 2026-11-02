@@ -1410,6 +1410,11 @@ fn open_pin(
     Ok(n)
 }
 
+/// 贴图换成 NSPanel 前的类，按序号记下。建窗口时 WKWebView 已在窗口上挂了 KVO（类是 `NSKVONotifying_` 派生类），
+/// 换类后 WebKit 拆 webview 时按新类注销对不上，抛 ObjC 异常、整个进程 abort；所以销毁前要换回来（见 `pin_close`）
+#[cfg(target_os = "macos")]
+static PIN_CLASS: std::sync::Mutex<Vec<(u64, usize)>> = std::sync::Mutex::new(Vec::new());
+
 /// 主线程调用。macOS：不激活应用的 NSPanel，层级 `NSFloatingWindowLevel`，低于遮罩；点它不带出面板、不抢前台应用。
 #[cfg(target_os = "macos")]
 #[allow(deprecated)] // cocoa 已弃用，但 tauri-nspanel 公开的就是它的类型
@@ -1425,6 +1430,13 @@ fn show_pin(w: &WebviewWindow) {
         return;
     };
     let mask = unsafe { (ns as id).styleMask() }.bits() as i32;
+    if let Some(n) = pin_index(w.label()) {
+        let cls = unsafe { tauri_nspanel::objc::runtime::object_getClass(ns as _) } as usize;
+        PIN_CLASS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((n, cls));
+    }
     // 不用 to_panel：插件会按标签一直持有指针，贴图销毁后那条记录悬空。from_window 只换类、不登记；
     // 它返回的 Id 没有自己的引用计数（from_retained_ptr），所以不能 drop
     let panel = std::mem::ManuallyDrop::new(RawNSPanel::from_window(w.clone()));
@@ -1455,6 +1467,39 @@ pub fn pin_close(app: &AppHandle, w: &WebviewWindow) -> Result<(), AppError> {
         _ => {}
     }
     log::info!("shot 关闭贴图 {n}");
+    // macOS：先在主线程把类换回去再销毁，同一轮里做完，中间不会有别的代码看到换回的窗口（见 PIN_CLASS）
+    #[cfg(target_os = "macos")]
+    {
+        let cls = {
+            let mut v = PIN_CLASS.lock().unwrap_or_else(PoisonError::into_inner);
+            v.iter().position(|e| e.0 == n).map(|i| v.swap_remove(i).1)
+        };
+        let w = w.clone();
+        on_main(app, move |_| {
+            use tauri_nspanel::objc::runtime::{Class, object_getClass};
+            let Ok(ns) = w.ns_window() else { return };
+            let now = unsafe { object_getClass(ns as _) };
+            let panel = Class::get("RawNSPanel").map_or(std::ptr::null(), |c| c as *const Class);
+            match (cls, now == panel) {
+                (Some(cls), true) => unsafe {
+                    tauri_nspanel::raw_nspanel::object_setClass(ns as _, cls as _);
+                },
+                // 没换过类（show_pin 取不到窗口），照常销毁
+                (None, false) => {}
+                // 换类后又被挂了 KVO（类变成 NSKVONotifying_RawNSPanel）：换回旧快照照样对不上，
+                // 以 RawNSPanel 身份释放又会跳过 NSWindow 的 dealloc。只隐藏、不销毁，漏一个窗口
+                _ => {
+                    log::warn!("贴图 {n} 的窗口类已变，只隐藏不销毁");
+                    let _ = w.hide();
+                    return;
+                }
+            }
+            if let Err(e) = w.destroy() {
+                log::warn!("销毁贴图 {n} 失败：{e}");
+            }
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
     w.destroy()?;
     Ok(())
 }
