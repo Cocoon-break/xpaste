@@ -5,11 +5,13 @@
 //!
 //! 选区旁有拼接结果的预览（最下面最新接上的部分），边框页收到进度后用 `long_preview` 拉取，看接缝对不对。
 //!
-//! 有辅助功能权限（Windows 不需要）时自动滚动：在选区中心发滚动事件，等画面停下再按实际位移决定下一步
+//! 有辅助功能权限（Windows 不需要）时可以自动滚动：设置“长截图自动滚动”开着时按 L 直接开始，关着（默认）时手动滚、
+//! 按空格开始本次自动滚动。在选区中心发滚动事件，等画面停下再按实际位移决定下一步
 //! （`xpaste_core::autoscroll`），已测出比例后把预期位移交给拼接缩小查找范围。用户自己滚动、按键或点击时让出，
 //! 停手 1 秒后从头起步；空格暂停与继续；到底自动完成（同回车）；从没动过时转手动并提示不响应。
+//! 完成后边框一淡出就在提示条显示“正在生成长图…”，编码、写剪切板后换成结果。
 //!
-//! 期间临时把回车、Esc（自动滚动时还有空格）注册成全局快捷键（键盘已还给原应用，否则收不到），结束时注销。
+//! 期间临时把回车、Esc（能自动滚动时还有空格）注册成全局快捷键（键盘已还给原应用，否则收不到），结束时注销。
 //! 画面排除边框窗口：macOS 由画面流排除它的窗口编号，Windows 上它带 `WDA_EXCLUDEFROMCAPTURE`（见 `rec::show_frame`）。
 //!
 //! 开发构建里设了 `XPASTE_LONG_DUMP=<目录>` 时，每帧另存为 `NNNNN.png`（第一帧为 00000），用来重放排查接不上。
@@ -20,7 +22,7 @@ use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 use xpaste_core::autoscroll::{Act, Pacer, PacerCfg};
 use xpaste_core::stitch::{Step, Stitch};
@@ -30,6 +32,7 @@ use crate::error::AppError;
 use crate::events;
 use crate::rec;
 use crate::shot::{self, LRect};
+use crate::state::AppState;
 
 /// 等下一帧最多这么久：画面不变时画面流不出新帧，等不到就回头看回车、Esc（按下后 0.2 秒内生效）
 const WAIT: Duration = Duration::from_millis(100);
@@ -69,7 +72,7 @@ struct Run {
     keys: Arc<Mutex<Keys>>,
 }
 
-/// 快捷键回调交给截屏线程的：空格按了奇数次没处理（切换暂停），以及最近一次长截图快捷键的时刻
+/// 快捷键回调交给截屏线程的：空格按了奇数次没处理（切换暂停；手动滚时开始自动滚动），以及最近一次长截图快捷键的时刻
 struct Keys {
     space: bool,
     at: Option<Instant>,
@@ -88,7 +91,7 @@ pub struct Progress {
     /// `run` 正常；`lost` 这一帧没对上（滚得太快）；`stuck` 连续 `STUCK` 都没对上（画面一直在变，或这个应用的滚动
     /// 落在小数像素上，见已知限制），自动滚动时为连续 3 次恢复不了；`full` 已到长度上限。
     /// 自动滚动（M23 规则 13）：`auto` 滚动中；`paused` 空格暂停；`pointer` 指针移出了选区（只在滚动跟着指针走的
-    /// 平台上）；`noperm` 没有辅助功能权限，手动滚；`noresponse` 窗口不响应自动滚动，手动滚；`autostuck` 自动滚动
+    /// 平台上）；`manual` 设置里没开自动滚动，手动滚、空格开始自动滚动；`noperm` 没有辅助功能权限，手动滚；`noresponse` 窗口不响应自动滚动，手动滚；`autostuck` 自动滚动
     /// 连续 3 次恢复不了、已暂停（空格重试）。用户接手时显示手动的 `run`、`lost`、`stuck`
     state: &'static str,
 }
@@ -145,12 +148,14 @@ pub fn start(app: &AppHandle, generation: u64, index: usize, rect: LRect) -> Res
     shot::end_if_current(app, generation);
     let below = rec::show_frame(app, bounds);
     events::emit_to(app, rec::FRAME, events::REC_FRAME, Some(rect));
-    let auto = xpaste_platform::can_auto_scroll();
+    // 能自动滚动（有权限）时，设置开着才直接自动滚；关着时手动滚，按空格开始本次自动滚动（M15、M23 规则 13）
+    let perm = xpaste_platform::can_auto_scroll();
+    let auto = perm && app.state::<AppState>().settings().long_auto_scroll;
     let gs = app.global_shortcut();
-    // 空格只在自动滚动时有用；手动滚时不占，用户可能用它翻页
+    // 空格只在能自动滚动时有用；没权限时不占，用户可能用它翻页
     for k in [ENTER, ESC, SPACE]
         .into_iter()
-        .filter(|k| auto || *k != SPACE)
+        .filter(|k| perm || *k != SPACE)
     {
         if let Err(e) = gs.register(k) {
             log::warn!("long 注册 {k} 失败：{e}");
@@ -173,10 +178,14 @@ pub fn start(app: &AppHandle, generation: u64, index: usize, rect: LRect) -> Res
         "long 开始 屏 {index} {}x{} {}",
         rect.w,
         rect.h,
-        if auto { "自动滚动" } else { "手动" }
+        match (auto, perm) {
+            (true, _) => "自动滚动",
+            (false, true) => "手动（空格自动滚动）",
+            (false, false) => "手动（没权限）",
+        }
     );
     let app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || run(&app, &cmd, &st, &keys, auto, opts));
+    tauri::async_runtime::spawn_blocking(move || run(&app, &cmd, &st, &keys, auto, perm, opts));
     Ok(())
 }
 
@@ -251,13 +260,14 @@ struct Auto {
 }
 
 /// 截屏线程：画面流的第一帧作为开头，之后来一帧拼一帧，直到完成或取消（M23 规则 13）。
-/// `auto`：能自动滚动（有权限），否则手动滚。
+/// `auto`：一开始就自动滚动；`perm`：能自动滚动（有权限），手动滚时按空格开始自动滚动。
 fn run(
     app: &AppHandle,
     cmd: &AtomicU8,
     shared: &Mutex<Option<Stitch>>,
     keys: &Mutex<Keys>,
     auto: bool,
+    perm: bool,
     opts: AreaOptions,
 ) {
     let scale = opts.scale;
@@ -301,7 +311,7 @@ fn run(
     let mut lost_since: Option<Instant> = None;
     // 排查用：拼了几帧、几帧没接上、拼接累计耗时
     let (mut frames, mut lost, mut busy) = (0u32, 0u32, Duration::ZERO);
-    let mut auto = auto.then(|| Auto {
+    let new_auto = || Auto {
         pacer: Pacer::new(PacerCfg {
             frame_h: h,
             px_per_unit: xpaste_platform::PX_PER_SCROLL_UNIT * scale,
@@ -312,15 +322,21 @@ fn run(
         hold: None,
         state: "auto",
         user: false,
-    });
-    // 没在自动滚动时，拼接状态 `run` 显示成什么：`run`、`noperm`、`noresponse`
-    let mut manual = if auto.is_some() { "run" } else { "noperm" };
+    };
+    let mut auto = auto.then(new_auto);
+    // 没在自动滚动时，拼接状态 `run` 显示成什么：`run`、`manual`（设置里没开，空格开始自动滚动）、`noperm`、
+    // `noresponse`
+    let mut manual = match (auto.is_some(), perm) {
+        (true, _) => "run",
+        (false, true) => "manual",
+        (false, false) => "noperm",
+    };
     // 日志用：自动滚动发了几步、学到的比例、怎么结束的
     let (mut steps, mut ratio) = (0u32, None::<f64>);
-    let mut ended = if auto.is_some() {
-        "手动"
-    } else {
-        "没权限"
+    let mut ended = match manual {
+        "manual" => "没开自动",
+        "noperm" => "没权限",
+        _ => "手动",
     };
     // 画面最近一次变化（接上、没接上、换了位置）的时刻
     let mut changed = Instant::now();
@@ -393,10 +409,19 @@ fn run(
         if c == DONE {
             break;
         }
-        // 到上限：不再自动滚，等用户回车
-        if state == "full" && auto.take().is_some() {
-            ended = "到上限";
+        // 到上限：不再自动滚（手动滚时也不能再开始），等用户回车
+        if state == "full" && (auto.take().is_some() || manual == "manual") {
+            (manual, ended) = ("run", "到上限");
             release_space(app);
+        }
+        // 手动滚时按了空格：开始本次自动滚动，之后同设置开着时一样（M23 规则 13）。空格这一下已记成快捷键时刻，
+        // 不算接手；标记在这里取走，`drive` 不会再把它当成暂停
+        if manual == "manual"
+            && std::mem::take(&mut keys.lock().unwrap_or_else(PoisonError::into_inner).space)
+        {
+            log::info!("long 空格开始自动滚动");
+            auto = Some(new_auto());
+            (manual, ended) = ("run", "手动");
         }
         let mut to_manual = false;
         if let Some(a) = auto.as_mut() {
@@ -463,11 +488,16 @@ fn run(
     }
     // 先收边框和快捷键，再停画面流（macOS 上停止最多等 10 秒）；Windows 上顺带卸掉输入钩子
     let _ = auto.take();
+    let st = stitch().take();
     end(app);
+    // 停画面流、编码与写剪切板要一会儿（开发构建 1–4 秒）：边框一淡出就提示在生成，完成后换成结果（M23 规则 13）
+    if st.is_some() {
+        rec::frame_busy(app, "正在生成长图…");
+    }
     let mode = stream.mode();
     stream.stop();
     join_dump(dump);
-    let Some(st) = stitch().take() else {
+    let Some(st) = st else {
         return;
     };
     let (w, h, rgba) = st.finish();

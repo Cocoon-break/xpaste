@@ -107,13 +107,19 @@ export async function onRecFrame(cb: (r: LRect | null) => void): Promise<void> {
   cb(await invoke<LRect | null>('rec_frame'));
 }
 
+/** 边框窗口提示条的载荷，对应 `rec::Toast`；`busy` 为进行中（长截图生成中），转圈、不自动收起。 */
+export type FrameToast = { text: string; ok: boolean; busy: boolean };
 /** 录屏、长截图的结果提示条（M23 规则 13、M24 规则 9）：显示在边框窗口左下角，之后后端隐藏窗口。 */
-export async function onFrameToast(cb: (t: { text: string; ok: boolean }) => void): Promise<void> {
+export async function onFrameToast(cb: (t: FrameToast) => void): Promise<void> {
   if (stub) {
-    if (new URLSearchParams(location.search).has('toast')) setTimeout(() => cb({ text: '长截图已复制，已加入历史 · 2880 × 9120', ok: true }), 600);
+    // 替身：`?toast` 先显示生成中，1.5 秒后换成结果
+    if (new URLSearchParams(location.search).has('toast')) {
+      setTimeout(() => cb({ text: '正在生成长图…', ok: true, busy: true }), 600);
+      setTimeout(() => cb({ text: '长截图已复制，已加入历史 · 2880 × 9120', ok: true, busy: false }), 2100);
+    }
     return;
   }
-  await listen<{ text: string; ok: boolean }>('frame-toast', (e) => cb(e.payload));
+  await listen<FrameToast>('frame-toast', (e) => cb(e.payload));
 }
 
 /** 长截图拼接结果的预览：缩到宽 `w`、最多高 `h`（物理像素），只含最下面最新接上的部分。 */
@@ -132,12 +138,12 @@ export async function longPreview(w: number, h: number): Promise<Frame> {
 }
 
 /** 长截图进度（同一个边框窗口）：已拼接的高度（物理像素）；`lost` 这一帧没对上，`full` 已到长度上限。
- *  自动滚动（M23 规则 13）：`auto` 滚动中，`paused` 空格暂停，`pointer` 指针移出了选区，`noperm` 没有辅助功能权限，
- *  `noresponse` 窗口不响应自动滚动（后两者手动滚），`autostuck` 自动滚动连续 3 次恢复不了、已暂停（空格重试）。
+ *  自动滚动（M23 规则 13）：`auto` 滚动中，`paused` 空格暂停，`pointer` 指针移出了选区，`manual` 设置里没开自动滚动、
+ *  手动滚（空格开始自动滚动），`noperm` 没有辅助功能权限，`noresponse` 窗口不响应自动滚动（后两者手动滚），`autostuck` 自动滚动连续 3 次恢复不了、已暂停（空格重试）。
  *  用户接手时为手动的 `run`、`lost`、`stuck`。 */
 export type LongProgress = {
   height: number;
-  state: 'run' | 'lost' | 'stuck' | 'full' | 'auto' | 'paused' | 'noperm' | 'noresponse' | 'pointer' | 'autostuck';
+  state: 'run' | 'lost' | 'stuck' | 'full' | 'auto' | 'paused' | 'manual' | 'noperm' | 'noresponse' | 'pointer' | 'autostuck';
 };
 export async function onLongShot(cb: (p: LongProgress) => void): Promise<void> {
   if (stub) {

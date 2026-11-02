@@ -26,6 +26,8 @@ export interface Settings {
   shotHotkey: string;
   shotDir: string;
   shotSaveCopy: boolean;
+  /** 长截图按 L 直接自动滚动；关着时手动滚、按空格才自动滚（M23 规则 13） */
+  longAutoScroll: boolean;
   recHotkey: string;
   recDir: string;
   recSystemAudio: boolean;

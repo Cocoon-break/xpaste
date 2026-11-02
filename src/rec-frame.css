@@ -68,10 +68,13 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: transparent;
 #toast[data-open="true"] { opacity: 1; transform: none; visibility: visible; transition: opacity 200ms var(--ease-enter), transform 240ms var(--ease-enter), visibility 0s; }
 #toast .t-ic { width: 28px; height: 28px; display: grid; place-items: center; color: var(--c-code); flex: none; }
 #toast .t-ic svg { width: 16px; height: 16px; }
+/* 生成中（M23 规则 13）：同截图工具栏的转圈；减少动态效果时静止 */
+#toast .spin { width: 14px; height: 14px; box-sizing: border-box; border-radius: 50%; border: 2px solid color-mix(in srgb, currentColor 25%, transparent); border-top-color: currentColor; animation: spin 700ms linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 #toast.danger .t-ic { color: var(--danger); }
 #toast .t-msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 /* 减少动态效果：不闪，四个角常亮 */
 @media (prefers-reduced-motion: reduce) {
-  #frame, #frame i { animation: none; }
+  #frame, #frame i, #toast .spin { animation: none; }
   #frame.out, #pv, #toast { transition: none; }
 }

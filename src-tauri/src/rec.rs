@@ -552,7 +552,16 @@ pub(crate) fn frame_out(app: &AppHandle) {
 /// 系统里关掉了 xPaste 通知时，通知看不到。`ok` 为假（失败、中断）时另发系统通知：边框所在的屏可能已经拔掉。
 /// 停留 `TOAST` 后隐藏窗口；期间又开始了录屏或长截图就不隐藏。阻塞调用方线程。
 pub(crate) fn frame_result(app: &AppHandle, text: &str, ok: bool) {
-    events::emit_to(app, FRAME, events::FRAME_TOAST, Toast { text, ok });
+    events::emit_to(
+        app,
+        FRAME,
+        events::FRAME_TOAST,
+        Toast {
+            text,
+            ok,
+            busy: false,
+        },
+    );
     if !ok {
         notify(app, text);
     }
@@ -564,14 +573,39 @@ pub(crate) fn frame_result(app: &AppHandle, text: &str, ok: bool) {
 
 /// 录制中的提示（如按了截图快捷键，M24 规则 10）：显示在正录着的边框窗口里，同时发系统通知。不隐藏窗口。
 pub(crate) fn frame_note(app: &AppHandle, text: &str) {
-    events::emit_to(app, FRAME, events::FRAME_TOAST, Toast { text, ok: false });
+    events::emit_to(
+        app,
+        FRAME,
+        events::FRAME_TOAST,
+        Toast {
+            text,
+            ok: false,
+            busy: false,
+        },
+    );
     notify(app, text);
+}
+
+/// 进行中的提示（长截图生成中，M23 规则 13）：转圈、不自动收起，等 `frame_result` 换成结果。
+pub(crate) fn frame_busy(app: &AppHandle, text: &str) {
+    events::emit_to(
+        app,
+        FRAME,
+        events::FRAME_TOAST,
+        Toast {
+            text,
+            ok: true,
+            busy: true,
+        },
+    );
 }
 
 #[derive(serde::Serialize, Clone)]
 struct Toast<'a> {
     text: &'a str,
     ok: bool,
+    /// 进行中：前端显示转圈、不自动收起，下一条提示到来时替换
+    busy: bool,
 }
 
 /// 淡出播完后隐藏边框窗口。

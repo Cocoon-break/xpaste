@@ -1617,7 +1617,7 @@ const ocrProgressEl = $('#ocrProgress'), ocrUnsupportedEl = $('#ocrUnsupported')
 const permRow = $('#permRow'), permState = $('#permState'), permBtn = $<HTMLButtonElement>('#permBtn');
 const themeSeg = $('#themeSeg'), themePill = themeSeg.querySelector<HTMLElement>('.pill')!;
 const themeOpts = [...themeSeg.querySelectorAll<HTMLElement>('[data-theme-opt]')];
-const shotSaveCopyIn = $<HTMLInputElement>('#shotSaveCopy'), shotPermRow = $('#shotPermRow');
+const shotSaveCopyIn = $<HTMLInputElement>('#shotSaveCopy'), longAutoIn = $<HTMLInputElement>('#longAutoScroll'), shotPermRow = $('#shotPermRow');
 const recSystemAudioIn = $<HTMLInputElement>('#recSystemAudio'), recMicIn = $<HTMLInputElement>('#recMicrophone'), recCopyIn = $<HTMLInputElement>('#recCopy');
 const recQualityIn = $<HTMLSelectElement>('#recQuality'), recFpsIn = $<HTMLSelectElement>('#recFps');
 const HOTKEY_IDLE = '点击输入框，然后按下新的组合键', OPT_IDLE = '点击输入框后按下新的组合键；按 ⌫ 清空表示不启用';
@@ -2072,6 +2072,7 @@ function openSettings() {
   recDir.pending = st.recDir;
   recDir.paint();
   shotSaveCopyIn.checked = st.shotSaveCopy;
+  longAutoIn.checked = st.longAutoScroll;
   recSystemAudioIn.checked = st.recSystemAudio;
   recMicIn.checked = st.recMicrophone;
   recCopyIn.checked = st.recCopy;
@@ -2189,7 +2190,7 @@ async function submitSettings() {
   const s = formToSettings(S.settings, {
     hotkey: pendingHotkey, retain: retainIn.value, limit, frequent, ignored: addIgnored(draftIgnored, ignoreIn.value), skipSensitive: sensitiveIn.checked,
     moveToTop: moveTopIn.checked, launchAtLogin: autostartIn.checked, ocrEnabled: ocrOnIn.checked, ocrBackfill: ocrBackfillIn.checked, searchFileText: fileTextIn.checked,
-    shotHotkey: shotKey.pending, shotDir: shotDir.pending, shotSaveCopy: shotSaveCopyIn.checked,
+    shotHotkey: shotKey.pending, shotDir: shotDir.pending, shotSaveCopy: shotSaveCopyIn.checked, longAutoScroll: longAutoIn.checked,
     recHotkey: recKey.pending, recDir: recDir.pending, recSystemAudio: recSystemAudioIn.checked, recMicrophone: recMicIn.checked, recCopy: recCopyIn.checked,
     recQuality: recQualityIn.value, recFps: recFpsIn.value,
   });

@@ -4,7 +4,7 @@
 // （最下面最新接上的部分），高度或状态变了就重新拉一次。
 import './rec-frame.css';
 import { longPreview, onFrameToast, onLongShot, onRecFrame, type LRect } from './api/shot';
-import { frameBox, infoSide, previewBox, PREVIEW_W, type Box } from './rec-frame-box.ts';
+import { frameBox, infoSide, longTip, previewBox, PREVIEW_W, type Box } from './rec-frame-box.ts';
 
 const frame = document.getElementById('frame')!, info = document.getElementById('info')!;
 const toast = document.getElementById('toast')!;
@@ -45,19 +45,6 @@ void onRecFrame((r: LRect | null) => {
   frame.style.animation = '';
 });
 
-const TEXT = {
-  run: '滚动选区里的内容',
-  lost: '滚得太快没接上，往回滚到预览里的位置',
-  stuck: '这里一直接不上（画面在变？），↩ 保留已拼好的部分',
-  full: '已到长度上限',
-  // 自动滚动（M23 规则 13）
-  auto: '自动滚动中，空格暂停',
-  paused: '已暂停，空格继续',
-  noperm: '滚动选区里的内容 · 授权辅助功能后可自动滚动',
-  noresponse: '这个窗口不响应自动滚动，请自己滚动',
-  pointer: '把指针移回选区继续',
-  autostuck: '这里一直接不上（画面在变？），空格重试，↩ 保留已拼好的部分',
-};
 /** 预览：同一高度与状态只拉一次；拉取中又有变化时，拉完再拉一次 */
 let pvKey = '', pvBusy = false, pvAgain = false;
 async function refreshPreview(key: string) {
@@ -92,21 +79,23 @@ void onLongShot((p) => {
   void refreshPreview(curKey);
   info.hidden = false;
   info.dataset.state = p.state;
-  const tip = p.state === 'run' && short ? '选区较矮，慢一点滚' : TEXT[p.state];
+  const tip = longTip(p.state, short);
   info.innerHTML = `<b>长截图</b><span class="px">${p.height} px</span><span class="tip">${tip}</span><kbd>↩</kbd>完成<kbd>Esc</kbd>取消`;
 });
 
-/* 结果提示条：边框与预览淡出，提示条在左下角淡入；停留后后端隐藏窗口 */
+/* 结果提示条：边框与预览淡出，提示条在左下角淡入；停留后后端隐藏窗口。
+   进行中（`busy`，长截图生成中，M23 规则 13）转圈、不自动收起，下一条提示到来时替换。 */
 let toastT = 0;
 const CHECK = '<path d="M5 12.5l4.5 4.5L19 7.5"/>', CROSS = '<path d="M6 6l12 12M18 6 6 18"/>';
 void onFrameToast((t) => {
   pv.classList.add('out');
-  document.getElementById('toastIc')!.innerHTML =
-    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${t.ok ? CHECK : CROSS}</svg>`;
+  document.getElementById('toastIc')!.innerHTML = t.busy
+    ? '<span class="spin" aria-hidden="true"></span>'
+    : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${t.ok ? CHECK : CROSS}</svg>`;
   toast.classList.toggle('danger', !t.ok);
   document.getElementById('toastMsg')!.textContent = t.text;
   toast.dataset.open = 'true';
   // 录制中的提示不隐藏窗口，自己收起；结果提示到点后窗口随之隐藏
   clearTimeout(toastT);
-  toastT = window.setTimeout(() => (toast.dataset.open = 'false'), 2400);
+  if (!t.busy) toastT = window.setTimeout(() => (toast.dataset.open = 'false'), 2400);
 });
