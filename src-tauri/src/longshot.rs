@@ -496,9 +496,8 @@ fn run(
     }
     let mode = stream.mode();
     stream.stop();
-    join_dump(dump);
     let Some(st) = st else {
-        return;
+        return join_dump(dump);
     };
     let (w, h, rgba) = st.finish();
     let t = Instant::now();
@@ -528,6 +527,8 @@ fn run(
         }
     };
     rec::frame_result(app, &notice, ok);
+    // 开发构建的逐帧存图最后再等：几百帧写盘要几十秒，不能拖着结果提示（release 不存图）
+    join_dump(dump);
 }
 
 /// `drive` 的结果：要做的动作，以及报过一步之后学到的比例（日志用）
