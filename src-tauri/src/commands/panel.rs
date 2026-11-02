@@ -94,6 +94,12 @@ pub fn reveal_file(app: AppHandle, path: String) -> Result<(), AppError> {
     Ok(())
 }
 
+/// 导出日志到“下载”并选中，返回文件名（M15“日志”）。
+#[tauri::command(async)]
+pub fn export_logs(app: AppHandle) -> Result<String, AppError> {
+    crate::diag::export(&app)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

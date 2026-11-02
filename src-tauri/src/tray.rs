@@ -147,6 +147,7 @@ pub fn setup(app: &App) -> tauri::Result<()> {
     let pause = MenuItem::with_id(app, "pause", pause_label(paused), true, None::<&str>)?;
     let clear = MenuItem::with_id(app, "clear", "清空历史…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
+    let logs = MenuItem::with_id(app, "logs", "导出日志", true, None::<&str>)?;
     let translate = MenuItem::with_id(app, "translate", "翻译…", true, None::<&str>)?;
     let version = MenuItem::with_id(
         app,
@@ -167,6 +168,7 @@ pub fn setup(app: &App) -> tauri::Result<()> {
             &pause,
             &clear,
             &settings,
+            &logs,
             &PredefinedMenuItem::separator(app)?,
             &version,
             &PredefinedMenuItem::separator(app)?,
@@ -193,6 +195,13 @@ pub fn setup(app: &App) -> tauri::Result<()> {
                 emit(app, CONFIRM_CLEAR, ());
             }
             "settings" => open_settings(app),
+            // 成功时访达 / 资源管理器里选中导出的文件，失败发系统通知（M17 规则 2）
+            "logs" => {
+                if let Err(e) = crate::diag::export(app) {
+                    log::warn!("导出日志失败：{e}");
+                    crate::notify(app, &format!("导出日志失败：{e}"));
+                }
+            }
             // 输入卡片（M26 规则 20）
             "translate" => crate::trcard::open_input(app),
             "rec-stop" => crate::rec::stop(app),

@@ -126,10 +126,13 @@ pub fn index_text(s: &str) -> String {
 // ponytail: 音节切分最多取 32 种，长查询多出的切法直接丢弃（先试长音节，自然切法排在前面）；漏召回时再按段数排序或放宽上限
 const MAX_SPLITS: usize = 32;
 
+/// 拼音查询的最长字母数（M05 规则 11）：切分按音节递归，深度随长度增长，粘贴超长字母串会撑爆线程栈
+const MAX_QUERY: usize = 64;
+
 /// `q` 的全部查询短语：每种音节切分一个 `'s1's2…'sk`（末段可为音节前缀），最后是大写的首字母短语。
-/// `q` 不是 ≥ 3 个 ASCII 字母时为空。
+/// `q` 不是 3–64 个 ASCII 字母时为空。
 fn phrases(q: &str) -> Vec<String> {
-    if q.len() < 3 || !q.bytes().all(|b| b.is_ascii_alphabetic()) {
+    if !(3..=MAX_QUERY).contains(&q.len()) || !q.bytes().all(|b| b.is_ascii_alphabetic()) {
         return vec![];
     }
     let q = q.to_ascii_lowercase();
@@ -169,7 +172,7 @@ fn split(q: &str, i: usize, ok: &[bool], acc: &mut String, out: &mut Vec<String>
     }
 }
 
-/// `q`（≥ 3 个 ASCII 字母）对 `fts_py` 的 MATCH 表达式：各短语加双引号以 ` OR ` 连接；否则为 None。
+/// `q`（3–64 个 ASCII 字母）对 `fts_py` 的 MATCH 表达式：各短语加双引号以 ` OR ` 连接；否则为 None。
 pub fn match_expr(q: &str) -> Option<String> {
     let ps = phrases(q);
     // 短语只含 ASCII 字母与 `'`，不会出现需要转义的双引号
@@ -388,6 +391,19 @@ mod tests {
         let q = format!("{}ii", "an".repeat(20));
         assert_eq!(match_expr(&q).unwrap(), format!("\"{}\"", q.to_uppercase()));
         assert!(t.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    #[test]
+    fn very_long_splittable_query_does_not_overflow_stack() {
+        // 粘贴进搜索框的长串 a 每个字母都是音节：切分递归深度等于长度，tokio 工作线程栈只有 2 MiB
+        let q = "a".repeat(200_000);
+        let r = std::thread::Builder::new()
+            .stack_size(2 << 20)
+            .spawn(move || match_expr(&q))
+            .unwrap()
+            .join()
+            .unwrap();
+        assert_eq!(r, None);
     }
 
     #[test]
