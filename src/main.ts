@@ -41,7 +41,7 @@ import {
 } from './spectrum';
 import { addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFrequent, parseLimit, pickerOptions, removeIgnored } from './settings-form';
 import { composing, justComposed } from './ime';
-import { errorControl, revealsFocus, tabKeyTarget } from './settings-tabs';
+import { errorControl, revealsFocus, shownTabTarget } from './settings-tabs';
 import {
   armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, nextSelection, pruneMulti, rangeIds, snippetTextChange, UNDO_MS, visible, type UndoState,
 } from './view';
@@ -1841,9 +1841,9 @@ $('#stTabs').addEventListener('click', (e) => {
   const t = (e.target as Element).closest<HTMLElement>('[role="tab"]');
   if (t) selectStTab(stTabs.indexOf(t), false);
 });
-// WAI-ARIA Tabs：←/→ 循环、Home / End，选中跟随焦点
+// WAI-ARIA Tabs：←/→ 循环、Home / End，选中跟随焦点；跳过隐藏的标签（Windows 上的“录屏”）
 $('#stTabs').addEventListener('keydown', (e) => {
-  const i = tabKeyTarget(e.key, stTab, stTabs.length, { meta: e.metaKey, ctrl: e.ctrlKey, alt: e.altKey });
+  const i = shownTabTarget(e.key, stTab, stTabs.map((t) => !t.hidden), { meta: e.metaKey, ctrl: e.ctrlKey, alt: e.altKey });
   if (i === null) return;
   e.preventDefault();
   e.stopPropagation();

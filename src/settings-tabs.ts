@@ -14,6 +14,13 @@ export function tabKeyTarget(key: string, i: number, n: number, m: Mods = {}): n
   }
 }
 
+/** 同 tabKeyTarget，但跳过隐藏的标签（Windows 上的“录屏”）：shown[j] 为第 j 个标签是否显示，i 与返回值都是在全部标签里的下标 */
+export function shownTabTarget(key: string, i: number, shown: boolean[], m: Mods = {}): number | null {
+  const idx = shown.flatMap((s, j) => (s ? [j] : []));
+  const t = tabKeyTarget(key, idx.indexOf(i), idx.length, m);
+  return t === null ? null : idx[t];
+}
+
 /** 打开设置时程序聚焦标签压住的焦点环，按下哪些键后照常显示：单按修饰键、带 Mod 或 Ctrl 的组合不算（例如还按着 ⌘ 再按一次 ,） */
 export const revealsFocus = (e: { key: string } & Mods): boolean =>
   !['Meta', 'Control', 'Alt', 'Shift'].includes(e.key) && !e.meta && !e.ctrl;

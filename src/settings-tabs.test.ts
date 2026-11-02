@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { errorControl, revealsFocus, tabKeyTarget } from './settings-tabs.ts';
+import { errorControl, revealsFocus, shownTabTarget, tabKeyTarget } from './settings-tabs.ts';
 
 test('←/→ 切到相邻标签，首尾循环', () => {
   assert.equal(tabKeyTarget('ArrowRight', 0, 4), 1);
@@ -20,6 +20,18 @@ test('带 Mod、Ctrl、Alt 的方向键不切标签（⌘ ←/→ 是面板的�
     assert.equal(tabKeyTarget('Home', 2, 4, m), null);
   }
   assert.equal(tabKeyTarget('ArrowRight', 0, 4, { shift: true }), 1);
+});
+
+test('跳过隐藏的标签（Windows 上的“录屏”），下标仍按全部标签算', () => {
+  // 通用 记录 搜索 截图 [录屏] 翻译
+  const win = [true, true, true, true, false, true], mac = win.map(() => true);
+  assert.equal(shownTabTarget('ArrowRight', 3, win), 5);
+  assert.equal(shownTabTarget('ArrowLeft', 5, win), 3);
+  assert.equal(shownTabTarget('ArrowRight', 5, win), 0);
+  assert.equal(shownTabTarget('End', 0, win), 5);
+  assert.equal(shownTabTarget('ArrowRight', 3, mac), 4);
+  assert.equal(shownTabTarget('ArrowRight', 3, win, { meta: true }), null);
+  assert.equal(shownTabTarget('Enter', 3, win), null);
 });
 
 test('只有导航类按键才显示打开时压住的焦点环', () => {
