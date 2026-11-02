@@ -187,9 +187,9 @@ impl Stitch {
         // 整张长图（滚回了 4 屏以外）：判定规则不变，最后 4 屏里的位置照样参与比较。最后 4 屏里分不清时，只有 4 屏以外
         // 某个位置至少是其余所有位置的 2 倍才接；4 屏以外的位置离末尾超过一屏，只会是没有新内容（Same），只更新位置，
         // 不会把内容接错
-        let whole = || {
+        let whole = |ps| {
             if len > window {
-                locate(len, at, &b[lo..hi], len, None)
+                locate(len, at, &b[lo..hi], len, ps)
             } else {
                 None
             }
@@ -205,14 +205,17 @@ impl Stitch {
         let around = |c: usize| Some(c.checked_sub(tol)?..=c + tol);
         let near_p = near.and_then(|n| around(n + lo));
         let near_d = near.and_then(|n| around((n + end).checked_sub(done)?));
-        // 先精确（预期附近、最后 4 屏、整张长图），再近似（预期附近、全范围）：预期偏得远时，全范围的精确比对比附近的
-        // 近似比对可靠
+        // 先精确（预期附近、最后 4 屏），再近似（预期附近、全范围），最后精确比对整张长图（预期附近、不限）：预期偏得远时，
+        // 全范围的精确比对比附近的近似比对可靠。整张长图放在最后：只能近似接上的内容（背景图不动的终端）每帧都会走到
+        // 近似比对，不必先白扫一遍整张长图；滚回很远的帧近似比对只往下找、要只有一个像样的位置，找不到才落到这里
         let found = near_p
+            .clone()
             .and_then(|r| exact(Some(r)))
             .or_else(|| exact(None))
-            .or_else(whole)
             .or_else(|| near_d.and_then(|r| approx(Some(r))))
-            .or_else(|| approx(None));
+            .or_else(|| approx(None))
+            .or_else(|| near_p.and_then(|r| whole(Some(r))))
+            .or_else(|| whole(None));
         let Some(p) = found else {
             self.located = false;
             return Step::Lost;
@@ -808,6 +811,34 @@ mod tests {
         for y in [20, 90, 130, 40] {
             assert_eq!(s.push(shot(y, true)), Step::Lost, "噪点下 y = {y}");
         }
+    }
+
+    /// 整张长图里找（拼出超过 4 屏后）也不能把一行行完全一样的内容错开接上：滚回很远、甩过末尾几行都不接进内容
+    #[test]
+    fn whole_image_search_never_misjoins_repetitive_lines() {
+        let f = |y| same_lines(y, 60);
+        // 给预期一步步拼到 6 屏多：每步 44 行（不是周期 8 的整数倍，画面每步都变）
+        let mut s = Stitch::new(64, 60, &f(0), 0, 4);
+        for k in 1..=6 {
+            assert_eq!(
+                s.push_near(f(44 * k), Some(44 * k)),
+                Step::Added(44),
+                "k = {k}"
+            );
+        }
+        let height = s.height();
+        assert!(height > 4 * 60);
+        // (a) 滚回很远：错开一个周期的位置都一样好，分不清，报没接上
+        assert_eq!(s.push(f(4)), Step::Lost);
+        // 给了预期（远在最后 4 屏以外；换一个相位，与上一帧不同）：范围内只有一个位置，定位到，没有新内容
+        assert_eq!(s.push_near(f(10), Some(10)), Step::Same);
+        assert_eq!(s.position(), 10);
+        // (b) 甩过末尾几行（与已拼好的部分没有重叠，预期范围超出能核对的部分不用）：报没接上，不接进内容
+        let past = height + 4;
+        assert_eq!(s.push(f(past)), Step::Lost);
+        // 与上一帧相同的帧不比对，换一个相位
+        assert_eq!(s.push_near(f(past + 2), Some(past + 2)), Step::Lost);
+        assert_eq!(s.height(), height);
     }
 
     #[test]
