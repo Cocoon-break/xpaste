@@ -3,7 +3,8 @@
 //! 标题栏留在结果最上面，底栏留在最下面。每帧底部的几行（窗口圆角、渐隐、没画完的半行）先不接，
 //! 等它们滚上来、在下一帧里画好了再接；结束时补上最后一帧的底部。
 //!
-//! 新帧在长图最后几屏里找位置，而不只和上一帧比：滚得太快接不上时，往回滚到预览里已有的任何位置都能接着拼。
+//! 新帧先在长图最后几屏里找位置，找不到再在整张长图里找，而不只和上一帧比：滚得太快接不上时，往回滚到预览里
+//! 已有的任何位置（包括长图开头）都能接着拼。
 //!
 //! 先按行哈希精确比对。找不到时退一步，只和上次接上的那帧近似比对（`follow`）：背景图不随文字滚动的终端、
 //! 半透明窗口、小数像素滚动，滚过之后没有一行完全相同。近似比对要明显胜出才接（见 `follow`），
@@ -19,7 +20,7 @@ use std::ops::RangeInclusive;
 /// 结果最多这么多像素（约 190 MB 的 RGBA）；行数另有上限。到上限后不再接
 pub const MAX_PIXELS: usize = 48_000_000;
 pub const MAX_ROWS: usize = 32_000;
-/// 新帧在长图最后这么多屏里找位置
+/// 新帧先在长图最后这么多屏里找位置，找不到再在整张长图里找
 const SEARCH_SCREENS: usize = 4;
 /// 近似比对时每行按亮度分成这么多段求和，粗筛位置
 const SEGS: usize = 8;
@@ -40,7 +41,7 @@ pub enum Step {
     Same,
     /// 长图长高了这么多行
     Added(usize),
-    /// 在长图最后几屏里找不到这一帧：滚得太快（两帧之间超过一屏）、往回滚得太远，或画面整体变了。
+    /// 在长图里找不到这一帧：滚得太快（两帧之间超过一屏）、超出了已拼好的部分，或画面整体变了。
     /// 不接，往回滚到已拼好的部分就能接着拼
     Lost,
     /// 已到上限，不再接
@@ -183,6 +184,16 @@ impl Stitch {
         let window = SEARCH_SCREENS * h;
         let end = self.end;
         let exact = |ps| locate(len, at, &b[lo..hi], window, ps);
+        // 整张长图（滚回了 4 屏以外）：判定规则不变，最后 4 屏里的位置照样参与比较。最后 4 屏里分不清时，只有 4 屏以外
+        // 某个位置至少是其余所有位置的 2 倍才接；4 屏以外的位置离末尾超过一屏，只会是没有新内容（Same），只更新位置，
+        // 不会把内容接错
+        let whole = || {
+            if len > window {
+                locate(len, at, &b[lo..hi], len, None)
+            } else {
+                None
+            }
+        };
         // 这一帧第 lo 行是上次接上那帧的第 lo + d 行，那一行在长图第 done - end + lo + d 行
         let approx = |ds| {
             self.follow(&cur, lo, hi, ds)
@@ -194,10 +205,12 @@ impl Stitch {
         let around = |c: usize| Some(c.checked_sub(tol)?..=c + tol);
         let near_p = near.and_then(|n| around(n + lo));
         let near_d = near.and_then(|n| around((n + end).checked_sub(done)?));
-        // 先精确（预期附近、全范围），再近似（预期附近、全范围）：预期偏得远时，全范围的精确比对比附近的近似比对可靠
+        // 先精确（预期附近、最后 4 屏、整张长图），再近似（预期附近、全范围）：预期偏得远时，全范围的精确比对比附近的
+        // 近似比对可靠
         let found = near_p
             .and_then(|r| exact(Some(r)))
             .or_else(|| exact(None))
+            .or_else(whole)
             .or_else(|| near_d.and_then(|r| approx(Some(r))))
             .or_else(|| approx(None));
         let Some(p) = found else {
@@ -407,13 +420,14 @@ fn profile(e: &[i16], cmp_w: usize) -> Vec<[u32; SEGS]> {
         .collect()
 }
 
-/// 在长图（共 `len` 行，`at(i)` 取第 i 行）最后 `window` 行里找 `band` 的位置：`band[0]` 对应长图第几行。
+/// 在长图（共 `len` 行，`at(i)` 取第 i 行）最后 `window` 行（整张长图时为 `len`）里找 `band` 的位置：`band[0]` 对应长图第几行。
 /// 重叠至少 1/5（不少于 8 行），对不上的行不超过重叠的 1/4（帧边上的圆角、渐隐、悬停高亮都会对不上），
 /// 至少 4 行非空白行对上；取对上的非空白行最多的位置，一样多取靠后的（离当前滚动位置最近）。
 /// 还要明显胜出：对上的非空白行至少是离它 3 行以外的次好位置的 2 倍。一行行很像的内容（代码、表格、
 /// 每行只差几个字的列表）错开整行也能对上不少行，重叠又少时分不清，宁可报没接上，不能接错。
 /// `around`：只在这些位置里找（预期附近），规则不变；`around` 有一部分超出能找的范围时不找。
-/// ponytail: 逐位置比对，最坏约 窗口行数 × 帧高 次比较（2 倍屏整屏约千万次、十几毫秒）；不够快时先按非空白行的哈希找候选位置。
+/// ponytail: 逐位置比对，每个位置对不上超过 1/4 就停，最坏约 窗口行数 × 帧高 / 4 次比较（整张长图 32000 行时约千万次）；
+/// 不够快时先按非空白行的哈希找候选位置。
 fn locate(
     len: usize,
     at: impl Fn(usize) -> Row,
@@ -592,6 +606,30 @@ mod tests {
         let (_, rows, px) = s.finish();
         assert_eq!(rows, 85);
         assert_eq!(strip(&px), strip(&shot(&p, 0, 85, 0, 0, 0)));
+    }
+
+    /// 拼出远超 4 屏后滚回开头：最后 4 屏里找不到，在整张长图里找到；之后往下滚照常接上，直到长出新内容
+    #[test]
+    fn returns_to_the_very_start_after_a_long_stitch() {
+        let p = page(1000);
+        let f = |y| shot(&p, y, 40, 0, 0, 0);
+        let mut s = Stitch::new(W, 40, &f(0), 1, 4);
+        for y in (30..=600).step_by(30) {
+            assert_eq!(s.push(f(y)), Step::Added(30), "y = {y}");
+        }
+        let height = s.height();
+        assert!(height > 10 * 40);
+        assert_eq!(s.push(f(0)), Step::Same);
+        assert_eq!(s.position(), 0);
+        assert!(s.located());
+        for y in (30..=600).step_by(30) {
+            assert_eq!(s.push(f(y)), Step::Same, "y = {y}");
+            assert_eq!(s.position(), y);
+        }
+        assert_eq!(s.push(f(630)), Step::Added(30));
+        assert_eq!(s.height(), height + 30);
+        let (_, rows, px) = s.finish();
+        assert_eq!(strip(&px), strip(&shot(&p, 0, rows, 0, 0, 0)));
     }
 
     #[test]
