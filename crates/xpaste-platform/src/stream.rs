@@ -231,7 +231,7 @@ mod tests {
         assert!(s.next(Duration::from_millis(30)).is_none());
         let e = t.elapsed();
         assert!(
-            e >= Duration::from_millis(30) && e < Duration::from_millis(200),
+            e >= Duration::from_millis(30) && e < Duration::from_secs(2),
             "{e:?}"
         );
     }
@@ -246,8 +246,9 @@ mod tests {
             l2.push(frame(7));
         });
         let t = Instant::now();
-        assert_eq!(s.next(Duration::from_secs(1)).map(|f| f.w), Some(7));
-        assert!(t.elapsed() < Duration::from_millis(200));
+        // 超时设得远大于上限：耗时低于上限说明是被唤醒的，不是等到了超时
+        assert_eq!(s.next(Duration::from_secs(5)).map(|f| f.w), Some(7));
+        assert!(t.elapsed() < Duration::from_secs(2));
         h.join().unwrap();
     }
 
@@ -261,8 +262,8 @@ mod tests {
             l2.fail();
         });
         let t = Instant::now();
-        assert!(s.next(Duration::from_secs(1)).is_none());
-        assert!(t.elapsed() < Duration::from_millis(200));
+        assert!(s.next(Duration::from_secs(5)).is_none());
+        assert!(t.elapsed() < Duration::from_secs(2));
         assert!(s.failed());
         h.join().unwrap();
     }
@@ -300,7 +301,7 @@ mod tests {
             },
             Duration::from_millis(10),
         );
-        let f = s.next(Duration::from_millis(200)).expect("应有帧");
+        let f = s.next(Duration::from_secs(5)).expect("应有帧");
         assert_eq!((f.h, f.rgba.len()), (1, 4 * f.w as usize));
         assert_eq!(s.mode(), "逐帧");
         s.stop();
@@ -317,8 +318,9 @@ mod tests {
             || Err(PlatformError::Capture("x".into())),
             Duration::from_millis(10),
         );
+        // 只是等待上限，满足即退出：CI 的 macOS 机器上 sleep(10ms) 常拖很久，200 ms 不够 5 次
         let t = Instant::now();
-        while !s.failed() && t.elapsed() < Duration::from_millis(200) {
+        while !s.failed() && t.elapsed() < Duration::from_secs(5) {
             thread::sleep(Duration::from_millis(5));
         }
         assert!(s.failed());
