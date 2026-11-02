@@ -119,6 +119,10 @@ pub fn changed_fields(old: &Settings, new: &Settings) -> Vec<&'static str> {
         ("shotHotkey", old.shot_hotkey != new.shot_hotkey),
         ("shotDir", old.shot_dir != new.shot_dir),
         ("shotSaveCopy", old.shot_save_copy != new.shot_save_copy),
+        (
+            "longAutoScroll",
+            old.long_auto_scroll != new.long_auto_scroll,
+        ),
         ("recHotkey", old.rec_hotkey != new.rec_hotkey),
         ("recDir", old.rec_dir != new.rec_dir),
         (
@@ -489,6 +493,7 @@ mod tests {
             shot_hotkey: "Alt+Shift+S".into(),
             shot_dir: "/x".into(),
             shot_save_copy: false,
+            long_auto_scroll: true,
             rec_hotkey: "Alt+Shift+Y".into(),
             rec_dir: "/y".into(),
             rec_system_audio: true,
@@ -513,6 +518,7 @@ mod tests {
                 "shotHotkey",
                 "shotDir",
                 "shotSaveCopy",
+                "longAutoScroll",
                 "recHotkey",
                 "recDir",
                 "recSystemAudio",

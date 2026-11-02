@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { frameBox, infoSide, previewBox } from './rec-frame-box.ts';
+import { frameBox, infoSide, longTip, previewBox } from './rec-frame-box.ts';
 
 test('frameBox 在选区外 3 px', () => {
   assert.deepEqual(frameBox({ x: 100, y: 50, w: 400, h: 300 }, 1440, 900), { x: 97, y: 47, w: 406, h: 306 });
@@ -26,4 +26,13 @@ test('长截图预览：右侧放不下放左侧，都放不下放选区里；�
   assert.equal(previewBox({ x: 0, y: 0, w: 1440, h: 900 }, 1440, 900).x, 1440 - 242 - 8);
   assert.deepEqual(previewBox({ x: 100, y: 0, w: 400, h: 900 }, 1440, 900), { x: 514, y: 8, w: 242, h: 884 });
   assert.equal(previewBox({ x: 100, y: 850, w: 400, h: 40 }, 1440, 900).h, 160);
+});
+
+test('longTip：手动模式带“空格自动滚动”，选区较矮时换前半句；没权限沿用原文案（M23 规则 13）', () => {
+  assert.equal(longTip('manual', false), '滚动选区里的内容 · 空格自动滚动');
+  assert.equal(longTip('manual', true), '选区较矮，慢一点滚 · 空格自动滚动');
+  assert.equal(longTip('run', true), '选区较矮，慢一点滚');
+  assert.equal(longTip('run', false), '滚动选区里的内容');
+  assert.equal(longTip('noperm', true), '滚动选区里的内容 · 授权辅助功能后可自动滚动');
+  assert.equal(longTip('auto', true), '自动滚动中，空格暂停');
 });

@@ -1,4 +1,4 @@
-//! Windows 平台层的纯函数：格式名映射、读取筛选、CF_HTML / CF_HDROP / DIB 解码、版本资源查询路径、托盘窗口类名、识别结果按词拼行、桌面窗口类名、PNG 转 DIB、BGRA 转不透明 RGBA。
+//! Windows 平台层的纯函数：格式名映射、读取筛选、CF_HTML / CF_HDROP / DIB 解码、版本资源查询路径、托盘窗口类名、识别结果按词拼行、桌面窗口类名、PNG 转 DIB、BGRA 转不透明 RGBA、低层钩子的用户输入判定。
 //! 与 `decode.rs` 一样全平台编译，`windows.rs` 只负责 Win32 调用。
 
 use std::borrow::Cow;
@@ -384,9 +384,53 @@ pub fn join_ocr_words(words: &[String]) -> String {
     out
 }
 
+/// 本进程发的滚动事件带的 `dwExtraInfo` 标记（"xpas"），低层钩子据此认出不是用户滚的（M23 规则 13）
+pub const SCROLL_MARK: usize = 0x7870_6173;
+
+/// 低层鼠标、键盘钩子收到的消息算不算用户输入（M23 规则 13）：滚轮（竖、横）、按键按下、鼠标按下算，
+/// 移动与松开不算；带本进程标记或被系统标为注入（`LLMHF_INJECTED` / `LLKHF_INJECTED`）的不算。
+pub fn is_user_input(msg: u32, injected: bool, extra_info: usize) -> bool {
+    const WM_KEYDOWN: u32 = 0x0100;
+    const WM_SYSKEYDOWN: u32 = 0x0104;
+    const WM_LBUTTONDOWN: u32 = 0x0201;
+    const WM_RBUTTONDOWN: u32 = 0x0204;
+    const WM_MBUTTONDOWN: u32 = 0x0207;
+    const WM_MOUSEWHEEL: u32 = 0x020A;
+    const WM_XBUTTONDOWN: u32 = 0x020B;
+    const WM_MOUSEHWHEEL: u32 = 0x020E;
+    !injected
+        && extra_info != SCROLL_MARK
+        && matches!(
+            msg,
+            WM_KEYDOWN
+                | WM_SYSKEYDOWN
+                | WM_LBUTTONDOWN
+                | WM_RBUTTONDOWN
+                | WM_MBUTTONDOWN
+                | WM_MOUSEWHEEL
+                | WM_XBUTTONDOWN
+                | WM_MOUSEHWHEEL
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 滚轮与按下算用户输入；移动、松开、注入的、带本进程标记的不算（M23 规则 13）
+    #[test]
+    fn user_input_is_wheel_or_press_not_injected() {
+        for msg in [
+            0x020A, 0x020E, 0x0100, 0x0104, 0x0201, 0x0204, 0x0207, 0x020B,
+        ] {
+            assert!(is_user_input(msg, false, 0), "{msg:#x}");
+        }
+        assert!(!is_user_input(0x0200, false, 0), "移动");
+        assert!(!is_user_input(0x0202, false, 0), "松开");
+        assert!(!is_user_input(0x0101, false, 0), "按键松开");
+        assert!(!is_user_input(0x020A, true, 0), "注入");
+        assert!(!is_user_input(0x020A, false, SCROLL_MARK), "本进程发的");
+    }
 
     #[test]
     fn join_ocr_words_keeps_chinese_punctuation_tight() {

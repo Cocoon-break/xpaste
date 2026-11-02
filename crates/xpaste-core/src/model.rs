@@ -123,6 +123,8 @@ pub struct Settings {
     pub shot_dir: String,
     /// 保存截图时同时复制到剪切板
     pub shot_save_copy: bool,
+    /// 长截图按 L 直接自动滚动（M23 规则 13）；默认关：自动滚动不知道用户想停在哪，关着时手动滚、按空格才自动滚
+    pub long_auto_scroll: bool,
     /// 录屏全局快捷键；空字符串表示不启用（M24）
     pub rec_hotkey: String,
     /// 录屏保存文件夹；空字符串表示平台默认（影片/xPaste）
@@ -177,6 +179,7 @@ impl Default for Settings {
             shot_hotkey: "Alt+Shift+A".into(),
             shot_dir: String::new(),
             shot_save_copy: true,
+            long_auto_scroll: false,
             rec_hotkey: "Alt+Shift+R".into(),
             rec_dir: String::new(),
             rec_system_audio: false,
@@ -955,6 +958,8 @@ mod tests {
         assert_eq!(s.shot_hotkey, "Alt+Shift+A");
         assert_eq!(s.shot_dir, "");
         assert!(s.shot_save_copy);
+        // 长截图自动滚动默认关：自动滚动不知道用户想停在哪（M15、M23 规则 13）
+        assert!(!s.long_auto_scroll);
     }
 
     #[test]
@@ -964,6 +969,7 @@ mod tests {
         assert_eq!(s.shot_hotkey, d.shot_hotkey);
         assert_eq!(s.shot_dir, d.shot_dir);
         assert_eq!(s.shot_save_copy, d.shot_save_copy);
+        assert_eq!(s.long_auto_scroll, d.long_auto_scroll);
     }
 
     #[test]

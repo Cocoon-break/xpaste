@@ -54,6 +54,7 @@ export type SettingsForm = {
   shotHotkey: string;
   shotDir: string;
   shotSaveCopy: boolean;
+  longAutoScroll: boolean;
   recHotkey: string;
   recDir: string;
   recSystemAudio: boolean;
@@ -80,6 +81,7 @@ export const formToSettings = (base: Settings, f: SettingsForm): Settings => ({
   shotHotkey: f.shotHotkey,
   shotDir: f.shotDir,
   shotSaveCopy: f.shotSaveCopy,
+  longAutoScroll: f.longAutoScroll,
   recHotkey: f.recHotkey,
   recDir: f.recDir,
   recSystemAudio: f.recSystemAudio,

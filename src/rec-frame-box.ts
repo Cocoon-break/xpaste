@@ -1,3 +1,5 @@
+import type { LongProgress } from './api/shot';
+
 // 录屏边框的位置（M24 规则 7）：四个直角画在选区外 GAP px 处；超出屏幕的那边收回到屏幕边上，
 // 全屏或贴边录制时角仍看得见（这时角落在录制范围内，靠录制排除边框窗口不进视频）。
 export type Box = { x: number; y: number; w: number; h: number };
@@ -35,4 +37,27 @@ export function previewBox(b: Box, vw: number, vh: number): Box {
   if (x + w > vw - EDGE) x = b.x - PV_GAP - w;
   if (x < EDGE) x = b.x + b.w - w - EDGE;
   return { x, y, w, h };
+}
+
+const TEXT = {
+  run: '滚动选区里的内容',
+  lost: '滚得太快没接上，往回滚到预览里的位置',
+  stuck: '这里一直接不上（画面在变？），↩ 保留已拼好的部分',
+  full: '已到长度上限',
+  // 自动滚动（M23 规则 13）
+  auto: '自动滚动中，空格暂停',
+  paused: '已暂停，空格继续',
+  manual: '滚动选区里的内容 · 空格自动滚动',
+  noperm: '滚动选区里的内容 · 授权辅助功能后可自动滚动',
+  noresponse: '这个窗口不响应自动滚动，请自己滚动',
+  pointer: '把指针移回选区继续',
+  autostuck: '这里一直接不上（画面在变？），空格重试，↩ 保留已拼好的部分',
+};
+const SHORT = '选区较矮，慢一点滚';
+
+/** 长截图选区旁的提示（M23 规则 13）。`short`：选区较矮，手动滚时提示慢一点滚（甩一下就超过整个选区，接不上）。 */
+export function longTip(state: LongProgress['state'], short: boolean): string {
+  if (short && state === 'run') return SHORT;
+  if (short && state === 'manual') return `${SHORT} · 空格自动滚动`;
+  return TEXT[state];
 }

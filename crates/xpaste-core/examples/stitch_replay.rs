@@ -4,7 +4,7 @@
 //! 用法：`cargo run --release -p xpaste-core --example stitch_replay -- <帧目录> [--scale 2] [--out 长图.png]`
 //!
 //! 每帧一个结果：`=` 没有新内容，`+N` 长高 N 行，`LOST` 没接上，`FULL` 到上限。
-//! 最后一行：`帧 N 没接上 L 高 H 最慢 Tms`。
+//! 最后一行：`帧 N 没接上 L 高 H 最慢 Tms 平均 Ams`。
 
 use std::path::PathBuf;
 
@@ -32,8 +32,8 @@ fn main() {
     let r = replay::replay(&dir, scale, |s| print!("{s} "));
     println!();
     println!(
-        "帧 {} 没接上 {} 高 {} 最慢 {}ms",
-        r.frames, r.lost, r.height, r.slowest_ms
+        "帧 {} 没接上 {} 高 {} 最慢 {}ms 平均 {:.2}ms",
+        r.frames, r.lost, r.height, r.slowest_ms, r.avg_ms
     );
     if let Some(p) = out {
         let (w, h, rgba) = r.image;

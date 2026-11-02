@@ -507,7 +507,7 @@ dialog.is-shown .dlg-body > * { animation: rowIn 460ms var(--ease-enter) both; a
 dialog[open] { display: flex; flex-direction: column; max-height: calc(100% - 32px); overflow: hidden; }
 dialog > form { display: contents; }
 .dlg-body { display: grid; gap: 16px; padding: 10px 22px 18px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
-/* 设置分标签（M15 规则 5）：四个面板叠在同一格里，对话框高度取最高的那个，切换时不跳动；
+/* 设置分标签（M15 规则 5）：各面板叠在同一格里，对话框高度取最高的那个，切换时不跳动；
    未选中的面板 inert + 隐藏，各自滚动（窗口矮时），页脚始终可见 */
 .st-tabs { position: relative; display: flex; gap: 4px; padding: 4px 12px 0; border-bottom: 1px solid var(--line); flex: none; }
 .st-tabs [role="tab"] {
@@ -545,7 +545,7 @@ dialog > form { display: contents; }
 }
 .field select option { background: var(--pop-solid); color: var(--fg); }
 .field input:focus-visible, .field select:focus-visible { outline: none; border-color: var(--beam); box-shadow: 0 0 0 3px color-mix(in srgb, var(--beam) 18%, transparent); }
-#hotkey, #shotHotkey, #trHotkey { font-family: var(--font-mono); cursor: pointer; }
+#hotkey, #shotHotkey, #recHotkey, #trHotkey { font-family: var(--font-mono); cursor: pointer; }
 /* 不记录这些应用：芯片 + 组合框，外框代替输入框描边与焦点环；候选列表在文档流内，不会被中部滚动区裁掉 */
 .apps-box {
   display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 38px; padding: 5px 6px 5px 8px; border-radius: 10px;
@@ -636,9 +636,14 @@ dialog > form { display: contents; }
 .tr-pick b { display: block; font-weight: 500; font-size: 13px; }
 .tr-pick small { display: block; font-size: 12px; color: var(--faint); }
 @media (hover: hover) and (pointer: fine) { .tr-pick label:not(:has(:checked)):hover { border-color: var(--muted); } }
-.tr-group { display: grid; gap: 12px; padding-top: 16px; border-top: 1px solid var(--line); }
-.tr-group h3 { margin: 0; font-size: 13px; font-weight: 600; }
-.tr-group > .help { margin: -6px 0 0; }
+/* 设置里带小标题的一组（“截图”标签的截图 / 长截图，“翻译”标签的两种方式）：上面一道分隔线；标签内第一组不画，免得和标签栏的分隔线叠成两道 */
+.st-group { display: grid; gap: 12px; padding-top: 16px; border-top: 1px solid var(--line); }
+.st-panes .dlg-body > .st-group:first-child { padding-top: 0; border-top: 0; }
+.st-group h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.st-group > .help { margin: -6px 0 0; }
+/* 组里的开关列表：紧跟小标题时不画顶线；在组末尾时去掉最后一个显示着的行的底线（Windows 上权限行隐藏），由下一组的分隔线隔开，不叠成两道 */
+.st-group > h3 + .switches { border-top: 0; margin-top: -6px; }
+.st-group > .switches:last-child > :nth-last-child(1 of :not([hidden])) { border-bottom: 0; }
 .tr-result { min-width: 0; overflow-wrap: anywhere; }
 .tr-result.is-ok { color: var(--c-code); }
 .tr-result.is-err { color: var(--danger); }

@@ -41,7 +41,7 @@ import {
 } from './spectrum';
 import { addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFrequent, parseLimit, pickerOptions, removeIgnored } from './settings-form';
 import { composing, justComposed } from './ime';
-import { errorControl, revealsFocus, tabKeyTarget } from './settings-tabs';
+import { errorControl, revealsFocus, shownTabTarget } from './settings-tabs';
 import {
   armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, nextSelection, pruneMulti, rangeIds, snippetTextChange, UNDO_MS, visible, type UndoState,
 } from './view';
@@ -1617,7 +1617,7 @@ const ocrProgressEl = $('#ocrProgress'), ocrUnsupportedEl = $('#ocrUnsupported')
 const permRow = $('#permRow'), permState = $('#permState'), permBtn = $<HTMLButtonElement>('#permBtn');
 const themeSeg = $('#themeSeg'), themePill = themeSeg.querySelector<HTMLElement>('.pill')!;
 const themeOpts = [...themeSeg.querySelectorAll<HTMLElement>('[data-theme-opt]')];
-const shotSaveCopyIn = $<HTMLInputElement>('#shotSaveCopy'), shotPermRow = $('#shotPermRow');
+const shotSaveCopyIn = $<HTMLInputElement>('#shotSaveCopy'), longAutoIn = $<HTMLInputElement>('#longAutoScroll'), shotPermRow = $('#shotPermRow');
 const recSystemAudioIn = $<HTMLInputElement>('#recSystemAudio'), recMicIn = $<HTMLInputElement>('#recMicrophone'), recCopyIn = $<HTMLInputElement>('#recCopy');
 const recQualityIn = $<HTMLSelectElement>('#recQuality'), recFpsIn = $<HTMLSelectElement>('#recFps');
 const HOTKEY_IDLE = '点击输入框，然后按下新的组合键', OPT_IDLE = '点击输入框后按下新的组合键；按 ⌫ 清空表示不启用';
@@ -1841,9 +1841,9 @@ $('#stTabs').addEventListener('click', (e) => {
   const t = (e.target as Element).closest<HTMLElement>('[role="tab"]');
   if (t) selectStTab(stTabs.indexOf(t), false);
 });
-// WAI-ARIA Tabs：←/→ 循环、Home / End，选中跟随焦点
+// WAI-ARIA Tabs：←/→ 循环、Home / End，选中跟随焦点；跳过隐藏的标签（Windows 上的“录屏”）
 $('#stTabs').addEventListener('keydown', (e) => {
-  const i = tabKeyTarget(e.key, stTab, stTabs.length, { meta: e.metaKey, ctrl: e.ctrlKey, alt: e.altKey });
+  const i = shownTabTarget(e.key, stTab, stTabs.map((t) => !t.hidden), { meta: e.metaKey, ctrl: e.ctrlKey, alt: e.altKey });
   if (i === null) return;
   e.preventDefault();
   e.stopPropagation();
@@ -2072,6 +2072,7 @@ function openSettings() {
   recDir.pending = st.recDir;
   recDir.paint();
   shotSaveCopyIn.checked = st.shotSaveCopy;
+  longAutoIn.checked = st.longAutoScroll;
   recSystemAudioIn.checked = st.recSystemAudio;
   recMicIn.checked = st.recMicrophone;
   recCopyIn.checked = st.recCopy;
@@ -2189,7 +2190,7 @@ async function submitSettings() {
   const s = formToSettings(S.settings, {
     hotkey: pendingHotkey, retain: retainIn.value, limit, frequent, ignored: addIgnored(draftIgnored, ignoreIn.value), skipSensitive: sensitiveIn.checked,
     moveToTop: moveTopIn.checked, launchAtLogin: autostartIn.checked, ocrEnabled: ocrOnIn.checked, ocrBackfill: ocrBackfillIn.checked, searchFileText: fileTextIn.checked,
-    shotHotkey: shotKey.pending, shotDir: shotDir.pending, shotSaveCopy: shotSaveCopyIn.checked,
+    shotHotkey: shotKey.pending, shotDir: shotDir.pending, shotSaveCopy: shotSaveCopyIn.checked, longAutoScroll: longAutoIn.checked,
     recHotkey: recKey.pending, recDir: recDir.pending, recSystemAudio: recSystemAudioIn.checked, recMicrophone: recMicIn.checked, recCopy: recCopyIn.checked,
     recQuality: recQualityIn.value, recFps: recFpsIn.value,
   });

@@ -10,6 +10,8 @@ pub struct Replay {
     pub lost: usize,
     pub height: usize,
     pub slowest_ms: u128,
+    /// 每帧 `push` 的平均耗时
+    pub avg_ms: f64,
     /// `finish()` 的 (宽, 高, RGBA)
     pub image: (usize, usize, Vec<u8>),
 }
@@ -36,13 +38,15 @@ pub fn replay(dir: &Path, scale: f64, mut each: impl FnMut(&str)) -> Replay {
         (24.0 * scale).round() as usize,
         (40.0 * scale).round() as usize,
     );
-    let (mut lost, mut slowest_ms) = (0, 0);
+    let (mut lost, mut slowest_ms, mut total) = (0, 0, 0.0);
     for p in &files[1..] {
         let (fw, fh, px) = load(p);
         assert_eq!((fw, fh), (w, h), "帧尺寸不一致");
         let t = Instant::now();
         let step = st.push(px);
-        slowest_ms = slowest_ms.max(t.elapsed().as_millis());
+        let e = t.elapsed();
+        slowest_ms = slowest_ms.max(e.as_millis());
+        total += e.as_secs_f64() * 1000.0;
         match step {
             Step::Same => each("="),
             Step::Added(n) => each(&format!("+{n}")),
@@ -59,6 +63,7 @@ pub fn replay(dir: &Path, scale: f64, mut each: impl FnMut(&str)) -> Replay {
         lost,
         height,
         slowest_ms,
+        avg_ms: total / (files.len() - 1).max(1) as f64,
         image: st.finish(),
     }
 }
