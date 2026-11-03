@@ -22,7 +22,6 @@ function blockAt(start: number): string {
   throw new Error('括号不配对');
 }
 const dark = hexes(blockAt(css.indexOf(':root {')));
-const lightA = hexes(blockAt(css.indexOf(':root:not([data-theme="dark"])')));
 const lightB = hexes(blockAt(css.indexOf(':root[data-theme="light"] {')));
 
 function lum(hex: string): number {
@@ -36,7 +35,20 @@ function contrast(a: string, b: string): number {
 }
 const TEXT = ['--fg', '--muted', '--faint', '--c-text', '--c-link', '--c-code', '--c-image', '--c-video', '--c-file', '--c-fav', '--c-snip'];
 
-test('light_blocks_match', () => assert.deepEqual(lightA, lightB));
+/** 取块内全部 `--name: value;` 声明（含 rgb()、阴影），值去掉多余空白。 */
+function decls(block: string): Record<string, string> {
+  const o: Record<string, string> = {};
+  for (const m of block.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) o[m[1]] = m[2].replace(/\s+/g, ' ').trim();
+  return o;
+}
+
+// 跟随系统的亮色块与手动亮色块必须逐条一致，rgb() 与阴影漂移也算。
+test('light_blocks_match', () => {
+  const a = decls(blockAt(css.indexOf(':root:not([data-theme="dark"])')));
+  const b = decls(blockAt(css.indexOf(':root[data-theme="light"] {')));
+  assert.ok(Object.keys(a).length > 30, '亮色块解析过少');
+  assert.deepEqual(a, b);
+});
 test('text_contrast_dark', () => {
   for (const k of TEXT) assert.ok(contrast(dark[k], '#252527') >= 4.5, k);
 });
@@ -49,4 +61,26 @@ test('white_on_fills', () => {
 test('no_bundled_fonts_or_removed_tokens', () => {
   for (const s of ['@font-face', '--spectrum', '--glow-a', '--glow-b', '--sp-glow-a', '--sp-glow-b', '--sp-mirror-a', '--sp-under', '--sp-top-mix'])
     assert.ok(!css.includes(s), s);
+});
+
+// 守护「刻度」原则 2（不发光、不渐变）：六个样式表里不出现彩色发光、彩虹与脉冲。
+const SHEETS = ['./tokens.css', './styles.css', './shot/shot.css', './pin/pin.css', './card/card.css', './rec-frame.css'];
+// 只抓模糊半径 > 0 的彩色阴影；`0 0 0 3px …var(--beam)…` 这类焦点圈（规格 7.6 保留）是第 4 个值，不算。
+const GLOW = /(box-shadow|filter)\s*:[^;]*(?<![\d.]px |\d )\b0 0 [1-9]\d*(\.\d+)?px[^;]*var\(--(tc|beam|c-[a-z]+|danger)\)/;
+
+test('glow_regex_samples', () => {
+  assert.ok(GLOW.test('box-shadow: 0 0 8px var(--tc)'));
+  assert.ok(GLOW.test('filter: drop-shadow(0 0 4px var(--c-video))'));
+  assert.ok(GLOW.test('box-shadow: 0 1px 2px #000, 0 0 12px color-mix(in srgb, var(--beam) 40%, transparent)'));
+  assert.ok(!GLOW.test('box-shadow: 0 0 0 3px color-mix(in srgb, var(--beam) 18%, transparent)'));
+  assert.ok(!GLOW.test('box-shadow: inset 0 0 0 1.5px var(--c-image)'));
+  assert.ok(!GLOW.test('box-shadow: 0 0 0 2px #fff, 0 1px 4px rgb(0 0 0 / .45)'));
+});
+test('no_glow_or_rainbow_in_css', () => {
+  for (const f of SHEETS) {
+    const src = readFileSync(new URL(f, import.meta.url), 'utf8');
+    for (const s of ['--spectrum', '--glow-', 'nowPulse', '@keyframes ping']) assert.ok(!src.includes(s), `${f}: ${s}`);
+    const m = src.match(GLOW);
+    assert.equal(m, null, `${f}: ${m?.[0]}`);
+  }
 });
