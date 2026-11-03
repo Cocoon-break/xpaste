@@ -10,16 +10,16 @@ body { font: 14px/1.5 var(--font-ui); color: var(--fg); -webkit-font-smoothing: 
 button { font: inherit; color: inherit; -webkit-tap-highlight-color: transparent; }
 :focus-visible { outline: 2px solid var(--beam); outline-offset: 2px; }
 kbd {
-  font: 500 11px/1 var(--font-mono);
+  font: 500 11px/1 var(--font-ui);
   display: inline-flex; align-items: center; justify-content: center;
-  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 5px;
-  color: var(--muted); background: var(--glass-2); border: 1px solid var(--line-2);
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 4px;
+  color: var(--muted); background: transparent; border: 1px solid var(--line-2);
 }
 @keyframes popIn { from { opacity: 0; transform: translateY(4px); filter: blur(3px); } }
 
 .card {
   display: flex; flex-direction: column; width: 100%; max-height: 100vh; overflow: hidden;
-  border-radius: 12px; background: var(--pop); border: 1px solid var(--line-2);
+  border-radius: 10px; background: var(--pop); border: 1px solid var(--line-2);
   -webkit-backdrop-filter: blur(20px) saturate(150%); backdrop-filter: blur(20px) saturate(150%);
 }
 .card.pop-in { animation: popIn 180ms var(--ease-enter) both; }

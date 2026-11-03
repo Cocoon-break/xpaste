@@ -11,7 +11,6 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: transparent;
 #frame i {
   position: absolute; width: var(--arm); height: var(--arm);
   border: 0 solid var(--c-video);
-  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--c-video) 75%, transparent));
   animation: blink 1000ms ease-in-out infinite;
 }
 #frame .tl { left: 0; top: 0; border-left-width: var(--line); border-top-width: var(--line); border-top-left-radius: 3px; }
@@ -19,7 +18,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: transparent;
 #frame .bl { left: 0; bottom: 0; border-left-width: var(--line); border-bottom-width: var(--line); border-bottom-left-radius: 3px; }
 #frame .br { right: 0; bottom: 0; border-right-width: var(--line); border-bottom-width: var(--line); border-bottom-right-radius: 3px; }
 /* 长截图（M23 规则 13）：四角用图片类型色、常亮；选区旁的提示随边框一起淡入淡出，主题随系统深浅色 */
-#frame[data-kind="long"] i { border-color: var(--c-image); filter: drop-shadow(0 0 6px color-mix(in srgb, var(--c-image) 75%, transparent)); animation: none; }
+#frame[data-kind="long"] i { border-color: var(--c-image); animation: none; }
 #info {
   position: absolute; left: 50%; transform: translateX(-50%);
   display: flex; align-items: center; gap: 8px; white-space: nowrap;
@@ -43,13 +42,13 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: transparent;
 #info[data-side="above"] { bottom: calc(100% + 10px); }
 #info[data-side="inside"] { bottom: 16px; }
 #info b { font-weight: 600; color: var(--fg); }
-#info .px { font: 500 11px/1 var(--font-display); color: var(--fg); font-variant-numeric: tabular-nums; }
+#info .px { font: 500 11px/1 var(--font-ui); color: var(--fg); font-variant-numeric: tabular-nums; }
 #info .tip { margin-right: 4px; }
 #info:is([data-state="lost"], [data-state="stuck"], [data-state="autostuck"]) .tip { color: var(--danger); }
 #info kbd {
-  font: 500 11px/1 var(--font-mono); display: inline-flex; align-items: center; justify-content: center;
-  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 5px;
-  color: var(--muted); background: var(--glass-2); border: 1px solid var(--line-2);
+  font: 500 11px/1 var(--font-ui); display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 4px;
+  color: var(--muted); background: transparent; border: 1px solid var(--line-2);
 }
 /* 淡出时长与 src-tauri/src/rec.rs 的 FADE 一致，播完后端隐藏窗口 */
 #frame.out { opacity: 0; transition: opacity 200ms ease-out; }
@@ -59,7 +58,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: transparent;
 #toast {
   position: fixed; left: 16px; bottom: 16px; pointer-events: none;
   display: flex; align-items: center; gap: 8px; max-width: calc(100% - 32px);
-  padding: 7px 14px 7px 7px; border-radius: 12px; font: 13px/1.5 var(--font-ui); color: var(--fg);
+  padding: 7px 14px 7px 7px; border-radius: 10px; font: 13px/1.5 var(--font-ui); color: var(--fg);
   background: var(--pop); border: 1px solid var(--line-2); box-shadow: var(--shadow-pop);
   -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
   opacity: 0; transform: translateY(6px); visibility: hidden;
