@@ -26,7 +26,8 @@
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "resizable": true,
-        "shadow": true
+        "shadow": true,
+        "backgroundThrottling": "disabled"
       }
     ],
     "security": {
