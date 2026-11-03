@@ -154,7 +154,7 @@ kbd {
   background: var(--cursor);
   transition: transform 360ms var(--ease-move), opacity 300ms ease; /* 位置用 translateX(px)，left 恒为 0（原则 4） */
 }
-.sp-beam::before { content: ""; position: absolute; top: -5px; left: -3.5px; border: 4px solid transparent; border-top: 5px solid var(--cursor); border-bottom: 0; }
+.sp-beam::before { content: ""; position: absolute; top: -5px; left: -3px; border: 3.5px solid transparent; border-top: 5px solid var(--cursor); border-bottom: 0; }
 .sp-beam.show { opacity: 1; }
 .sp-now { position: absolute; right: -2px; bottom: -2px; width: 4px; height: 4px; background: var(--fg); }
 /* 时间轴是尺子：次刻度为基线下 4 px 短刻度，有文字的标签上方 7 px 长刻度 */
@@ -231,7 +231,9 @@ kbd {
    top: -4px 抵掉列表的上内边距，贴住滚动区顶边；不加动画（M25 规则 2） */
 .snip-bar { position: sticky; top: -4px; z-index: 3; height: auto; margin: 0 -8px; padding: 10px 18px 7px; background: color-mix(in srgb, var(--pop-solid) 97%, transparent); box-shadow: 0 8px 12px -10px rgb(0 0 0 / .25); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
 .snip-bar::after { order: 1; }
-.new-snip { order: 2; letter-spacing: 0; color: var(--c-snip); border-color: color-mix(in srgb, var(--c-snip) 40%, transparent); background: color-mix(in srgb, var(--c-snip) 10%, transparent); }
+/* 普通按钮的中性底，片段色只留给图标（「刻度」原则 3） */
+.new-snip { order: 2; letter-spacing: 0; }
+.new-snip .ic { color: var(--c-snip); }
 .new-snip kbd { height: 16px; font-size: 10px; }
 
 /* 选中光标：独立一层平滑滑动，列表内容本身即时切换 */
@@ -355,7 +357,7 @@ mark { background: var(--mark-bg); color: var(--mark-fg); border-radius: 3px; pa
 .p-link a { color: var(--c-link); font: 13px/1.7 var(--font-mono); overflow-wrap: anywhere; text-underline-offset: 3px; text-decoration-color: color-mix(in srgb, var(--c-link) 40%, transparent); }
 .p-link a .ic { display: inline; width: 13px; height: 13px; vertical-align: -2px; }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
-.chip.ok { color: var(--fg); border-color: color-mix(in srgb, var(--c-code) 35%, transparent); }
+.chip.ok { color: var(--fg); }
 .p-code {
   margin: 0; padding: 14px 0; overflow: auto; counter-reset: ln;
   font: 13px/1.75 var(--font-mono); background: var(--well); border: 1px solid var(--line); border-radius: 8px;
@@ -399,7 +401,7 @@ button.poster { display: block; width: 100%; padding: 0; background: #000000; ba
 @media (hover: hover) and (pointer: fine) { .poster:hover .play { transform: scale(1.1); } }
 .p-video figcaption { font-size: 12px; color: var(--faint); }
 .p-file { display: flex; gap: 16px; align-items: flex-start; }
-.p-file .big { width: 60px; height: 72px; border-radius: 12px; display: grid; place-items: center; color: var(--c-file); flex: none; background: color-mix(in srgb, var(--c-file) 12%, transparent); border: 1px solid color-mix(in srgb, var(--c-file) 30%, transparent); }
+.p-file .big { width: 60px; height: 72px; border-radius: 12px; display: grid; place-items: center; color: var(--c-file); flex: none; background: var(--glass-2); border: 1px solid var(--line-2); }
 .p-file .big .ic { width: 28px; height: 28px; }
 .p-file > div { min-width: 0; display: grid; gap: 6px; }
 .fname { font-size: 17px; font-weight: 500; overflow-wrap: anywhere; }
