@@ -63,7 +63,7 @@ test('no_bundled_fonts_or_removed_tokens', () => {
     assert.ok(!css.includes(s), s);
 });
 
-// 守护「刻度」原则 2（不发光、不渐变）：六个样式表里不出现彩色发光、彩虹与脉冲。
+// 守护「刻度」原则 2、4：六个样式表里不出现彩色发光、彩虹、脉冲与已删的内置字体。
 const SHEETS = ['./tokens.css', './styles.css', './shot/shot.css', './pin/pin.css', './card/card.css', './rec-frame.css'];
 // 只抓模糊半径 > 0 的彩色阴影；`0 0 0 3px …var(--beam)…` 这类焦点圈（规格 7.6 保留）是第 4 个值，不算。
 const GLOW = /(box-shadow|filter)\s*:[^;]*(?<![\d.]px |\d )\b0 0 [1-9]\d*(\.\d+)?px[^;]*var\(--(tc|beam|c-[a-z]+|danger)\)/;
@@ -79,7 +79,7 @@ test('glow_regex_samples', () => {
 test('no_glow_or_rainbow_in_css', () => {
   for (const f of SHEETS) {
     const src = readFileSync(new URL(f, import.meta.url), 'utf8');
-    for (const s of ['--spectrum', '--glow-', 'nowPulse', '@keyframes ping']) assert.ok(!src.includes(s), `${f}: ${s}`);
+    for (const s of ['--spectrum', '--glow-', 'nowPulse', '@keyframes ping', 'Geist', 'Unbounded', 'JetBrains']) assert.ok(!src.includes(s), `${f}: ${s}`);
     const m = src.match(GLOW);
     assert.equal(m, null, `${f}: ${m?.[0]}`);
   }
