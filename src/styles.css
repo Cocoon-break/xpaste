@@ -180,10 +180,10 @@ kbd {
 /* 时间轴是尺子：次刻度为基线下 4 px 短刻度，有文字的标签上方 7 px 长刻度 */
 .sp-axis { position: relative; height: 22px; font: 11px var(--font-ui); color: var(--faint); font-variant-numeric: tabular-nums; }
 .sp-axis span { position: absolute; top: 8px; transform: translateX(-50%); white-space: nowrap; transition: none; }
-.sp-axis span:not(.minor):not(.early)::before { content: ""; position: absolute; left: 50%; top: -8px; width: 1px; height: 7px; background: var(--tick-base); }
+.sp-axis span:not(.minor):not(.early):not(.now)::before { content: ""; position: absolute; left: 50%; top: -8px; width: 1px; height: 7px; background: var(--tick-base); }
 .sp-axis span.early { transform: translateX(-30%); }
 .sp-axis span.now { transform: translateX(-100%); color: var(--muted); }
-.sp-axis span.now::before { left: auto; right: 0; }
+.sp-axis span.now::before { content: ""; position: absolute; right: 0; top: -8px; width: 1px; height: 7px; background: var(--tick-base); }
 .sp-axis span.minor { top: 0; height: 4px; width: 1px; background: var(--line-2); }
 /* 概览条：放大态出现，标出当前时间窗；默认视图淡出但仍占位 */
 .sp-mini { position: relative; height: 8px; margin-top: 2px; border-radius: 4px; background: var(--line); overflow: hidden; opacity: 0; transition: opacity 200ms ease; cursor: pointer; }

@@ -36,7 +36,7 @@ import { otherEngine, staleDelta, translatable, trAfterDelta, trAfterEnd, trBloc
 import { nextStep, onboardSteps, type Step } from './onboarding';
 import { applyAdded, applyRemoved, applyUpdated } from './records';
 import {
-  centerWin, clampWin, DAY, dayTicks, followNow, HOUR, layoutBars, miniWin, panWin, sameColumns, spanOf, spectrumStat, staggerIndex,
+  centerWin, clampWin, DAY, followNow, HOUR, layoutBars, minorDayTicks, miniWin, panWin, sameColumns, spanOf, spectrumStat, staggerIndex,
   ticks as winTicks, winLabel, xOf, zoomWin, type Layout, type Win,
 } from './spectrum';
 import { addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFrequent, parseLimit, pickerOptions, removeIgnored } from './settings-form';
@@ -841,10 +841,9 @@ function renderSpectrum(freshId?: number, stat = true) {
   spTrack.querySelector<HTMLElement>('.sp-now')!.hidden = !!spWin && !spWin.pinned;
   let tk: { x: number; l: string; c?: string }[];
   if (!spWin) {
-    // 每小时一根短刻度（M14）：18/12/6 小时前与“现在”已有文字标签，按小时序号跳过（h = 6/12/18/24）
-    const labelled = new Set([6, 12, 18, 24]);
+    // 每小时一根短刻度（M14）：已有文字标签的位置由 minorDayTicks 剔除
     tk = [{ x: 3, l: '更早', c: 'early' }, ...[18, 12, 6].map((h) => ({ x: 6 + 94 * (1 - h / 24), l: hf.format(spNow - h * HOUR) })), { x: 100, l: '现在', c: 'now' },
-      ...dayTicks().flatMap((x, i) => (i === 0 || labelled.has(24 - i) ? [] : [{ x, l: '', c: 'minor' }]))];
+      ...minorDayTicks().map((x) => ({ x, l: '', c: 'minor' }))];
   } else {
     const all = winTicks(spWin, spNow), hasNow = all.some((t) => t.now);
     // 离“现在”不到 6% 的主刻度只留刻度线，文字不叠

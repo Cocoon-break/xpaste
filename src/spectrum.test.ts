@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Kind, RecordSummary } from './api/types.ts';
 import {
-  centerWin, clampWin, DAY, dayTicks, followNow, hPct, HOUR, layoutBars, MIN_SPAN, miniWin, panWin, sameColumns, spanOf, spectrumStat,
+  centerWin, clampWin, DAY, dayTicks, followNow, hPct, HOUR, layoutBars, MIN_SPAN, minorDayTicks, miniWin, panWin, sameColumns, spanOf, spectrumStat,
   staggerIndex, tickStep, ticks, timeAt, winLabel, xOf, xPct, zoomWin,
 } from './spectrum.ts';
 
@@ -157,4 +157,10 @@ test('dayTicks_hourly_from_early_boundary_to_now', () => {
   assert.equal(t[0], 6);
   assert.equal(t[24], 100);
   assert.ok(Math.abs(t[6] - (6 + 94 / 4)) < 1e-9);
+});
+
+test('minorDayTicks_skip_boundary_now_and_labelled', () => {
+  const m = minorDayTicks();
+  assert.equal(m.length, 20);
+  for (const x of [6, 100, ...[18, 12, 6].map((h) => 6 + 94 * (1 - h / 24))]) assert.ok(m.every((v) => Math.abs(v - x) > 1e-6), String(x));
 });
