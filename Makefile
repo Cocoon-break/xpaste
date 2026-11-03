@@ -15,7 +15,7 @@ MAC_X64 := x86_64-apple-darwin
 HAS_MAC_X64 := $(shell test "$$(uname -sm)" = "Darwin arm64" && rustup target list --installed 2>/dev/null | grep -c $(MAC_X64) || echo 0)
 HAS_XWIN := $(shell command -v cargo-xwin >/dev/null 2>&1 && command -v makensis >/dev/null 2>&1 && test -x $(LLVM_BIN)/clang-cl && command -v lld-link >/dev/null 2>&1 && echo 1 || echo 0)
 
-.PHONY: help install dev dev-isolated fmt lint test-rust test-web test check build build-check release release-win release-x64 release-app release-report measure icons fonts clean
+.PHONY: help install dev dev-isolated fmt lint test-rust test-web test check build build-check release release-win release-x64 release-app release-report measure icons clean
 
 help: ## 列出可用目标
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{ printf "  %-14s %s\n", $$1, $$2 }'
@@ -104,9 +104,6 @@ icons: ## 从 docs/brand 的 SVG 重新生成应用图标和托盘图标（需�
 	magick $$tmp/s{16,24,32,48,64,256}.png src-tauri/icons/icon.ico && \
 	mkdir -p src-tauri/icons/tray && \
 	for f in macos macos-paused windows windows-paused; do rsvg-convert docs/brand/tray-$$f.svg -o src-tauri/icons/tray/$$f.png; done
-
-fonts: ## 重新下载内置字体（latin 子集 woff2）与 OFL 许可证到 src/fonts
-	bash scripts/fetch-fonts.sh
 
 clean: ## 清理构建产物
 	cargo clean
