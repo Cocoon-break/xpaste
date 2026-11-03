@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Kind, RecordSummary } from './api/types.ts';
 import {
-  centerWin, clampWin, DAY, followNow, hPct, HOUR, layoutBars, MIN_SPAN, miniWin, panWin, sameColumns, spanOf, spectrumStat,
+  centerWin, clampWin, DAY, dayTicks, followNow, hPct, HOUR, layoutBars, MIN_SPAN, miniWin, panWin, sameColumns, spanOf, spectrumStat,
   staggerIndex, tickStep, ticks, timeAt, winLabel, xOf, xPct, zoomWin,
 } from './spectrum.ts';
 
@@ -149,4 +149,12 @@ test('layoutBars 带时间窗时只排窗内记录', () => {
   assert.equal(colOf.size, 2);
   assert.ok(!colOf.has(2));
   assert.ok(bars.every((b) => b.x > 80));
+});
+
+test('dayTicks_hourly_from_early_boundary_to_now', () => {
+  const t = dayTicks();
+  assert.equal(t.length, 25);
+  assert.equal(t[0], 6);
+  assert.equal(t[24], 100);
+  assert.ok(Math.abs(t[6] - (6 + 94 / 4)) < 1e-9);
 });

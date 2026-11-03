@@ -36,7 +36,7 @@ import { otherEngine, staleDelta, translatable, trAfterDelta, trAfterEnd, trBloc
 import { nextStep, onboardSteps, type Step } from './onboarding';
 import { applyAdded, applyRemoved, applyUpdated } from './records';
 import {
-  centerWin, clampWin, DAY, followNow, HOUR, layoutBars, miniWin, panWin, sameColumns, spanOf, spectrumStat, staggerIndex,
+  centerWin, clampWin, DAY, dayTicks, followNow, HOUR, layoutBars, miniWin, panWin, sameColumns, spanOf, spectrumStat, staggerIndex,
   ticks as winTicks, winLabel, xOf, zoomWin, type Layout, type Win,
 } from './spectrum';
 import { addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFrequent, parseLimit, pickerOptions, removeIgnored } from './settings-form';
@@ -112,7 +112,7 @@ const trBtn = $<HTMLButtonElement>('#trBtn');
 const delBtn = $<HTMLButtonElement>('#delBtn'), saveSnipBtn = $<HTMLButtonElement>('#saveSnipBtn'), editSnipBtn = $<HTMLButtonElement>('#editSnipBtn');
 const snipBar = $('#snipBar');
 const menu = $('#menu'), mOpen = $<HTMLButtonElement>('[data-m="open"]'), toastEl = $('#toast'), toastMsg = $('#toastMsg'), undoBtn = $<HTMLButtonElement>('#undoBtn'), toastAct = $<HTMLButtonElement>('#toastAct'), pauseBtn = $('#pauseBtn');
-const spBars = $('#spBars'), spMirror = $('#spMirror'), spTrack = $('#spTrack'), spBeam = $('#spBeam'), spTip = $('#spTip');
+const spBars = $('#spBars'), spTrack = $('#spTrack'), spBeam = $('#spBeam'), spTip = $('#spTip');
 const spMini = $('#spMini'), spPresets = $('#spPresets');
 
 // —— 状态 ——
@@ -791,7 +791,7 @@ function paintSpCollapsed(c: boolean) {
   spToggle.setAttribute('aria-expanded', String(!c));
   spToggle.setAttribute('aria-label', c ? '展开复制频谱' : '收起复制频谱');
 }
-const SP_DESC = '过去 24 小时，每根光柱是一次复制，越高内容越大';
+const SP_DESC = '过去 24 小时';
 // stat = false：缩放 / 平移只换时间窗，不重算统计（设计 §4.8）
 function renderSpectrum(freshId?: number, stat = true) {
   spNow = Date.now();
@@ -810,28 +810,25 @@ function renderSpectrum(freshId?: number, stat = true) {
   // 片段不画（M25 规则 8）
   const recs = [...S.records.values()].filter((r) => !S.removing.has(r.id) && !isSnip(r));
   const next = layoutBars(recs, spNow, spTrack.clientWidth, matches, freshId, spWin);
-  // 倒影不带 .on / .fresh
   const base = (b: Layout['bars'][number]) => `bar${b.ids.length > 1 ? ' multi' : ''}${b.dim ? ' dim' : ''}`;
   const n = next.bars.length;
   if (sameColumns(sp, next) && spBars.children.length === n) {
     // 列没变（切分类、搜索、时间小幅流逝）：原地改，.dim/.on 的 200ms 过渡照常播放（原型同样是原地切类）
     next.bars.forEach((b, i) => {
-      for (const el of [spBars.children[i], spMirror.children[i]] as HTMLElement[]) {
-        if (!el) continue;
-        el.className = base(b) + (b.fresh && el.parentElement === spBars ? ' fresh' : '');
-        el.dataset.type = b.kind;
-        el.style.left = b.x + '%';
-        el.style.height = b.h + '%';
-        // 撤销删除时光柱还在原列，但 remove() 的收起动画 fill: forwards 仍压着它：取消脚本动画，CSS 过渡照常
-        el.getAnimations().forEach((a) => {
-          if (!(a instanceof CSSAnimation) && !(a instanceof CSSTransition)) a.cancel();
-        });
-      }
+      const el = spBars.children[i] as HTMLElement | undefined;
+      if (!el) return;
+      el.className = base(b) + (b.fresh ? ' fresh' : '');
+      el.dataset.type = b.kind;
+      el.style.left = b.x + '%';
+      el.style.height = b.h + '%';
+      // 撤销删除时光柱还在原列，但 remove() 的收起动画 fill: forwards 仍压着它：取消脚本动画，CSS 过渡照常
+      el.getAnimations().forEach((a) => {
+        if (!(a instanceof CSSAnimation) && !(a instanceof CSSTransition)) a.cancel();
+      });
     });
   } else {
     spBars.innerHTML = next.bars.map((b, i) =>
       `<span class="${base(b)}${b.fresh ? ' fresh' : ''}" data-col="${i}" data-type="${b.kind}" style="left:${b.x}%;height:${b.h}%;--i:${staggerIndex(i, n)}"></span>`).join('');
-    spMirror.innerHTML = spBars.innerHTML;
     // 悬停的光柱已被替换，提示条不再对应
     spTip.classList.remove('show');
   }
@@ -844,7 +841,10 @@ function renderSpectrum(freshId?: number, stat = true) {
   spTrack.querySelector<HTMLElement>('.sp-now')!.hidden = !!spWin && !spWin.pinned;
   let tk: { x: number; l: string; c?: string }[];
   if (!spWin) {
-    tk = [{ x: 3, l: '更早', c: 'early' }, ...[18, 12, 6].map((h) => ({ x: 6 + 94 * (1 - h / 24), l: hf.format(spNow - h * HOUR) })), { x: 100, l: '现在', c: 'now' }];
+    // 每小时一根短刻度（M14）：18/12/6 小时前与“现在”已有文字标签，按小时序号跳过（h = 6/12/18/24）
+    const labelled = new Set([6, 12, 18, 24]);
+    tk = [{ x: 3, l: '更早', c: 'early' }, ...[18, 12, 6].map((h) => ({ x: 6 + 94 * (1 - h / 24), l: hf.format(spNow - h * HOUR) })), { x: 100, l: '现在', c: 'now' },
+      ...dayTicks().flatMap((x, i) => (i === 0 || labelled.has(24 - i) ? [] : [{ x, l: '', c: 'minor' }]))];
   } else {
     const all = winTicks(spWin, spNow), hasNow = all.some((t) => t.now);
     // 离“现在”不到 6% 的主刻度只留刻度线，文字不叠
@@ -1287,9 +1287,7 @@ function remove(ids: number[]) {
     // 光柱只代表这一条时才收起；同列还有别的记录就等删除后的重绘（片段没有光柱）
     const col = sp.colOf.get(id);
     const one = col !== undefined && sp.bars[col].ids.length === 1;
-    // 倒影随正像一起收起
-    for (const layer of [spBars, spMirror])
-      fx(one ? layer.children[col] ?? null : null, [{ transform: 'scaleY(1)', opacity: 1 }, { transform: 'scaleY(0)', opacity: 0 }], { duration: 260, easing: EASE_MOVE, fill: 'forwards' });
+    fx(one ? spBars.children[col] ?? null : null, [{ transform: 'scaleY(1)', opacity: 1 }, { transform: 'scaleY(0)', opacity: 0 }], { duration: 260, easing: EASE_MOVE, fill: 'forwards' });
   }
   // 下方的行与 .item.is-removing 的收起同步上移（滚到底时整体按夹紧量修正，见 goneOf）
   paintRows({ glide: `transform 240ms ${EASE_MOVE} 100ms`, glideBusy: `transform 240ms ${EASE_MOVE}` });
