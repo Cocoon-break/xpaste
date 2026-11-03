@@ -91,7 +91,7 @@ kbd {
   transition: background-color 130ms ease, color 130ms ease, transform 140ms var(--ease-enter);
 }
 .bar button:active:not([aria-disabled="true"]) { transform: scale(.92); }
-.bar button[aria-pressed="true"] { background: color-mix(in srgb, var(--beam) 16%, transparent); color: var(--beam); }
+.bar button[aria-pressed="true"] { background: color-mix(in srgb, var(--beam) 16%, transparent); color: var(--cursor); }
 .bar button[aria-disabled="true"] { opacity: .35; cursor: default; }
 @media (hover: hover) and (pointer: fine) {
   .bar button:hover:not([aria-disabled="true"]):not([aria-pressed="true"]) { background: var(--hover); color: var(--fg); }

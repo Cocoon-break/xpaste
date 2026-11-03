@@ -84,3 +84,16 @@ test('no_glow_or_rainbow_in_css', () => {
     assert.equal(m, null, `${f}: ${m?.[0]}`);
   }
 });
+
+test('搜索框聚焦描边是完整 --beam（M21 无障碍，非文本 3:1）', () => {
+  const styles = readFileSync(new URL('./styles.css', import.meta.url), 'utf8');
+  const m = styles.match(/\.search:focus-within\s*\{([^}]*)\}/);
+  assert.ok(m);
+  assert.match(m[1], /border-color:\s*var\(--beam\)\s*[;}]/);
+});
+
+test('截图标注画布字体栈与 --font-ui 一致（M16）', () => {
+  const ui = css.match(/--font-ui:\s*([^;]+);/)![1].trim();
+  const ink = readFileSync(new URL('./shot/ink.ts', import.meta.url), 'utf8');
+  assert.ok(ink.includes(`'${ui}'`), 'ink.ts 的 UI 字体栈与 tokens.css 的 --font-ui 不同');
+});

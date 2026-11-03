@@ -35,7 +35,7 @@ kbd {
 .card .c-head .c-title { flex: 1; min-width: 0; padding: 0; }
 .card .c-head button {
   flex: none; height: 22px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent;
-  color: var(--beam); font-size: 12px; cursor: pointer; transition: background-color 130ms ease;
+  color: var(--cursor); font-size: 12px; cursor: pointer; transition: background-color 130ms ease;
 }
 /* 展开对照（M26 规则 19、20）：原文、译文各放进一个圆角框，中间留缝，不画贯穿的分割线（会和底部的横线交成十字）；
    原文框是输入框的样子（凹底，聚焦时描边换品牌色），译文框是浅底。底部按钮不再画横线。标题行多目标语言下拉框 */
@@ -67,7 +67,7 @@ kbd {
   font-size: 12px; color: var(--muted);
 }
 .card .c-note span { flex: 1; min-width: 0; }
-.card .c-note button { flex: none; border: 0; padding: 0; background: none; color: var(--beam); font-size: 12px; cursor: pointer; }
+.card .c-note button { flex: none; border: 0; padding: 0; background: none; color: var(--cursor); font-size: 12px; cursor: pointer; }
 .card .c-foot { flex: none; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; padding: 8px; border-top: 1px solid var(--line-2); }
 .card .c-more { display: contents; }
 .card .c-more button:last-child { margin-right: auto; }

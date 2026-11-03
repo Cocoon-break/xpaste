@@ -32,7 +32,7 @@
   --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
   --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
   --font-display: var(--font-ui);
-  --font-mono: ui-monospace, "SF Mono", Menlo, "Cascadia Mono", Consolas, monospace;
+  --font-mono: ui-monospace, "SF Mono", Menlo, "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace;
 }
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {

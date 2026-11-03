@@ -93,7 +93,7 @@ kbd {
 .titlebar .sub { color: var(--faint); font-size: 12px; }
 /* 状态点不发光、不画胶囊（M16 7.2）；暂停时点为 --faint */
 .titlebar .live { margin-left: auto; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); padding: 2px 6px; background: none; border: 0; border-radius: 5px; }
-.titlebar .live:hover { background: var(--hover); }
+@media (hover: hover) and (pointer: fine) { .titlebar .live:hover { background: var(--hover); } }
 .titlebar .live i { width: 6px; height: 6px; border-radius: 50%; background: var(--c-code); }
 .titlebar .live[data-paused="true"] i { background: var(--faint); }
 
@@ -103,7 +103,7 @@ kbd {
   background: var(--well); border: 1px solid var(--line-2); border-radius: 9px; color: var(--muted);
   transition: border-color 200ms ease, background-color 200ms ease;
 }
-.search:focus-within { border-color: color-mix(in srgb, var(--beam) 55%, transparent); background: var(--well-2); }
+.search:focus-within { border-color: var(--beam); background: var(--well-2); }
 .search input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: var(--fg); font: inherit; font-size: 15px; }
 .search input::placeholder { color: var(--faint); }
 .search input::-webkit-search-cancel-button { display: none; }
@@ -216,6 +216,7 @@ kbd {
 /* 选中块的底与内描边画在每个标签上：画在容器上会被 clip-path 裁掉左右两侧的描边 */
 .tabs-over .tab { color: var(--fg); font-weight: 500; background: var(--glass-3); box-shadow: inset 0 0 0 1px var(--line-2); }
 .tabs-over .tab .star { color: var(--tc); }
+.tabs-over .tab .n { color: var(--muted); }
 .tabs-over .tab[data-type="all"] .dot { background: var(--fg); }
 .tabs-over .tabs-sep { background: transparent; }
 .tabs-over[data-instant] { transition: none; }
@@ -282,6 +283,8 @@ kbd {
 .idx kbd, .tail kbd { border-color: transparent; background: none; }
 .pin-mark { color: var(--muted); }
 .row[aria-selected="true"] .idx { color: var(--fg); }
+/* 选中行的副信息落在 --sel 上，--faint 不足 4.5:1，改 --muted（M21 无障碍） */
+.row[aria-selected="true"] .meta { color: var(--muted); }
 .qa {
   position: absolute; right: 0; top: 50%; display: flex; gap: 4px;
   transform: translate(8px, -50%); opacity: 0; pointer-events: none;
@@ -432,7 +435,9 @@ button.poster { display: block; width: 100%; padding: 0; background: #000000; ba
 }
 .menu[data-open="true"] button { opacity: 1; transform: none; transition-delay: calc(var(--i) * 24ms), calc(var(--i) * 24ms), 0ms; }
 .menu button kbd { margin-left: auto; }
-.menu button:hover, .menu button:focus-visible { background: color-mix(in srgb, var(--beam) 12%, transparent); outline: none; }
+.menu button:hover, .menu button:focus-visible { background: color-mix(in srgb, var(--beam) 12%, transparent); }
+/* 键盘焦点要有 3:1 的真指示，不能只靠 12% 底色（M21 无障碍） */
+.menu button:focus-visible { outline: 2px solid var(--beam); outline-offset: -2px; }
 .menu .danger { color: var(--danger); }
 .menu .danger:hover, .menu .danger:focus-visible { background: color-mix(in srgb, var(--danger) 12%, transparent); }
 .menu .sep { height: 1px; background: var(--line-2); margin: 5px 7px; }
@@ -451,7 +456,7 @@ button.poster { display: block; width: 100%; padding: 0; background: #000000; ba
 .toast[data-open="true"] { opacity: 1; transform: translate(-50%, 0); visibility: visible; transition: opacity 220ms var(--ease-enter), transform 420ms var(--ease-spring), visibility 0s; }
 .toast .t-ic { color: var(--c-code); display: grid; }
 #toastMsg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; padding-right: 5px; }
-.toast-undo { flex: none; display: inline-flex; gap: 7px; align-items: center; height: 28px; padding: 0 8px 0 10px; border: 0; border-radius: 8px; background: color-mix(in srgb, var(--beam) 12%, transparent); color: var(--beam); font-weight: 500; cursor: pointer; }
+.toast-undo { flex: none; display: inline-flex; gap: 7px; align-items: center; height: 28px; padding: 0 8px 0 10px; border: 0; border-radius: 8px; background: color-mix(in srgb, var(--beam) 12%, transparent); color: var(--cursor); font-weight: 500; cursor: pointer; }
 .toast-undo:hover { background: color-mix(in srgb, var(--beam) 20%, transparent); }
 .toast-undo svg { width: 18px; height: 18px; transform: rotate(-90deg); }
 .toast-undo circle { fill: none; stroke-width: 2; }
