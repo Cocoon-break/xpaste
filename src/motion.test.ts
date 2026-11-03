@@ -86,7 +86,7 @@ test('M20-6 切换分类 380ms enter，指示条换色，列表逐行浮现；�
   assert.match(ts, /setFilter\(t\.dataset\.f as Filter, e\.detail === 0\)/);
 });
 
-test('M20-7 新记录 300ms enter 行高展开、下方行补位 → 520ms spring 落位 → 类型色闪光；新光柱升起 + ping', () => {
+test('M20-7 新记录 300ms enter 行高展开、下方行补位 → 520ms spring 落位 → 类型色闪光；新光柱升起（无发光脉冲，M14）', () => {
   assert.match(rule('.item'), /transition: grid-template-rows 300ms var\(--ease-enter\)/);
   assert.match(css, /@starting-style \{\s*\.item\.is-new \{ grid-template-rows: 0fr; \}\s*\.item\.is-new \.row \{ opacity: 0; transform: translateY\(-12px\) scale\(\.97\); \}\s*\}/);
   assert.match(rule('.item.is-new .row'), /transition: opacity 260ms var\(--ease-enter\) 60ms, transform 520ms var\(--ease-spring\) 60ms; animation: flash 1400ms ease-out 200ms/);
@@ -94,7 +94,7 @@ test('M20-7 新记录 300ms enter 行高展开、下方行补位 → 520ms sprin
   assert.match(ts, /fx\(row, \[\{ transform: 'translateY\(-12px\) scale\(\.97\)' \}, \{ transform: 'none' \}\], \{ duration: 520, easing: EASE_SPRING, delay: 60, fill: 'backwards' \}\)/);
   assert.match(ts, /const ENTER_GLIDE = `transform 300ms \$\{EASE_ENTER\}`;/);
   assert.match(ts, /renderList\(\{ scroll: restored, glide: S\.shown \? ENTER_GLIDE : '' \}\);\s*renderSpectrum\(s\.id\);/);
-  assert.match(rule('.bar.fresh'), /animation: barIn 700ms var\(--ease-spring\) both, ping 1200ms ease-out 200ms/);
+  assert.match(rule('.bar.fresh'), /animation: barIn 700ms var\(--ease-spring\) both;/);
 });
 
 test('M20-8 复制成功 760ms move 类型色光扫；复制按钮对勾弹入', () => {
