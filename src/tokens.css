@@ -23,7 +23,7 @@
   --shadow-win: 0 30px 80px -24px rgb(0 0 0 / .6);
   --shadow-pop: 0 12px 32px -12px rgb(0 0 0 / .6);
   --scrim: rgb(0 0 0 / .45);
-  --track-off: rgb(255 255 255 / .1); --knob: #EAF0FF;
+  --track-off: rgb(255 255 255 / .1); --knob: #ECECEE;
   --mark-bg: rgb(214 163 94 / .28); --mark-fg: #F2D9B3; --mark-ring: transparent;
   --img-check: rgb(255 255 255 / .04);
 

@@ -1035,7 +1035,6 @@ spMini.addEventListener('click', (e) => {
 });
 
 // —— 分类标签 ——
-const tabColor = (k: string) => (k === 'all' ? 'var(--beam)' : `var(--c-${k})`);
 function renderTabs(instant: boolean) {
   const c = counts(S.records, favMin());
   const html = (real: boolean) => FILTERS.map(([k, l]) => {
@@ -1048,13 +1047,10 @@ function renderTabs(instant: boolean) {
   tabsBase.innerHTML = html(true);
   tabsOver.innerHTML = html(false);
   if (refocus) tabsBase.querySelector<HTMLElement>(`[data-f="${refocus}"]`)?.focus({ preventScroll: true });
-  // 颜色带的色标对齐到每个标签中心，指示条停在哪就是哪个类型的颜色
-  const stops = [...tabsBase.querySelectorAll<HTMLElement>('.tab')].map((b) => `${tabColor(b.dataset.f!)} ${b.offsetLeft + b.offsetWidth / 2}px`);
-  tabsOver.style.background = `linear-gradient(90deg, ${stops.join(', ')})`;
   const b = tabsBase.querySelector<HTMLElement>(`[data-f="${S.filter}"]`)!;
   const l = b.offsetLeft, r = tabs.offsetWidth - l - b.offsetWidth;
   instantly(tabsOver, instant, () => {
-    tabsOver.style.clipPath = `inset(0 ${r}px 0 ${l}px round 999px)`;
+    tabsOver.style.clipPath = `inset(0 ${r}px 0 ${l}px round 7px)`;
   });
   if (instant) b.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
@@ -2950,22 +2946,6 @@ pbody.addEventListener('click', (e) => {
 win.addEventListener('contextmenu', (e) => {
   if (!(e.target as Element).closest('input, textarea')) e.preventDefault();
 });
-// 描边跟随指针发光：只改 .glow 自己的变量，rAF 合并
-if (matchMedia('(hover: hover) and (pointer: fine)').matches) {
-  const glow = $('#glow');
-  let glowRaf = 0, gx = 0, gy = 0;
-  win.addEventListener('pointermove', (e) => {
-    gx = e.clientX;
-    gy = e.clientY;
-    if (glowRaf) return;
-    glowRaf = requestAnimationFrame(() => {
-      glowRaf = 0;
-      const r = win.getBoundingClientRect();
-      glow.style.setProperty('--mx', gx - r.left + 'px');
-      glow.style.setProperty('--my', gy - r.top + 'px');
-    });
-  });
-}
 // 跟随系统切深浅色时整体一次切换，不让各元素按各自的过渡渐变（M16 规则 5）
 matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
   if (root.dataset.theme) return;

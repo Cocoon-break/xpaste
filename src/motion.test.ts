@@ -79,14 +79,15 @@ test('M20-5 频谱光束 360ms move', () => {
 test('M20-6 切换分类 380ms enter，指示条换色，列表逐行浮现；键盘 0ms', () => {
   assert.match(rule('.tabs-over'), /transition: clip-path 380ms var\(--ease-enter\)/);
   assert.match(rule('.tabs-over[data-instant]'), /transition: none/);
-  // 颜色带按标签中心铺色标，指示条滑到哪就露出哪种类型色
-  assert.match(ts, /tabsOver\.style\.background = `linear-gradient\(90deg, \$\{stops\.join\(', '\)\}\)`/);
+  // 选中块是中性底（M16 7.3）：脚本不再铺彩色带，裁切圆角 7px
+  assert.doesNotMatch(ts, /tabsOver\.style\.background|tabColor/);
+  assert.match(ts, /round 7px\)`/);
   assert.match(ts, /renderList\(\{ stagger: !instant \}\);/);
   assert.match(ts, /case 'filter': return setFilter\(cycleFilter\(S\.filter, a\.d\), true\);/);
   assert.match(ts, /setFilter\(t\.dataset\.f as Filter, e\.detail === 0\)/);
 });
 
-test('M20-7 新记录 300ms enter 行高展开、下方行补位 → 520ms spring 落位 → 类型色闪光；新光柱升起（无发光脉冲，M14）', () => {
+test('M20-7 新记录 300ms enter 行高展开、下方行补位 → 520ms spring 落位 → 选中底色淡出；新光柱升起（无发光脉冲，M14）', () => {
   assert.match(rule('.item'), /transition: grid-template-rows 300ms var\(--ease-enter\)/);
   assert.match(css, /@starting-style \{\s*\.item\.is-new \{ grid-template-rows: 0fr; \}\s*\.item\.is-new \.row \{ opacity: 0; transform: translateY\(-12px\) scale\(\.97\); \}\s*\}/);
   assert.match(rule('.item.is-new .row'), /transition: opacity 260ms var\(--ease-enter\) 60ms, transform 520ms var\(--ease-spring\) 60ms; animation: flash 1400ms ease-out 200ms/);
@@ -97,7 +98,7 @@ test('M20-7 新记录 300ms enter 行高展开、下方行补位 → 520ms sprin
   assert.match(rule('.bar.fresh'), /animation: barIn 700ms var\(--ease-spring\) both;/);
 });
 
-test('M20-8 复制成功 760ms move 类型色光扫；复制按钮对勾弹入', () => {
+test('M20-8 复制成功 760ms move 中性色带光扫；复制按钮对勾弹入', () => {
   assert.match(rule('.row.beam::after'), /animation: beam 760ms var\(--ease-move\) var\(--beam-at, 0ms\) forwards/);
   assert.match(ts, /const BEAM_MS = 760;/);
   assert.match(rule('.swap > *'), /transition: opacity 180ms ease-out, transform 320ms var\(--ease-spring\), filter 180ms ease-out/);
@@ -178,11 +179,10 @@ test('M20-15 切换主题：点选即时切换并立即保存；data-theme-switc
   assert.doesNotMatch(css, /view-transition/);
 });
 
-test('M20-16 描边跟随指针：.glow 读指针坐标变量，悬停时显现', () => {
-  assert.match(html, /<div class="glow" id="glow" aria-hidden="true"><\/div>/);
-  assert.match(rule('.glow'), /radial-gradient\(260px circle at var\(--mx, 50%\) var\(--my, -200px\)/);
-  assert.match(rule('.window:hover .glow'), /opacity: 1/);
-  assert.match(ts, /win\.addEventListener\('pointermove'[\s\S]*?requestAnimationFrame\([\s\S]*?glow\.style\.setProperty\('--mx', [\s\S]*?glow\.style\.setProperty\('--my', /);
+test('M20-16 描边光晕已删（M16 7.2）：没有 .glow 元素、样式与指针监听', () => {
+  assert.doesNotMatch(html, /id="glow"/);
+  assert.doesNotMatch(css, /\.glow|--mx|--my/);
+  assert.doesNotMatch(ts, /glowRaf|setProperty\('--mx'/);
 });
 
 test('M20-频谱开关 chevron 140ms enter：收起时旋转 180°，减少动态效果下即时；收起 / 展开本身不过渡高度', () => {
