@@ -25,6 +25,7 @@ pub const NS_WINDOW_STYLE_MASK_NONACTIVATING_PANEL: i32 = 1 << 7;
 
 /// 无 Dock 图标；把面板窗口换成不激活应用的 NSPanel，浮在全屏应用之上；铺系统毛玻璃。
 /// 只有激活策略失败才返回错误，NSPanel / 毛玻璃失败只记日志。
+/// 隐藏期间网页进程不让 WebKit 挂起在 tauri.conf.json 的 `backgroundThrottling`（M04 规则 8）。
 #[cfg(target_os = "macos")]
 #[allow(deprecated)] // cocoa 已弃用，但 tauri-nspanel 公开的就是它的类型
 pub fn setup_macos(app: &tauri::App) -> Result<(), crate::error::AppError> {

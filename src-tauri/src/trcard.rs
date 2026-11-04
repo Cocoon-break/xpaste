@@ -214,6 +214,8 @@ pub fn prewarm(app: &AppHandle) {
         .always_on_top(true)
         .accept_first_mouse(true)
         .inner_size(CARD.0, CARD.1)
+        // 同面板：隐藏久了 WebKit 挂起页面进程，上屏后要等进程恢复、重新出图，卡片先空白零点几秒（M04 规则 8、M26 规则 19）
+        .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled)
         .build();
     match built {
         #[cfg(target_os = "macos")]
