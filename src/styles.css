@@ -230,8 +230,9 @@ kbd {
 .ghead > span { font: 11px var(--font-ui); font-variant-numeric: tabular-nums; }
 .ghead::after { content: ""; flex: 1; height: 1px; background: var(--line); }
 /* “片段”分类：分组标题吸顶，新建按钮固定在右侧，片段再多也不用滚到底找（M25 规则 2）。
-   top: -4px 抵掉列表的上内边距，贴住滚动区顶边；不加动画（M25 规则 2） */
-.snip-bar { position: sticky; top: -4px; z-index: 3; height: auto; margin: 0 -8px; padding: 10px 18px 7px; background: color-mix(in srgb, var(--pop-solid) 97%, transparent); box-shadow: 0 8px 12px -10px rgb(0 0 0 / .25); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+   top: -4px 抵掉列表的上内边距，贴住滚动区顶边；不加动画（M25 规则 2）。
+   底色用面板自己的 --glass，与面板同色、不出色带；滚到下面的行靠模糊遮住（M16） */
+.snip-bar { position: sticky; top: -4px; z-index: 3; height: auto; margin: 0 -8px; padding: 10px 18px 7px; background: var(--glass); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
 .snip-bar::after { order: 1; }
 /* 普通按钮的中性底，片段色只留给图标（「刻度」原则 3） */
 .new-snip { order: 2; letter-spacing: 0; }
