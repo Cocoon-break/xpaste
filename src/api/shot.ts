@@ -232,7 +232,7 @@ const dev = {
     g.addColorStop(0, '#0B1030'); g.addColorStop(0.55, '#151B47'); g.addColorStop(1, '#22103A');
     c.fillStyle = g; c.fillRect(0, 0, W, H);
     const [bar, browser, chat, editor] = this.wins();
-    const UI = '"Geist", "PingFang SC", sans-serif';
+    const UI = '-apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif';
     for (const [b, dark, lines] of [[editor, true, 14], [chat, false, 5], [browser, false, 8]] as const) {
       c.save(); c.shadowColor = 'rgba(0,0,0,.5)'; c.shadowBlur = 44; c.shadowOffsetY = 18;
       c.beginPath(); c.roundRect(b.x, b.y, b.w, b.h, 11); c.fillStyle = dark ? '#151925' : '#FFFFFF'; c.fill(); c.restore();
@@ -280,7 +280,7 @@ const devPin = {
     c.scale(r, r);
     c.fillStyle = '#FFFFFF'; c.fillRect(0, 0, w, h);
     c.fillStyle = '#ECEEF3'; c.fillRect(0, 0, w, 32);
-    c.font = '400 13px "Geist", "PingFang SC", sans-serif'; c.fillStyle = '#3A3F4F';
+    c.font = '400 13px -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif'; c.fillStyle = '#3A3F4F';
     for (let i = 0; i < 6; i++) c.fillText(i % 3 ? '本季度预算总额 480 万元，较上季度增加 12%。' : '2026 年第四季度预算', 20, 58 + i * 24, w - 40);
     queueMicrotask(() => this.setBounds(this.b));
     return cv.toDataURL('image/png');
