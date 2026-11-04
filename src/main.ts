@@ -235,10 +235,8 @@ function emptyHTML() {
 // 一次性的入场类（stg、is-new）不计入比较，之后的重绘不会打断动画
 type Painted = { el: HTMLElement; h: string; top: number };
 let painted = new Map<string, Painted>();
-// cell 的 top 相对 .list-inner，滚动容器还有上内边距；“片段”分类的吸顶栏在 .list-inner 之前，也算进去。
-// 吸顶后它盖住视口顶部 barH() 高，选中行滚动时按缩小后的视口算（select）
-const barH = () => (snipBar.hidden ? 0 : snipBar.offsetHeight);
-const padTop = () => (parseFloat(getComputedStyle(list).paddingTop) || 0) + barH();
+// cell 的 top 相对 .list-inner，滚动容器还有上内边距（“片段”吸顶栏在滚动区外，不占视口）
+const padTop = () => parseFloat(getComputedStyle(list).paddingTop) || 0;
 // 正在删除的行收起后，它下方的 cell 显示位置上移一行（设计 9.4）。原型靠 grid 收起把邻居推上去，
 // 这里 .vrow 绝对定位，位置显式算：S.cells 不变，删除计时器到点重排时 layout 给出的 top 与这里一致。
 // 滚到底时重排会把 scrollTop 夹紧到新的最大值（原型是收起过程中逐渐夹紧）：超出的 over 让所有 cell
@@ -395,7 +393,7 @@ function select(id: number | null, { scroll = false, glide = true, instant = fal
   S.sel = id;
   const top = id === null ? undefined : shownTop(id);
   if (scroll && top !== undefined) {
-    const st = scrollTo(top + padTop() - barH(), ROW_H, list.scrollTop, list.clientHeight - barH());
+    const st = scrollTo(top + padTop(), ROW_H, list.scrollTop, list.clientHeight);
     // 先同步滚动并重绘，保证 aria-activedescendant 指向的行已在 DOM 中
     if (st !== list.scrollTop) {
       list.scrollTop = st;
@@ -2793,6 +2791,8 @@ list.addEventListener('click', (e) => {
   if (qa === 'pin') togglePin(id, true);
   if (qa === 'edit') void openSnippet('edit', id);
 });
+// 吸顶栏在列表外，上面的列表委托收不到它的点击（空列表里的同名按钮仍走上面）
+$('#newSnipBtn').addEventListener('click', () => openSnippet('new'));
 list.addEventListener('dblclick', (e) => {
   const id = itemOf(e);
   if (id !== null && !(e.target as Element).closest('[data-qa]')) copyRecord(id);

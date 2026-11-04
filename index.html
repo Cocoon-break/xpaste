@@ -45,11 +45,13 @@
       </div>
 
       <div class="body">
-        <div class="list" id="list" role="listbox" aria-label="剪切板历史">
+        <div class="list-col">
           <div class="ghead snip-bar" id="snipBar" hidden>片段<span id="snipCount"></span><button class="btn sm new-snip" type="button" id="newSnipBtn" data-act="new"><span data-icon="plus"></span>新建片段<kbd data-modk="N"></kbd></button></div>
-          <div class="list-inner">
-            <div class="sel-ind" id="ind" aria-hidden="true"></div>
-            <div id="rows"></div>
+          <div class="list" id="list" role="listbox" aria-label="剪切板历史">
+            <div class="list-inner">
+              <div class="sel-ind" id="ind" aria-hidden="true"></div>
+              <div id="rows"></div>
+            </div>
           </div>
         </div>
         <section class="preview" aria-label="预览">
