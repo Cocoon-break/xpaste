@@ -14,7 +14,7 @@ export type Tool = Obj['t'];
 
 export const COLORS = ['#FF3B47', '#FF9F1A', '#22C55E', '#0EA5E9', '#8B5CF6', '#FFFFFF'];
 export const STROKE = [2, 4, 7], FONT = [14, 20, 28], STEP_R = [11, 14, 18], MOSAIC = [14, 24, 40];
-const UI = '"Geist", "PingFang SC", "Microsoft YaHei", sans-serif';
+const UI = '-apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif';
 
 /** 按住 Shift：矩形 / 椭圆取正方形 / 正圆（保留拖动方向），箭头吸附到 45° 的倍数且长度不变。 */
 export function constrain(o: { t: Tool; x0: number; y0: number; x1: number; y1: number; shift: boolean }) {

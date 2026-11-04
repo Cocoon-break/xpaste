@@ -36,7 +36,7 @@ import { otherEngine, staleDelta, translatable, trAfterDelta, trAfterEnd, trBloc
 import { nextStep, onboardSteps, type Step } from './onboarding';
 import { applyAdded, applyRemoved, applyUpdated } from './records';
 import {
-  centerWin, clampWin, DAY, followNow, HOUR, layoutBars, miniWin, panWin, sameColumns, spanOf, spectrumStat, staggerIndex,
+  centerWin, clampWin, DAY, followNow, HOUR, layoutBars, minorDayTicks, miniWin, panWin, sameColumns, spanOf, spectrumStat, staggerIndex,
   ticks as winTicks, winLabel, xOf, zoomWin, type Layout, type Win,
 } from './spectrum';
 import { addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFrequent, parseLimit, pickerOptions, removeIgnored } from './settings-form';
@@ -112,7 +112,7 @@ const trBtn = $<HTMLButtonElement>('#trBtn');
 const delBtn = $<HTMLButtonElement>('#delBtn'), saveSnipBtn = $<HTMLButtonElement>('#saveSnipBtn'), editSnipBtn = $<HTMLButtonElement>('#editSnipBtn');
 const snipBar = $('#snipBar');
 const menu = $('#menu'), mOpen = $<HTMLButtonElement>('[data-m="open"]'), toastEl = $('#toast'), toastMsg = $('#toastMsg'), undoBtn = $<HTMLButtonElement>('#undoBtn'), toastAct = $<HTMLButtonElement>('#toastAct'), pauseBtn = $('#pauseBtn');
-const spBars = $('#spBars'), spMirror = $('#spMirror'), spTrack = $('#spTrack'), spBeam = $('#spBeam'), spTip = $('#spTip');
+const spBars = $('#spBars'), spTrack = $('#spTrack'), spBeam = $('#spBeam'), spTip = $('#spTip');
 const spMini = $('#spMini'), spPresets = $('#spPresets');
 
 // —— 状态 ——
@@ -235,10 +235,8 @@ function emptyHTML() {
 // 一次性的入场类（stg、is-new）不计入比较，之后的重绘不会打断动画
 type Painted = { el: HTMLElement; h: string; top: number };
 let painted = new Map<string, Painted>();
-// cell 的 top 相对 .list-inner，滚动容器还有上内边距；“片段”分类的吸顶栏在 .list-inner 之前，也算进去。
-// 吸顶后它盖住视口顶部 barH() 高，选中行滚动时按缩小后的视口算（select）
-const barH = () => (snipBar.hidden ? 0 : snipBar.offsetHeight);
-const padTop = () => (parseFloat(getComputedStyle(list).paddingTop) || 0) + barH();
+// cell 的 top 相对 .list-inner，滚动容器还有上内边距（“片段”吸顶栏在滚动区外，不占视口）
+const padTop = () => parseFloat(getComputedStyle(list).paddingTop) || 0;
 // 正在删除的行收起后，它下方的 cell 显示位置上移一行（设计 9.4）。原型靠 grid 收起把邻居推上去，
 // 这里 .vrow 绝对定位，位置显式算：S.cells 不变，删除计时器到点重排时 layout 给出的 top 与这里一致。
 // 滚到底时重排会把 scrollTop 夹紧到新的最大值（原型是收起过程中逐渐夹紧）：超出的 over 让所有 cell
@@ -395,7 +393,7 @@ function select(id: number | null, { scroll = false, glide = true, instant = fal
   S.sel = id;
   const top = id === null ? undefined : shownTop(id);
   if (scroll && top !== undefined) {
-    const st = scrollTo(top + padTop() - barH(), ROW_H, list.scrollTop, list.clientHeight - barH());
+    const st = scrollTo(top + padTop(), ROW_H, list.scrollTop, list.clientHeight);
     // 先同步滚动并重绘，保证 aria-activedescendant 指向的行已在 DOM 中
     if (st !== list.scrollTop) {
       list.scrollTop = st;
@@ -791,7 +789,7 @@ function paintSpCollapsed(c: boolean) {
   spToggle.setAttribute('aria-expanded', String(!c));
   spToggle.setAttribute('aria-label', c ? '展开复制频谱' : '收起复制频谱');
 }
-const SP_DESC = '过去 24 小时，每根光柱是一次复制，越高内容越大';
+const SP_DESC = '过去 24 小时';
 // stat = false：缩放 / 平移只换时间窗，不重算统计（设计 §4.8）
 function renderSpectrum(freshId?: number, stat = true) {
   spNow = Date.now();
@@ -810,28 +808,25 @@ function renderSpectrum(freshId?: number, stat = true) {
   // 片段不画（M25 规则 8）
   const recs = [...S.records.values()].filter((r) => !S.removing.has(r.id) && !isSnip(r));
   const next = layoutBars(recs, spNow, spTrack.clientWidth, matches, freshId, spWin);
-  // 倒影不带 .on / .fresh
   const base = (b: Layout['bars'][number]) => `bar${b.ids.length > 1 ? ' multi' : ''}${b.dim ? ' dim' : ''}`;
   const n = next.bars.length;
   if (sameColumns(sp, next) && spBars.children.length === n) {
     // 列没变（切分类、搜索、时间小幅流逝）：原地改，.dim/.on 的 200ms 过渡照常播放（原型同样是原地切类）
     next.bars.forEach((b, i) => {
-      for (const el of [spBars.children[i], spMirror.children[i]] as HTMLElement[]) {
-        if (!el) continue;
-        el.className = base(b) + (b.fresh && el.parentElement === spBars ? ' fresh' : '');
-        el.dataset.type = b.kind;
-        el.style.left = b.x + '%';
-        el.style.height = b.h + '%';
-        // 撤销删除时光柱还在原列，但 remove() 的收起动画 fill: forwards 仍压着它：取消脚本动画，CSS 过渡照常
-        el.getAnimations().forEach((a) => {
-          if (!(a instanceof CSSAnimation) && !(a instanceof CSSTransition)) a.cancel();
-        });
-      }
+      const el = spBars.children[i] as HTMLElement | undefined;
+      if (!el) return;
+      el.className = base(b) + (b.fresh ? ' fresh' : '');
+      el.dataset.type = b.kind;
+      el.style.left = b.x + '%';
+      el.style.height = b.h + '%';
+      // 撤销删除时光柱还在原列，但 remove() 的收起动画 fill: forwards 仍压着它：取消脚本动画，CSS 过渡照常
+      el.getAnimations().forEach((a) => {
+        if (!(a instanceof CSSAnimation) && !(a instanceof CSSTransition)) a.cancel();
+      });
     });
   } else {
     spBars.innerHTML = next.bars.map((b, i) =>
       `<span class="${base(b)}${b.fresh ? ' fresh' : ''}" data-col="${i}" data-type="${b.kind}" style="left:${b.x}%;height:${b.h}%;--i:${staggerIndex(i, n)}"></span>`).join('');
-    spMirror.innerHTML = spBars.innerHTML;
     // 悬停的光柱已被替换，提示条不再对应
     spTip.classList.remove('show');
   }
@@ -844,7 +839,9 @@ function renderSpectrum(freshId?: number, stat = true) {
   spTrack.querySelector<HTMLElement>('.sp-now')!.hidden = !!spWin && !spWin.pinned;
   let tk: { x: number; l: string; c?: string }[];
   if (!spWin) {
-    tk = [{ x: 3, l: '更早', c: 'early' }, ...[18, 12, 6].map((h) => ({ x: 6 + 94 * (1 - h / 24), l: hf.format(spNow - h * HOUR) })), { x: 100, l: '现在', c: 'now' }];
+    // 每小时一根短刻度（M14）：已有文字标签的位置由 minorDayTicks 剔除
+    tk = [{ x: 3, l: '更早', c: 'early' }, ...[18, 12, 6].map((h) => ({ x: 6 + 94 * (1 - h / 24), l: hf.format(spNow - h * HOUR) })), { x: 100, l: '现在', c: 'now' },
+      ...minorDayTicks().map((x) => ({ x, l: '', c: 'minor' }))];
   } else {
     const all = winTicks(spWin, spNow), hasNow = all.some((t) => t.now);
     // 离“现在”不到 6% 的主刻度只留刻度线，文字不叠
@@ -1036,7 +1033,6 @@ spMini.addEventListener('click', (e) => {
 });
 
 // —— 分类标签 ——
-const tabColor = (k: string) => (k === 'all' ? 'var(--beam)' : `var(--c-${k})`);
 function renderTabs(instant: boolean) {
   const c = counts(S.records, favMin());
   const html = (real: boolean) => FILTERS.map(([k, l]) => {
@@ -1049,13 +1045,10 @@ function renderTabs(instant: boolean) {
   tabsBase.innerHTML = html(true);
   tabsOver.innerHTML = html(false);
   if (refocus) tabsBase.querySelector<HTMLElement>(`[data-f="${refocus}"]`)?.focus({ preventScroll: true });
-  // 颜色带的色标对齐到每个标签中心，指示条停在哪就是哪个类型的颜色
-  const stops = [...tabsBase.querySelectorAll<HTMLElement>('.tab')].map((b) => `${tabColor(b.dataset.f!)} ${b.offsetLeft + b.offsetWidth / 2}px`);
-  tabsOver.style.background = `linear-gradient(90deg, ${stops.join(', ')})`;
   const b = tabsBase.querySelector<HTMLElement>(`[data-f="${S.filter}"]`)!;
   const l = b.offsetLeft, r = tabs.offsetWidth - l - b.offsetWidth;
   instantly(tabsOver, instant, () => {
-    tabsOver.style.clipPath = `inset(0 ${r}px 0 ${l}px round 999px)`;
+    tabsOver.style.clipPath = `inset(0 ${r}px 0 ${l}px round 7px)`;
   });
   if (instant) b.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
@@ -1287,9 +1280,7 @@ function remove(ids: number[]) {
     // 光柱只代表这一条时才收起；同列还有别的记录就等删除后的重绘（片段没有光柱）
     const col = sp.colOf.get(id);
     const one = col !== undefined && sp.bars[col].ids.length === 1;
-    // 倒影随正像一起收起
-    for (const layer of [spBars, spMirror])
-      fx(one ? layer.children[col] ?? null : null, [{ transform: 'scaleY(1)', opacity: 1 }, { transform: 'scaleY(0)', opacity: 0 }], { duration: 260, easing: EASE_MOVE, fill: 'forwards' });
+    fx(one ? spBars.children[col] ?? null : null, [{ transform: 'scaleY(1)', opacity: 1 }, { transform: 'scaleY(0)', opacity: 0 }], { duration: 260, easing: EASE_MOVE, fill: 'forwards' });
   }
   // 下方的行与 .item.is-removing 的收起同步上移（滚到底时整体按夹紧量修正，见 goneOf）
   paintRows({ glide: `transform 240ms ${EASE_MOVE} 100ms`, glideBusy: `transform 240ms ${EASE_MOVE}` });
@@ -2800,6 +2791,8 @@ list.addEventListener('click', (e) => {
   if (qa === 'pin') togglePin(id, true);
   if (qa === 'edit') void openSnippet('edit', id);
 });
+// 吸顶栏在列表外，上面的列表委托收不到它的点击（空列表里的同名按钮仍走上面）
+$('#newSnipBtn').addEventListener('click', () => openSnippet('new'));
 list.addEventListener('dblclick', (e) => {
   const id = itemOf(e);
   if (id !== null && !(e.target as Element).closest('[data-qa]')) copyRecord(id);
@@ -2953,22 +2946,6 @@ pbody.addEventListener('click', (e) => {
 win.addEventListener('contextmenu', (e) => {
   if (!(e.target as Element).closest('input, textarea')) e.preventDefault();
 });
-// 描边跟随指针发光：只改 .glow 自己的变量，rAF 合并
-if (matchMedia('(hover: hover) and (pointer: fine)').matches) {
-  const glow = $('#glow');
-  let glowRaf = 0, gx = 0, gy = 0;
-  win.addEventListener('pointermove', (e) => {
-    gx = e.clientX;
-    gy = e.clientY;
-    if (glowRaf) return;
-    glowRaf = requestAnimationFrame(() => {
-      glowRaf = 0;
-      const r = win.getBoundingClientRect();
-      glow.style.setProperty('--mx', gx - r.left + 'px');
-      glow.style.setProperty('--my', gy - r.top + 'px');
-    });
-  });
-}
 // 跟随系统切深浅色时整体一次切换，不让各元素按各自的过渡渐变（M16 规则 5）
 matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
   if (root.dataset.theme) return;

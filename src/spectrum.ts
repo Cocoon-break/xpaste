@@ -12,6 +12,12 @@ export function xPct(age: number): number | null {
   return Math.min(99.4, 6 + 94 * (1 - age / DAY));
 }
 
+/** 24 小时默认视图的每小时刻度 x%（M14）：从“更早”分界（6）到“现在”（100），共 25 根 */
+export const dayTicks = () => Array.from({ length: 25 }, (_, h) => 6 + (94 * h) / 24);
+
+/** 默认视图里只有短刻度的位置：去掉 6（更早分界）、100（现在）和 18/12/6 小时前（已有文字标签的长刻度），按序号而非浮点比较 */
+export const minorDayTicks = () => dayTicks().filter((_, i) => ![0, 6, 12, 18, 24].includes(i));
+
 export const hPct = (size: number) => 16 + Math.min(1, Math.log10(Math.max(10, size)) / 8) * 84;
 
 // —— 时间窗（阶段 11）：放大后整条轨道映射过去 24 小时内的一段 ——
