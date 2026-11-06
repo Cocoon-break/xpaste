@@ -5,20 +5,28 @@
 :root {
   color-scheme: dark;
   --ink: #1C1C1E;
-  --glass: rgb(32 32 34 / .74);
+  /* 两级表面：工具区与状态栏是材质（--glass），列表与预览再压暗一层（--sheet） */
+  --glass: rgb(40 40 43 / .74);
+  --sheet: rgb(20 20 22 / .55);
   --glass-2: rgb(255 255 255 / .04);
-  --glass-3: rgb(255 255 255 / .07);
+  --glass-3: rgb(255 255 255 / .06);
   --line: rgb(255 255 255 / .07);
-  --line-2: rgb(255 255 255 / .12);
+  --line-2: rgb(255 255 255 / .09);
   --fg: #ECECEE; --muted: #ABABB2; --faint: #93939A;
   --c-text: #9CB3BF; --c-link: #8EA3E2; --c-code: #82C2A6; --c-accent: #CF93C0;
   --c-image: #D6A35E; --c-video: #DE877E; --c-file: #AA97D4; --c-fav: #C8C27A;
   /* 片段：沿用已删掉的颜色类型那一档（M25 规则 2）；按钮与列表第二行拿它当文字色，亮暗都过 4.5 : 1 */
   --c-snip: #CF93C0;
+  --c-str: #E0B275;
+  /* 图形色：只给频谱刻线、分类色点等非文字标记；文本类压成暗钢灰，少数类型才跳得出来 */
+  --g-text: #6F7F88; --g-link: #8DA2E6; --g-code: #6FC3A0; --g-image: #DDA65A; --g-video: #E58A80; --g-file: #AE9AE0;
   --beam: #23809F; --beam-hover: #2B8CAE; --on-beam: #FFFFFF; --cursor: #5FA3BC; --on-rec: #1A0507; --on-pill: #06101C; --danger: #C9434F; --danger-hover: #D4515D; --on-danger: #FFFFFF;
   --well: rgb(0 0 0 / .16); --well-2: rgb(0 0 0 / .24);
   --pop: rgb(38 38 41 / .96); --pop-solid: #262629;
-  --hover: rgb(255 255 255 / .08); --sel: rgb(255 255 255 / .09); --tick-base: rgb(255 255 255 / .16);
+  --hover: rgb(255 255 255 / .06); --sel: rgb(255 255 255 / .075); --tick-base: rgb(255 255 255 / .16);
+  --seg-on: rgb(255 255 255 / .12); --seg-ring: 0 0 0 1px rgb(255 255 255 / .05);
+  --kbd-bg: rgb(255 255 255 / .07);
+  --search-bg: rgb(0 0 0 / .22);
   --preview-bg: transparent;
   --shadow-win: 0 30px 80px -24px rgb(0 0 0 / .6);
   --shadow-pop: 0 12px 32px -12px rgb(0 0 0 / .6);
@@ -38,20 +46,26 @@
   :root:not([data-theme="dark"]) {
     color-scheme: light;
     --ink: #F5F5F7;
-    --glass: rgb(248 248 250 / .78);
-    --glass-2: rgb(0 0 0 / .03);
+    --glass: rgb(228 229 234 / .84);
+    --sheet: rgb(255 255 255 / .84);
+    --glass-2: rgb(0 0 0 / .035);
     --glass-3: rgb(0 0 0 / .05);
-    --line: rgb(0 0 0 / .07);
-    --line-2: rgb(0 0 0 / .12);
+    --line: rgb(0 0 0 / .08);
+    --line-2: rgb(0 0 0 / .10);
     --fg: #1D1D1F; --muted: #5C5C64; --faint: #6E6E76;
     --c-text: #44707F; --c-link: #3E5DB5; --c-code: #2F7A5F; --c-accent: #95427F;
     --c-image: #93600F; --c-video: #B24A40; --c-file: #6A50A8; --c-fav: #66701C;
     /* 片段：沿用已删掉的颜色类型那一档（M25 规则 2）；按钮与列表第二行拿它当文字色，亮暗都过 4.5 : 1 */
     --c-snip: #95427F;
+    --c-str: #A8590A;
+    --g-text: #8A9AA3; --g-link: #5A78D6; --g-code: #28906C; --g-image: #B47A16; --g-video: #D45A4C; --g-file: #8C70D0;
     --beam: #0E7FA3; --beam-hover: #0B6E8E; --on-beam: #FFFFFF; --cursor: #0E7FA3; --on-rec: #FFFFFF; --on-pill: #FFFFFF; --danger: #C8334A; --danger-hover: #B02B40; --on-danger: #FFFFFF;
     --well: rgb(0 0 0 / .035); --well-2: rgb(255 255 255 / .7);
     --pop: rgb(255 255 255 / .96); --pop-solid: #FFFFFF;
-    --hover: rgb(0 0 0 / .05); --sel: rgb(0 0 0 / .06); --tick-base: rgb(0 0 0 / .18);
+    --hover: rgb(0 0 0 / .045); --sel: rgb(0 0 0 / .055); --tick-base: rgb(0 0 0 / .16);
+    --seg-on: #FFFFFF; --seg-ring: 0 0 0 1px rgb(0 0 0 / .06), 0 1px 2px rgb(0 0 0 / .08);
+    --kbd-bg: rgb(0 0 0 / .055);
+    --search-bg: rgb(255 255 255 / .9);
     --preview-bg: transparent;
     --shadow-win: 0 30px 80px -24px rgb(0 0 0 / .28);
     --shadow-pop: 0 12px 32px -12px rgb(0 0 0 / .22);
@@ -64,20 +78,26 @@
 :root[data-theme="light"] {
   color-scheme: light;
   --ink: #F5F5F7;
-  --glass: rgb(248 248 250 / .78);
-  --glass-2: rgb(0 0 0 / .03);
+  --glass: rgb(228 229 234 / .84);
+  --sheet: rgb(255 255 255 / .84);
+  --glass-2: rgb(0 0 0 / .035);
   --glass-3: rgb(0 0 0 / .05);
-  --line: rgb(0 0 0 / .07);
-  --line-2: rgb(0 0 0 / .12);
+  --line: rgb(0 0 0 / .08);
+  --line-2: rgb(0 0 0 / .10);
   --fg: #1D1D1F; --muted: #5C5C64; --faint: #6E6E76;
   --c-text: #44707F; --c-link: #3E5DB5; --c-code: #2F7A5F; --c-accent: #95427F;
   --c-image: #93600F; --c-video: #B24A40; --c-file: #6A50A8; --c-fav: #66701C;
   /* 片段：沿用已删掉的颜色类型那一档（M25 规则 2）；按钮与列表第二行拿它当文字色，亮暗都过 4.5 : 1 */
   --c-snip: #95427F;
+  --c-str: #A8590A;
+  --g-text: #8A9AA3; --g-link: #5A78D6; --g-code: #28906C; --g-image: #B47A16; --g-video: #D45A4C; --g-file: #8C70D0;
   --beam: #0E7FA3; --beam-hover: #0B6E8E; --on-beam: #FFFFFF; --cursor: #0E7FA3; --on-rec: #FFFFFF; --on-pill: #FFFFFF; --danger: #C8334A; --danger-hover: #B02B40; --on-danger: #FFFFFF;
   --well: rgb(0 0 0 / .035); --well-2: rgb(255 255 255 / .7);
   --pop: rgb(255 255 255 / .96); --pop-solid: #FFFFFF;
-  --hover: rgb(0 0 0 / .05); --sel: rgb(0 0 0 / .06); --tick-base: rgb(0 0 0 / .18);
+  --hover: rgb(0 0 0 / .045); --sel: rgb(0 0 0 / .055); --tick-base: rgb(0 0 0 / .16);
+  --seg-on: #FFFFFF; --seg-ring: 0 0 0 1px rgb(0 0 0 / .06), 0 1px 2px rgb(0 0 0 / .08);
+  --kbd-bg: rgb(0 0 0 / .055);
+  --search-bg: rgb(255 255 255 / .9);
   --preview-bg: transparent;
   --shadow-win: 0 30px 80px -24px rgb(0 0 0 / .28);
   --shadow-pop: 0 12px 32px -12px rgb(0 0 0 / .22);
