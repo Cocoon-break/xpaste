@@ -33,7 +33,9 @@ function contrast(a: string, b: string): number {
   const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p);
   return (x + 0.05) / (y + 0.05);
 }
-const TEXT = ['--fg', '--muted', '--faint', '--c-text', '--c-link', '--c-code', '--c-image', '--c-video', '--c-file', '--c-fav', '--c-snip'];
+const TEXT = ['--fg', '--muted', '--faint', '--c-text', '--c-link', '--c-code', '--c-image', '--c-video', '--c-file', '--c-fav', '--c-snip', '--c-str'];
+// 图形色（刻线、色点）对工具区底色 ≥ 3 : 1；--g-text 有意压成安静的钢灰，不参与
+const GRAPHIC = ['--g-link', '--g-code', '--g-image', '--g-video', '--g-file'];
 
 /** 取块内全部 `--name: value;` 声明（含 rgb()、阴影），值去掉多余空白。 */
 function decls(block: string): Record<string, string> {
@@ -54,6 +56,12 @@ test('text_contrast_dark', () => {
 });
 test('text_contrast_light', () => {
   for (const k of TEXT) assert.ok(contrast(lightB[k], '#F2F2F4') >= 4.5, k);
+});
+test('graphic_contrast', () => {
+  for (const k of GRAPHIC) {
+    assert.ok(contrast(dark[k], '#252527') >= 3, `dark ${k}`);
+    assert.ok(contrast(lightB[k], '#E8E9ED') >= 3, `light ${k}`);
+  }
 });
 test('white_on_fills', () => {
   for (const b of [dark, lightB]) for (const k of ['--beam', '--danger']) assert.ok(contrast('#FFFFFF', b[k]) >= 4.5, k);
