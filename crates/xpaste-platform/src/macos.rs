@@ -5,8 +5,8 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use objc2::rc::{Retained, autoreleasepool};
-use objc2::runtime::{AnyObject, ProtocolObject};
+use objc2::rc::{Allocated, Retained, autoreleasepool};
+use objc2::runtime::{AnyClass, AnyObject, ProtocolObject};
 use objc2::{AllocAnyThread, ClassType, msg_send};
 use objc2_app_kit::{
     NSApplicationActivationPolicy, NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard,
@@ -537,6 +537,54 @@ fn first_video_track(asset: &AVURLAsset) -> Option<Retained<AVAssetTrack>> {
     let video = unsafe { AVMediaTypeVideo }?;
     // SAFETY: video 是有效的媒体类型
     unsafe { asset.tracksWithMediaType(video) }.firstObject()
+}
+
+// PDFKit 没有引入绑定库，按类名取 PDFDocument，只用到三个只读方法
+#[link(name = "PDFKit", kind = "framework")]
+unsafe extern "C" {}
+
+/// PDF 最多读前这么多页
+const PDF_MAX_PAGES: usize = 50;
+
+/// 用系统的 PDFKit 读 PDF 里的文字（各页以换行连接），最多 `max_bytes` 字节、前 `PDF_MAX_PAGES` 页。
+/// 打不开、加密未解锁、扫描件（没有文字层）时返回 None。
+pub fn pdf_text(path: &Path, max_bytes: usize) -> Option<String> {
+    autoreleasepool(|_| {
+        let cls = AnyClass::get(c"PDFDocument")?;
+        let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+        // SAFETY: PDFDocument 的 alloc / initWithURL:，url 在调用期间有效；打不开时 init 返回 nil
+        let doc: Retained<AnyObject> = unsafe {
+            let obj: Allocated<AnyObject> = msg_send![cls, alloc];
+            let doc: Option<Retained<AnyObject>> = msg_send![obj, initWithURL: &*url];
+            doc?
+        };
+        // SAFETY: pageCount 是只读属性（NSUInteger）
+        let pages: usize = unsafe { msg_send![&*doc, pageCount] };
+        let mut out = String::new();
+        for i in 0..pages.min(PDF_MAX_PAGES) {
+            if out.len() >= max_bytes {
+                break;
+            }
+            // SAFETY: i 小于 pageCount；pageAtIndex: 返回 PDFPage 或 nil，string 返回 NSString 或 nil
+            let text: Option<Retained<NSString>> = unsafe {
+                let page: Option<Retained<AnyObject>> = msg_send![&*doc, pageAtIndex: i];
+                page.and_then(|p| msg_send![&*p, string])
+            };
+            if let Some(t) = text {
+                if !out.is_empty() {
+                    out.push('\n');
+                }
+                out.push_str(&t.to_string());
+            }
+        }
+        let mut end = max_bytes.min(out.len());
+        while !out.is_char_boundary(end) {
+            end -= 1;
+        }
+        out.truncate(end);
+        let out = out.trim().to_string();
+        (!out.is_empty()).then_some(out)
+    })
 }
 
 /// 读时长、方向校正后的分辨率、帧率与编码。无视频轨或 AVFoundation 打不开（如 mkv）时返回 None。

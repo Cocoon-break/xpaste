@@ -31,7 +31,7 @@ import {
 } from './format';
 import { hotkeyFromEvent, hotkeyLabel } from './hotkey';
 import { keyAction } from './keymap';
-import { copyVerb, escHint, openLabel } from './labels';
+import { copyVerb, escHint, fileTextHelp, openLabel } from './labels';
 import { ocrLabel, ocrProgressLabel, snippetHTML } from './ocr-label';
 import { searchGate } from './search-gate';
 import { otherEngine, staleDelta, translatable, trAfterDelta, trAfterEnd, trBlockHTML, type Engine, type Tr } from './translate';
@@ -2290,6 +2290,7 @@ function openSettings() {
   ocrOnIn.checked = st.ocrEnabled;
   ocrBackfillIn.checked = st.ocrBackfill;
   fileTextIn.checked = st.searchFileText;
+  $('#fileTextHelp').textContent = fileTextHelp(S.platform.os);
   paintOcrBackfill();
   pollOcr();
   ocrTimer ||= window.setInterval(pollOcr, 2000);

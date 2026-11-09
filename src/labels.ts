@@ -13,3 +13,7 @@ export function openLabel(kind: Kind, hasFile: boolean, os: PlatformInfo['os']):
   if (kind === 'file' || kind === 'video' || (kind === 'image' && hasFile)) return os === 'macos' ? '在访达中显示' : '在资源管理器中显示';
   return null;
 }
+
+/** 设置“搜索文本文件内容”的说明：PDF 只有 macOS 读得出（系统的 PDFKit，M05 规则 2） */
+export const fileTextHelp = (os: PlatformInfo['os']) =>
+  `复制 txt、md、csv、json、代码${os === 'macos' ? '、PDF ' : ''}等文件时读入前 64 KB 供搜索，不显示；会让数据库变大`;

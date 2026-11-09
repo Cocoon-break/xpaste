@@ -63,7 +63,25 @@ pub fn start(app: AppHandle) {
     });
 }
 
-fn ingest(app: &AppHandle, snap: Snapshot) {
+/// 文件记录里各 PDF 的文字，按顺序读到预算用完（M05 规则 2；只有 macOS 读得出）。
+/// ponytail: 在采集线程里同步读，单个 PDF 最多 50 页；大 PDF 拖慢采集时挪到补全线程
+fn pdf_texts(paths: &[std::path::PathBuf]) -> Vec<String> {
+    let mut left = capture::FILE_TEXT_BYTES;
+    let mut out = Vec::new();
+    for p in paths {
+        let is_pdf = p.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
+        if left == 0 || !is_pdf {
+            continue;
+        }
+        if let Some(t) = xpaste_platform::pdf_text(p, left) {
+            left -= t.len();
+            out.push(t);
+        }
+    }
+    out
+}
+
+fn ingest(app: &AppHandle, mut snap: Snapshot) {
     let state = app.state::<AppState>();
     // process 会消耗快照，先记下补全任务要用的信息
     let kind = detect::kind(&snap);
@@ -73,6 +91,9 @@ fn ingest(app: &AppHandle, snap: Snapshot) {
     let source = snap.source.as_ref().map(|a| a.id.clone());
     let settings = state.settings().clone();
     let paused = state.paused.load(Ordering::SeqCst);
+    if settings.search_file_text && kind == Kind::File && !paused {
+        snap.file_texts = pdf_texts(&snap.file_paths);
+    }
     let outcome = capture::process(snap, &settings, paused, &mut state.store(), now_ms());
     match outcome {
         Err(e) => log::warn!("记录入库失败：{e}"),

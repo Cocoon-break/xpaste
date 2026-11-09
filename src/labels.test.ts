@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { copyVerb, escHint, openLabel } from './labels.ts';
+import { copyVerb, escHint, fileTextHelp, openLabel } from './labels.ts';
 
 test('copyVerb 按能否粘贴给出动词', () => {
   assert.equal(copyVerb(true), '粘贴');
@@ -28,4 +28,9 @@ test('escHint 有来源胶囊、搜索框为空时提示去掉来源（M29 规�
   assert.equal(escHint(false, false, true), '去掉来源');
   assert.equal(escHint(true, false, true), '清空搜索');
   assert.equal(escHint(false, true, true), '取消选择');
+});
+
+test('fileTextHelp：macOS 的说明里带 PDF，Windows 不带（M05 规则 2）', () => {
+  assert.equal(fileTextHelp('macos'), '复制 txt、md、csv、json、代码、PDF 等文件时读入前 64 KB 供搜索，不显示；会让数据库变大');
+  assert.equal(fileTextHelp('windows'), '复制 txt、md、csv、json、代码等文件时读入前 64 KB 供搜索，不显示；会让数据库变大');
 });
