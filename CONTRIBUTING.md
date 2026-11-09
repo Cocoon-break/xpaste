@@ -63,6 +63,15 @@ make release-win   # 在 macOS 上交叉打 Windows 安装程序（见下文）
 2. 在 `main` 上打标签并推送：`git tag v0.2.1 && git push origin v0.2.1`。标签必须等于 `v` + 版本号，不一致时流程直接失败。
 3. 给已有标签补发或重发：Actions → Release → Run workflow，填标签名。
 
+## 官网
+
+`website/` 原样发布到 GitHub Pages，没有构建步骤。首页上那几块会动、能操作的界面不是仿制品，是 `src/` 的真实前端加演示数据：
+
+- 演示数据和 Tauri 接口的替身在 `scripts/site-demo/`（面板、划词卡片、截图遮罩各一个入口；截图遮罩用的是 `src/api/shot.ts` 里的开发替身）。
+- `make site-demo` 把它们打包进 `website/demo/`，产物要一起提交。改了面板、卡片或截图遮罩的界面，或者改了演示数据之后跑一次。
+- `scripts/site-demo/` 在 `tsconfig.json` 的检查范围里：`src/api/types.ts` 的结构变了而演示数据没跟上，`make check` 会报错。
+- 演示页面的样式和脚本全部内联进 html，直接双击打开 `website/index.html` 也能看；演示加载成功之前只显示占位图。
+
 ## 在 macOS 上打 Windows 安装包
 
 `tauri build` 只给当前系统打包，所以 Mac 上默认只有 `.dmg`。装好下面的工具后，`make release-win`（或 `make release`）会用 Tauri 的交叉编译把 Windows 安装程序也打出来，和其他安装包一起放到 `target/installers/`（原始位置 `target/x86_64-pc-windows-msvc/release/bundle/nsis/`）：

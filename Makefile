@@ -15,7 +15,7 @@ MAC_X64 := x86_64-apple-darwin
 HAS_MAC_X64 := $(shell test "$$(uname -sm)" = "Darwin arm64" && rustup target list --installed 2>/dev/null | grep -c $(MAC_X64) || echo 0)
 HAS_XWIN := $(shell command -v cargo-xwin >/dev/null 2>&1 && command -v makensis >/dev/null 2>&1 && test -x $(LLVM_BIN)/clang-cl && command -v lld-link >/dev/null 2>&1 && echo 1 || echo 0)
 
-.PHONY: help install dev dev-isolated fmt lint test-rust test-web test check build build-check release release-win release-x64 release-app release-report measure icons clean
+.PHONY: site-demo help install dev dev-isolated fmt lint test-rust test-web test check build build-check release release-win release-x64 release-app release-report measure icons clean
 
 help: ## 列出可用目标
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{ printf "  %-14s %s\n", $$1, $$2 }'
@@ -90,6 +90,10 @@ release-report: ## 把各目标的安装包收拢到 target/installers/ 并列�
 	done || true
 	@echo "== 安装包（$(INSTALLERS)/）=="
 	@ls -1 $(INSTALLERS) 2>/dev/null | while read -r f; do echo "  $$f  $$(du -sh $(INSTALLERS)/$$f | cut -f1)"; done
+
+site-demo: ## 重新生成官网上可操作的演示面板（website/demo/）：改了 src/ 的界面或 scripts/site-demo/ 之后跑，产物一起提交
+	rm -rf website/demo
+	for e in index card shot; do SITE_DEMO_ENTRY=$$e pnpm exec vite build --config scripts/site-demo/vite.config.mjs || exit 1; done
 
 measure: ## macOS 性能与可靠性测量（先 make release-app；离开电脑时运行，约 15 分钟；终端要有辅助功能权限）
 	bash scripts/measure.sh all

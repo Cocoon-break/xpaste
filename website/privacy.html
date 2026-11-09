@@ -6,25 +6,28 @@
 <title>隐私说明 · xPaste</title>
 <meta name="description" content="xPaste 的隐私说明：数据只存在本机，没有账号、云同步和使用统计；只在你手动翻译时发送那一段文字。">
 <link rel="icon" type="image/svg+xml" href="assets/logo.svg">
+<meta name="color-scheme" content="light dark">
 <style>
-:root { color-scheme: dark; --bg: #000000; --s1: #181818; --s3: #272727; --fg: #F2F2F2; --muted: #A3A3A3; --beam: #8FE3FF; --on-beam: #06101C; --base: cubic-bezier(.22, 1, .36, 1); }
+/* 与首页同一套「刻度」取值：系统中性灰、系统字体，一根品牌青 */
+:root { color-scheme: light dark; --bg: #F5F5F7; --surface: #FFFFFF; --raised: #ECECEF; --line-2: rgb(0 0 0 / .14); --fg: #1D1D1F; --muted: #5C5C64; --accent: #0E7FA3; --accent-hover: #0B6E8E; --accent-ink: #0B6E8E; --ease: cubic-bezier(.22, 1, .36, 1); }
+@media (prefers-color-scheme: dark) { :root { --bg: #1C1C1E; --surface: #242426; --raised: #2C2C2F; --line-2: rgb(255 255 255 / .14); --fg: #ECECEE; --muted: #ABABB2; --accent: #23809F; --accent-hover: #2B8CAE; --accent-ink: #6BB6CF; } }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--fg); font: 400 16px/24px "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 400 16px/26px -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
 main { max-width: 680px; margin: 0 auto; padding: 96px 16px; }
-a { color: var(--beam); }
-:focus-visible { outline: 2px solid var(--beam); outline-offset: 2px; border-radius: 8px; }
-.back { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); text-decoration: none; font-size: 14px; line-height: 20px; transition: color .3s var(--base); }
+a { color: var(--accent-ink); text-underline-offset: 3px; }
+:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; border-radius: 6px; }
+.back { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); text-decoration: none; font-size: 14px; line-height: 20px; transition: color .15s var(--ease); }
 .back:hover { color: var(--fg); }
 .back img { width: 24px; height: 24px; }
-h1 { margin: 32px 0 0; font-size: 36px; line-height: 40px; font-weight: 600; text-wrap: balance; background: linear-gradient(90deg, #FFFFFF, #9B9B9B); -webkit-background-clip: text; background-clip: text; color: transparent; }
+h1 { margin: 32px 0 0; font-size: 36px; line-height: 44px; font-weight: 600; letter-spacing: -.01em; text-wrap: balance; }
 h2 { margin: 48px 0 0; font-size: 20px; line-height: 28px; font-weight: 600; }
 p, li { color: var(--muted); text-wrap: pretty; }
 p { margin: 16px 0 0; }
 ul { margin: 16px 0 0; padding-left: 24px; }
 li + li { margin-top: 8px; }
-code { font: 14px/20px ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: var(--fg); }
-.btn { display: inline-flex; margin-top: 32px; padding: 8px 12px; border-radius: 9999px; background: var(--beam); color: var(--on-beam); font-weight: 600; text-decoration: none; transition: transform .5s var(--base); }
-.btn:hover { transform: translateY(-1px); }
+code { font: 13px/20px ui-monospace, "SF Mono", Menlo, "Cascadia Mono", Consolas, monospace; color: var(--fg); overflow-wrap: anywhere; }
+.btn { display: inline-flex; align-items: center; height: 44px; margin-top: 32px; padding: 0 20px; border-radius: 10px; background: var(--accent); color: #FFFFFF; font-weight: 500; font-size: 15px; text-decoration: none; transition: background-color .15s var(--ease), transform .15s var(--ease); }
+.btn:hover { background: var(--accent-hover); }
 .btn:active { transform: scale(.98); }
 </style>
 </head>
@@ -32,7 +35,7 @@ code { font: 14px/20px ui-monospace, "SF Mono", Menlo, Consolas, monospace; colo
 <main>
 <a class="back" href="index.html"><img src="assets/logo.svg" alt="" width="24" height="24">返回 xPaste 首页</a>
 <h1>隐私说明</h1>
-<p>更新于 2026 年 10 月 31 日。xPaste 的隐私原则只有一条：你的剪切板历史只存在你的电脑上。</p>
+<p>更新于 2026 年 11 月 9 日。xPaste 的隐私原则只有一条：你的剪切板历史只存在你的电脑上。</p>
 <h2>应用收集什么</h2>
 <p>什么都不收集。xPaste 没有账号、没有云同步、没有使用统计。唯一会把内容发到网络上的是你手动发起的翻译，见下一节。</p>
 <ul>
@@ -51,7 +54,7 @@ code { font: 14px/20px ui-monospace, "SF Mono", Menlo, Consolas, monospace; colo
 <li>API Key 只保存在本机的设置里；日志里不写原文、译文、API Key 和接口地址。</li>
 </ul>
 <h2>这个网站收集什么</h2>
-<p>这个页面不使用 Cookie，也没有统计脚本。图标字体从 unpkg.com 加载，下载链接指向 GitHub，这两个服务会按各自的政策记录访问。</p>
+<p>这个网站不使用 Cookie，没有统计脚本，也不加载第三方的字体和脚本。首页上能操作的面板装的是演示数据；你在首页上复制文字时，页面会把你选中的那段文字显示在演示面板里，这只发生在你的浏览器里，不读取剪切板，也不发送到任何地方。主题选择记在浏览器的本地存储里。下载链接指向 GitHub，GitHub 会按它的政策记录访问。</p>
 <h2>删除你的数据</h2>
 <p>在 xPaste 设置里选“清空历史…”（置顶记录会保留），或者卸载后删除上面的数据目录。数据库没有加密，靠系统账户权限保护。</p>
 <h2>联系</h2>
