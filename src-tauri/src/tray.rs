@@ -18,6 +18,9 @@ struct Handles {
     pause: MenuItem<Wry>,
     /// “停止录制”：只在录制中插在第一项（M24）
     rec_stop: MenuItem<Wry>,
+    version: MenuItem<Wry>,
+    /// “下载新版本…”：发现新版本后插在版本号上面（M28 规则 4）
+    update: MenuItem<Wry>,
 }
 
 static TRAY: OnceLock<Handles> = OnceLock::new();
@@ -47,6 +50,10 @@ pub fn rec_stop_label(hotkey_label: &str) -> String {
 
 pub fn version_label(v: &str) -> String {
     format!("xPaste {v}")
+}
+
+pub fn update_label(v: &str) -> String {
+    format!("下载新版本 {v}…")
 }
 
 // macOS 用模板图，系统按菜单栏明暗自动反色；Windows 用彩色图
@@ -115,6 +122,27 @@ pub fn show_stop_item(app: &AppHandle, on: bool) {
     }
 }
 
+/// 发现新版本：在版本号上面插入“下载新版本 <版本>…”，已插入时只换文字。
+pub fn show_update(v: &str) {
+    let Some(h) = TRAY.get() else {
+        return;
+    };
+    let r = h.update.set_text(update_label(v)).and_then(|()| {
+        if h.menu.get(h.update.id()).is_some() {
+            return Ok(());
+        }
+        let at = h
+            .menu
+            .items()?
+            .iter()
+            .position(|i| i.id() == h.version.id());
+        h.menu.insert(&h.update, at.unwrap_or(0))
+    });
+    if let Err(e) = r {
+        log::warn!("更新托盘“下载新版本”失败：{e}");
+    }
+}
+
 /// 快捷键改成功后更新第一项文字，并恢复“打开 xPaste”的点击行为。
 pub fn set_hotkey_label(shortcut: &str) {
     HOTKEY_FAILED.store(false, Ordering::SeqCst);
@@ -158,6 +186,7 @@ pub fn setup(app: &App) -> tauri::Result<()> {
     )?;
     let quit = MenuItem::with_id(app, "quit", "退出 xPaste", true, None::<&str>)?;
     let rec_stop = MenuItem::with_id(app, "rec-stop", rec_stop_label(""), true, None::<&str>)?;
+    let update = MenuItem::with_id(app, "update", update_label(""), true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[
@@ -205,6 +234,7 @@ pub fn setup(app: &App) -> tauri::Result<()> {
             // 输入卡片（M26 规则 20）
             "translate" => crate::trcard::open_input(app),
             "rec-stop" => crate::rec::stop(app),
+            "update" => crate::update::open(app),
             // 录制中退出由 ExitRequested 里的 rec::hold_exit 先停止、写完文件再退出（M24 规则 8）
             "quit" => app.exit(0),
             _ => {}
@@ -226,6 +256,8 @@ pub fn setup(app: &App) -> tauri::Result<()> {
         open,
         pause,
         rec_stop,
+        version,
+        update,
     });
     Ok(())
 }
@@ -240,6 +272,7 @@ mod tests {
         assert_eq!(pause_label(true), "继续记录");
         assert_eq!(pause_label(false), "暂停记录");
         assert_eq!(version_label("0.1.0"), "xPaste 0.1.0");
+        assert_eq!(update_label("0.8.0"), "下载新版本 0.8.0…");
         assert_eq!(rec_stop_label("⌥ + Shift + R"), "停止录制（⌥ + Shift + R）");
         assert_eq!(rec_stop_label(""), "停止录制");
     }

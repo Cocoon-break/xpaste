@@ -18,6 +18,8 @@ export interface Settings {
   skipSensitive: boolean;
   moveToTop: boolean;
   launchAtLogin: boolean;
+  /** 每天向 GitHub 查一次有没有新版本（M28） */
+  updateCheck: boolean;
   appearance: Appearance;
   panelSize: [number, number];
   panelStyle: PanelStyle;
@@ -251,3 +253,6 @@ export type CardShow = {
 export type CardDone = { seq: number; ok: boolean; text: string | null; lang: string | null; engine: string; error: AppError | null };
 /** `trcard_translate` 的结果：新序号（恒为传入的 + 1）与这次用的翻译方式标签，对应 `trcard::Again`。 */
 export type CardAgain = { seq: number; engine: string };
+
+/** 本次运行发现的新版本（M28 规则 4）；`url` 是该版本的 Release 页 */
+export type UpdateInfo = { version: string; current: string; url: string };

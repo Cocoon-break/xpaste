@@ -15,6 +15,7 @@ export const settings: Settings = {
   skipSensitive: true,
   moveToTop: true,
   launchAtLogin: false,
+  updateCheck: false,
   appearance: q.get('theme') === 'light' ? 'light' : q.get('theme') === 'dark' ? 'dark' : 'system',
   panelSize: [960, 640],
   // ?style=compact：精简模式（M27），核对界面用

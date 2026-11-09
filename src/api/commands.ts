@@ -10,6 +10,7 @@ import type {
   Engines,
   TranslateStatus,
   Translated,
+  UpdateInfo,
 } from './types';
 
 export const bootstrap = () => invoke<Bootstrap>('bootstrap');
@@ -36,6 +37,7 @@ export const pickFolder = (defaultPath?: string) => open({ directory: true, defa
 export const openUrl = (url: string) => invoke<void>('open_url', { url });
 export const revealFile = (path: string) => invoke<void>('reveal_file', { path });
 export const exportLogs = () => invoke<string>('export_logs');
+export const updateAvailable = () => invoke<UpdateInfo | null>('update_available');
 
 export const getRecord = (id: number) => invoke<RecordDetail | null>('get_record', { id });
 export const search = (q: string) => invoke<SearchHit[]>('search', { q });

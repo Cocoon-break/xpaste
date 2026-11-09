@@ -112,6 +112,8 @@ pub struct Settings {
     pub skip_sensitive: bool,
     pub move_to_top: bool,
     pub launch_at_login: bool,
+    /// 每天向 GitHub 查一次有没有新版本（M28）
+    pub update_check: bool,
     pub appearance: Appearance,
     /// 逻辑像素
     pub panel_size: (f64, f64),
@@ -180,6 +182,7 @@ impl Default for Settings {
             skip_sensitive: true,
             move_to_top: true,
             launch_at_login: true,
+            update_check: true,
             appearance: Appearance::Dark,
             panel_size: (960.0, 640.0),
             panel_style: PanelStyle::Full,
@@ -852,6 +855,7 @@ mod tests {
         assert_eq!(s.retention_days, Some(30));
         assert_eq!(s.max_records, 500);
         assert!(s.skip_sensitive && s.move_to_top && s.launch_at_login);
+        assert!(s.update_check);
         assert_eq!(s.appearance, Appearance::Dark);
         assert_eq!(s.panel_size, (960.0, 640.0));
         assert_eq!(s.last_filter, "all");

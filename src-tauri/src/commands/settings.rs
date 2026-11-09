@@ -59,6 +59,24 @@ pub fn bootstrap(state: State<'_, AppState>) -> Result<Bootstrap, AppError> {
     bootstrap_inner(&state)
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateInfo {
+    pub version: String,
+    pub current: String,
+    pub url: String,
+}
+
+/// 本次运行发现的新版本，设置“通用”页显示（M28 规则 4）；没发现时为 None。
+#[tauri::command]
+pub fn update_available(app: AppHandle) -> Option<UpdateInfo> {
+    crate::update::found().map(|v| UpdateInfo {
+        url: crate::update::release_url(&v),
+        current: app.package_info().version.to_string(),
+        version: v,
+    })
+}
+
 /// 校验、持久化并生效新设置。不处理快捷键、不清理、不发事件。
 pub fn save_settings_inner(state: &AppState, mut s: Settings) -> Result<(), AppError> {
     s.normalize();
@@ -100,6 +118,7 @@ pub fn changed_fields(old: &Settings, new: &Settings) -> Vec<&'static str> {
         ("skipSensitive", old.skip_sensitive != new.skip_sensitive),
         ("moveToTop", old.move_to_top != new.move_to_top),
         ("launchAtLogin", old.launch_at_login != new.launch_at_login),
+        ("updateCheck", old.update_check != new.update_check),
         ("appearance", old.appearance != new.appearance),
         ("panelSize", old.panel_size != new.panel_size),
         ("lastFilter", old.last_filter != new.last_filter),
@@ -263,7 +282,7 @@ pub fn save_settings(
     state: State<'_, AppState>,
     settings: Settings,
 ) -> Result<(), AppError> {
-    let (hotkey, shot_hotkey, rec_hotkey, tr_hotkey, appearance, launch, ocr_on) = (
+    let (hotkey, shot_hotkey, rec_hotkey, tr_hotkey, appearance, launch, ocr_on, upd_on) = (
         settings.hotkey.clone(),
         settings.shot_hotkey.clone(),
         settings.rec_hotkey.clone(),
@@ -271,6 +290,7 @@ pub fn save_settings(
         settings.appearance,
         settings.launch_at_login,
         settings.ocr_enabled,
+        settings.update_check,
     );
     let changed = commit_settings(&state, settings, |p, s, r, t| {
         crate::hotkey::register(&app, p, s, r, t)
@@ -308,6 +328,10 @@ pub fn save_settings(
     }
     if changed.contains(&"launchAtLogin") {
         set_autostart(&app, launch);
+    }
+    // 打开“自动检查更新”后立刻查一次（M28 规则 1）
+    if changed.contains(&"updateCheck") && upd_on {
+        crate::update::check_now(&app);
     }
     // 回填线程自己再看 ocrEnabled 与 ocrBackfill 是否都开着
     if changed.contains(&"ocrEnabled") || changed.contains(&"ocrBackfill") {
@@ -499,6 +523,7 @@ mod tests {
         assert!(changed_fields(&old, &old).is_empty());
         let new = Settings {
             hotkey: "Alt+Space".into(),
+            update_check: false,
             appearance: xpaste_core::Appearance::Light,
             panel_size: (1000.0, 700.0),
             spectrum_collapsed: true,
@@ -525,6 +550,7 @@ mod tests {
             changed_fields(&old, &new),
             [
                 "hotkey",
+                "updateCheck",
                 "appearance",
                 "panelSize",
                 "spectrumCollapsed",
