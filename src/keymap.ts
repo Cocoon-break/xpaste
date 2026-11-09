@@ -17,6 +17,8 @@ export type KeyCtx = {
   multi: number;
   /** 选中的记录可翻译（M26 规则 1） */
   selTranslatable: boolean;
+  /** 选中项是文本、代码或链接：Shift+Enter 粘贴为纯文本（M09 规则 7） */
+  selPlain: boolean;
   /** 精简模式（M27）、预览开着、分类不是“全部” */
   compact: boolean;
   peek: boolean;
@@ -32,6 +34,7 @@ export type Action =
   | { t: 'menuMove'; d: 1 | -1 }
   | { t: 'move'; d: 1 | -1; instant: boolean }
   | { t: 'copy' }
+  | { t: 'copyPlain' }
   | { t: 'copyIndex'; i: number }
   | { t: 'pin' }
   | { t: 'filter'; d: 1 | -1 }
@@ -82,6 +85,7 @@ export const keyAction = (e: KeyEv, c: KeyCtx): Action => {
   if (vert && e.shift && c.inSnip && !e.mod) return { t: 'extend', d: vert };
   if (vert) return { t: 'move', d: vert, instant: e.repeat };
   // 按住不连发：删除、复制（次数 +1）、置顶（来回翻转）都只认第一次按下
+  if (k === 'Enter' && e.shift && c.selPlain && c.multi < 2 && !e.mod && !e.ctrl && !c.onControl && !e.repeat) return { t: 'copyPlain' };
   if (k === 'Enter' && !e.mod && !e.ctrl && !c.onControl && !e.repeat) return { t: 'copy' };
   const digit = /^Digit([1-9])$/.exec(e.code);
   if (digit && e.mod) return e.repeat ? null : { t: 'copyIndex', i: Number(digit[1]) - 1 };

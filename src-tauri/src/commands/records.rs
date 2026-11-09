@@ -246,8 +246,10 @@ pub async fn copy(
     state: State<'_, AppState>,
     id: i64,
     paste: bool,
+    plain: bool,
 ) -> Result<CopyResult, AppError> {
     let flavors = precheck(&state, id)?;
+    let flavors = if plain { plain_only(flavors) } else { flavors };
     let bytes: usize = flavors.iter().map(|f| f.data.len()).sum();
     write_marked(&state, || xpaste_platform::write(&flavors)).inspect_err(|_| {
         log::warn!("写入剪切板失败 id={id} bytes={bytes}");
@@ -284,6 +286,16 @@ pub async fn copy(
             }
         }
     }
+}
+
+/// 粘贴为纯文本（M09 规则 7）：只留纯文本那一份，富文本、HTML 等格式不写回。
+/// 记录里没有纯文本格式（图片、文件）时原样写回。
+fn plain_only(flavors: Vec<Flavor>) -> Vec<Flavor> {
+    let plain = text_flavor("").format;
+    if !flavors.iter().any(|f| f.format == plain) {
+        return flavors;
+    }
+    flavors.into_iter().filter(|f| f.format == plain).collect()
 }
 
 /// 预览“复制文字”：只写一份纯文本，标记为自身写入（不入库、不计使用次数）。
@@ -451,6 +463,23 @@ mod tests {
             insert_text_record_without_flavors(&state)
         )));
         std::fs::remove_file(&f).unwrap();
+    }
+
+    #[test]
+    fn plain_only_keeps_text_flavor() {
+        let f = |format: &str| Flavor {
+            item: 0,
+            format: format.into(),
+            data: vec![1],
+        };
+        let plain = text_flavor("x").format;
+        let got = plain_only(vec![f("public.html"), f(&plain), f("public.rtf")]);
+        assert_eq!(
+            got.iter().map(|f| f.format.as_str()).collect::<Vec<_>>(),
+            [plain.as_str()]
+        );
+        // 没有纯文本格式（图片、文件）时原样写回
+        assert_eq!(plain_only(vec![f("public.png")]).len(), 1);
     }
 
     #[test]

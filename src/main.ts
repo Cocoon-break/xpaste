@@ -1233,12 +1233,15 @@ function toast(msg: string, { undo = false, icon = 'check' as keyof typeof I, ac
 // —— 操作 ——
 // 结果以后端事件为准：copy 之后 record-updated 带来新的 uses / copiedAt
 let copyTimer = 0;
-function copyRecord(id: number) {
+/** 文本、代码、链接可以只粘贴纯文本那一份（M09 规则 7） */
+const plainable = (r: Pick<RecordSummary, 'kind'>) => r.kind === 'text' || r.kind === 'code' || r.kind === 'link';
+
+function copyRecord(id: number, plain = false) {
   const before = S.records.get(id);
   // 多选时复制不可用（M25 规则 6）
   if (!before || S.removing.has(id) || S.multi.size >= 2) return;
   // 粘贴成功由后端直接隐藏面板（无淡出）；只复制或失败时面板不动
-  copy(id, true).then(
+  copy(id, true, plain).then(
     (res) => {
       const cur = S.records.get(id);
       // 事件可能还没到；并发的置顶、补全更新也不会让次数变少
@@ -1421,6 +1424,7 @@ function openMenu(id: number, x: number, y: number, viaKb: boolean, detail = det
   $('#mOpen').textContent = open ?? '';
   // 历史：粘贴、置顶、按类型的动作、存为片段…；片段：粘贴、编辑片段…、按类型的动作（M25 规则 6）
   $('[data-m="copy"]').hidden = bulk;
+  $('[data-m="copyPlain"]').hidden = bulk || !plainable(r);
   $('[data-m="peek"]').hidden = bulk || !compact();
   $('[data-m="pin"]').hidden = bulk || snip;
   $('[data-m="editSnippet"]').hidden = bulk || !snip;
@@ -2682,6 +2686,7 @@ document.addEventListener('keydown', (e) => {
       inSnip: S.filter === 'snip',
       multi: S.multi.size,
       selTranslatable: !!selR && translatable(selR),
+      selPlain: !!selR && plainable(selR),
       compact: S.settings.panelStyle === 'compact',
       peek: win.dataset.peek === 'true',
       filtered: S.filter !== 'all',
@@ -2699,6 +2704,7 @@ document.addEventListener('keydown', (e) => {
     case 'menuMove': return moveMenuFocus(a.d);
     case 'move': return move(a.d, a.instant);
     case 'copy': return void (sel !== null && copyRecord(sel));
+    case 'copyPlain': return void (sel !== null && copyRecord(sel, true));
     case 'copyIndex': {
       // 多选时复制不可用（M25 规则 6）
       const r = S.multi.size >= 2 ? undefined : vis()[a.i];
@@ -2959,6 +2965,7 @@ menu.addEventListener('click', (e) => {
   if (!m || id === null) return;
   closeMenu(true);
   if (m === 'copy') copyRecord(id);
+  if (m === 'copyPlain') copyRecord(id, true);
   if (m === 'peek') setPeek(true);
   if (m === 'pin') togglePin(id, mouse);
   if (m === 'open') openFromMenu(id);

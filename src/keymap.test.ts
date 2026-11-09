@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { keyAction, type KeyCtx, type KeyEv } from './keymap.ts';
 
 const ctx = (o: Partial<KeyCtx> = {}): KeyCtx => ({
-  inSearch: true, onControl: false, searchHasText: false, menuOpen: false, hasSel: true, canUndo: false, dialogOpen: false, selIsSnip: false, inSnip: false, multi: 0, selTranslatable: false, compact: false, peek: false, filtered: false, ...o,
+  inSearch: true, onControl: false, searchHasText: false, menuOpen: false, hasSel: true, canUndo: false, dialogOpen: false, selIsSnip: false, inSnip: false, multi: 0, selTranslatable: false, selPlain: false, compact: false, peek: false, filtered: false, ...o,
 });
 const ev = (o: Partial<KeyEv>): KeyEv => ({ key: '', code: '', mod: false, alt: false, shift: false, repeat: false, ...o });
 
@@ -79,7 +79,7 @@ test('Mod+, 打开设置', () => assert.deepEqual(keyAction(ev({ key: ',', mod: 
 
 test('⌃ + 字母不进搜索框，⌃ + Enter 不复制（macOS 上 ⌃ 不是 Mod）', () => {
   const base = { key: '', code: '', mod: false, alt: false, shift: false, repeat: false };
-  const ctx = { inSearch: false, onControl: false, searchHasText: false, menuOpen: false, hasSel: true, canUndo: false, dialogOpen: false, selIsSnip: false, inSnip: false, multi: 0, selTranslatable: false, compact: false, peek: false, filtered: false };
+  const ctx = { inSearch: false, onControl: false, searchHasText: false, menuOpen: false, hasSel: true, canUndo: false, dialogOpen: false, selIsSnip: false, inSnip: false, multi: 0, selTranslatable: false, selPlain: false, compact: false, peek: false, filtered: false };
   assert.equal(keyAction({ ...base, key: 'a', code: 'KeyA', ctrl: true }, ctx), null);
   assert.deepEqual(keyAction({ ...base, key: 'a', code: 'KeyA' }, ctx), { t: 'focusSearch' });
   assert.equal(keyAction({ ...base, key: 'Enter', code: 'Enter', ctrl: true }, ctx), null);
@@ -153,4 +153,14 @@ test('完整面板不受精简规则影响', () => {
   assert.deepEqual(keyAction(ev({ key: 'Escape' }), ctx({ filtered: true })), { t: 'hide' });
   assert.equal(keyAction(ev({ key: 'Backspace' }), ctx({ filtered: true })), null);
   assert.deepEqual(keyAction(ev({ key: 't', mod: true }), ctx({ selTranslatable: true })), { t: 'translate' });
+});
+
+test('Shift+Enter：有文字的记录粘贴为纯文本，其余照常粘贴（M09 规则 7）', () => {
+  const k = (o: Partial<KeyEv>, c: Partial<KeyCtx> = {}) => keyAction(ev(o), ctx(c));
+  assert.deepEqual(k({ key: 'Enter', shift: true }, { selPlain: true }), { t: 'copyPlain' });
+  assert.deepEqual(k({ key: 'Enter', shift: true }), { t: 'copy' });
+  assert.deepEqual(k({ key: 'Enter' }, { selPlain: true }), { t: 'copy' });
+  assert.equal(k({ key: 'Enter', shift: true, repeat: true }, { selPlain: true }), null);
+  // 多选时退回 copy，由 copyRecord 忽略（M25 规则 6）
+  assert.deepEqual(k({ key: 'Enter', shift: true }, { selPlain: true, multi: 2 }), { t: 'copy' });
 });

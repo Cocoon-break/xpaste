@@ -21,7 +21,8 @@ export const frontendReady = () => invoke<void>('frontend_ready');
 /** 有对话框打开时后端不因失焦或快捷键隐藏面板。 */
 /** `open`：设置、确认框或片段对话框开着（快捷键不隐藏面板）；`keep`：片段对话框开着或正在选文件夹（失焦也不隐藏，M04 规则 3） */
 export const setDialogOpen = (open: boolean, keep: boolean) => invoke<void>('set_dialog_open', { open, keep });
-export const copy = (id: number, paste: boolean) => invoke<CopyResult>('copy', { id, paste });
+/** `plain`：只写回纯文本那一份，去掉字体、颜色等格式（M09 规则 7） */
+export const copy = (id: number, paste: boolean, plain = false) => invoke<CopyResult>('copy', { id, paste, plain });
 /** 只写纯文本，标记为自身写入，不产生新记录。 */
 export const copyTextPlain = (text: string) => invoke<void>('copy_text_plain', { text });
 export const requestAccessibility = () => invoke<void>('request_accessibility');
