@@ -1,7 +1,7 @@
 import './styles.css';
 import { attachConsole, info } from './api/log';
 import {
-  accessibilityGranted, bootstrap, clearHistory, exportLogs, copy, copyTextPlain, countUnpinned, createSnippet, deleteRecords, finishOnboarding, frontendReady, getRecord, hidePanel, hotkeyStatus, installedApps,
+  accessibilityGranted, bootstrap, clearHistory, exportLogs, updateAvailable, copy, copyTextPlain, countUnpinned, createSnippet, deleteRecords, finishOnboarding, frontendReady, getRecord, hidePanel, hotkeyStatus, installedApps,
   ocrProgress, openUrl, overlayBegin, pickFolder, prunePreview, reocr, requestAccessibility, requestScreenCapture, revealFile, saveSettings, saveSnippet, screenCaptureGranted, search, trcardPress,
   setDialogOpen, setPaused, setPinned, translateEngines, translateDownload, translateRecord, translateStatus, translateTest, undoDelete, updateSnippet,
 } from './api/commands';
@@ -1678,7 +1678,9 @@ const dlg = $<HTMLDialogElement>('#settings'), form = $<HTMLFormElement>('#setti
 const hotkeyHelp = $('#hotkeyHelp'), retainIn = $<HTMLSelectElement>('#retain'), limitIn = $<HTMLInputElement>('#limit'), limitErr = $('#limitErr');
 const frequentIn = $<HTMLInputElement>('#frequentIn'), frequentErr = $('#frequentErr');
 const ignoreIn = $<HTMLInputElement>('#ignore'), sensitiveIn = $<HTMLInputElement>('#sensitive');
-const moveTopIn = $<HTMLInputElement>('#moveTop'), autostartIn = $<HTMLInputElement>('#autostart');
+const moveTopIn = $<HTMLInputElement>('#moveTop'), autostartIn = $<HTMLInputElement>('#autostart'), updCheckIn = $<HTMLInputElement>('#updateCheck');
+const updRow = $('#updRow'), updVer = $('#updVer'), updCur = $('#updCur');
+let updUrl = '';
 const ocrOnIn = $<HTMLInputElement>('#ocrOn'), ocrBackfillIn = $<HTMLInputElement>('#ocrBackfill'), fileTextIn = $<HTMLInputElement>('#fileText');
 const ocrProgressEl = $('#ocrProgress'), ocrUnsupportedEl = $('#ocrUnsupported');
 const permRow = $('#permRow'), permState = $('#permState'), permBtn = $<HTMLButtonElement>('#permBtn');
@@ -2198,6 +2200,15 @@ function openSettings() {
   sensitiveIn.checked = st.skipSensitive;
   moveTopIn.checked = st.moveToTop;
   autostartIn.checked = st.launchAtLogin;
+  updCheckIn.checked = st.updateCheck;
+  // 本次运行发现了新版本才显示这一行（M28 规则 4）
+  void updateAvailable().then((u) => {
+    updRow.hidden = !u;
+    if (!u) return;
+    updVer.textContent = `新版本 ${u.version}`;
+    updCur.textContent = `当前 ${u.current}`;
+    updUrl = u.url;
+  }, (e: AppError) => void info(`读取新版本失败 kind=${e.kind}`));
   ocrOnIn.checked = st.ocrEnabled;
   ocrBackfillIn.checked = st.ocrBackfill;
   fileTextIn.checked = st.searchFileText;
@@ -2285,7 +2296,7 @@ async function submitSettings() {
   if (limit === null || frequent === null || urlErr) return showStControl(stPanes.map((p) => p.querySelector<HTMLElement>('[aria-invalid="true"]')).find(Boolean)!);
   const s = formToSettings(S.settings, {
     hotkey: pendingHotkey, retain: retainIn.value, limit, frequent, ignored: addIgnored(draftIgnored, ignoreIn.value), skipSensitive: sensitiveIn.checked,
-    moveToTop: moveTopIn.checked, launchAtLogin: autostartIn.checked, ocrEnabled: ocrOnIn.checked, ocrBackfill: ocrBackfillIn.checked, searchFileText: fileTextIn.checked,
+    moveToTop: moveTopIn.checked, launchAtLogin: autostartIn.checked, updateCheck: updCheckIn.checked, ocrEnabled: ocrOnIn.checked, ocrBackfill: ocrBackfillIn.checked, searchFileText: fileTextIn.checked,
     shotHotkey: shotKey.pending, shotDir: shotDir.pending, shotSaveCopy: shotSaveCopyIn.checked, longAutoScroll: longAutoIn.checked,
     recHotkey: recKey.pending, recDir: recDir.pending, recSystemAudio: recSystemAudioIn.checked, recMicrophone: recMicIn.checked, recCopy: recCopyIn.checked,
     recQuality: recQualityIn.value, recFps: recFpsIn.value, panelStyle: draftStyle,
@@ -2933,6 +2944,7 @@ trBtn.addEventListener('click', () => S.sel !== null && doTranslate(S.sel));
 // 设置对话框留在确认框下面；列表与频谱由 records-removed 刷新
 $('#clearBtn').addEventListener('click', () => void confirmClear().then((m) => m && (clearNote.textContent = m)));
 // 成功时后端已在访达 / 资源管理器里选中文件，面板随之失焦隐藏；结果仍写进行内，下次打开设置时复原
+$('#updBtn').addEventListener('click', () => void openUrl(updUrl).catch((err: AppError) => toast(err.message)));
 $('#logBtn').addEventListener('click', () => void exportLogs().then(
   (name) => (logNote.textContent = `已导出到“下载”文件夹：${name}`),
   (e) => (logNote.textContent = `导出失败：${(e as AppError).message}`),

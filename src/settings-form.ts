@@ -48,6 +48,7 @@ export type SettingsForm = {
   skipSensitive: boolean;
   moveToTop: boolean;
   launchAtLogin: boolean;
+  updateCheck: boolean;
   ocrEnabled: boolean;
   ocrBackfill: boolean;
   searchFileText: boolean;
@@ -76,6 +77,7 @@ export const formToSettings = (base: Settings, f: SettingsForm): Settings => ({
   skipSensitive: f.skipSensitive,
   moveToTop: f.moveToTop,
   launchAtLogin: f.launchAtLogin,
+  updateCheck: f.updateCheck,
   ocrEnabled: f.ocrEnabled,
   ocrBackfill: f.ocrBackfill,
   searchFileText: f.searchFileText,

@@ -166,6 +166,7 @@
             <div class="switches" style="--i:3">
               <label class="switch"><span><b>开机时启动</b><small>登录系统后在后台待命</small></span><input type="checkbox" id="autostart" name="autostart" checked></label>
               <label class="switch"><span><b>复制后移到顶部</b><small>再次使用的条目会排到列表最前</small></span><input type="checkbox" id="moveTop" name="moveTop" checked></label>
+              <label class="switch"><span><b>自动检查更新</b><small>每天向 GitHub 查一次有没有新版本，不发送任何数据</small></span><input type="checkbox" id="updateCheck" name="updateCheck" checked></label>
             </div>
             <div class="field" style="--i:4">
               <div class="line"><span><label for="frequentIn"><b>进入“常用”的使用次数</b></label><small id="frequentHelp">同一条内容被复制这么多次后出现在“常用”</small></span><span class="suffix"><input type="number" id="frequentIn" min="2" max="99" step="1" inputmode="numeric" autocomplete="off" aria-describedby="frequentHelp frequentErr"><span>次</span></span></div>
@@ -175,7 +176,11 @@
               <span><b>自动粘贴权限</b><small id="permState"></small></span>
               <button class="btn sm" type="button" id="permBtn" hidden>前往授权</button>
             </div>
-            <div class="line" style="--i:6">
+            <div class="line" id="updRow" style="--i:6" hidden>
+              <span><b id="updVer"></b><small id="updCur"></small></span>
+              <button class="btn sm" type="button" id="updBtn">前往下载</button>
+            </div>
+            <div class="line" style="--i:7">
               <span><b>日志</b><small id="logNote" aria-live="polite">遇到问题时导出，发给开发者协助排查；不含剪切板内容</small></span>
               <button class="btn sm" type="button" id="logBtn">导出日志</button>
             </div>

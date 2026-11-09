@@ -17,6 +17,7 @@ pub mod state;
 mod translate;
 mod tray;
 mod trcard;
+mod update;
 
 use state::AppState;
 use std::path::PathBuf;
@@ -116,6 +117,7 @@ pub fn run() {
             ));
             ocr.schedule_backfill(app.handle(), ocr::BACKFILL_DELAY);
             housekeeping::start(app.handle().clone());
+            update::start(app.handle().clone());
             #[cfg(target_os = "macos")]
             panel::setup_macos(app).inspect_err(|e| log::error!("面板初始化失败：{e}"))?;
             #[cfg(windows)]
@@ -233,6 +235,7 @@ pub fn run() {
             commands::settings::set_paused,
             commands::settings::finish_onboarding,
             commands::settings::installed_apps,
+            commands::settings::update_available,
             commands::panel::hide_panel,
             commands::panel::frontend_ready,
             commands::panel::set_dialog_open,

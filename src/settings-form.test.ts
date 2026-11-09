@@ -48,7 +48,7 @@ test('retention 选项往返', () => {
 test('formToSettings 只改表单字段，其余（含外观：点选即保存，不经表单）沿用 base', () => {
   const base: Settings = {
     hotkey: 'CommandOrControl+Shift+V', retentionDays: 30, maxRecords: 500, ignoredApps: ['1Password'], skipSensitive: true,
-    moveToTop: true, launchAtLogin: true, appearance: 'system', panelSize: [880, 600], lastFilter: 'code', spectrumCollapsed: true,
+    moveToTop: true, launchAtLogin: true, updateCheck: true, appearance: 'system', panelSize: [880, 600], lastFilter: 'code', spectrumCollapsed: true,
     panelStyle: 'full', compactSize: [400, 520],
     frequentMinUses: 3, ocrEnabled: true, ocrBackfill: true, searchFileText: false,
     shotHotkey: 'Alt+Shift+A', shotDir: '', shotSaveCopy: true, longAutoScroll: false,
@@ -60,14 +60,14 @@ test('formToSettings 只改表单字段，其余（含外观：点选即保存�
   assert.deepEqual(
     formToSettings(base, {
       hotkey: 'CommandOrControl+Alt+C', retain: 'forever', limit: 1000, ignored: ['a', 'b'], skipSensitive: false, moveToTop: false,
-      launchAtLogin: false, frequent: 5, ocrEnabled: false, ocrBackfill: false, searchFileText: true,
+      launchAtLogin: false, updateCheck: false, frequent: 5, ocrEnabled: false, ocrBackfill: false, searchFileText: true,
       shotHotkey: 'Alt+Shift+S', shotDir: '/x', shotSaveCopy: false, longAutoScroll: true,
       recHotkey: 'Alt+Shift+T', recDir: '/y', recSystemAudio: true, recMicrophone: true, recCopy: false,
       recQuality: 'small', recFps: '60', panelStyle: 'compact',
     }),
     {
       hotkey: 'CommandOrControl+Alt+C', retentionDays: null, maxRecords: 1000, ignoredApps: ['a', 'b'], skipSensitive: false,
-      moveToTop: false, launchAtLogin: false, appearance: 'system', panelSize: [880, 600], lastFilter: 'code', spectrumCollapsed: true,
+      moveToTop: false, launchAtLogin: false, updateCheck: false, appearance: 'system', panelSize: [880, 600], lastFilter: 'code', spectrumCollapsed: true,
       panelStyle: 'compact', compactSize: [400, 520],
       frequentMinUses: 5, ocrEnabled: false, ocrBackfill: false, searchFileText: true,
       shotHotkey: 'Alt+Shift+S', shotDir: '/x', shotSaveCopy: false, longAutoScroll: true,

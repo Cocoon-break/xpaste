@@ -127,7 +127,7 @@ jobs:
             | Mac · Intel（macOS 13 及以上） | `xPaste_x64.dmg` |
             | Windows 10 21H2 / 11（x64） | `xPaste_x64-setup.exe` |
 
-            带版本号的文件与上面内容相同。
+            带版本号的文件与上面内容相同。用 Homebrew 装的执行 `brew upgrade --cask xpaste` 升级。
 
             ## 第一次打开
 
