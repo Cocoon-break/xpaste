@@ -14,7 +14,7 @@ make dev-isolated   # 开发运行；数据目录隔离在 .xpaste-dev/，开启
 make check          # 提交前跑：fmt --check + clippy -D warnings（debug 与 release 各一遍）+ 版本号一致性 + Rust/前端单元测试 + 前端构建
 make test           # 只跑单元测试（cargo test --workspace + pnpm test）
 make build-check    # 按发布配置编译应用但不打安装包（CI 不跑：PR 只跑 make check，合并进 main 后跑 make release）
-make release        # 打未签名安装包，收拢到 target/installers/
+make release        # 打安装包（本地默认不签名），收拢到 target/installers/
 ```
 
 跑单个测试：

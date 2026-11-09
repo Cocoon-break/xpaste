@@ -12,7 +12,10 @@
 
 [官网](https://cocoon-break.github.io/xpaste/) · [下载](#下载安装) · [功能规格说明](docs/xPaste-功能规格说明.md) · [参与开发](CONTRIBUTING.md)
 
-<img src="website/assets/panel.webp" width="760" alt="xPaste 面板：搜索框、复制频谱、内容分类、历史列表和预览">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/panel-dark.webp">
+  <img src="docs/screenshots/panel-light.webp" width="760" alt="xPaste 面板：搜索框、复制频谱、内容分类、历史列表和预览">
+</picture>
 
 </div>
 
@@ -57,13 +60,17 @@
 
 上面的链接始终指向最新版，历史版本在 [Releases](https://github.com/Cocoon-break/xpaste/releases)。
 
-**macOS**：打开 dmg，把 xPaste 拖进“应用程序”。安装包还没有签名，从浏览器下载后第一次打开会被系统拦下，可能提示“xPaste 已损坏，无法打开”，而且没有“仍要打开”按钮。这不是文件坏了，按下面的顺序放行：
+**macOS**：打开 dmg，把 xPaste 拖进“应用程序”。0.6.0 之后的版本用 Developer ID 签名并经过 Apple 公证，直接打开即可。
+
+从 0.6.0 及更早的版本升级上来时，签名身份变了，“辅助功能”和“屏幕录制”权限要重新授予一次：系统设置的列表里已有旧的 xPaste 条目时，先删掉再重新添加。之后升级不用再授权。
+
+0.6.0 及更早的版本没有签名，从浏览器下载后第一次打开会被系统拦下，可能提示“xPaste 已损坏，无法打开”，而且没有“仍要打开”按钮。这不是文件坏了，按下面的顺序放行：
 
 1. 在终端运行 `xattr -dr com.apple.quarantine /Applications/xPaste.app`（去掉隔离属性），再正常打开。这一步在各版本 macOS 上都有效。
 2. 如果弹窗写的是“无法验证开发者”而不是“已损坏”，也可以先双击打开一次，再到系统设置 → 隐私与安全性，在页面底部点“仍要打开”（出现这个按钮时才行）。
 3. 仅限 macOS 13–14：在访达的“应用程序”里按住 Control 点按 xPaste →“打开”，在弹窗里再点“打开”。从 macOS 15 起，这个方法不再能绕过拦截。
 
-**Windows**：运行安装程序，它会装到当前用户目录（`%LOCALAPPDATA%\xPaste`），不需要管理员权限。SmartScreen 提示“Windows 已保护你的电脑”时，点“更多信息 → 仍要运行”。部分 Windows 10 没有 WebView2 运行时，安装程序会在线下载，需要联网。
+**Windows**：运行安装程序，它会装到当前用户目录（`%LOCALAPPDATA%\xPaste`），不需要管理员权限。安装包没有签名，SmartScreen 提示“Windows 已保护你的电脑”时，点“更多信息 → 仍要运行”。部分 Windows 10 没有 WebView2 运行时，安装程序会在线下载，需要联网。
 
 ### 支持情况
 
@@ -124,6 +131,7 @@
 - 托盘菜单：
   - “翻译…”打开输入卡片；
   - “暂停记录”在重启后仍然有效；
+  - “导出日志”把日志和最近的崩溃报告打成一个 zip 放进“下载”文件夹，反馈问题时发给开发者，里面不含剪切板内容；
   - 菜单底部灰色的“xPaste <版本>”是当前版本号。
 
 ## 数据与隐私
@@ -147,7 +155,7 @@
 
 ## 已知限制
 
-- 安装包没有签名，也没有自动更新，新版本要手动下载安装。
+- 没有自动更新，新版本要手动下载安装。Windows 安装包没有签名；macOS 安装包从 0.6.0 之后的版本起签名并公证。
 - Windows 端的翻译、划词翻译已在实机上验收，截图、贴图、长截图还只在 CI 上编译并跑通单元测试；图片文字识别依赖系统已安装的 OCR 语言包。
 - macOS 分 Apple 芯片和 Intel 两个安装包，没有通用版本。
 - 截图的选区不能跨显示器；贴图退出 xPaste 就消失，重启不恢复。macOS 15 起系统会定期再次询问是否继续允许屏幕录制。
@@ -175,7 +183,8 @@ make check         # 提交前全量检查
 - [技术选型](docs/ADR-001-技术选型.md)
 - [实现设计](docs/specs/2026-10-18-xPaste-实现设计.md)：设计文档放在 `docs/specs/`，实施计划放在 `docs/plans/`
 - [验收记录](docs/验收记录.md)
-- [交互原型](docs/xpaste-prototype.html)：下载后用浏览器直接打开
+- [界面视觉规范「刻度」](docs/specs/2026-11-03-界面视觉规范-刻度-设计.md)：现在的界面视觉，附[面板视觉原型](docs/specs/2026-11-06-面板视觉原型.html)（下载后用浏览器直接打开）
+- [交互原型](docs/xpaste-prototype.html)：最早的交互原型，视觉已被「刻度」取代
 
 ## 许可证
 
