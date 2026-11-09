@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { keyAction, type KeyCtx, type KeyEv } from './keymap.ts';
 
 const ctx = (o: Partial<KeyCtx> = {}): KeyCtx => ({
-  inSearch: true, onControl: false, searchHasText: false, menuOpen: false, hasSel: true, canUndo: false, dialogOpen: false, selIsSnip: false, inSnip: false, multi: 0, selTranslatable: false, ...o,
+  inSearch: true, onControl: false, searchHasText: false, menuOpen: false, hasSel: true, canUndo: false, dialogOpen: false, selIsSnip: false, inSnip: false, multi: 0, selTranslatable: false, compact: false, peek: false, filtered: false, ...o,
 });
 const ev = (o: Partial<KeyEv>): KeyEv => ({ key: '', code: '', mod: false, alt: false, shift: false, repeat: false, ...o });
 
@@ -79,7 +79,7 @@ test('Mod+, 打开设置', () => assert.deepEqual(keyAction(ev({ key: ',', mod: 
 
 test('⌃ + 字母不进搜索框，⌃ + Enter 不复制（macOS 上 ⌃ 不是 Mod）', () => {
   const base = { key: '', code: '', mod: false, alt: false, shift: false, repeat: false };
-  const ctx = { inSearch: false, onControl: false, searchHasText: false, menuOpen: false, hasSel: true, canUndo: false, dialogOpen: false, selIsSnip: false, inSnip: false, multi: 0, selTranslatable: false };
+  const ctx = { inSearch: false, onControl: false, searchHasText: false, menuOpen: false, hasSel: true, canUndo: false, dialogOpen: false, selIsSnip: false, inSnip: false, multi: 0, selTranslatable: false, compact: false, peek: false, filtered: false };
   assert.equal(keyAction({ ...base, key: 'a', code: 'KeyA', ctrl: true }, ctx), null);
   assert.deepEqual(keyAction({ ...base, key: 'a', code: 'KeyA' }, ctx), { t: 'focusSearch' });
   assert.equal(keyAction({ ...base, key: 'Enter', code: 'Enter', ctrl: true }, ctx), null);
@@ -109,4 +109,46 @@ test('Mod+T 翻译', () => {
   assert.equal(keyAction(t, ctx({ hasSel: true, selTranslatable: false })), null);
   assert.equal(keyAction(t, ctx({ hasSel: true, selTranslatable: true, multi: 2 })), null);
   assert.equal(keyAction(t, ctx({ hasSel: true, selTranslatable: true, dialogOpen: true })), null);
+});
+
+// 精简模式（M27 规则 7–9）
+const cx = (o: Partial<KeyCtx> = {}) => ctx({ compact: true, ...o });
+
+test('精简：搜索框为空按空格开关预览；有字时空格照常输入', () => {
+  assert.deepEqual(keyAction(ev({ key: ' ' }), cx()), { t: 'peek' });
+  assert.equal(keyAction(ev({ key: ' ' }), cx({ searchHasText: true })), null);
+  assert.deepEqual(keyAction(ev({ key: ' ' }), cx({ peek: true, searchHasText: true })), { t: 'peek' });
+  assert.equal(keyAction(ev({ key: ' ' }), cx({ inSearch: false, onControl: true })), null);
+});
+
+test('精简：Mod+Y 有字没字都开关预览', () => {
+  assert.deepEqual(keyAction(ev({ key: 'y', mod: true }), cx()), { t: 'peek' });
+  assert.deepEqual(keyAction(ev({ key: 'y', mod: true }), cx({ searchHasText: true })), { t: 'peek' });
+});
+
+test('精简：Esc 先关预览，再清搜索，再回到全部，最后隐藏', () => {
+  assert.deepEqual(keyAction(ev({ key: 'Escape' }), cx({ peek: true, searchHasText: true, multi: 2 })), { t: 'peekClose' });
+  assert.deepEqual(keyAction(ev({ key: 'Escape' }), cx({ searchHasText: true, filtered: true })), { t: 'clearSearch' });
+  assert.deepEqual(keyAction(ev({ key: 'Escape' }), cx({ filtered: true })), { t: 'clearFilter' });
+  assert.deepEqual(keyAction(ev({ key: 'Escape' }), cx()), { t: 'hide' });
+  assert.deepEqual(keyAction(ev({ key: 'Escape' }), cx({ peek: true, menuOpen: true })), { t: 'menuClose' });
+});
+
+test('精简：搜索框为空按 ⌫ 去掉分类标签', () => {
+  assert.deepEqual(keyAction(ev({ key: 'Backspace' }), cx({ filtered: true })), { t: 'clearFilter' });
+  assert.equal(keyAction(ev({ key: 'Backspace' }), cx({ filtered: true, searchHasText: true })), null);
+  assert.equal(keyAction(ev({ key: 'Backspace' }), cx()), null);
+  assert.deepEqual(keyAction(ev({ key: 'Backspace', mod: true }), cx({ filtered: true })), { t: 'delete' });
+});
+
+test('精简：Mod+T 打开预览并翻译', () =>
+  assert.deepEqual(keyAction(ev({ key: 't', mod: true }), cx({ selTranslatable: true })), { t: 'peekTranslate' }));
+
+test('完整面板不受精简规则影响', () => {
+  assert.deepEqual(keyAction(ev({ key: ' ' }), ctx({ inSearch: false })), { t: 'focusSearch' });
+  assert.equal(keyAction(ev({ key: ' ' }), ctx()), null);
+  assert.equal(keyAction(ev({ key: 'y', mod: true }), ctx()), null);
+  assert.deepEqual(keyAction(ev({ key: 'Escape' }), ctx({ filtered: true })), { t: 'hide' });
+  assert.equal(keyAction(ev({ key: 'Backspace' }), ctx({ filtered: true })), null);
+  assert.deepEqual(keyAction(ev({ key: 't', mod: true }), ctx({ selTranslatable: true })), { t: 'translate' });
 });

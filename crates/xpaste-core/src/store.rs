@@ -1052,7 +1052,7 @@ impl Store {
             snippet_body,
             lines: row.get(13)?,
             url: row.get(14)?,
-            files: row.get(15)?,
+            file_count: row.get(15)?,
         })
     }
 
@@ -1452,7 +1452,7 @@ pub(crate) mod tests {
             .list_summaries()
             .unwrap()
             .into_iter()
-            .map(|r| (r.lines, r.url, r.files))
+            .map(|r| (r.lines, r.url, r.file_count))
             .collect();
         let url = Some("https://a.io/x".to_string());
         assert_eq!(

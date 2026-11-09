@@ -2185,7 +2185,7 @@ async function submitSettings() {
     moveToTop: moveTopIn.checked, launchAtLogin: autostartIn.checked, ocrEnabled: ocrOnIn.checked, ocrBackfill: ocrBackfillIn.checked, searchFileText: fileTextIn.checked,
     shotHotkey: shotKey.pending, shotDir: shotDir.pending, shotSaveCopy: shotSaveCopyIn.checked, longAutoScroll: longAutoIn.checked,
     recHotkey: recKey.pending, recDir: recDir.pending, recSystemAudio: recSystemAudioIn.checked, recMicrophone: recMicIn.checked, recCopy: recCopyIn.checked,
-    recQuality: recQualityIn.value, recFps: recFpsIn.value,
+    recQuality: recQualityIn.value, recFps: recFpsIn.value, panelStyle: S.settings.panelStyle,
   });
   // 翻译字段不经 SettingsForm；末尾的 / 由后端去掉。engine 没动过就原样写回（可能是空串）
   Object.assign(s, {
@@ -2565,6 +2565,9 @@ document.addEventListener('keydown', (e) => {
       inSnip: S.filter === 'snip',
       multi: S.multi.size,
       selTranslatable: !!selR && translatable(selR),
+      compact: S.settings.panelStyle === 'compact',
+      peek: win.dataset.peek === 'true',
+      filtered: S.filter !== 'all',
     },
   );
   if (!a) return;

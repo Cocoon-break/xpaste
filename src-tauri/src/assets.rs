@@ -99,7 +99,7 @@ mod tests {
                 snippet_body: None,
                 lines: None,
                 url: None,
-                files: None,
+                file_count: None,
             },
             text: None,
             truncated: false,

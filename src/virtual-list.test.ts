@@ -31,3 +31,16 @@ test('layout(groups, false) 不产生 head cell', () => {
   assert.deepEqual(cells.map((c) => c.kind), ['row', 'row']);
   assert.equal(total, 2 * ROW_H);
 });
+
+test('layout 带行高与按组的标题高：精简模式 36 行高、9 px 细线、0 不出标题（M27 规则 6）', () => {
+  const { cells, total } = layout(
+    [{ name: '置顶', rows: [{ id: 1 }, { id: 2 }] }, { name: '记录', rows: [{ id: 3 }, { id: 4 }] }],
+    true, 36, (gi) => [0, 9][gi],
+  );
+  assert.deepEqual(cells.map((c) => c.kind), ['row', 'row', 'head', 'row', 'row']);
+  assert.deepEqual(cells.map((c) => c.top), [0, 36, 72, 81, 117]);
+  assert.equal(total, 36 * 4 + 9);
+  assert.equal(topOf(cells, 3), 36 * 2 + 9);
+  // 按 36 高计算区间：scrollTop 81 起第一个可见的是 id 3
+  assert.deepEqual(range(cells, 81, 36, 0), [3, 4]);
+});

@@ -564,8 +564,8 @@ pub struct RecordSummary {
     pub lines: Option<u32>,
     /// 链接的地址（前 2048 字符）
     pub url: Option<String>,
-    /// 文件记录的文件个数
-    pub files: Option<u32>,
+    /// 文件记录的文件个数；不叫 files：`RecordDetail` 展平摘要后还有文件列表 `files`
+    pub file_count: Option<u32>,
 }
 
 impl fmt::Debug for RecordSummary {
@@ -1355,7 +1355,7 @@ mod tests {
             snippet_body: None,
             lines: None,
             url: None,
-            files: None,
+            file_count: None,
         };
         let d = RecordDetail {
             summary,

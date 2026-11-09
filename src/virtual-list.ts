@@ -4,24 +4,29 @@ export const ROW_H = 56;
 export const HEAD_H = 34;
 export const OVERSCAN = 8;
 
-/** `index` 为该行在 `vis` 中的序号，供 1–9 序号与 `--i`。 */
+/** `index` 为该行在 `vis` 中的序号，供 1–9 序号与 `--i`；`h` 为 cell 高。 */
 export type Cell =
-  | { kind: 'head'; name: string; count: number; top: number; gi: number }
-  | { kind: 'row'; id: number; index: number; top: number; gi: number };
+  | { kind: 'head'; name: string; count: number; top: number; gi: number; h: number }
+  | { kind: 'row'; id: number; index: number; top: number; gi: number; h: number };
 
-const height = (c: Cell) => (c.kind === 'head' ? HEAD_H : ROW_H);
-
-export const layout = (groups: { name: string; rows: { id: number }[] }[], heads = true): { cells: Cell[]; total: number } => {
+/** `rowH`、`headH` 默认是完整面板的；精简模式行更矮、各组标题高不同，`headH` 为 0 的组不出标题（M27 规则 6）。 */
+export const layout = (
+  groups: { name: string; rows: { id: number }[] }[],
+  heads = true,
+  rowH: number = ROW_H,
+  headH: (gi: number) => number = () => HEAD_H,
+): { cells: Cell[]; total: number } => {
   const cells: Cell[] = [];
   let top = 0, index = 0;
   groups.forEach((g, gi) => {
-    if (heads) {
-      cells.push({ kind: 'head', name: g.name, count: g.rows.length, top, gi });
-      top += HEAD_H;
+    const h = heads ? headH(gi) : 0;
+    if (h > 0) {
+      cells.push({ kind: 'head', name: g.name, count: g.rows.length, top, gi, h });
+      top += h;
     }
     for (const r of g.rows) {
-      cells.push({ kind: 'row', id: r.id, index: index++, top, gi });
-      top += ROW_H;
+      cells.push({ kind: 'row', id: r.id, index: index++, top, gi, h: rowH });
+      top += rowH;
     }
   });
   return { cells, total: top };
@@ -33,7 +38,7 @@ export const range = (cells: Cell[], scrollTop: number, viewportH: number, overs
   let lo = 0, hi = cells.length;
   while (lo < hi) {
     const mid = (lo + hi) >> 1;
-    if (cells[mid].top + height(cells[mid]) > scrollTop) hi = mid;
+    if (cells[mid].top + cells[mid].h > scrollTop) hi = mid;
     else lo = mid + 1;
   }
   const first = lo, bottom = scrollTop + viewportH;
