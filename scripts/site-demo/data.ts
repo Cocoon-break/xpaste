@@ -9,7 +9,7 @@ const MIN = 60e3;
 let uid = 0;
 export const nextId = () => ++uid;
 
-export const mk = (kind: Kind, title: string, app: string | null, ago: number, extra: Extra = {}): Demo => ({
+export const mk = (kind: Kind, title: string, app: string | null, ago: number, extra: Extra = {}): Demo => withCounts({
   id: nextId(),
   kind,
   title,
@@ -33,7 +33,18 @@ export const mk = (kind: Kind, title: string, app: string | null, ago: number, e
   translation: null,
   translationLang: null,
   translationEngine: null,
+  lines: null,
+  url: null,
+  fileCount: null,
   ...extra,
+});
+
+/** 精简模式单行补充用的三个字段，与 store.rs 的 SUMMARY_SQL 同样算法（M27 规则 4） */
+const withCounts = (d: Demo): Demo => ({
+  ...d,
+  lines: d.kind === 'text' || d.kind === 'code' ? (d.text ?? '').replace(/[\t\n\r ]+$/, '').split('\n').length : null,
+  url: d.kind === 'link' ? d.text : null,
+  fileCount: d.kind === 'file' ? d.files.length : null,
 });
 
 const img = (file: string, w: number, h: number, ocr: string | null, bytes: number): Extra => ({

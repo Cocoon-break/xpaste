@@ -6,7 +6,7 @@ use tauri::{
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Monitor, PhysicalPosition,
     PhysicalSize, Theme, WebviewWindow,
 };
-use xpaste_core::Appearance;
+use xpaste_core::{Appearance, PanelStyle, Settings};
 
 use crate::state::AppState;
 
@@ -180,12 +180,13 @@ pub(crate) fn cursor_monitor(app: &AppHandle) -> tauri::Result<Option<Monitor>> 
 
 /// 移到鼠标所在屏的工作区；失败只记日志，不影响显示。
 fn place(app: &AppHandle, w: &WebviewWindow) -> tauri::Result<()> {
-    let size = app
-        .state::<AppState>()
-        .settings
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .panel_size;
+    // 尺寸与最小尺寸按面板样式（M27 规则 2）
+    let (style, size) = {
+        let state = app.state::<AppState>();
+        let s = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+        (s.panel_style, style_size(&s))
+    };
+    let min = min_size(style);
     let Some(m) = cursor_monitor(app)? else {
         return Ok(());
     };
@@ -197,6 +198,8 @@ fn place(app: &AppHandle, w: &WebviewWindow) -> tauri::Result<()> {
         h: wa.size.height as f64 / sf,
     };
     let (x, y) = place_in_work_area(work, size);
+    // 先放宽或收紧最小尺寸再定尺寸：完整 → 精简时窗口才缩得下去
+    w.set_min_size(Some(LogicalSize::new(min.0, min.1)))?;
     if cfg!(target_os = "macos") {
         // macOS 的逻辑坐标就是点，与显示器缩放无关
         w.set_size(LogicalSize::new(size.0, size.1))?;
@@ -664,10 +667,58 @@ pub fn current_theme(app: &AppHandle) -> Option<Theme> {
     theme_of(app.state::<AppState>().settings().appearance)
 }
 
-/// 物理尺寸换成逻辑像素；不可见或小于 720 × 520 时不记。
-pub fn size_to_remember(phys: (u32, u32), sf: f64, visible: bool) -> Option<(f64, f64)> {
+/// 面板最小尺寸：完整 720 × 520，精简 360 × 400（M04 规则 5、M27 规则 2）。
+pub fn min_size(style: PanelStyle) -> (f64, f64) {
+    match style {
+        PanelStyle::Full => (720.0, 520.0),
+        PanelStyle::Compact => (360.0, 400.0),
+    }
+}
+
+/// 当前样式要用的尺寸。
+fn style_size(s: &Settings) -> (f64, f64) {
+    match s.panel_style {
+        PanelStyle::Full => s.panel_size,
+        PanelStyle::Compact => s.compact_size,
+    }
+}
+
+/// 物理尺寸换成逻辑像素；不可见或小于 `min` 时不记。
+pub fn size_to_remember(
+    phys: (u32, u32),
+    sf: f64,
+    visible: bool,
+    min: (f64, f64),
+) -> Option<(f64, f64)> {
     let size = (phys.0 as f64 / sf, phys.1 as f64 / sf);
-    (visible && size.0 >= 720.0 && size.1 >= 520.0).then_some(size)
+    (visible && size.0 >= min.0 && size.1 >= min.1).then_some(size)
+}
+
+/// 把拖出来的尺寸记进当前样式那一项（两种样式各自记住，M27 规则 2）；没变返回 false。
+fn remembered(s: &mut Settings, size: (f64, f64)) -> bool {
+    let slot = match s.panel_style {
+        PanelStyle::Full => &mut s.panel_size,
+        PanelStyle::Compact => &mut s.compact_size,
+    };
+    // 显示时 place() 按设置改尺寸也会触发 Resized，尺寸没变就不写
+    if same_size(*slot, size) {
+        return false;
+    }
+    *slot = size;
+    true
+}
+
+/// 保存设置时面板样式变了：面板开着就当场按新样式重新定尺寸与位置；隐藏时等下次唤起的 place()（M27 规则 1）。
+pub fn apply_style(app: &AppHandle) {
+    on_main(app, |app| {
+        let Some(w) = window(app) else { return };
+        if !w.is_visible().unwrap_or(false) {
+            return;
+        }
+        if let Err(e) = place(app, &w) {
+            log::warn!("按面板样式调整窗口失败：{e}");
+        }
+    });
 }
 
 /// 最近一次尺寸变化的编号；防抖期间又变了就放弃这次。
@@ -684,12 +735,14 @@ pub fn remember_size(app: &AppHandle) {
             return;
         }
         let Some(w) = window(&app) else { return };
+        let style = app.state::<AppState>().settings().panel_style;
         let read = || -> tauri::Result<_> {
             let p = w.inner_size()?;
             Ok(size_to_remember(
                 (p.width, p.height),
                 w.scale_factor()?,
                 w.is_visible()?,
+                min_size(style),
             ))
         };
         let size = match read() {
@@ -700,11 +753,10 @@ pub fn remember_size(app: &AppHandle) {
         let state = app.state::<AppState>();
         // 持 settings 锁写库，并发的 save_settings 不会被这里的旧字段覆盖（锁序 settings → store，无反向路径）
         let mut s = state.settings();
-        // 显示时 place() 按设置改尺寸也会触发 Resized，尺寸没变就不写
-        if same_size(s.panel_size, size) {
+        // 防抖期间样式被保存改了：这次的尺寸属于旧样式，不记
+        if s.panel_style != style || !remembered(&mut s, size) {
             return;
         }
-        s.panel_size = size;
         if let Err(e) = state.store().save_settings(&s) {
             log::warn!("保存面板尺寸失败：{e}");
         }
@@ -748,14 +800,41 @@ mod tests {
 
     #[test]
     fn size_to_remember_ignores_hidden_and_too_small() {
+        let full = min_size(PanelStyle::Full);
+        assert_eq!(full, (720.0, 520.0));
         assert_eq!(
-            size_to_remember((1920, 1280), 2.0, true),
+            size_to_remember((1920, 1280), 2.0, true, full),
             Some((960.0, 640.0))
         );
-        assert_eq!(size_to_remember((1920, 1280), 2.0, false), None);
-        assert_eq!(size_to_remember((1400, 1000), 2.0, true), None); // 700 × 500 < 720 × 520
+        assert_eq!(size_to_remember((1920, 1280), 2.0, false, full), None);
+        assert_eq!(size_to_remember((1400, 1000), 2.0, true, full), None); // 700 × 500 < 720 × 520
+        // 精简面板最小 360 × 400（M27 规则 2）
+        let compact = min_size(PanelStyle::Compact);
+        assert_eq!(
+            size_to_remember((720, 800), 2.0, true, compact),
+            Some((360.0, 400.0))
+        );
+        assert_eq!(size_to_remember((720, 798), 2.0, true, compact), None);
         assert!(same_size(SIZE, (960.5, 639.5)));
         assert!(!same_size(SIZE, (962.0, 640.0)));
+    }
+
+    #[test]
+    fn remember_size_picks_field_by_style() {
+        let mut s = xpaste_core::Settings {
+            panel_style: PanelStyle::Compact,
+            ..Default::default()
+        };
+        assert!(remembered(&mut s, (380.0, 450.0)));
+        assert_eq!((s.compact_size, s.panel_size), ((380.0, 450.0), SIZE));
+        // 与现值相差不超过 1 px 不算变化
+        assert!(!remembered(&mut s, (380.5, 449.5)));
+        s.panel_style = PanelStyle::Full;
+        assert!(remembered(&mut s, (1000.0, 700.0)));
+        assert_eq!(
+            (s.compact_size, s.panel_size),
+            ((380.0, 450.0), (1000.0, 700.0))
+        );
     }
 
     #[test]

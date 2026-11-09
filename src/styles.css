@@ -665,6 +665,93 @@ dialog > form { display: contents; }
   .statusbar .k:not(:first-child) { display: none; }
 }
 
+/* —— 精简模式（M27）：只有搜索栏和单行列表；取值照原型 docs/specs/2026-11-09-精简模式-原型.html。
+   写在窄窗口规则之后：精简窗口不到 760 宽，要盖过上面的上下叠放 —— */
+#moreBtn, .peek-hint, .q-chip, .paused-pill { display: none; }
+:root[data-style="compact"] .window { grid-template-rows: auto minmax(0, 1fr); }
+:root[data-style="compact"] .titlebar, :root[data-style="compact"] .spectrum, :root[data-style="compact"] .tabs-scroll,
+:root[data-style="compact"] .statusbar, :root[data-style="compact"] #settingsBtn { display: none; }
+:root[data-style="compact"] .searchbar { gap: 4px; padding: 8px; }
+:root[data-style="compact"] .search { height: 36px; gap: 8px; padding: 0 10px 0 11px; }
+:root[data-style="compact"] .search input { font-size: 14px; }
+:root[data-style="compact"] .count { font: 12px var(--font-ui); color: var(--faint); }
+:root[data-style="compact"] #moreBtn { display: inline-flex; flex: none; width: 28px; height: 28px; }
+:root[data-style="compact"] #moreBtn[aria-expanded="true"] { color: var(--fg); background: var(--glass-3); }
+:root[data-style="compact"] .q-chip:not([hidden]) {
+  flex: none; display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: 6px;
+  font-size: 12px; color: var(--fg); background: var(--seg-on); box-shadow: var(--seg-ring);
+}
+/* 有分类标签时不再显示占位“搜索” */
+:root[data-style="compact"] .q-chip:not([hidden]) ~ input::placeholder { color: transparent; }
+.q-chip i { width: 6px; height: 6px; border-radius: 50%; background: var(--tg, var(--muted)); }
+.q-chip[data-type="all"] i, .q-chip[data-type="fav"] i { background: var(--c-fav); }
+.q-chip[data-type="snip"] i { background: var(--c-snip); }
+/* 暂停记录：搜索框右侧一个可点的标记（M27 规则 10），状态点同标题栏 */
+:root[data-style="compact"] .paused-pill:not([hidden]) {
+  flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 2px 6px; border: 0; border-radius: 5px;
+  background: none; color: var(--muted); font-size: 11.5px; cursor: pointer;
+}
+.paused-pill i { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
+@media (hover: hover) and (pointer: fine) { .paused-pill:hover { background: var(--hover); } }
+#moreMenu { left: auto; right: 8px; top: 46px; transform-origin: right top; }
+
+:root[data-style="compact"] .body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); position: relative; border-radius: 0 0 13px 13px; }
+:root[data-style="compact"] .list-col { border: 0; }
+:root[data-style="compact"] .list { padding: 4px 6px 8px; }
+:root[data-style="compact"] .snip-bar { padding: 8px 12px 4px; }
+:root[data-style="compact"] .empty { padding: 48px 16px; }
+/* 选中光标：36 高，左缘 2 × 14 的刻度 */
+:root[data-style="compact"] .sel-ind { height: 36px; border-radius: 7px; }
+:root[data-style="compact"] .sel-ind::before { left: 3px; top: 11px; height: 14px; }
+:root[data-style="compact"] .row { border-radius: 7px; }
+:root[data-style="compact"] .row-in { height: 36px; grid-template-columns: 20px minmax(0, 1fr) auto; gap: 10px; padding: 0 8px 0 12px; }
+:root[data-style="compact"] .thumb { width: 20px; height: 20px; border-radius: 4px; background: none; }
+:root[data-style="compact"] .thumb:has(img) { border: 0; box-shadow: 0 0 0 1px var(--line-2); }
+:root[data-style="compact"] .thumb .play { background: rgb(0 0 0 / .2); }
+:root[data-style="compact"] .thumb .play .ic { width: 9px; height: 9px; }
+:root[data-style="compact"] .thumb .ocr-badge, :root[data-style="compact"] .meta, :root[data-style="compact"] .qa { display: none; }
+:root[data-style="compact"] .title { display: flex; align-items: baseline; gap: 8px; }
+:root[data-style="compact"] .title .t { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+:root[data-style="compact"] .title .t.mono { font: 12.5px var(--font-mono); }
+:root[data-style="compact"] .title .cx { flex: 0 1000 auto; min-width: 24px; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--faint); }
+/* 没有页面标题的链接：域名完整，路径截断 */
+:root[data-style="compact"] .title.rev .t { flex: none; max-width: 70%; }
+:root[data-style="compact"] .title.rev .cx { flex: 1 1 auto; max-width: none; }
+:root[data-style="compact"] .ocr-tag { flex: none; font-size: 11.5px; color: var(--c-image); }
+:root[data-style="compact"] .row[data-type="snip"] .title .t { color: var(--c-snip); }
+:root[data-style="compact"] .row[aria-selected="true"] .cx { color: var(--muted); }
+:root[data-style="compact"] .tail { min-width: 0; gap: 4px; color: var(--faint); }
+:root[data-style="compact"] .tail .ic { width: 13px; height: 13px; }
+:root[data-style="compact"] .idx { padding: 0 2px; font-variant-numeric: tabular-nums; }
+/* 没有悬停按钮，序号与图钉悬停时也留着 */
+:root[data-style="compact"] .row:hover .idx, :root[data-style="compact"] .row:hover .pin-mark { opacity: 1; }
+/* 分组：片段组时的小标题，置顶之后的细线（M27 规则 6） */
+:root[data-style="compact"] .glabel { height: 24px; box-sizing: border-box; display: flex; align-items: center; gap: 8px; padding: 4px 12px 0; font-size: 11px; color: var(--faint); }
+:root[data-style="compact"] .glabel::after, :root[data-style="compact"] .rule::before { content: ""; flex: 1; height: 1px; background: var(--line); }
+:root[data-style="compact"] .rule { height: 9px; display: flex; align-items: center; padding: 0 12px; }
+
+/* 预览：盖在列表上，只有类型标签与按键提示（M27 规则 8） */
+:root[data-style="compact"] .preview { display: none; }
+:root[data-style="compact"] #win[data-peek="true"] .preview {
+  display: grid; position: absolute; inset: 6px; z-index: 3;
+  background: var(--pop-solid); border: 1px solid var(--line-2); border-radius: 10px; box-shadow: var(--shadow-pop);
+  animation: peekIn 180ms var(--ease-enter);
+}
+@keyframes peekIn { from { opacity: 0; transform: scale(.98); } }
+:root[data-style="compact"] .pact { display: none; }
+:root[data-style="compact"] .phead { min-height: 38px; padding: 4px 10px 4px 12px; }
+:root[data-style="compact"] .peek-hint { display: inline-flex; align-items: center; gap: 4px; flex: none; font-size: 11.5px; color: var(--faint); }
+:root[data-style="compact"] .peek-hint kbd { margin-left: 6px; }
+:root[data-style="compact"] .pbody { padding: 12px 14px; }
+:root[data-style="compact"] .pmeta { padding: 8px 12px; }
+
+/* 设置铺满精简窗口，不留遮罩边（M27 规则 12） */
+:root[data-style="compact"] #settings[open] { width: 100%; height: 100%; max-width: none; max-height: none; margin: 0; border: 0; border-radius: 14px; background: var(--pop-solid); }
+:root[data-style="compact"] #settings::backdrop { background: transparent; }
+/* 面板样式：两段文字，选中块不滑动 */
+.seg.text button { width: auto; padding: 0 12px; font-size: 12.5px; }
+.seg.text button[aria-checked="true"] { background: var(--pop-solid); box-shadow: inset 0 0 0 1px var(--line-2), 0 2px 6px -2px rgb(0 0 0 / .3); }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after, ::backdrop { transition-duration: 0s !important; transition-delay: 0s !important; animation: none !important; }
   /* 过渡归零后悬停仍会瞬间放大，减少动态效果时干脆不缩放 */

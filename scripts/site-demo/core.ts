@@ -17,6 +17,9 @@ export const settings: Settings = {
   launchAtLogin: false,
   appearance: q.get('theme') === 'light' ? 'light' : q.get('theme') === 'dark' ? 'dark' : 'system',
   panelSize: [960, 640],
+  // ?style=compact：精简模式（M27），核对界面用
+  panelStyle: q.get('style') === 'compact' ? 'compact' : 'full',
+  compactSize: [400, 520],
   lastFilter: 'all',
   // ?spectrum=0：搜索场景里把频谱收起来，列表多露出几行
   spectrumCollapsed: q.get('spectrum') === '0',

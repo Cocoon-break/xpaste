@@ -21,7 +21,8 @@ import {
   onShotNeedPermission,
   onTranslateDelta,
 } from './api/events';
-import type { AppError, Appearance, Engines, FileEntry, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
+import type { AppError, Appearance, Engines, FileEntry, PanelStyle, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
+import { COMPACT, compactGroups, compactHeadH, rowParts } from './compact';
 import { copyToast, needsAccessibility } from './copy-status';
 import {
   canInlinePlay, esc, FILTERS, FL, fmtBytes, fmtDateTime, fmtDur, fmtInt, hl, hlCode, host, isFav, isHttpUrl, isSnip, LABEL, rel, truncate, videoChips,
@@ -71,6 +72,11 @@ const I = {
   sun: '<circle cx="10" cy="10" r="3.2"/><path d="M10 2.5v1.8M10 15.7v1.8M2.5 10h1.8M15.7 10h1.8M4.7 4.7 6 6M14 14l1.3 1.3M15.3 4.7 14 6M6 14l-1.3 1.3"/>',
   moon: '<path d="M15.5 12.2A6 6 0 0 1 7.8 4.5a6 6 0 1 0 7.7 7.7z"/>',
   chevron: '<path d="m6 12 4-4 4 4"/>',
+  // 精简模式（M27）：更多、预览、暂停、完整面板
+  more: '<circle cx="5" cy="10" r=".9" fill="currentColor"/><circle cx="10" cy="10" r=".9" fill="currentColor"/><circle cx="15" cy="10" r=".9" fill="currentColor"/>',
+  eye: '<path d="M2.5 10s2.8-5.2 7.5-5.2 7.5 5.2 7.5 5.2-2.8 5.2-7.5 5.2S2.5 10 2.5 10z"/><circle cx="10" cy="10" r="2.2"/>',
+  pause: '<path d="M7.5 5v10M12.5 5v10"/>',
+  panel: '<rect x="2.5" y="4" width="15" height="12" rx="2"/><path d="M9 4v12M9 8h8.5"/>',
   monitor: '<rect x="3" y="4" width="14" height="9.5" rx="1.5"/><path d="M7.5 16.5h5M10 13.5v3"/>',
   // 片段：书签与铅笔（M25 规则 2、6）
   snip: '<path d="M6 3.5h8v13l-4-3-4 3z"/>',
@@ -111,6 +117,7 @@ const pinBtn = $<HTMLButtonElement>('#pinBtn'), copyBtn = $<HTMLButtonElement>('
 const trBtn = $<HTMLButtonElement>('#trBtn');
 const delBtn = $<HTMLButtonElement>('#delBtn'), saveSnipBtn = $<HTMLButtonElement>('#saveSnipBtn'), editSnipBtn = $<HTMLButtonElement>('#editSnipBtn');
 const snipBar = $('#snipBar');
+const moreMenu = $('#moreMenu'), moreBtn = $('#moreBtn'), qChip = $('#qChip'), pausedPill = $('#pausedPill');
 const menu = $('#menu'), mOpen = $<HTMLButtonElement>('[data-m="open"]'), toastEl = $('#toast'), toastMsg = $('#toastMsg'), undoBtn = $<HTMLButtonElement>('#undoBtn'), toastAct = $<HTMLButtonElement>('#toastAct'), pauseBtn = $('#pauseBtn');
 const spBars = $('#spBars'), spTrack = $('#spTrack'), spBeam = $('#spBeam'), spTip = $('#spTip');
 const spMini = $('#spMini'), spPresets = $('#spPresets');
@@ -146,7 +153,7 @@ const S = {
   /** 当前可见条数，供 aria-setsize */
   count: 0,
 };
-const menuOpen = () => menu.dataset.open === 'true';
+const menuOpen = () => menu.dataset.open === 'true' || moreMenu.dataset.open === 'true';
 
 // —— 随状态变化的文案 ——
 const undoHint = $('#undoHint'), escHintEl = $('#escHint');
@@ -168,6 +175,17 @@ const source = (r: RecordSummary) => r.app?.name || '未知来源';
 /** 行、选中光标与预览标签的类型色：片段统一用片段色（M25 规则 2） */
 const typeOf = (r: RecordSummary) => (isSnip(r) ? 'snip' : r.kind);
 const modKey = () => (S.platform.os === 'macos' ? '⌘' : 'Ctrl');
+/** 精简模式（M27）：根元素 data-style 换布局，行更矮 */
+const compact = () => S.settings.panelStyle === 'compact';
+const rowH = () => (compact() ? COMPACT.row : ROW_H);
+// 精简行只有一行：标题加淡色补充，命中图中文字时标题换成命中片段（M27 规则 4、5）
+const titleHTML = (r: RecordSummary) => {
+  const mono = r.kind === 'code' && !isSnip(r) ? ' mono' : '';
+  if (!compact()) return `<div class="title${mono}">${hl(r.title, S.marks.get(r.id) ?? S.q)}</div>`;
+  const p = rowParts(r, { q: S.q, mark: S.marks.get(r.id), snippet: S.snippets.get(r.id) });
+  return `<div class="title${p.rev ? ' rev' : ''}">${p.ocr ? '<span class="ocr-tag">图中文字</span>' : ''}<span class="t${mono}">${p.title}</span>${p.extra ? `<span class="cx">${p.extra}</span>` : ''}</div>`;
+};
+const idxLabel = (i: number) => (!compact() ? String(i + 1) : S.platform.os === 'macos' ? `⌘${i + 1}` : `Ctrl+${i + 1}`);
 const newSnipHTML = () => `<button class="btn sm new-snip" type="button" data-act="new">${svg('plus')}新建片段<kbd>${modKey()} N</kbd></button>`;
 
 const thumb = (r: RecordSummary) =>
@@ -193,11 +211,11 @@ const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id ===
         <div class="row-in">
           ${thumb(r)}
           <div class="main">
-            <div class="title${r.kind === 'code' && !isSnip(r) ? ' mono' : ''}">${hl(r.title, S.marks.get(r.id) ?? S.q)}</div>
+            ${titleHTML(r)}
             <div class="meta">${metaLine(r)}</div>
           </div>
           <div class="tail">
-            ${r.pinned ? `<span class="pin-mark">${svg('pinFill')}</span>` : ''}${i < 9 ? `<kbd class="idx">${i + 1}</kbd>` : ''}
+            ${r.pinned ? `<span class="pin-mark">${svg('pinFill')}</span>` : ''}${i < 9 ? `<kbd class="idx">${idxLabel(i)}</kbd>` : ''}
             <span class="qa" aria-hidden="true">
               ${isSnip(r) ? `<button type="button" tabindex="-1" data-qa="edit" title="编辑片段">${svg('pencil')}</button>`
                 : `<button type="button" tabindex="-1" data-qa="pin" title="${r.pinned ? '取消置顶' : '置顶'}">${svg(r.pinned ? 'pinFill' : 'pin')}</button>`}
@@ -212,7 +230,8 @@ const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id ===
 function setCount(n: number) {
   const c = counts(S.records, favMin());
   const total = S.filter === 'snip' ? c.snip : S.filter === 'all' && S.matchIds ? c.all + c.snip : c.all;
-  const html = `${fmtInt(n)}<small>/ ${fmtInt(total)}</small>`;
+  // 精简模式只在有搜索词或分类标签时显示“N 条”（M27 规则 7）
+  const html = !compact() ? `${fmtInt(n)}<small>/ ${fmtInt(total)}</small>` : S.q.trim() || S.filter !== 'all' ? `${fmtInt(n)} 条` : '';
   if (countEl.innerHTML === html) return;
   countEl.innerHTML = html;
   fx(countEl, [{ transform: 'translateY(6px)', opacity: 0, filter: 'blur(3px)' }, { transform: 'none', opacity: 1, filter: 'blur(0)' }], { duration: 260, easing: EASE_ENTER });
@@ -245,10 +264,10 @@ type Gone = { tops: number[]; over: number };
 const goneOf = (): Gone => {
   const tops = [...S.removing].flatMap((id) => topOf(S.cells, id) ?? []);
   // 删除后的最大滚动量不小于 0：不满一屏（或溢出不足）时不夹紧
-  const over = tops.length ? Math.max(0, list.scrollTop - Math.max(0, list.scrollHeight - tops.length * ROW_H - list.clientHeight)) : 0;
+  const over = tops.length ? Math.max(0, list.scrollTop - Math.max(0, list.scrollHeight - tops.length * rowH() - list.clientHeight)) : 0;
   return { tops, over };
 };
-const shiftUp = (top: number, g: Gone) => top + g.over - g.tops.filter((t) => t < top).length * ROW_H;
+const shiftUp = (top: number, g: Gone) => top + g.over - g.tops.filter((t) => t < top).length * rowH();
 const shownTop = (id: number) => {
   const t = topOf(S.cells, id);
   return t === undefined ? t : shiftUp(t, goneOf());
@@ -281,7 +300,7 @@ function paintRows({ stagger = false, glide = '', glideBusy = '' } = {}) {
     if (c.kind === 'row' && !r) continue;
     const key = c.kind === 'head' ? 'h' + c.name : 'r' + c.id;
     const h = r && c.kind === 'row' ? rowHTML(r, c.index, false, false)
-      : c.kind === 'head' ? `<div class="ghead" role="presentation" id="gh${c.gi}">${esc(c.name)}<span>${c.count}</span></div>` : '';
+      : c.kind === 'head' ? headHTML(c) : '';
     let p = painted.get(key);
     if (!p) {
       const el = document.createElement('div');
@@ -329,6 +348,12 @@ function markSel() {
   q.setAttribute('aria-activedescendant', r ? r.id : '');
 }
 
+// 精简模式的组标题：有片段组时是小标题，否则是置顶后的一条细线（M27 规则 6）
+function headHTML(c: Extract<Cell, { kind: 'head' }>) {
+  if (!compact()) return `<div class="ghead" role="presentation" id="gh${c.gi}">${esc(c.name)}<span>${c.count}</span></div>`;
+  return c.h === COMPACT.label ? `<div class="glabel" role="presentation">${esc(c.name)}</div>` : '<div class="rule" role="presentation"></div>';
+}
+
 let paintRaf = 0;
 const schedulePaint = () => {
   if (!paintRaf) paintRaf = requestAnimationFrame(() => {
@@ -358,7 +383,10 @@ function renderList({ scroll = false, stagger = false, base = 0, glide = '' } = 
     select(null);
     return;
   }
-  ({ cells: S.cells, total: S.total } = layout(groups(v, S.filter), !snip));
+  if (compact()) {
+    const gs = compactGroups(v, S.filter);
+    ({ cells: S.cells, total: S.total } = layout(gs, !snip, COMPACT.row, (gi) => compactHeadH(gs, gi)));
+  } else ({ cells: S.cells, total: S.total } = layout(groups(v, S.filter), !snip));
   rowsEl.querySelector('.empty')?.remove();
   rowsEl.style.height = S.total + 'px';
   paintRows({ stagger, glide });
@@ -391,9 +419,11 @@ type SelectOpts = { scroll?: boolean; glide?: boolean; instant?: boolean; fade?:
 function select(id: number | null, { scroll = false, glide = true, instant = false, fade = true, indDur, indEase, pan }: SelectOpts = {}) {
   const changed = S.sel !== id;
   S.sel = id;
+  // 没有选中项（列表空了）时不留一块空的预览（M27 规则 8）
+  if (id === null) setPeek(false);
   const top = id === null ? undefined : shownTop(id);
   if (scroll && top !== undefined) {
-    const st = scrollTo(top + padTop(), ROW_H, list.scrollTop, list.clientHeight);
+    const st = scrollTo(top + padTop(), rowH(), list.scrollTop, list.clientHeight);
     // 先同步滚动并重绘，保证 aria-activedescendant 指向的行已在 DOM 中
     if (st !== list.scrollTop) {
       list.scrollTop = st;
@@ -451,6 +481,33 @@ function setPin(on: boolean, instant: boolean) {
   });
   pinBtn.setAttribute('aria-pressed', String(on));
   pinBtn.setAttribute('aria-label', on ? '取消置顶' : '置顶');
+}
+
+// 精简模式的预览盖在列表上（M27 规则 8）：内容就是右侧预览，选中变了它跟着变；没有选中时不开
+function setPeek(on: boolean) {
+  if (on && S.sel === null) return;
+  win.dataset.peek = String(on);
+  if (on) $('#peekKey').textContent = q.value ? `${modKey()} Y` : '空格';
+  else {
+    // 预览里在播的视频跟着停；焦点在预览里时交还搜索框
+    pbody.querySelectorAll('video').forEach((v) => v.pause());
+    if (pbody.closest('.preview')!.contains(document.activeElement)) q.focus({ preventScroll: true });
+  }
+}
+// 精简搜索框只写“搜索”（M27 规则 3）
+const Q_PLACEHOLDER = q.placeholder;
+function setStyleRoot(style: PanelStyle) {
+  root.dataset.style = style;
+  q.placeholder = style === 'compact' ? '搜索' : Q_PLACEHOLDER;
+}
+// 换面板样式（M27 规则 1）：窗口尺寸由后端 apply_style 改，这里换布局并按新行高重排
+function applyStyle(style: PanelStyle) {
+  setStyleRoot(style);
+  setPeek(false);
+  closeMenu(false);
+  renderTabs(true);
+  renderList({ scroll: true });
+  moveInd({ instant: true });
 }
 
 // —— 预览 ——
@@ -1051,6 +1108,10 @@ function renderTabs(instant: boolean) {
     tabsOver.style.clipPath = `inset(0 ${r}px 0 ${l}px round 7px)`;
   });
   if (instant) b.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  // 精简模式没有标签栏：不是“全部”时分类显示在搜索框里（M27 规则 7）
+  qChip.hidden = S.filter === 'all';
+  qChip.dataset.type = S.filter;
+  qChip.lastElementChild!.textContent = FL[S.filter];
 }
 // 界面记忆（分类 M06 等）：合并写进 settings，失败不提示。
 // 防抖 300ms：按住 Mod+←/→ 连续切换时只写最后落定的值；成功后只合并本次 patch，不回滚同时进行的设置保存
@@ -1360,6 +1421,7 @@ function openMenu(id: number, x: number, y: number, viaKb: boolean, detail = det
   $('#mOpen').textContent = open ?? '';
   // 历史：粘贴、置顶、按类型的动作、存为片段…；片段：粘贴、编辑片段…、按类型的动作（M25 规则 6）
   $('[data-m="copy"]').hidden = bulk;
+  $('[data-m="peek"]').hidden = bulk || !compact();
   $('[data-m="pin"]').hidden = bulk || snip;
   $('[data-m="editSnippet"]').hidden = bulk || !snip;
   $('[data-m="saveSnippet"]').hidden = bulk || snip;
@@ -1389,14 +1451,26 @@ function openMenu(id: number, x: number, y: number, viaKb: boolean, detail = det
 function closeMenu(restore: boolean) {
   if (!menuOpen()) return;
   menu.dataset.open = 'false';
+  moreMenu.dataset.open = 'false';
+  moreBtn.setAttribute('aria-expanded', 'false');
   S.menuFor = null;
   const back = restore && menuReturn && document.contains(menuReturn) ? menuReturn : null;
   // 焦点不能留在隐藏的菜单里，否则 Enter 还会触发旧动作
   if (back) back.focus({ preventScroll: true });
-  else if (menu.contains(document.activeElement)) q.focus({ preventScroll: true });
+  else if (menu.contains(document.activeElement) || moreMenu.contains(document.activeElement)) q.focus({ preventScroll: true });
+}
+// 精简模式的“更多”菜单（M27 规则 10）：位置固定在按钮下方，由 CSS 定
+function openMore() {
+  if (menuOpen()) closeMenu(false);
+  $('#mmPause').textContent = S.paused ? '继续记录' : '暂停记录';
+  menuReturn = document.activeElement as HTMLElement | null;
+  moreMenu.dataset.open = 'true';
+  moreBtn.setAttribute('aria-expanded', 'true');
+  moreMenu.querySelector<HTMLElement>('button')!.focus({ preventScroll: true });
 }
 function moveMenuFocus(d: 1 | -1) {
-  const bs = [...menu.querySelectorAll<HTMLElement>('button:not([hidden])')];
+  const m = moreMenu.dataset.open === 'true' ? moreMenu : menu;
+  const bs = [...m.querySelectorAll<HTMLElement>('button:not([hidden])')];
   const i = bs.indexOf(document.activeElement as HTMLElement);
   bs[(i + d + bs.length) % bs.length].focus();
 }
@@ -1412,6 +1486,7 @@ function openFromMenu(id: number) {
 }
 
 function paintPause() {
+  pausedPill.hidden = !S.paused;
   pauseBtn.querySelector('span')!.textContent = S.paused ? '已暂停' : '正在记录';
   pauseBtn.setAttribute('aria-pressed', String(S.paused));
   pauseBtn.dataset.paused = String(S.paused);
@@ -1934,6 +2009,32 @@ ignoreBox.addEventListener('click', (e) => {
 
 // 外观：点选即生效并立即保存（不防抖、不预览，关闭对话框不还原）。窗口主题由 save_settings 切换；
 // 切到“跟随系统”时 prefers-color-scheme 随窗口主题翻转，由下方 matchMedia 监听整体切换
+// 面板样式（M27 规则 1）：只改表单里的选择，随“保存设置”生效
+const styleSeg = $('#styleSeg'), styleOpts = [...styleSeg.querySelectorAll<HTMLElement>('[data-style-opt]')];
+let draftStyle: PanelStyle = 'full';
+function paintStyle() {
+  for (const b of styleOpts) {
+    const on = b.dataset.styleOpt === draftStyle;
+    b.setAttribute('aria-checked', String(on));
+    b.tabIndex = on ? 0 : -1;
+  }
+  $('#styleHelp').textContent = draftStyle === 'compact' ? '只有搜索框和列表，按空格预览' : '分类、复制频谱和右侧预览';
+}
+styleSeg.addEventListener('click', (e) => {
+  const b = (e.target as Element).closest<HTMLElement>('[data-style-opt]');
+  if (!b) return;
+  draftStyle = b.dataset.styleOpt as PanelStyle;
+  paintStyle();
+});
+styleSeg.addEventListener('keydown', (e) => {
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  e.preventDefault();
+  e.stopPropagation();
+  draftStyle = draftStyle === 'full' ? 'compact' : 'full';
+  paintStyle();
+  styleOpts.find((b) => b.dataset.styleOpt === draftStyle)!.focus();
+});
+
 const themeMode = () => (root.dataset.theme || 'system') as Appearance;
 function paintTheme(instant: boolean) {
   const mode = themeMode();
@@ -2046,6 +2147,8 @@ function openSettings() {
   logNote.textContent = LOG_NOTE;
   snipNote.textContent = SNIP_NOTE;
   const st = S.settings;
+  draftStyle = st.panelStyle;
+  paintStyle();
   pendingHotkey = st.hotkey;
   hotkeyIn.value = hotkeyLabel(st.hotkey, S.platform.os);
   setHotkeyHelp(HOTKEY_IDLE);
@@ -2185,7 +2288,7 @@ async function submitSettings() {
     moveToTop: moveTopIn.checked, launchAtLogin: autostartIn.checked, ocrEnabled: ocrOnIn.checked, ocrBackfill: ocrBackfillIn.checked, searchFileText: fileTextIn.checked,
     shotHotkey: shotKey.pending, shotDir: shotDir.pending, shotSaveCopy: shotSaveCopyIn.checked, longAutoScroll: longAutoIn.checked,
     recHotkey: recKey.pending, recDir: recDir.pending, recSystemAudio: recSystemAudioIn.checked, recMicrophone: recMicIn.checked, recCopy: recCopyIn.checked,
-    recQuality: recQualityIn.value, recFps: recFpsIn.value,
+    recQuality: recQualityIn.value, recFps: recFpsIn.value, panelStyle: draftStyle,
   });
   // 翻译字段不经 SettingsForm；末尾的 / 由后端去掉。engine 没动过就原样写回（可能是空串）
   Object.assign(s, {
@@ -2201,6 +2304,7 @@ async function submitSettings() {
     }
     await saveSettings(s);
     const favChanged = s.frequentMinUses !== S.settings.frequentMinUses;
+    const styleChanged = s.panelStyle !== S.settings.panelStyle;
     S.settings = s;
     refreshEngines();
     // 常用阈值只在前端用：立即按新阈值重算分类计数、列表与预览标签
@@ -2211,6 +2315,7 @@ async function submitSettings() {
       renderList();
     }
     closeSettings();
+    if (styleChanged) applyStyle(s.panelStyle);
     toast('设置已保存');
   } catch (e) {
     const err = e as AppError;
@@ -2520,6 +2625,7 @@ const hidden = () => {
   details.clear();
   pbody.querySelectorAll('video').forEach((v) => v.pause());
   pbody.innerHTML = '';
+  setPeek(false);
   closeMenu(false);
   // 对话框不播收起动画，直接关（各自的 close 事件里交还焦点、结算确认框并同步后端的对话框标志）
   document.querySelectorAll<HTMLDialogElement>('dialog[open]').forEach((d) => d.close());
@@ -2565,6 +2671,9 @@ document.addEventListener('keydown', (e) => {
       inSnip: S.filter === 'snip',
       multi: S.multi.size,
       selTranslatable: !!selR && translatable(selR),
+      compact: S.settings.panelStyle === 'compact',
+      peek: win.dataset.peek === 'true',
+      filtered: S.filter !== 'all',
     },
   );
   if (!a) return;
@@ -2602,6 +2711,13 @@ document.addEventListener('keydown', (e) => {
     case 'editSnippet': return void (sel !== null && openSnippet('edit', sel));
     case 'newSnippet': return void openSnippet('new');
     case 'translate': return void (sel !== null && doTranslate(sel));
+    // 精简模式（M27 规则 7–9）
+    case 'peek': return setPeek(win.dataset.peek !== 'true');
+    case 'peekClose': return setPeek(false);
+    case 'peekTranslate':
+      setPeek(true);
+      return void (sel !== null && doTranslate(sel));
+    case 'clearFilter': return setFilter('all', true);
     case 'selectAll': {
       S.multi = new Set(vis().filter((r) => !S.removing.has(r.id)).map((r) => r.id));
       return setMulti();
@@ -2697,6 +2813,7 @@ S.filter = FILTERS.some(([k]) => k === b.settings.lastFilter) ? (b.settings.last
 if (b.settings.appearance === 'system') delete root.dataset.theme;
 else root.dataset.theme = b.settings.appearance;
 root.dataset.material = b.platform.material;
+setStyleRoot(b.settings.panelStyle);
 // 原生淡出时网页内容不再自己淡出（否则内容先消失、只剩底板），整体由窗口 alpha 承担
 root.toggleAttribute('data-native-fade', nativeFade());
 const MOD = b.platform.os === 'macos' ? '⌘' : 'Ctrl';
@@ -2830,6 +2947,7 @@ menu.addEventListener('click', (e) => {
   if (!m || id === null) return;
   closeMenu(true);
   if (m === 'copy') copyRecord(id);
+  if (m === 'peek') setPeek(true);
   if (m === 'pin') togglePin(id, mouse);
   if (m === 'open') openFromMenu(id);
   if (m === 'saveSnippet') void openSnippet('save', id);
@@ -2839,8 +2957,23 @@ menu.addEventListener('click', (e) => {
 });
 document.addEventListener('pointerdown', (e) => {
   const t = e.target as Node;
-  if (menuOpen() && !menu.contains(t)) closeMenu(false);
+  if (menuOpen() && !menu.contains(t) && !moreMenu.contains(t) && !moreBtn.contains(t)) closeMenu(false);
 }, true);
+moreBtn.addEventListener('click', () => (moreMenu.dataset.open === 'true' ? closeMenu(true) : openMore()));
+moreMenu.addEventListener('click', (e) => {
+  const m = (e.target as Element).closest<HTMLElement>('[data-mm]')?.dataset.mm;
+  if (!m) return;
+  closeMenu(true);
+  if (m === 'pause') return void setPaused(!S.paused).catch((err: AppError) => toast(err.message));
+  if (m === 'settings') return openSettings();
+  // 切换到完整面板：等于把面板样式改成完整并保存（M27 规则 1）
+  const next = { ...S.settings, panelStyle: 'full' as const };
+  saveSettings(next).then(() => {
+    S.settings = next;
+    applyStyle('full');
+  }, (err: AppError) => toast(err.message));
+});
+pausedPill.addEventListener('click', () => setPaused(false).catch((err: AppError) => toast(err.message)));
 undoBtn.addEventListener('click', undo);
 toastAct.addEventListener('click', () => {
   toastRun?.();

@@ -17,6 +17,10 @@ export type KeyCtx = {
   multi: number;
   /** 选中的记录可翻译（M26 规则 1） */
   selTranslatable: boolean;
+  /** 精简模式（M27）、预览开着、分类不是“全部” */
+  compact: boolean;
+  peek: boolean;
+  filtered: boolean;
 };
 
 /** `mod` 是平台的 Mod 键：macOS 只认 ⌘（metaKey），Windows 只认 Ctrl；`ctrl` 是字面的 Control 键（macOS 的 ⌃），
@@ -45,6 +49,10 @@ export type Action =
   | { t: 'extend'; d: 1 | -1 }
   | { t: 'clearMulti' }
   | { t: 'translate' }
+  | { t: 'peek' }
+  | { t: 'peekClose' }
+  | { t: 'peekTranslate' }
+  | { t: 'clearFilter' }
   | null;
 
 export const keyAction = (e: KeyEv, c: KeyCtx): Action => {
@@ -56,9 +64,16 @@ export const keyAction = (e: KeyEv, c: KeyCtx): Action => {
     return vert ? { t: 'menuMove', d: vert } : null;
   }
   if (e.mod && k === ',') return e.repeat ? null : { t: 'settings' };
+  // 精简模式：空格（搜索框为空时）或 Mod+Y 开关预览；Esc 先关预览；搜索框为空时 Esc、⌫ 去掉分类标签（M27 规则 7–9）
+  if (c.compact) {
+    if (k === 'Escape' && c.peek) return { t: 'peekClose' };
+    if (e.mod && lk === 'y' && !e.shift && !e.alt) return e.repeat ? null : { t: 'peek' };
+    if (k === ' ' && !e.mod && !e.ctrl && !e.alt && !c.onControl && !c.searchHasText) return e.repeat ? null : { t: 'peek' };
+    if (c.filtered && !c.searchHasText && !c.onControl && ((k === 'Escape' && c.multi < 2) || (k === 'Backspace' && !e.mod))) return { t: 'clearFilter' };
+  }
   // 片段（M25 规则 5、6）；翻译（M26 规则 2，多选时不可翻译）
   if (e.mod && !e.shift && !e.alt && !e.repeat) {
-    if (lk === 't' && c.selTranslatable && c.multi < 2) return { t: 'translate' };
+    if (lk === 't' && c.selTranslatable && c.multi < 2) return { t: c.compact ? 'peekTranslate' : 'translate' };
     if (lk === 's' && c.hasSel && !c.selIsSnip) return { t: 'saveSnippet' };
     if (lk === 'e' && c.selIsSnip && c.multi < 2) return { t: 'editSnippet' };
     if (lk === 'n') return { t: 'newSnippet' };

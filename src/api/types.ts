@@ -7,6 +7,9 @@ export type Appearance = 'system' | 'light' | 'dark';
 /** 录屏清晰度（M24 规则 6） */
 export type RecQuality = 'high' | 'standard' | 'small';
 
+/** 面板样式（M27 规则 1） */
+export type PanelStyle = 'full' | 'compact';
+
 export interface Settings {
   hotkey: string;
   retentionDays: number | null;
@@ -17,6 +20,9 @@ export interface Settings {
   launchAtLogin: boolean;
   appearance: Appearance;
   panelSize: [number, number];
+  panelStyle: PanelStyle;
+  /** 精简面板的尺寸，与完整面板各自记住（M27 规则 2） */
+  compactSize: [number, number];
   lastFilter: string;
   spectrumCollapsed: boolean;
   frequentMinUses: number;
@@ -85,6 +91,11 @@ export interface RecordSummary {
   ocrState: number;
   /** 不为 null 即片段，值是列表第二行的摘要（M25 规则 10） */
   snippetBody: string | null;
+  /** 文本、代码的行数；链接的地址；文件记录的文件个数（M27 规则 4 的单行补充）。
+   *  文件个数不叫 files：`RecordDetail.files` 是文件列表 */
+  lines: number | null;
+  url: string | null;
+  fileCount: number | null;
 }
 
 /** 已识别（有文字或无文字）的图片数 / 图片总数；`supported` 为本机是否有可用识别引擎。 */
