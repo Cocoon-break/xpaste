@@ -17,12 +17,16 @@
       <div class="searchbar">
         <label class="search" for="q">
           <span data-icon="search"></span>
+          <!-- 精简模式：当前分类显示成搜索框里的标签（M27 规则 7） -->
+          <span class="q-chip" id="qChip" hidden><i></i><span></span></span>
           <input id="q" name="q" type="search" placeholder="搜索内容或来源应用，例如“会议”或 Figma…" autocomplete="off" spellcheck="false"
                  role="combobox" aria-controls="list" aria-expanded="true" aria-autocomplete="list" aria-label="搜索剪切板历史">
           <button class="btn icon ghost sm" type="button" id="clearQ" aria-label="清除搜索" hidden><span data-icon="x"></span></button>
           <span class="count" id="count" aria-live="polite"></span>
+          <button class="paused-pill" id="pausedPill" type="button" title="点击继续记录" hidden><i></i>已暂停</button>
         </label>
         <button class="btn icon" type="button" id="settingsBtn" aria-label="设置"><span data-icon="sliders"></span></button>
+        <button class="btn icon ghost" type="button" id="moreBtn" aria-label="更多" aria-haspopup="menu" aria-controls="moreMenu" aria-expanded="false"><span data-icon="more"></span></button>
       </div>
 
       <div class="spectrum" id="spectrum" data-collapsed="false">
@@ -57,6 +61,8 @@
         <section class="preview" aria-label="预览">
           <header class="phead">
             <div class="ptype" id="ptype"></div>
+            <!-- 精简模式的预览只有按键提示，不放操作按钮（M27 规则 8） -->
+            <span class="peek-hint" aria-hidden="true"><kbd>Enter</kbd><span data-verb></span><kbd id="peekKey">空格</kbd>关闭</span>
             <div class="pact">
               <button class="btn icon" type="button" id="trBtn" aria-label="翻译" hidden><span data-icon="translate"></span></button>
               <button class="btn icon" type="button" id="pinBtn" aria-label="置顶" aria-pressed="false">
@@ -90,6 +96,7 @@
 
       <div class="menu" id="menu" role="menu" aria-label="条目操作" data-open="false">
         <button type="button" role="menuitem" data-m="copy" style="--i:0"><span data-icon="copy"></span><span data-verb>复制</span><kbd>Enter</kbd></button>
+        <button type="button" role="menuitem" data-m="peek" style="--i:1" hidden><span data-icon="eye"></span>预览<kbd>空格</kbd></button>
         <button type="button" role="menuitem" data-m="pin" style="--i:1"><span data-icon="pin"></span><span id="mPin">置顶</span><kbd class="modp"></kbd></button>
         <button type="button" role="menuitem" data-m="editSnippet" style="--i:2" hidden><span data-icon="pencil"></span>编辑片段…<kbd data-modk="E"></kbd></button>
         <button type="button" role="menuitem" data-m="open" style="--i:3" hidden><span data-icon="link"></span><span id="mOpen"></span></button>
@@ -97,6 +104,14 @@
         <button type="button" role="menuitem" data-m="saveSnippet" style="--i:5"><span data-icon="snip"></span>存为片段…<kbd data-modk="S"></kbd></button>
         <div class="sep" role="separator"></div>
         <button type="button" role="menuitem" data-m="del" class="danger" style="--i:6"><span data-icon="trash"></span><span id="mDel">删除</span><kbd class="del">Del</kbd></button>
+      </div>
+
+      <!-- 精简模式右上角的“更多”（M27 规则 10） -->
+      <div class="menu" id="moreMenu" role="menu" aria-label="更多" data-open="false">
+        <button type="button" role="menuitem" data-mm="full" style="--i:0"><span data-icon="panel"></span>切换到完整面板</button>
+        <button type="button" role="menuitem" data-mm="pause" style="--i:1"><span data-icon="pause"></span><span id="mmPause">暂停记录</span></button>
+        <div class="sep" role="separator"></div>
+        <button type="button" role="menuitem" data-mm="settings" style="--i:2"><span data-icon="sliders"></span>设置…<kbd data-modk=","></kbd></button>
       </div>
 
       <div class="toast" id="toast" data-open="false">
@@ -141,19 +156,26 @@
                 <button type="button" role="radio" data-theme-opt="dark" aria-label="暗色主题" title="暗色"><span data-icon="moon"></span></button>
               </div>
             </div>
-            <div class="switches" style="--i:2">
+            <div class="line" style="--i:2">
+              <span><b id="styleLabel">面板样式</b><small id="styleHelp"></small></span>
+              <div class="seg text" id="styleSeg" role="radiogroup" aria-labelledby="styleLabel" aria-describedby="styleHelp">
+                <button type="button" role="radio" data-style-opt="full">完整</button>
+                <button type="button" role="radio" data-style-opt="compact">精简</button>
+              </div>
+            </div>
+            <div class="switches" style="--i:3">
               <label class="switch"><span><b>开机时启动</b><small>登录系统后在后台待命</small></span><input type="checkbox" id="autostart" name="autostart" checked></label>
               <label class="switch"><span><b>复制后移到顶部</b><small>再次使用的条目会排到列表最前</small></span><input type="checkbox" id="moveTop" name="moveTop" checked></label>
             </div>
-            <div class="field" style="--i:3">
+            <div class="field" style="--i:4">
               <div class="line"><span><label for="frequentIn"><b>进入“常用”的使用次数</b></label><small id="frequentHelp">同一条内容被复制这么多次后出现在“常用”</small></span><span class="suffix"><input type="number" id="frequentIn" min="2" max="99" step="1" inputmode="numeric" autocomplete="off" aria-describedby="frequentHelp frequentErr"><span>次</span></span></div>
               <p class="err" id="frequentErr" hidden>请输入 2 到 99 之间的整数</p>
             </div>
-            <div class="line" id="permRow" style="--i:4" hidden>
+            <div class="line" id="permRow" style="--i:5" hidden>
               <span><b>自动粘贴权限</b><small id="permState"></small></span>
               <button class="btn sm" type="button" id="permBtn" hidden>前往授权</button>
             </div>
-            <div class="line" style="--i:5">
+            <div class="line" style="--i:6">
               <span><b>日志</b><small id="logNote" aria-live="polite">遇到问题时导出，发给开发者协助排查；不含剪切板内容</small></span>
               <button class="btn sm" type="button" id="logBtn">导出日志</button>
             </div>
