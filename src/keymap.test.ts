@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { keyAction, type KeyCtx, type KeyEv } from './keymap.ts';
 
 const ctx = (o: Partial<KeyCtx> = {}): KeyCtx => ({
-  inSearch: true, onControl: false, searchHasText: false, menuOpen: false, hasSel: true, canUndo: false, dialogOpen: false, selIsSnip: false, inSnip: false, multi: 0, selTranslatable: false, selPlain: false, compact: false, peek: false, filtered: false, ...o,
+  inSearch: true, onControl: false, searchHasText: false, menuOpen: false, hasSel: true, canUndo: false, dialogOpen: false, selIsSnip: false, inSnip: false, multi: 0, selTranslatable: false, selPlain: false, app: false, sug: false, compact: false, peek: false, filtered: false, ...o,
 });
 const ev = (o: Partial<KeyEv>): KeyEv => ({ key: '', code: '', mod: false, alt: false, shift: false, repeat: false, ...o });
 
@@ -79,7 +79,7 @@ test('Mod+, 打开设置', () => assert.deepEqual(keyAction(ev({ key: ',', mod: 
 
 test('⌃ + 字母不进搜索框，⌃ + Enter 不复制（macOS 上 ⌃ 不是 Mod）', () => {
   const base = { key: '', code: '', mod: false, alt: false, shift: false, repeat: false };
-  const ctx = { inSearch: false, onControl: false, searchHasText: false, menuOpen: false, hasSel: true, canUndo: false, dialogOpen: false, selIsSnip: false, inSnip: false, multi: 0, selTranslatable: false, selPlain: false, compact: false, peek: false, filtered: false };
+  const ctx = { inSearch: false, onControl: false, searchHasText: false, menuOpen: false, hasSel: true, canUndo: false, dialogOpen: false, selIsSnip: false, inSnip: false, multi: 0, selTranslatable: false, selPlain: false, app: false, sug: false, compact: false, peek: false, filtered: false };
   assert.equal(keyAction({ ...base, key: 'a', code: 'KeyA', ctrl: true }, ctx), null);
   assert.deepEqual(keyAction({ ...base, key: 'a', code: 'KeyA' }, ctx), { t: 'focusSearch' });
   assert.equal(keyAction({ ...base, key: 'Enter', code: 'Enter', ctrl: true }, ctx), null);
@@ -163,4 +163,25 @@ test('Shift+Enter：有文字的记录粘贴为纯文本，其余照常粘贴（
   assert.equal(k({ key: 'Enter', shift: true, repeat: true }, { selPlain: true }), null);
   // 多选时退回 copy，由 copyRecord 忽略（M25 规则 6）
   assert.deepEqual(k({ key: 'Enter', shift: true }, { selPlain: true, multi: 2 }), { t: 'copy' });
+});
+
+test('来源筛选：Tab 接受建议，⌫ / Esc 去掉胶囊（M29 规则 2、5）', () => {
+  const k = (o: Partial<KeyEv>, c: Partial<KeyCtx> = {}) => keyAction(ev(o), ctx(c));
+  assert.deepEqual(k({ key: 'Tab' }, { sug: true }), { t: 'acceptSug' });
+  // 没有建议、按着 Shift、焦点不在搜索框：交还浏览器默认的移焦点
+  assert.equal(k({ key: 'Tab' }), null);
+  assert.equal(k({ key: 'Tab', shift: true }, { sug: true }), null);
+  assert.equal(k({ key: 'Tab' }, { sug: true, inSearch: false }), null);
+  assert.deepEqual(k({ key: 'Backspace' }, { app: true }), { t: 'clearApp' });
+  assert.equal(k({ key: 'Backspace' }, { app: true, searchHasText: true }), null);
+  // Esc：先清空搜索词，再去掉胶囊，最后隐藏
+  assert.deepEqual(k({ key: 'Escape' }, { app: true, searchHasText: true }), { t: 'clearSearch' });
+  assert.deepEqual(k({ key: 'Escape' }, { app: true }), { t: 'clearApp' });
+  assert.deepEqual(k({ key: 'Escape' }), { t: 'hide' });
+  // 精简模式：胶囊先于分类标签去掉
+  assert.deepEqual(k({ key: 'Backspace' }, { app: true, compact: true, filtered: true }), { t: 'clearApp' });
+  assert.deepEqual(k({ key: 'Escape' }, { app: true, compact: true, filtered: true }), { t: 'clearApp' });
+  assert.deepEqual(k({ key: 'Backspace' }, { compact: true, filtered: true }), { t: 'clearFilter' });
+  // 多选时 Esc 先取消选择
+  assert.deepEqual(k({ key: 'Escape' }, { app: true, multi: 2 }), { t: 'clearMulti' });
 });

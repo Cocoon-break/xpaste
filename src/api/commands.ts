@@ -40,6 +40,9 @@ export const revealFile = (path: string) => invoke<void>('reveal_file', { path }
 export const exportLogs = () => invoke<string>('export_logs');
 export const updateAvailable = () => invoke<UpdateInfo | null>('update_available');
 
+/** 来源筛选的建议（M29 规则 1）：`names` 里对得上输入的应用名（名字、全拼、首字母） */
+export const matchApps = (q: string, names: string[]) => invoke<string[]>('match_apps', { q, names });
+
 export const getRecord = (id: number) => invoke<RecordDetail | null>('get_record', { id });
 export const search = (q: string) => invoke<SearchHit[]>('search', { q });
 export const setPinned = (id: number, on: boolean) => invoke<void>('set_pinned', { id, on });

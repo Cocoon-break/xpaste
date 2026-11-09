@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>来源应用筛选原型</title>
+<style>
+  /* 取值照 src/tokens.css（「刻度」）；面板的毛玻璃在这里换成不透明底 */
+  :root { color-scheme: dark; --page: #101012; --ink: #1C1C1E; --glass: #28282B; --sheet: #1A1A1C; --glass-2: rgb(255 255 255 / .04); --glass-3: rgb(255 255 255 / .06);
+    --line: rgb(255 255 255 / .07); --line-2: rgb(255 255 255 / .09); --fg: #ECECEE; --muted: #ABABB2; --faint: #93939A;
+    --g-text: #6F7F88; --g-link: #8DA2E6; --g-code: #6FC3A0; --g-image: #DDA65A; --g-file: #AE9AE0;
+    --beam: #23809F; --cursor: #5FA3BC; --hover: rgb(255 255 255 / .06); --sel: rgb(255 255 255 / .075); --kbd-bg: rgb(255 255 255 / .07); --search-bg: rgb(0 0 0 / .22);
+    --seg-on: rgb(255 255 255 / .12); --mark-bg: rgb(214 163 94 / .28); --mark-fg: #F2D9B3; --shadow-win: 0 30px 80px -24px rgb(0 0 0 / .6);
+    --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif; }
+  :root[data-theme="light"] { color-scheme: light; --page: #ECECF0; --ink: #F5F5F7; --glass: #E4E5EA; --sheet: #FFFFFF; --glass-2: rgb(0 0 0 / .035); --glass-3: rgb(0 0 0 / .05);
+    --line: rgb(0 0 0 / .08); --line-2: rgb(0 0 0 / .10); --fg: #1D1D1F; --muted: #5C5C64; --faint: #6E6E76;
+    --g-text: #8A9AA3; --g-link: #5A78D6; --g-code: #28906C; --g-image: #B47A16; --g-file: #8C70D0;
+    --beam: #0E7FA3; --cursor: #0E7FA3; --hover: rgb(0 0 0 / .045); --sel: rgb(0 0 0 / .055); --kbd-bg: rgb(0 0 0 / .055); --search-bg: rgb(255 255 255 / .9);
+    --seg-on: #FFFFFF; --mark-bg: #FBE3A6; --mark-fg: #3A2A00; --shadow-win: 0 30px 80px -24px rgb(0 0 0 / .28); }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--fg); font: 13px/1.5 var(--font-ui); }
+  main { max-width: 1040px; margin: 0 auto; padding: 28px 16px 64px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; } h2 { font-size: 15px; font-weight: 600; margin: 36px 0 4px; }
+  .intro { color: var(--muted); margin: 0; max-width: 76ch; }
+  .bar { display: flex; gap: 14px; align-items: center; margin: 16px 0 18px; color: var(--faint); font-size: 12px; }
+  .seg { display: inline-flex; padding: 2px; border-radius: 7px; background: var(--glass-2); border: 1px solid var(--line); }
+  .seg button { font: inherit; color: var(--muted); background: none; border: 0; border-radius: 5px; padding: 3px 10px; cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: var(--seg-on); color: var(--fg); }
+  kbd { font: 11px var(--font-ui); padding: 1px 5px; border-radius: 4px; background: var(--kbd-bg); color: var(--muted); }
+  .steps { margin: 10px 0 0; padding-left: 18px; color: var(--muted); } .steps li { margin: 2px 0; }
+  .log { margin-top: 10px; min-height: 20px; color: var(--faint); font-size: 12px; }
+  .cases { display: grid; grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); gap: 18px; margin-top: 14px; }
+  .case h3 { font-size: 13px; font-weight: 600; margin: 0 0 2px; } .case > p { margin: 0 0 8px; color: var(--muted); font-size: 12px; }
+
+  /* —— 面板 —— */
+  .win { border-radius: 12px; background: var(--glass); border: 1px solid var(--line-2); box-shadow: var(--shadow-win); overflow: hidden; }
+  .titlebar { display: flex; align-items: center; gap: 8px; padding: 10px 18px 8px; font-size: 12px; color: var(--muted); } .titlebar b { color: var(--fg); font-weight: 600; }
+  .searchbar { padding: 2px 18px 12px; }
+  .search { display: flex; align-items: center; gap: 8px; height: 42px; padding: 0 12px 0 14px; background: var(--search-bg); border: 1px solid var(--line-2); border-radius: 9px; color: var(--muted); }
+  .search:focus-within, .win.static .search { border-color: var(--beam); }
+  .search svg { flex: none; }
+  .search input { flex: 1; min-width: 40px; border: 0; outline: none; background: transparent; color: var(--fg); font: inherit; font-size: 15px; }
+  .search input::placeholder { color: var(--faint); }
+  .count { font-size: 13px; font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--fg); } .count small { font-weight: 400; font-size: 12px; color: var(--faint); margin-left: 3px; }
+  /* 来源胶囊：搜索框里、输入位置左边 */
+  .cap { flex: none; display: inline-flex; align-items: center; gap: 6px; max-width: 46%; height: 26px; padding: 0 4px 0 6px; border-radius: 7px; background: var(--glass-3); color: var(--fg); font-size: 13px; }
+  .cap span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cap button { flex: none; width: 18px; height: 18px; display: grid; place-items: center; border: 0; border-radius: 5px; background: none; color: var(--faint); cursor: pointer; }
+  .cap button:hover { background: var(--hover); color: var(--fg); }
+  .cat { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px; border-radius: 7px; background: var(--glass-3); color: var(--fg); font-size: 13px; }
+  .cat i { width: 6px; height: 6px; border-radius: 50%; background: var(--tg); }
+  /* 建议：搜索框右侧，不占新的一行，输入时界面不跳 */
+  .sug { flex: none; display: inline-flex; align-items: center; gap: 6px; max-width: 52%; height: 26px; padding: 0 4px 0 6px; border: 0; border-radius: 7px; background: var(--glass-2); color: var(--muted); font: inherit; font-size: 12.5px; cursor: pointer; }
+  .sug:hover { background: var(--hover); color: var(--fg); }
+  .sug .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); } .sug small { font-size: 12px; color: var(--faint); white-space: nowrap; }
+  .ai { flex: none; width: 16px; height: 16px; border-radius: 4px; display: grid; place-items: center; font: 600 9.5px var(--font-ui); color: #fff; }
+  .tabs { display: flex; gap: 4px; padding: 0 18px 10px; font-size: 12.5px; color: var(--muted); }
+  .tabs span { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 7px; } .tabs span[data-on="true"] { background: var(--seg-on); color: var(--fg); }
+  .tabs i { width: 6px; height: 6px; border-radius: 50%; background: var(--tg, var(--fg)); } .tabs small { color: var(--faint); font-variant-numeric: tabular-nums; }
+  .body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); background: var(--sheet); border-top: 1px solid var(--line); }
+  .win.compact .body, .win.mini .body { grid-template-columns: minmax(0, 1fr); }
+  .list { padding: 8px; min-height: 0; overflow: auto; } .win.full .list { height: 320px; }
+  .row { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; gap: 12px; align-items: center; height: 56px; padding: 0 10px; border-radius: 8px; cursor: default; }
+  .row[aria-selected="true"] { background: var(--sel); }
+  .thumb { width: 36px; height: 36px; border-radius: 8px; background: var(--glass-2); display: grid; place-items: center; color: var(--tg); }
+  .title, .meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .title { font-size: 13.5px; } .meta { font-size: 11.5px; color: var(--faint); margin-top: 1px; }
+  mark { background: var(--mark-bg); color: var(--mark-fg); border-radius: 3px; padding: 0 1px; }
+  .idx { font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .win.compact .row { height: 36px; grid-template-columns: 20px minmax(0, 1fr) auto; gap: 10px; } .win.compact .thumb { width: 20px; height: 20px; border-radius: 5px; background: none; } .win.compact .meta { display: none; }
+  .win.compact .titlebar, .win.compact .tabs { display: none; } .win.compact .searchbar { padding: 10px; } .win.compact .search { height: 36px; } .win.compact .search input { font-size: 14px; }
+  .empty { padding: 40px 16px; text-align: center; color: var(--muted); } .empty b { color: var(--fg); font-weight: 600; display: block; margin-bottom: 4px; }
+  .empty button { margin-top: 12px; font: inherit; color: var(--fg); background: var(--glass-3); border: 1px solid var(--line-2); border-radius: 7px; padding: 5px 12px; cursor: pointer; }
+  .preview { border-left: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; } .win.compact .preview, .win.mini .preview { display: none; }
+  .pbody { flex: 1; padding: 16px; font-size: 13.5px; color: var(--fg); overflow: hidden; word-break: break-all; }
+  .pfoot { display: flex; gap: 24px; padding: 10px 16px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--faint); } .pfoot div b { display: block; font-weight: 400; color: var(--fg); font-size: 12.5px; }
+  .src { font: inherit; font-size: 12.5px; color: var(--fg); background: none; border: 0; padding: 0; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; border-radius: 4px; }
+  .src:hover { color: var(--cursor); text-decoration: underline; }
+  .status { display: flex; gap: 14px; justify-content: flex-end; padding: 7px 18px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--faint); } .win.compact .status { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>来源应用筛选原型</h1>
+  <p class="intro">“只记得是从哪个应用复制的”。输入应用名，搜索框右侧出现建议，按 <kbd>Tab</kbd> 把它变成胶囊，之后输入的字只在这个应用的记录里搜。照 Chrome 地址栏“按 Tab 搜索这个网站”的做法：不自动变胶囊，因为输入“微信”也可能是想搜内容里带“微信”两个字的记录。</p>
+
+  <div class="bar">
+    <span>主题 <span class="seg" id="themeSeg"><button data-v="dark" aria-pressed="true">暗</button><button data-v="light">亮</button></span></span>
+    <span>面板 <span class="seg" id="styleSeg"><button data-v="full" aria-pressed="true">完整</button><button data-v="compact">精简</button></span></span>
+  </div>
+
+  <div id="live" style="max-width:880px"></div>
+  <p class="log" id="log" aria-live="polite"></p>
+  <ol class="steps">
+    <li>在上面的搜索框里输入 <kbd>wx</kbd>、<kbd>微信</kbd> 或 <kbd>chr</kbd>：右侧出现“只看 微信 · 6 条”，按 <kbd>Tab</kbd> 或点它。</li>
+    <li>胶囊出现后接着输入 <kbd>会议</kbd>：只在微信的记录里搜；计数的分母是这个应用的条数。</li>
+    <li>搜索框为空时按 <kbd>⌫</kbd> 去掉胶囊。<kbd>Esc</kbd> 依次：清空搜索词 → 去掉胶囊 → 隐藏面板。</li>
+    <li>也可以点右边预览底部的“来源”直接筛选这个应用（给用鼠标的人）。</li>
+    <li>不想筛选：不按 <kbd>Tab</kbd> 接着打字或按 <kbd>↑</kbd><kbd>↓</kbd><kbd>Enter</kbd>，和现在完全一样。</li>
+  </ol>
+
+  <h2>各种情况</h2>
+  <p class="intro">下面是静态的画面，逐个核对。</p>
+  <div class="cases" id="cases"></div>
+</main>
+
+<script>
+const TYPES = { text: ['文本', '--g-text'], link: ['链接', '--g-link'], code: ['代码', '--g-code'], image: ['图片', '--g-image'], file: ['文件', '--g-file'] };
+const ICON = {
+  text: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 4.5h10M3 8h10M3 11.5h6"/></svg>',
+  link: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M6.8 9.2a2.6 2.6 0 0 0 3.7 0l2-2a2.6 2.6 0 0 0-3.7-3.7l-.6.6M9.2 6.8a2.6 2.6 0 0 0-3.7 0l-2 2a2.6 2.6 0 0 0 3.7 3.7l.6-.6"/></svg>',
+  code: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5"/></svg>',
+  image: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="2"/><path d="m2.5 11 3-3 2.5 2.5 2-2 3.5 3.5"/></svg>',
+  file: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M4 2h5l3 3v9H4z"/><path d="M9 2v3h3"/></svg>',
+  search: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/></svg>',
+  x: '<svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="m2 2 6 6M8 2 2 8"/></svg>',
+};
+// 应用：名字、图标底色（真应用里是已有的应用图标）、拼音全拼与首字母（真应用里用现有的拼音索引）
+const APPS = {
+  '微信': ['#2DAA4F', 'weixin wx'], '企业微信': ['#2F7DE1', 'qiyeweixin qywx'], 'Chrome': ['#D9643A', ''], 'VS Code': ['#2F7DE1', 'vscode'],
+  '备忘录': ['#D9A21B', 'beiwanglu bwl'], 'Figma': ['#8E5CD9', ''], '访达': ['#3B8FD9', 'fangda fd'],
+  'Microsoft Remote Desktop Beta': ['#C8553D', 'rdp'],
+};
+const R = (kind, title, app, ago) => ({ kind, title, app, ago });
+const DATA = [
+  R('text', '周四下午 3 点在 2 号会议室评审 xPaste v0.2', '微信', '2分钟前'), R('text', '微信支付的回调地址要改成正式环境', '备忘录', '3分钟前'), R('code', 'const debounce = (fn, ms = 200) => {', 'VS Code', '4分钟前'),
+  R('text', '好的，我晚点发你', '微信', '6分钟前'), R('link', 'https://developer.mozilla.org/zh-CN/docs/Web/API', 'Chrome', '7分钟前'),
+  R('image', '截图 2026-11-10 10.32.png', '微信', '9分钟前'), R('text', '上海市徐汇区漕溪北路 88 号 12 楼', '备忘录', '12分钟前'),
+  R('text', '会议号：482 913 776，密码 2580', '微信', '15分钟前'), R('link', 'https://github.com/Cocoon-break/xpaste/pull/46', 'Chrome', '18分钟前'),
+  R('code', 'pnpm tauri build --target aarch64-apple-darwin', 'VS Code', '21分钟前'), R('file', '需求评审纪要.md', '访达', '25分钟前'),
+  R('text', '下周一的会议改到线上，链接稍后发', '企业微信', '40分钟前'),
+  R('link', 'https://www.figma.com/design/xpaste-panel', 'Figma', '52分钟前'), R('text', '发票抬头：上海某某科技有限公司', '微信', '1小时前'),
+  R('text', '报销单已提交，等财务审批', '企业微信', '1小时前'), R('text', '快递单号 SF1234567890', '微信', '2小时前'),
+  R('text', '192.168.31.20 administrator', 'Microsoft Remote Desktop Beta', '3小时前'), R('code', 'SELECT id, title FROM records WHERE kind = ?', 'VS Code', '3小时前'),
+].map((r, i) => ({ ...r, id: i }));
+
+const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const hi = (s, q) => { const i = q ? s.toLowerCase().indexOf(q.toLowerCase()) : -1; return i < 0 ? esc(s) : `${esc(s.slice(0, i))}<mark>${esc(s.slice(i, i + q.length))}</mark>${esc(s.slice(i + q.length))}`; };
+const appIcon = (a) => `<i class="ai" style="background:${APPS[a][0]}">${esc(a.replace(/^Microsoft /, '')[0])}</i>`;
+// 应用名匹配：整段输入是应用名的一部分、全拼的开头或首字母；拉丁字母至少 2 个，汉字 1 个起
+const appMatches = (a, q) => {
+  const t = q.trim().toLowerCase();
+  if (!t || (/^[\x00-\x7f]+$/.test(t) && t.length < 2)) return false;
+  return a.toLowerCase().includes(t) || APPS[a][1].split(' ').some((p) => p && p.startsWith(t));
+};
+
+class Panel {
+  constructor(host, st = {}, opts = {}) {
+    this.s = { q: '', app: null, filter: 'all', sel: 0, compact: false, ...st };
+    this.o = opts; this.host = host;
+    host.innerHTML = `<div class="win ${opts.static ? 'static mini' : 'full'}">
+      <div class="titlebar"><b>xPaste</b>剪切板历史</div>
+      <div class="searchbar"><label class="search">${ICON.search}<span data-slot="chips" style="display:contents"></span>
+        <input type="search" autocomplete="off" spellcheck="false" aria-label="搜索剪切板历史"><span data-slot="sug" style="display:contents"></span><span class="count"></span></label></div>
+      <div class="tabs"></div>
+      <div class="body"><div class="list"></div><div class="preview"><div class="pbody"></div><div class="pfoot"></div></div></div>
+      <div class="status"><span><kbd>↑</kbd> <kbd>↓</kbd> 选择</span><span><kbd>Enter</kbd> 粘贴</span><span data-slot="esc"></span></div></div>`;
+    this.win = host.firstElementChild; this.inp = host.querySelector('input'); this.inp.value = this.s.q;
+    if (opts.static) { this.inp.tabIndex = -1; this.win.inert = true; } else this.bind();
+    this.paint();
+  }
+  inCat() { return DATA.filter((r) => this.s.filter === 'all' || r.kind === this.s.filter); }
+  // 建议：没有胶囊时，命中的应用里取当前分类下记录最多的一个
+  sug() {
+    if (this.s.app) return null;
+    const pool = this.inCat(), n = (a) => pool.filter((r) => r.app === a).length;
+    const hit = Object.keys(APPS).filter((a) => appMatches(a, this.s.q) && n(a) > 0).sort((a, b) => n(b) - n(a))[0];
+    return hit ? { app: hit, n: n(hit) } : null;
+  }
+  rows() {
+    const q = this.s.q.trim().toLowerCase();
+    return this.inCat().filter((r) => (!this.s.app || r.app === this.s.app) && (!q || r.title.toLowerCase().includes(q) || (!this.s.app && appMatches(r.app, q))));
+  }
+  set(p, why) { Object.assign(this.s, p); if ('q' in p) this.inp.value = p.q; if (!('sel' in p)) this.s.sel = 0; this.paint(); if (why && this.o.log) this.o.log(why); }
+  paint() {
+    const s = this.s, w = this.win, rows = this.rows(), sug = this.sug(), q = s.q.trim();
+    w.classList.toggle('compact', s.compact);
+    const [tn, tv] = TYPES[s.filter] ?? [];
+    w.querySelector('[data-slot="chips"]').innerHTML =
+      (s.compact && s.filter !== 'all' ? `<span class="cat" style="--tg:var(${tv})"><i></i>${tn}</span>` : '') +
+      (s.app ? `<span class="cap" title="只看来自 ${esc(s.app)} 的记录">${appIcon(s.app)}<span>${esc(s.app)}</span><button type="button" data-act="uncap" aria-label="去掉来源筛选">${ICON.x}</button></span>` : '');
+    this.inp.placeholder = s.app ? (s.app.length > 8 ? '只在这个应用里搜索' : `在 ${s.app} 的记录里搜索`) : s.compact ? '搜索' : '搜索内容或来源应用，例如“会议”或 Figma…';
+    w.querySelector('[data-slot="sug"]').innerHTML = sug
+      ? `<button type="button" class="sug" data-act="cap" title="只看来自 ${esc(sug.app)} 的记录">${appIcon(sug.app)}<span class="nm">只看 ${esc(sug.app)}</span><small>${sug.n} 条</small><kbd>Tab</kbd></button>` : '';
+    const total = this.inCat().filter((r) => !s.app || r.app === s.app).length;
+    w.querySelector('.count').innerHTML = s.compact ? (q || s.app || s.filter !== 'all' ? `${rows.length} 条` : '') : `${rows.length}<small>/ ${total}</small>`;
+    w.querySelector('.tabs').innerHTML = ['all', ...Object.keys(TYPES)].map((k) =>
+      `<span data-on="${s.filter === k}" style="${k === 'all' ? '' : `--tg:var(${TYPES[k][1]})`}"><i></i>${k === 'all' ? '全部' : TYPES[k][0]}<small>${k === 'all' ? DATA.length : DATA.filter((r) => r.kind === k).length}</small></span>`).join('');
+    const max = this.o.rows ?? 99;
+    w.querySelector('.list').innerHTML = rows.length ? rows.slice(0, max).map((r, i) => `
+      <div class="row" role="option" data-i="${i}" aria-selected="${i === s.sel}" style="--tg:var(${TYPES[r.kind][1]})">
+        <div class="thumb">${ICON[r.kind]}</div>
+        <div><div class="title">${hi(r.title, q)}</div><div class="meta">${s.app ? '' : `${!s.app && q && !r.title.toLowerCase().includes(q.toLowerCase()) ? hi(r.app, q) : esc(r.app)} · `}${r.ago}</div></div>
+        <span class="idx">${i < 9 ? i + 1 : ''}</span></div>`).join('')
+      : `<div class="empty"><b>${s.app ? `${esc(s.app)} 的记录里没有“${esc(q)}”` : `没有找到“${esc(q)}”`}</b>${s.app ? `<button type="button" data-act="widen">在全部来源里搜索“${esc(q)}”</button>` : '换个关键词试试'}</div>`;
+    const cur = rows[s.sel];
+    w.querySelector('.pbody').textContent = cur ? cur.title : '';
+    w.querySelector('.pfoot').innerHTML = cur ? `<div>来源<b><button type="button" class="src" data-act="src" title="只看来自 ${esc(cur.app)} 的记录">${appIcon(cur.app)}${esc(cur.app)}</button></b></div><div>复制于<b>${cur.ago}</b></div><div>类型<b>${TYPES[cur.kind][0]}</b></div>` : '';
+    w.querySelector('[data-slot="esc"]').innerHTML = `<kbd>Esc</kbd> ${q ? '清空搜索' : s.app ? '去掉来源' : '隐藏'}`;
+  }
+  bind() {
+    this.inp.addEventListener('input', () => this.set({ q: this.inp.value }));
+    this.inp.addEventListener('keydown', (e) => {
+      const s = this.s, sug = this.sug(), n = this.rows().length;
+      if (e.isComposing) return;
+      if (e.key === 'Tab' && !e.shiftKey && sug) { e.preventDefault(); this.set({ app: sug.app, q: '' }, `Tab：输入的字变成胶囊“${sug.app}”，列表只剩它的 ${sug.n} 条`); }
+      else if (e.key === 'Backspace' && !this.inp.value && s.app) { e.preventDefault(); this.set({ app: null }, '⌫：搜索框为空，去掉来源胶囊'); }
+      else if (e.key === 'Backspace' && !this.inp.value && s.compact && s.filter !== 'all') { e.preventDefault(); this.set({ filter: 'all' }, '⌫：去掉分类标签，回到“全部”（M27 规则 7）'); }
+      else if (e.key === 'Escape') { e.preventDefault(); if (this.inp.value) this.set({ q: '' }, 'Esc：清空搜索词，胶囊保留'); else if (s.app) this.set({ app: null }, 'Esc：去掉来源胶囊'); else if (s.compact && s.filter !== 'all') this.set({ filter: 'all' }, 'Esc：回到“全部”'); else this.o.log?.('Esc：隐藏面板（下次唤起时胶囊和搜索词都已清空）'); }
+      else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); if (n) this.set({ sel: (s.sel + (e.key === 'ArrowDown' ? 1 : n - 1)) % n }); }
+      else if (e.key === 'Enter') { const r = this.rows()[s.sel]; if (r) this.o.log?.(`Enter：粘贴“${r.title}”`); }
+      else if ((e.metaKey || e.ctrlKey) && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) { e.preventDefault(); const ks = ['all', ...Object.keys(TYPES)]; this.set({ filter: ks[(ks.indexOf(s.filter) + (e.key === 'ArrowRight' ? 1 : ks.length - 1)) % ks.length] }, 'Mod + ←/→：切换分类，胶囊保留，两者叠加'); }
+    });
+    this.win.addEventListener('mousedown', (e) => { if (e.target !== this.inp) e.preventDefault(); });
+    this.win.addEventListener('click', (e) => {
+      const act = e.target.closest('[data-act]')?.dataset.act, row = e.target.closest('.row');
+      const sug = this.sug(), cur = this.rows()[this.s.sel];
+      if (act === 'cap' && sug) this.set({ app: sug.app, q: '' }, `点建议：胶囊“${sug.app}”`);
+      else if (act === 'uncap') this.set({ app: null }, '点胶囊上的 ×：去掉来源筛选，搜索词保留');
+      else if (act === 'widen') this.set({ app: null }, '去掉胶囊，在全部来源里搜同一个词');
+      else if (act === 'src' && cur) this.set({ app: cur.app, q: '' }, `点预览里的来源：胶囊“${cur.app}”`);
+      else if (row) this.set({ sel: Number(row.dataset.i) });
+      this.inp.focus();
+    });
+  }
+}
+
+const logEl = document.getElementById('log');
+const live = new Panel(document.getElementById('live'), {}, { log: (m) => (logEl.textContent = m) });
+
+const CASES = [
+  ['1 输入应用名：出现建议', '输入 wx（拼音首字母）。列表照常按内容和应用名搜，右侧多一个“只看 微信 · 6 条 Tab”。不按 Tab 就和现在一样。', { q: 'wx' }],
+  ['2 按 Tab：变成胶囊', '输入的字清空，变成搜索框里的胶囊；列表只剩微信的记录，行的第二行不再重复写应用名；占位文字改成“在 微信 的记录里搜索”。', { app: '微信' }],
+  ['3 胶囊 + 搜索词', '只在这个应用的记录里搜。计数的分母是这个应用的条数。', { app: '微信', q: '会议' }],
+  ['4 输入的字既是应用名、也在内容里', '输入“微信”：备忘录里有一条内容带“微信”，照常列出并高亮；同时给出建议。所以不自动变胶囊。', { q: '微信' }],
+  ['5 多个应用都对得上', '输入“微信”时“微信”和“企业微信”都对得上，只建议记录最多的“微信”（见 4）。要选企业微信，多打一个字，如“企业”或 qywx。', { q: '企业' }],
+  ['6 应用里搜不到', '说明是在哪个应用里没找到，给一个按钮去掉胶囊、在全部来源里搜同一个词。', { app: 'VS Code', q: '会议' }],
+  ['7 和分类叠加（完整面板）', '先切到“链接”分类再输入 chr：建议里的条数是这个分类下的条数。', { filter: 'link', q: 'chr' }],
+  ['8 应用名很长', '胶囊最宽占搜索框的 46%，放不下时截断，悬停显示完整名字。', { app: 'Microsoft Remote Desktop Beta' }],
+  ['9 输入的不是应用名', '没有建议，和现在一样。', { q: '发票' }],
+  ['10 精简模式：建议', '同一套做法；搜索框窄，建议最宽占一半。', { compact: true, q: '微信' }],
+  ['11 精简模式：分类标签 + 来源胶囊', '分类标签在前、来源胶囊在后。搜索框为空时按 ⌫ 先去掉胶囊，再按一次去掉分类。', { compact: true, filter: 'text', app: '微信' }],
+];
+document.getElementById('cases').innerHTML = CASES.map(([t, d], i) => `<div class="case"><h3>${t}</h3><p>${d}</p><div data-case="${i}" style="${CASES[i][2].compact ? 'max-width:400px' : ''}"></div></div>`).join('');
+document.querySelectorAll('[data-case]').forEach((el) => new Panel(el, CASES[Number(el.dataset.case)][2], { static: true, rows: 4 }));
+
+function bindSeg(id, apply) {
+  const seg = document.getElementById(id);
+  seg.addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; seg.querySelectorAll('button').forEach((x) => x.setAttribute('aria-pressed', String(x === b))); apply(b.dataset.v); });
+}
+bindSeg('themeSeg', (v) => (document.documentElement.dataset.theme = v));
+bindSeg('styleSeg', (v) => { document.getElementById('live').style.maxWidth = v === 'compact' ? '400px' : '880px'; live.set({ compact: v === 'compact' }); live.inp.focus(); });
+// ?theme=light：直接打开亮色（截图核对用）
+if (new URLSearchParams(location.search).get('theme') === 'light') document.querySelector('#themeSeg [data-v="light"]').click();
+live.inp.focus();
+</script>
+</body>
+</html>

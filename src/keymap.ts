@@ -19,6 +19,10 @@ export type KeyCtx = {
   selTranslatable: boolean;
   /** 选中项是文本、代码或链接：Shift+Enter 粘贴为纯文本（M09 规则 7） */
   selPlain: boolean;
+  /** 搜索框里有来源胶囊（M29） */
+  app: boolean;
+  /** 搜索框右侧有“只看 xx”的建议 */
+  sug: boolean;
   /** 精简模式（M27）、预览开着、分类不是“全部” */
   compact: boolean;
   peek: boolean;
@@ -56,6 +60,8 @@ export type Action =
   | { t: 'peekClose' }
   | { t: 'peekTranslate' }
   | { t: 'clearFilter' }
+  | { t: 'acceptSug' }
+  | { t: 'clearApp' }
   | null;
 
 export const keyAction = (e: KeyEv, c: KeyCtx): Action => {
@@ -72,8 +78,12 @@ export const keyAction = (e: KeyEv, c: KeyCtx): Action => {
     if (k === 'Escape' && c.peek) return { t: 'peekClose' };
     if (e.mod && lk === 'y' && !e.shift && !e.alt) return e.repeat ? null : { t: 'peek' };
     if (k === ' ' && !e.mod && !e.ctrl && !e.alt && !c.onControl && !c.searchHasText) return e.repeat ? null : { t: 'peek' };
-    if (c.filtered && !c.searchHasText && !c.onControl && ((k === 'Escape' && c.multi < 2) || (k === 'Backspace' && !e.mod))) return { t: 'clearFilter' };
   }
+  // 来源筛选（M29 规则 2、5）：Tab 把建议变成胶囊；搜索框为空时 ⌫、Esc 去掉胶囊，先于精简模式的分类标签
+  const emptyBack = !c.searchHasText && !c.onControl && ((k === 'Escape' && c.multi < 2) || (k === 'Backspace' && !e.mod));
+  if (k === 'Tab' && c.sug && c.inSearch && !e.shift && !e.mod && !e.ctrl && !e.alt) return { t: 'acceptSug' };
+  if (c.app && emptyBack) return { t: 'clearApp' };
+  if (c.compact && c.filtered && emptyBack) return { t: 'clearFilter' };
   // 片段（M25 规则 5、6）；翻译（M26 规则 2，多选时不可翻译）
   if (e.mod && !e.shift && !e.alt && !e.repeat) {
     if (lk === 't' && c.selTranslatable && c.multi < 2) return { t: c.compact ? 'peekTranslate' : 'translate' };

@@ -1,7 +1,7 @@
 import './styles.css';
 import { attachConsole, info } from './api/log';
 import {
-  accessibilityGranted, bootstrap, clearHistory, exportLogs, updateAvailable, copy, copyTextPlain, countUnpinned, createSnippet, deleteRecords, finishOnboarding, frontendReady, getRecord, hidePanel, hotkeyStatus, installedApps,
+  accessibilityGranted, bootstrap, clearHistory, exportLogs, updateAvailable, matchApps, copy, copyTextPlain, countUnpinned, createSnippet, deleteRecords, finishOnboarding, frontendReady, getRecord, hidePanel, hotkeyStatus, installedApps,
   ocrProgress, openUrl, overlayBegin, pickFolder, prunePreview, reocr, requestAccessibility, requestScreenCapture, revealFile, saveSettings, saveSnippet, screenCaptureGranted, search, trcardPress,
   setDialogOpen, setPaused, setPinned, translateEngines, translateDownload, translateRecord, translateStatus, translateTest, undoDelete, updateSnippet,
 } from './api/commands';
@@ -22,6 +22,7 @@ import {
   onTranslateDelta,
 } from './api/events';
 import type { AppError, Appearance, Engines, FileEntry, PanelStyle, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
+import { appCounts, bestApp, fromApp } from './source';
 import { COMPACT, compactGroups, compactHeadH, rowParts } from './compact';
 import { copyToast, needsAccessibility } from './copy-status';
 import {
@@ -132,6 +133,10 @@ const S = {
   snippets: new Map<number, string>(),
   // 拼音命中的原汉字：高亮用它代替查询词
   marks: new Map<number, string>(),
+  /** 来源胶囊：只看来自这个应用的记录（M29）；隐藏面板时清空 */
+  app: null as string | null,
+  /** 搜索框右侧的建议“只看 xx · n 条” */
+  sug: null as { app: string; n: number } | null,
   sel: null as number | null,
   /** 多选（只在“片段”分类，M25 规则 6）：空或至少 2 条 */
   multi: new Set<number>(),
@@ -168,8 +173,10 @@ async function paintVerb() {
 
 // —— 数据视图 ——
 const favMin = () => S.settings.frequentMinUses;
-const vis = () => visible(S.records, S.filter, S.matchIds, favMin());
-const matches = (r: RecordSummary) => inFilter(r, S.filter, favMin(), S.matchIds !== null) && (S.matchIds === null || S.matchIds.has(r.id));
+const vis = () => fromApp(visible(S.records, S.filter, S.matchIds, favMin()), S.app);
+/** 当前分类下、不看搜索词的记录：建议的条数与胶囊下的总数都按它算（M29 规则 1、3） */
+const inCategory = () => visible(S.records, S.filter, null, favMin());
+const matches = (r: RecordSummary) => inFilter(r, S.filter, favMin(), S.matchIds !== null) && (S.matchIds === null || S.matchIds.has(r.id)) && fromApp([r], S.app).length > 0;
 const rowEl = (id: number | null) => (id === null ? null : document.getElementById('opt-' + id));
 const source = (r: RecordSummary) => r.app?.name || '未知来源';
 /** 行、选中光标与预览标签的类型色：片段统一用片段色（M25 规则 2） */
@@ -197,7 +204,7 @@ const thumb = (r: RecordSummary) =>
 const metaLine = (r: RecordSummary) => {
   // 片段：内容摘要 + 用过 N 次，不显示来源与时间（M25 规则 2）
   const parts = r.snippetBody !== null ? [`<span class="snip-of">${hl(r.snippetBody, S.q)}</span>`, `用过 ${fmtInt(r.uses)} 次`]
-    : [esc(source(r)), rel(r.copiedAt), r.kind === 'video' && r.durationSec !== null ? fmtDur(r.durationSec) : fmtBytes(r.size)];
+    : [...(S.app === null ? [esc(source(r))] : []), rel(r.copiedAt), r.kind === 'video' && r.durationSec !== null ? fmtDur(r.durationSec) : fmtBytes(r.size)];
   if (isFav(r, favMin())) parts.push(`<span class="uses">用过 ${fmtInt(r.uses)} 次</span>`);
   // 命中来自图中文字时片段放最前：它是这一行出现在结果里的原因，放末尾在常见宽度下关键词会被省略号截掉
   const snip = S.snippets.get(r.id);
@@ -229,9 +236,10 @@ const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id ===
 /** 总数（M25 规则 2）：“片段”分类是片段数，“全部”搜索时是历史数加片段数，其余是历史数 */
 function setCount(n: number) {
   const c = counts(S.records, favMin());
-  const total = S.filter === 'snip' ? c.snip : S.filter === 'all' && S.matchIds ? c.all + c.snip : c.all;
+  // 有来源胶囊时分母是这个应用在当前分类下的条数（M29 规则 3）
+  const total = S.app !== null ? fromApp(inCategory(), S.app).length : S.filter === 'snip' ? c.snip : S.filter === 'all' && S.matchIds ? c.all + c.snip : c.all;
   // 精简模式只在有搜索词或分类标签时显示“N 条”（M27 规则 7）
-  const html = !compact() ? `${fmtInt(n)}<small>/ ${fmtInt(total)}</small>` : S.q.trim() || S.filter !== 'all' ? `${fmtInt(n)} 条` : '';
+  const html = !compact() ? `${fmtInt(n)}<small>/ ${fmtInt(total)}</small>` : S.q.trim() || S.filter !== 'all' || S.app !== null ? `${fmtInt(n)} 条` : '';
   if (countEl.innerHTML === html) return;
   countEl.innerHTML = html;
   fx(countEl, [{ transform: 'translateY(6px)', opacity: 0, filter: 'blur(3px)' }, { transform: 'none', opacity: 1, filter: 'blur(0)' }], { duration: 260, easing: EASE_ENTER });
@@ -241,6 +249,12 @@ let bootError = '';
 function emptyHTML() {
   if (bootError) return `<div class="empty"><span class="ring">${svg('inbox')}</span><p>无法读取历史记录：${esc(bootError)}</p></div>`;
   const qq = S.q.trim(), f = S.filter;
+  // 来源胶囊下搜不到：说明是在哪个应用里没找到，给一个按钮去掉胶囊再搜同一个词（M29 规则 4）
+  if (S.app !== null) {
+    return qq
+      ? `<div class="empty"><span class="ring">${svg('search')}</span><p>${esc(S.app)} 的记录里没有“${esc(qq)}”</p><button class="btn sm" type="button" data-act="widen">在全部来源里搜索“${esc(qq)}”</button></div>`
+      : `<div class="empty"><span class="ring">${svg('inbox')}</span><p>没有来自 ${esc(S.app)} 的${f === 'all' ? '' : FL[f]}记录</p><button class="btn sm" type="button" data-act="reset">清除搜索与筛选</button></div>`;
+  }
   const msg = qq ? `没有匹配“${esc(qq)}”的${f === 'all' ? '' : FL[f]}记录`
     : f === 'fav' ? `还没有常用记录。同一条内容复制 ${favMin()} 次以上就会出现在这里`
     : f === 'snip' ? '还没有片段。在历史记录上右键“存为片段…”，或在设置里新建'
@@ -286,7 +300,7 @@ function paintBeam(row: HTMLElement | null) {
 // 多选时行尾快捷按钮收起、Esc 提示改成取消选择（M25 规则 6）；多选的每次变化都会走 paintRows 或空列表
 function paintMultiUi() {
   list.classList.toggle('multi', S.multi.size >= 2);
-  escHintEl.textContent = escHint(!!S.q, S.multi.size >= 2);
+  escHintEl.textContent = escHint(!!S.q, S.multi.size >= 2, S.app !== null);
 }
 function paintRows({ stagger = false, glide = '', glideBusy = '' } = {}) {
   paintMultiUi();
@@ -496,9 +510,64 @@ function setPeek(on: boolean) {
 }
 // 精简搜索框只写“搜索”（M27 规则 3）
 const Q_PLACEHOLDER = q.placeholder;
+const qPlaceholder = (style: PanelStyle = S.settings.panelStyle) =>
+  S.app !== null ? ([...S.app].length > 8 ? '只在这个应用里搜索' : `在 ${S.app} 的记录里搜索`) : style === 'compact' ? '搜索' : Q_PLACEHOLDER;
 function setStyleRoot(style: PanelStyle) {
   root.dataset.style = style;
-  q.placeholder = style === 'compact' ? '搜索' : Q_PLACEHOLDER;
+  q.placeholder = qPlaceholder(style);
+}
+
+// —— 来源筛选（M29）——
+const qApp = $('#qApp'), qSug = $<HTMLButtonElement>('#qSug');
+const appIconOf = (name: string) => {
+  for (const r of S.records.values()) if (r.app?.name === name && r.app.icon) return r.app.icon;
+  return null;
+};
+const setAppIcon = (host: HTMLElement, name: string) => {
+  const img = host.querySelector('img')!, src = appIconOf(name);
+  img.hidden = !src;
+  if (src) img.src = src;
+};
+function paintApp() {
+  qApp.hidden = S.app === null;
+  if (S.app !== null) {
+    qApp.title = `只看来自 ${S.app} 的记录`;
+    qApp.children[1].textContent = S.app;
+    setAppIcon(qApp, S.app);
+  }
+  qSug.hidden = S.sug === null;
+  if (S.sug) {
+    qSug.title = `只看来自 ${S.sug.app} 的记录`;
+    qSug.querySelector('.nm')!.textContent = `只看 ${S.sug.app}`;
+    qSug.querySelector('small')!.textContent = `${fmtInt(S.sug.n)} 条`;
+    setAppIcon(qSug, S.sug.app);
+  }
+  q.placeholder = qPlaceholder();
+  escHintEl.textContent = escHint(!!S.q, S.multi.size >= 2, S.app !== null);
+}
+// 建议：输入对得上某个应用名（名字、全拼、首字母，由后端比对）时，取当前分类下记录最多的一个；序号丢弃先发后到的结果
+let sugSeq = 0;
+function updateSug(v: string) {
+  const seq = ++sugSeq, t = v.trim();
+  const done = (s: typeof S.sug) => {
+    if (seq !== sugSeq) return;
+    S.sug = s;
+    paintApp();
+  };
+  if (S.app !== null || !t) return done(null);
+  const c = appCounts(inCategory());
+  matchApps(t, [...c.keys()]).then((names) => done(bestApp(names, c)), () => done(null));
+}
+/** 设置或去掉来源胶囊；`clearQuery`：Tab 接受建议、点预览里的来源时，输入的字换成胶囊 */
+function setApp(app: string | null, clearQuery: boolean) {
+  if (S.app === app) return;
+  S.app = app;
+  S.sug = null;
+  S.multi.clear();
+  if (clearQuery) q.value = '';
+  paintApp();
+  void runSearch(q.value);
+  q.focus();
 }
 // 换面板样式（M27 规则 1）：窗口尺寸由后端 apply_style 改，这里换布局并按新行高重排
 function applyStyle(style: PanelStyle) {
@@ -598,7 +667,10 @@ function metaHTML(r: RecordSummary, d: RecordDetail | null) {
   // 文件记录里夹着图片时也识别：不含图片的文件记录状态永远是 0，不显示字段
   const ocrable = r.kind === 'image' || (r.kind === 'file' && r.ocrState !== 0);
   if (ocrable && (r.ocrState !== 1 || d?.ocrText)) meta.push(['文字', reocrNow ? '识别中…' : ocrLabel(r.ocrState, d?.ocrText)]);
-  return meta.map(([k, v]) => `<div><dt>${k}</dt><dd title="${esc(v)}">${esc(v)}</dd></div>`).join('');
+  // “来源”可点：只看这个应用（M29 规则 2）
+  return meta.map(([k, v]) => k === '来源' && r.app
+    ? `<div><dt>${k}</dt><dd><button class="src-btn" type="button" data-act="src" title="只看来自 ${esc(v)} 的记录">${esc(v)}</button></dd></div>`
+    : `<div><dt>${k}</dt><dd title="${esc(v)}">${esc(v)}</dd></div>`).join('');
 }
 
 // 摘要立即渲染；正文异步取详情，序号过期的结果丢弃。同一条只取一次（摘要更新只刷新头部与信息栏）
@@ -1137,6 +1209,7 @@ function setFilter(k: Filter, instant: boolean) {
   S.multi.clear();
   persistFilter();
   renderTabs(instant);
+  updateSug(S.q);
   // M06 规则 6：切换分类后回到顶部并选中第一条
   list.scrollTop = 0;
   S.sel = null;
@@ -1186,7 +1259,8 @@ function runSearch(v: string, opts: { stagger?: boolean; base?: number; timed?: 
   typedSearch.cancel();
   S.q = v;
   clearQ.hidden = !v;
-  escHintEl.textContent = escHint(!!v, S.multi.size >= 2);
+  escHintEl.textContent = escHint(!!v, S.multi.size >= 2, S.app !== null);
+  updateSug(v);
   return new Promise((settled) =>
     fetchMatches(v, () => {
       list.scrollTop = 0;
@@ -2635,6 +2709,9 @@ const hidden = () => {
   instantly(spMini, true, () => spMini.classList.remove('show'));
   win.dataset.shown = 'false';
   S.multi.clear();
+  // 来源胶囊同搜索词，不跨唤起保留（M29 规则 5）
+  S.app = S.sug = null;
+  paintApp();
   // 跨隐藏不复用详情（例如文件是否还在）
   bodyFor = null;
   details.clear();
@@ -2687,6 +2764,8 @@ document.addEventListener('keydown', (e) => {
       multi: S.multi.size,
       selTranslatable: !!selR && translatable(selR),
       selPlain: !!selR && plainable(selR),
+      app: S.app !== null,
+      sug: S.sug !== null,
       compact: S.settings.panelStyle === 'compact',
       peek: win.dataset.peek === 'true',
       filtered: S.filter !== 'all',
@@ -2735,6 +2814,9 @@ document.addEventListener('keydown', (e) => {
       setPeek(true);
       return void (sel !== null && doTranslate(sel));
     case 'clearFilter': return setFilter('all', true);
+    // 来源筛选（M29 规则 2、5）
+    case 'acceptSug': return void (S.sug && setApp(S.sug.app, true));
+    case 'clearApp': return setApp(null, false);
     case 'selectAll': {
       S.multi = new Set(vis().filter((r) => !S.removing.has(r.id)).map((r) => r.id));
       return setMulti();
@@ -2881,6 +2963,13 @@ clearQ.addEventListener('click', () => {
   runSearch('');
   q.focus();
 });
+// 来源筛选（M29）：点建议变成胶囊；点胶囊上的 × 去掉胶囊、搜索词保留；点预览信息栏的“来源”只看这个应用
+qSug.addEventListener('click', () => S.sug && setApp(S.sug.app, true));
+$('#qAppX').addEventListener('click', () => setApp(null, false));
+pmeta.addEventListener('click', (e) => {
+  const r = S.sel === null ? undefined : S.records.get(S.sel);
+  if ((e.target as Element).closest('[data-act="src"]') && r?.app) setApp(r.app.name, true);
+});
 tabsBase.addEventListener('click', (e) => {
   const t = (e.target as Element).closest<HTMLElement>('[data-f]');
   if (t) setFilter(t.dataset.f as Filter, e.detail === 0);
@@ -2900,8 +2989,11 @@ const itemOf = (e: Event) => {
 };
 list.addEventListener('click', (e) => {
   const t = e.target as Element;
+  if (t.closest('[data-act="widen"]')) return setApp(null, false);
   if (t.closest('[data-act="reset"]')) {
     q.value = '';
+    S.app = null;
+    paintApp();
     S.filter = 'all';
     persistFilter();
     renderTabs(false);

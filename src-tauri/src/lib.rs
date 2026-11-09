@@ -249,6 +249,7 @@ pub fn run() {
             commands::panel::open_panel_settings,
             commands::records::get_record,
             commands::records::search,
+            commands::records::match_apps,
             commands::records::set_pinned,
             commands::records::delete,
             commands::records::undo_delete,

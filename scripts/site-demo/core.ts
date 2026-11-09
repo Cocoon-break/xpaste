@@ -204,6 +204,8 @@ const handlers: Record<string, (a: any) => unknown> = {
   translate_status: () => ({ supported: true, pack: 'installed' }),
   translate_record: ({ id }) => translate(id),
   translate_test: () => 'Hello',
+  // 演示页面没有拼音索引，只按名字比对
+  match_apps: ({ q, names }) => (names as string[]).filter((n) => String(q).trim().length > 0 && n.toLowerCase().includes(String(q).trim().toLowerCase())),
   export_logs: () => fail('internal', '演示页面不导出日志'),
   // 划词卡片（card.html）：窗口高度交给父页面去调
   trcard_resize: ({ h }) => void tell({ type: 'card-size', h }),

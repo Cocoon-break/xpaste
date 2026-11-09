@@ -97,7 +97,8 @@ kbd {
 .titlebar .live i { width: 6px; height: 6px; border-radius: 50%; background: var(--c-code); }
 .titlebar .live[data-paused="true"] i { background: var(--faint); }
 
-.searchbar { display: flex; gap: 10px; align-items: center; padding: 2px 18px 12px; }
+/* min-width: 0：输入框的固有宽度（约 20 个字符）加上来源建议，在精简面板里会把整列撑宽 */
+.searchbar { display: flex; gap: 10px; align-items: center; padding: 2px 18px 12px; min-width: 0; }
 .search {
   flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; height: 42px; padding: 0 12px 0 14px;
   background: var(--search-bg); border: 1px solid var(--line-2); border-radius: 9px; color: var(--muted);
@@ -107,6 +108,19 @@ kbd {
 .search input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: var(--fg); font: inherit; font-size: 15px; }
 .search input::placeholder { color: var(--faint); }
 .search input::-webkit-search-cancel-button { display: none; }
+/* 来源筛选（M29）：搜索框里的来源胶囊；右侧“只看 xx”的建议不另起一行，输入时界面不跳 */
+.q-app:not([hidden]) { flex: none; display: inline-flex; align-items: center; gap: 6px; max-width: 46%; height: 26px; padding: 0 4px 0 6px; border-radius: 7px; background: var(--glass-3); color: var(--fg); font-size: 13px; }
+.q-app > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.q-app img, .q-sug img { flex: none; width: 16px; height: 16px; border-radius: 4px; }
+.q-app button { flex: none; width: 18px; height: 18px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 5px; background: none; color: var(--faint); cursor: pointer; }
+.q-app button svg { width: 10px; height: 10px; }
+.q-sug:not([hidden]) { flex: none; display: inline-flex; align-items: center; gap: 6px; max-width: 52%; height: 26px; padding: 0 4px 0 6px; border: 0; border-radius: 7px; background: var(--glass-2); color: var(--muted); font: 12.5px var(--font-ui); cursor: pointer; }
+.q-sug .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
+.q-sug small { font-size: 12px; color: var(--faint); white-space: nowrap; }
+@media (hover: hover) and (pointer: fine) { .q-app button:hover, .q-sug:hover { background: var(--hover); color: var(--fg); } }
+/* 预览信息栏的“来源”可点：只看这个应用 */
+.pmeta .src-btn { max-width: 100%; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (hover: hover) and (pointer: fine) { .pmeta .src-btn:hover { color: var(--cursor); text-decoration: underline; } }
 .count { font: 500 13px var(--font-display); font-variant-numeric: tabular-nums; color: var(--fg); display: inline-block; white-space: nowrap; }
 .count small { font: 12px var(--font-ui); color: var(--faint); margin-left: 3px; }
 
@@ -675,6 +689,7 @@ dialog > form { display: contents; }
 :root[data-style="compact"] .search { height: 36px; gap: 8px; padding: 0 10px 0 11px; }
 :root[data-style="compact"] .search input { font-size: 14px; }
 :root[data-style="compact"] .count { font: 12px var(--font-ui); color: var(--faint); }
+:root[data-style="compact"] .q-app:not([hidden]), :root[data-style="compact"] .q-sug:not([hidden]) { height: 22px; font-size: 12px; border-radius: 6px; }
 :root[data-style="compact"] #moreBtn { display: inline-flex; flex: none; width: 28px; height: 28px; }
 :root[data-style="compact"] #moreBtn[aria-expanded="true"] { color: var(--fg); background: var(--glass-3); }
 :root[data-style="compact"] .q-chip:not([hidden]) {

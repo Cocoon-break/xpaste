@@ -23,3 +23,9 @@ test('openLabel 按类型与平台给出右键菜单的打开动作', () => {
   assert.equal(openLabel('image', false, 'macos'), null);
   assert.equal(openLabel('text', false, 'macos'), null);
 });
+
+test('escHint 有来源胶囊、搜索框为空时提示去掉来源（M29 规则 5）', () => {
+  assert.equal(escHint(false, false, true), '去掉来源');
+  assert.equal(escHint(true, false, true), '清空搜索');
+  assert.equal(escHint(false, true, true), '取消选择');
+});

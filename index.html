@@ -19,9 +19,12 @@
           <span data-icon="search"></span>
           <!-- 精简模式：当前分类显示成搜索框里的标签（M27 规则 7） -->
           <span class="q-chip" id="qChip" hidden><i></i><span></span></span>
+          <!-- 来源筛选：按 Tab 接受建议后，应用名显示成搜索框里的胶囊（M29） -->
+          <span class="q-app" id="qApp" hidden><img alt="" width="16" height="16" hidden><span></span><button type="button" id="qAppX" aria-label="去掉来源筛选"><span data-icon="x"></span></button></span>
           <input id="q" name="q" type="search" placeholder="搜索内容或来源应用，例如“会议”或 Figma…" autocomplete="off" spellcheck="false"
                  role="combobox" aria-controls="list" aria-expanded="true" aria-autocomplete="list" aria-label="搜索剪切板历史">
           <button class="btn icon ghost sm" type="button" id="clearQ" aria-label="清除搜索" hidden><span data-icon="x"></span></button>
+          <button class="q-sug" type="button" id="qSug" hidden><img alt="" width="16" height="16" hidden><span class="nm"></span><small></small><kbd>Tab</kbd></button>
           <span class="count" id="count" aria-live="polite"></span>
           <button class="paused-pill" id="pausedPill" type="button" title="点击继续记录" hidden><i></i>已暂停</button>
         </label>

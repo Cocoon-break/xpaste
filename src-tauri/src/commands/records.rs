@@ -77,6 +77,16 @@ pub fn search(state: State<'_, AppState>, q: String) -> Result<Vec<SearchHit>, A
     Ok(state.store().search_hits(&q)?)
 }
 
+/// 来源筛选的建议（M29 规则 1）：`names` 里对得上输入的应用名，顺序不变。
+/// 应用名由前端从已加载的记录里给，这里只做名字、拼音与首字母的比对。
+#[tauri::command]
+pub fn match_apps(q: String, names: Vec<String>) -> Vec<String> {
+    names
+        .into_iter()
+        .filter(|n| xpaste_core::pinyin::name_matches(n, &q))
+        .collect()
+}
+
 #[tauri::command(async)]
 pub fn set_pinned(
     app: AppHandle,
