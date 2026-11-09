@@ -20,7 +20,7 @@ make dev           # 开发运行，使用真实数据目录
 make check         # 提交前全量检查：格式、clippy、Rust + 前端单元测试、前端构建
 make test          # 只跑单元测试
 make measure       # macOS 性能与可靠性测量（先 make release-app；离开电脑时运行，约 15 分钟；终端要有“辅助功能”权限，脚本用 osascript 发按键）
-make release       # 打发布包（未签名），收拢到 target/installers/
+make release       # 打发布包（本地默认不签名，见“签名与公证”），收拢到 target/installers/
 make release-x64   # 在 Apple 芯片 Mac 上打 Intel 版 .dmg（需 rustup target add x86_64-apple-darwin；装了之后 make release 也会顺带打）
 make release-win   # 在 macOS 上交叉打 Windows 安装程序（见下文）
 ```

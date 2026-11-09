@@ -60,7 +60,7 @@ build-check: ## 按发布配置编译应用但不打安装包
 # CI=true：Tauri 打 dmg 时检测到它会给 bundle_dmg.sh 加 --skip-jenkins，跳过 Finder AppleScript
 # 窗口布局（阶段 1 在这里超时 -1712），无界面环境也能完成；代价是 dmg 打开后没有图标摆位，
 # “应用程序”快捷方式仍在。
-release: ## 打发布包（未签名）：macOS 产出 .dmg（Apple 芯片装了 x86_64 target 时再打 Intel 包，装了交叉工具时再打 Windows 安装程序），Windows 产出 NSIS 安装程序
+release: ## 打发布包（设了 APPLE_* 环境变量时签名并公证 macOS 包，见 CONTRIBUTING）：macOS 产出 .dmg（Apple 芯片装了 x86_64 target 时再打 Intel 包，装了交叉工具时再打 Windows 安装程序），Windows 产出 NSIS 安装程序
 	CI=true pnpm tauri build
 ifeq ($(HAS_MAC_X64),1)
 	CI=true pnpm tauri build --target $(MAC_X64)
