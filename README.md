@@ -60,6 +60,14 @@
 
 上面的链接始终指向最新版，历史版本在 [Releases](https://github.com/Cocoon-break/xpaste/releases)。
 
+macOS 也可以用 Homebrew 安装（[Cocoon-break/homebrew-tap](https://github.com/Cocoon-break/homebrew-tap)）：
+
+```sh
+brew trust --cask cocoon-break/tap/xpaste   # Homebrew 要求先信任第三方 tap 里的 cask
+brew install --cask cocoon-break/tap/xpaste
+brew upgrade --cask xpaste                  # 以后升级
+```
+
 **macOS**：打开 dmg，把 xPaste 拖进“应用程序”。0.6.0 之后的版本用 Developer ID 签名并经过 Apple 公证，直接打开即可。
 
 从 0.6.0 及更早的版本升级上来时，签名身份变了，“辅助功能”和“屏幕录制”权限要重新授予一次：系统设置的列表里已有旧的 xPaste 条目时，先删掉再重新添加。之后升级不用再授权。

@@ -189,6 +189,8 @@ h3 { font: 600 18px/26px var(--ui); }
 .help > div { min-width: 0; }
 .help b { display: block; margin-bottom: 4px; color: var(--fg); font-weight: 600; }
 .cmd { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 8px 8px 8px 16px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--surface); }
+.brew { margin-top: 32px; color: var(--muted); font-size: 14px; line-height: 24px; }
+.brew b { color: var(--fg); font-weight: 600; }
 .cmd code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; color: var(--fg); }
 
 .faqs { display: grid; grid-template-columns: 4fr 7fr; gap: 64px; align-items: start; }
@@ -415,11 +417,15 @@ footer nav a:hover { color: var(--fg); }
       <li><b>macOS · Intel</b><span>macOS 13 及以上 · Intel 处理器的 Mac</span><a class="btn" href="https://github.com/Cocoon-break/xpaste/releases/latest/download/xPaste_x64.dmg"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>下载 .dmg</a></li>
       <li><b>Windows</b><span>Windows 10 21H2 / 11 · x64 · 不需要管理员权限</span><a class="btn" href="https://github.com/Cocoon-break/xpaste/releases/latest/download/xPaste_x64-setup.exe"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>下载 .exe</a></li>
     </ul>
+    <div class="brew">
+      <b>也可以用 Homebrew 安装（macOS）</b>
+      <div class="cmd"><code>brew trust --cask cocoon-break/tap/xpaste &amp;&amp; brew install --cask cocoon-break/tap/xpaste</code><button class="btn sm" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M5 16H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h11a1 1 0 0 1 1 1v1"/></svg><span>复制</span></button></div>
+    </div>
     <div class="help">
       <div>
         <b>macOS 第一次打开提示“已损坏”？</b>
         0.6.0 及更早的版本没有签名，文件没有坏；之后的版本已签名并公证，不会再提示。还在用旧版本时，在终端运行这一行再打开：
-        <div class="cmd"><code id="cmd">xattr -dr com.apple.quarantine /Applications/xPaste.app</code><button class="btn sm" type="button" id="copy"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M5 16H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h11a1 1 0 0 1 1 1v1"/></svg><span>复制</span></button></div>
+        <div class="cmd"><code>xattr -dr com.apple.quarantine /Applications/xPaste.app</code><button class="btn sm" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M5 16H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h11a1 1 0 0 1 1 1v1"/></svg><span>复制</span></button></div>
       </div>
       <div>
         <b>Windows 提示“已保护你的电脑”？</b>
@@ -601,13 +607,13 @@ function copied(text) {
 }
 document.addEventListener('copy', () => copied(getSelection()));
 
-// 复制放行命令
-document.getElementById('copy').addEventListener('click', async (e) => {
-  const text = document.getElementById('cmd').textContent, label = e.currentTarget.querySelector('span');
+// 复制命令（Homebrew 安装、旧版本放行）
+document.querySelectorAll('.cmd button').forEach((b) => b.addEventListener('click', async () => {
+  const text = b.parentElement.querySelector('code').textContent, label = b.querySelector('span');
   try { await navigator.clipboard.writeText(text); label.textContent = '已复制'; copied(text); }
   catch { label.textContent = '复制失败'; }
   setTimeout(() => { label.textContent = '复制'; }, 2400);
-});
+}));
 </script>
 </body>
 </html>

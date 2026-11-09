@@ -134,3 +134,40 @@ jobs:
             macOS 安装包已签名并公证，直接打开即可。从未签名的旧版本（0.6.0 及更早）升级后，“辅助功能”和“屏幕录制”权限要重新授予一次。
 
             Windows 安装包未签名，提示“Windows 已保护你的电脑”时，点“更多信息 → 仍要运行”。
+
+  # 发布之后更新 Homebrew tap（Cocoon-break/homebrew-tap）里 cask 的版本号与 sha256。
+  # 用的是只对 tap 仓库有写权限的 deploy key（仓库 Secret TAP_DEPLOY_KEY），没配置时只发警告。
+  # 给旧标签补发时不动 tap，免得把它退回旧版本；这一步失败不影响已经发布的安装包。
+  tap:
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: 更新 cask
+        run: |
+          if [ -z "$TAP_DEPLOY_KEY" ]; then echo "::warning::没有配置 TAP_DEPLOY_KEY，Homebrew tap 没有更新"; exit 0; fi
+          latest=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName)
+          if [ "$latest" != "$TAG" ]; then echo "$TAG 不是最新版（最新是 $latest），不更新 tap"; exit 0; fi
+          ver=${TAG#v}
+          sha() { gh release download "$TAG" --repo "$GITHUB_REPOSITORY" -p "xPaste_${ver}_$1.dmg" -O - | sha256sum | cut -d' ' -f1; }
+          arm=$(sha aarch64)
+          intel=$(sha x64)
+          mkdir -p ~/.ssh
+          printf '%s\n' "$TAP_DEPLOY_KEY" > ~/.ssh/tap
+          chmod 600 ~/.ssh/tap
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/tap -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          git clone -q git@github.com:Cocoon-break/homebrew-tap.git tap
+          cd tap
+          sed -i -E \
+            -e "s/^(  version )\"[^\"]*\"/\1\"$ver\"/" \
+            -e "s/(sha256 arm: +)\"[0-9a-f]{64}\"/\1\"$arm\"/" \
+            -e "s/(intel: )\"[0-9a-f]{64}\"/\1\"$intel\"/" \
+            Casks/xpaste.rb
+          grep -q "version \"$ver\"" Casks/xpaste.rb && grep -q "$arm" Casks/xpaste.rb && grep -q "$intel" Casks/xpaste.rb \
+            || { echo "Casks/xpaste.rb 的格式变了，没能改对" >&2; git diff; exit 1; }
+          if git diff --quiet; then echo "cask 已经是 $ver"; exit 0; fi
+          git diff
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -qam "xpaste $ver"
+          git push -q origin HEAD
