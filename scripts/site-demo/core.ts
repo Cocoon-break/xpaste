@@ -2,6 +2,7 @@
 // （搜索片段只给识别文字命中、前后各 12 字；拼音命中带 mark），其余命令能让界面走通即可。
 import type { AppError, Bootstrap, Settings } from '../../src/api/types';
 import { INITIALS, PINYIN, RECORDS, TRANSLATIONS, mk, summary, type Demo } from './data';
+import { tell } from './bridge';
 import { emit } from './event';
 
 const q = new URLSearchParams(location.search);
@@ -42,7 +43,6 @@ export const settings: Settings = {
   translateHotkey: 'Alt+Shift+T',
 };
 
-const tell = (msg: Record<string, unknown>) => parent !== window && parent.postMessage({ xp: true, ...msg }, '*');
 const byId = (id: number) => RECORDS.find((r) => r.id === id);
 const removed: Demo[] = [];
 

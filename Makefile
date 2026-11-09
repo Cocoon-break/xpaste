@@ -92,7 +92,8 @@ release-report: ## 把各目标的安装包收拢到 target/installers/ 并列�
 	@ls -1 $(INSTALLERS) 2>/dev/null | while read -r f; do echo "  $$f  $$(du -sh $(INSTALLERS)/$$f | cut -f1)"; done
 
 site-demo: ## 重新生成官网上可操作的演示面板（website/demo/）：改了 src/ 的界面或 scripts/site-demo/ 之后跑，产物一起提交
-	pnpm exec vite build --config scripts/site-demo/vite.config.mjs
+	rm -rf website/demo
+	for e in index card shot; do SITE_DEMO_ENTRY=$$e pnpm exec vite build --config scripts/site-demo/vite.config.mjs || exit 1; done
 
 measure: ## macOS 性能与可靠性测量（先 make release-app；离开电脑时运行，约 15 分钟；终端要有辅助功能权限）
 	bash scripts/measure.sh all

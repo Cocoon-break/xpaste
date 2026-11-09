@@ -1,5 +1,6 @@
 // 官网页面与演示面板之间的桥。父页面用 postMessage 指挥：换主题、演示打字、点分类、缩放频谱、
 // 把访客在页面上的复制记进来；面板把“访客上手了”告诉父页面（“准备好了”“粘贴了哪条”由 core.ts 发）。
+import { fromPage, tell } from './bridge';
 import { addCopied } from './core';
 
 // 面板抢焦点时不带着外层页面滚动
@@ -29,7 +30,6 @@ html, body { background: transparent !important; }
 document.head.append(style);
 
 const sleep = (ms: number) => new Promise((ok) => setTimeout(ok, ms));
-const tell = (type: string) => parent !== window && parent.postMessage({ xp: true, type }, '*');
 const click = (sel: string) => document.querySelector<HTMLElement>(sel)?.click();
 
 /** 演示打字：一个字一个字填进搜索框。`run` 变了说明被新的指令或访客打断。 */
@@ -58,8 +58,8 @@ function theme(v: string) {
 }
 
 addEventListener('message', (e: MessageEvent) => {
-  const m = e.data as { xp?: boolean; type?: string; value?: string } | null;
-  if (!m || m.xp !== true || e.source !== parent) return;
+  const m = fromPage(e);
+  if (!m) return;
   const v = String(m.value ?? '');
   if (m.type === 'theme') theme(v);
   else if (m.type === 'type') void type(v);
@@ -73,6 +73,6 @@ for (const name of ['pointerdown', 'keydown', 'wheel'] as const) {
   addEventListener(name, (e) => {
     if (!e.isTrusted) return;
     run += 1;
-    tell('interact');
+    tell({ type: 'interact' });
   }, { capture: true, passive: true });
 }

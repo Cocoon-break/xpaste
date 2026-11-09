@@ -121,7 +121,8 @@ h1 span { display: inline-block; white-space: nowrap; }
 /* 会动的演示：iframe 里是真实界面。默认不接收鼠标（免得滚动页面时被面板截住），点一下才交给访客 */
 .demo { margin-top: 56px; }
 .live { position: relative; overflow: hidden; border-radius: 12px; filter: drop-shadow(var(--shadow-win)); }
-.live iframe { display: block; width: 100%; height: 100%; border: 0; pointer-events: none; }
+.live iframe { display: block; width: 100%; height: 100%; border: 0; pointer-events: none; opacity: 0; transition: opacity .3s var(--ease); }
+.live.ready iframe { opacity: 1; }
 .live.taken iframe { pointer-events: auto; }
 .live .take { position: absolute; inset: 0; width: 100%; border: 0; background: none; cursor: pointer; }
 .live.taken .take { display: none; }
@@ -471,17 +472,16 @@ footer nav a:hover { color: var(--fg); }
 <script>
 // —— 主题：跟随系统 / 浅色 / 深色，记在 localStorage，演示界面跟着换 ——
 const root = document.documentElement;
-const frames = new Set();
-const post = (frame, msg) => frame.contentWindow?.postMessage({ xp: true, ...msg }, '*');
+// 嵌入页地址带 ?scene=<哪一幕>，来回的消息都报上这个名字；WebKit 里 MessageEvent.source 有时不准，不能靠它认人
+const post = (s, msg) => s.frame?.contentWindow?.postMessage({ xp: true, scene: s.name, ...msg }, '*');
 const themeNow = () => root.dataset.theme || 'system';
 function setTheme(v) {
   if (v === 'light' || v === 'dark') root.dataset.theme = v; else delete root.dataset.theme;
   try { v === 'system' ? localStorage.removeItem('xp-theme') : localStorage.setItem('xp-theme', v); } catch {}
   document.querySelectorAll('[data-theme-opt]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.themeOpt === v)));
-  frames.forEach((f) => post(f, { type: 'theme', value: v }));
+  scenes.forEach((s) => post(s, { type: 'theme', value: v }));
 }
 document.querySelectorAll('[data-theme-opt]').forEach((b) => b.addEventListener('click', () => setTheme(b.dataset.themeOpt)));
-setTheme(themeNow());
 
 // —— 会动的演示 ——
 // 每一幕是一个 iframe（website/demo/ 里的真实界面），没人动手时按下面的脚本自己演；
@@ -501,19 +501,18 @@ const scenes = [...document.querySelectorAll('[data-scene]')].map((el) => {
   const live = el.querySelector('.live'), say = el.querySelector('.say2');
   return { el, live, say, name: el.dataset.scene, frame: null, ready: false, seen: false, taken: false, paused: still, token: 0, idleSay: say.innerHTML };
 });
-const sceneOf = (win) => scenes.find((s) => s.frame && s.frame.contentWindow === win);
 const hero = scenes[0];
+setTheme(themeNow());
 
 function mount(s) {
   if (s.frame) return;
   const f = document.createElement('iframe');
   const t = themeNow(), src = s.live.dataset.src;
-  f.src = t === 'system' ? src : src + (src.includes('?') ? '&' : '?') + 'theme=' + t;
+  f.src = src + (src.includes('?') ? '&' : '?') + 'scene=' + s.name + (t === 'system' ? '' : '&theme=' + t);
   f.title = s.live.querySelector('.take').getAttribute('aria-label').replace('点一下，自己', '可以') ;
   f.setAttribute('allowtransparency', 'true');
   s.live.prepend(f);
   s.frame = f;
-  frames.add(f);
 }
 
 const wait = (s, token, ms) => new Promise((ok) => setTimeout(() => ok(token === s.token), ms));
@@ -524,8 +523,8 @@ async function loop(s) {
       if (token !== s.token) return;
       if (op === 'say') s.say.textContent = v;
       else if (op === 'wait') { if (!(await wait(s, token, v))) return; }
-      else if (op === 'card') post(s.frame, { type: 'card', ...CARD });
-      else post(s.frame, { type: op, value: v });
+      else if (op === 'card') post(s, { type: 'card', ...CARD });
+      else post(s, { type: op, value: v });
     }
   }
 }
@@ -533,7 +532,7 @@ async function loop(s) {
 function sync(s) {
   const run = s.ready && s.seen && !s.taken && !s.paused;
   if (run && !s.running) { s.running = true; void loop(s); }
-  else if (!run && s.running) { s.running = false; s.token += 1; if (s.name === 'shot') post(s.frame, { type: 'stop' }); }
+  else if (!run && s.running) { s.running = false; s.token += 1; if (s.name === 'shot') post(s, { type: 'stop' }); }
   const b = s.el.querySelector('[data-act="pause"]');
   if (b) { b.textContent = s.paused ? '播放演示' : '暂停演示'; b.setAttribute('aria-pressed', String(s.paused)); b.hidden = s.taken; }
   const t = s.el.querySelector('[data-act="take"]');
@@ -551,12 +550,13 @@ function take(s, on) {
 addEventListener('message', (e) => {
   const m = e.data;
   if (!m || m.xp !== true) return;
-  const s = sceneOf(e.source);
+  const s = scenes.find((x) => x.name === m.scene && x.frame);
   if (!s) return;
   if (m.type === 'ready') {
     s.ready = true;
+    s.live.classList.add('ready');
     s.live.style.backgroundImage = 'none';
-    post(s.frame, { type: 'theme', value: themeNow() });
+    post(s, { type: 'theme', value: themeNow() });
     s.running = false;
     s.token += 1;
     sync(s);
@@ -582,7 +582,7 @@ document.querySelectorAll('[data-q]').forEach((b) => b.addEventListener('click',
   if (!hero.frame) return;
   hero.paused = true; sync(hero);
   hero.say.textContent = `输入“${b.dataset.q}”。点“自己上手”可以接着搜别的`;
-  post(hero.frame, { type: 'type', value: b.dataset.q });
+  post(hero, { type: 'type', value: b.dataset.q });
 }));
 
 // —— 页面自己也“记”你的复制：刻度带右端升起一条刻线，首屏面板里多一条记录（只在这个页面里，不读剪切板） ——
@@ -597,7 +597,7 @@ function copied(text) {
   tick.setAttribute('d', `M${1594 - (copies - 1) * 7} 60v-${Math.min(52, 14 + Math.round(Math.sqrt(t.length) * 4))}`);
   svg.append(tick);
   document.getElementById('band-say').innerHTML = `<b>记下了：${[...t].length} 个字。</b>它已经出现在上面的面板里，右边多了一条刻线`;
-  if (hero.frame) { hero.paused = true; sync(hero); post(hero.frame, { type: 'type', value: '' }); setTimeout(() => post(hero.frame, { type: 'copied', value: t }), 250); }
+  if (hero.frame) { hero.paused = true; sync(hero); post(hero, { type: 'type', value: '' }); setTimeout(() => post(hero, { type: 'copied', value: t }), 250); }
 }
 document.addEventListener('copy', () => copied(getSelection()));
 

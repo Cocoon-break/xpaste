@@ -1,5 +1,7 @@
 // 官网上的截图遮罩：真实的 shot.html，跑在它自带的开发替身上（冻结的是一张画出来的假桌面）。
 // 没人动手时自己演一遍：拖出选区 → 画矩形 → 画箭头 → 回车复制，然后重来；访客一动手就把鼠标交给访客。
+import { fromPage, tell } from './bridge';
+
 const style = document.createElement('style');
 style.textContent = `
 html, body { background: transparent !important; }
@@ -17,7 +19,6 @@ for (const name of ['setPointerCapture', 'releasePointerCapture'] as const) {
 }
 
 const sleep = (ms: number) => new Promise((ok) => setTimeout(ok, ms));
-const tell = (type: string) => parent !== window && parent.postMessage({ xp: true, type }, '*');
 const ov = () => document.getElementById('ov') as HTMLElement;
 
 const cursor = document.createElement('div');
@@ -72,18 +73,21 @@ async function play() {
 }
 
 // 一次截图结束（演示按了回车，或访客自己完成 / 按了 Esc）：遮罩撤下后重新开始
-addEventListener('load', () => {
+// 内联的模块脚本在 WebKit 里可能晚于 load 才执行：已经加载完就下一轮直接开始
+const start = () => setTimeout(() => {
   let seen = false;
   new MutationObserver(() => {
     if (!ov().hidden) seen = true;
     else if (seen) setTimeout(() => location.reload(), 900);
   }).observe(ov(), { attributes: true, attributeFilter: ['hidden'] });
-  tell('ready');
+  tell({ type: 'ready' });
 });
+if (document.readyState === 'complete') start();
+else addEventListener('load', start);
 
 addEventListener('message', (e: MessageEvent) => {
-  const m = e.data as { xp?: boolean; type?: string; value?: string } | null;
-  if (!m || m.xp !== true || e.source !== parent) return;
+  const m = fromPage(e);
+  if (!m) return;
   if (m.type === 'theme') {
     const root = document.documentElement;
     if (m.value === 'light' || m.value === 'dark') root.dataset.theme = m.value;
@@ -97,6 +101,6 @@ for (const name of ['pointerdown', 'keydown'] as const) {
     if (!e.isTrusted) return;
     run += 1;
     cursor.classList.remove('on');
-    tell('interact');
+    tell({ type: 'interact' });
   }, { capture: true });
 }
