@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>应用图标原型</title>
+<style>
+  /* 页面取「刻度」的中性色与品牌青（界面视觉规范第 4 节） */
+  :root { --bg: #F5F5F7; --card: #FFFFFF; --fg: #1D1D1F; --muted: #5C5C64; --faint: #6E6E76; --line: rgb(0 0 0 / .08); --well: rgb(0 0 0 / .04); --beam: #0E7FA3; }
+  :root[data-page="dark"] { --bg: #161618; --card: #1F1F21; --fg: #ECECEE; --muted: #ABABB2; --faint: #93939A; --line: rgb(255 255 255 / .08); --well: rgb(255 255 255 / .04); --beam: #23809F; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.55 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; }
+  main { max-width: 1120px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 0 0 4px; }
+  h2 { font-size: 16px; font-weight: 600; margin: 0; }
+  p { margin: 0; color: var(--muted); }
+  .bar { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin: 20px 0 28px; }
+  .seg { display: inline-flex; padding: 2px; border-radius: 8px; background: var(--well); border: 1px solid var(--line); }
+  .seg button { font: inherit; font-size: 13px; color: var(--muted); background: none; border: 0; border-radius: 6px; padding: 4px 12px; cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: var(--card); color: var(--fg); box-shadow: 0 1px 2px rgb(0 0 0 / .12); }
+  .seg-label { font-size: 13px; color: var(--faint); margin-right: 8px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 24px; margin-bottom: 20px; }
+  .lineup { display: flex; flex-wrap: wrap; gap: 24px; }
+  .lineup figure { margin: 0; text-align: center; }
+  .lineup figcaption { font-size: 12px; color: var(--faint); margin-top: 6px; }
+  .head { display: flex; gap: 24px; align-items: center; flex-wrap: wrap; }
+  .head .big { width: 176px; height: 176px; flex: none; }
+  .head .txt { flex: 1; min-width: 240px; display: grid; gap: 6px; }
+  .tag { display: inline-block; font-size: 12px; color: var(--beam); border: 1px solid currentColor; border-radius: 6px; padding: 0 6px; margin-left: 8px; vertical-align: 2px; }
+  .ctx { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-top: 20px; }
+  .ctx > div { border-radius: 10px; padding: 12px; background: var(--well); border: 1px solid var(--line); }
+  .ctx h3 { font-size: 12px; font-weight: 500; color: var(--faint); margin: 0 0 10px; }
+  .sizes { display: flex; align-items: flex-end; gap: 14px; }
+  .sizes img { width: 100%; height: 100%; display: block; }
+  .sizes span { display: grid; justify-items: center; gap: 4px; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+  /* 桌面与程序坞：两种墙纸各一 */
+  .desk { border-radius: 8px; padding: 18px 10px 8px; display: flex; justify-content: center; }
+  .desk.l { background: #C9CDD3; } .desk.d { background: #2B2D31; }
+  .dock { display: flex; gap: 6px; padding: 5px; border-radius: 14px; background: rgb(255 255 255 / .35); border: 1px solid rgb(255 255 255 / .35); }
+  .desk.d .dock { background: rgb(255 255 255 / .1); border-color: rgb(255 255 255 / .12); }
+  .dock i { width: 40px; height: 40px; border-radius: 9px; display: block; }
+  .dock svg, .dock img { width: 40px; height: 40px; display: block; }
+  .stack { display: grid; gap: 8px; }
+  /* 菜单栏 */
+  .mb { height: 26px; border-radius: 6px; display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 0 10px; font-size: 12px; }
+  .mb.l { background: #E8E8EA; color: #000; } .mb.d { background: #1E1E20; color: #fff; }
+  .mb.d .tmpl { filter: invert(1); }
+  .mb .dot { width: 14px; height: 10px; border-radius: 2px; background: currentColor; opacity: .35; }
+  .mb .tmpl { width: 18px; height: 18px; display: block; }
+  /* Windows 任务栏 */
+  .tb { height: 40px; border-radius: 6px; background: #202020; display: flex; align-items: center; justify-content: center; gap: 10px; }
+  .tb i { width: 24px; height: 24px; border-radius: 4px; background: #3A3A3C; display: block; }
+  .tb .on { position: relative; padding: 6px; border-radius: 4px; background: rgb(255 255 255 / .08); }
+  .tb .on::after { content: ""; position: absolute; left: 50%; bottom: 1px; width: 14px; height: 3px; margin-left: -7px; border-radius: 2px; background: #5FA3BC; }
+  .tb svg { width: 24px; height: 24px; display: block; }
+  /* 官网页头 */
+  .site { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 600; height: 40px; padding: 0 12px; border-radius: 8px; background: var(--card); border: 1px solid var(--line); }
+  .site svg { width: 30px; height: 30px; flex: none; margin-left: -4px; }
+  .site small { margin-left: auto; font-size: 13px; font-weight: 400; color: var(--muted); }
+  .note { font-size: 13px; color: var(--faint); margin-top: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>应用图标原型</h1>
+  <p>四个方向，都按「刻度」做：中性底色、一个图形、品牌青只点一处，不发光、不渐变、不加高光。每个方向下面是它在程序坞、各尺寸、菜单栏、Windows 任务栏和官网页头里的样子。</p>
+
+  <div class="bar">
+    <span><span class="seg-label">图标底色</span><span class="seg" id="tileSeg"><button data-v="light" aria-pressed="true">浅</button><button data-v="dark">深</button></span></span>
+    <span><span class="seg-label">页面</span><span class="seg" id="pageSeg"><button data-v="light" aria-pressed="true">浅</button><button data-v="dark">深</button></span></span>
+  </div>
+
+  <section class="card">
+    <h2>A 换底色</h2>
+    <p style="margin-top:4px">不要白底之后的四种底色。图形完全相同，只换底色与配色。</p>
+    <div id="variants"></div>
+  </section>
+
+  <section class="card">
+    <h2>放在一起比</h2>
+    <p style="margin-top:4px">第一个是现在的图标（docs/brand/xpaste-logo.svg）。</p>
+    <div class="ctx" id="compare"></div>
+  </section>
+
+  <div id="cands"></div>
+</main>
+
+<script>
+// 调色：图标底色浅 / 深两套；tmpl 是菜单栏模板图（只用黑色 + 透明度，系统按菜单栏明暗反色）
+const PAL = {
+  light: { tile: '#F5F5F7', edge: 'rgb(0 0 0 / .10)', ink: '#1D1D1F', dim: 'rgb(29 29 31 / .28)', acc: '#0E7FA3' },
+  dark: { tile: '#1C1C1E', edge: 'rgb(255 255 255 / .10)', ink: '#ECECEE', dim: 'rgb(236 236 238 / .30)', acc: '#5FA3BC' },
+  tmpl: { ink: '#000', dim: 'rgb(0 0 0 / .45)', acc: '#000' },
+  // A 换底色（用户不要白底，2026-11-09）
+  graphite: { tile: '#3A3A3C', edge: 'rgb(255 255 255 / .10)', ink: '#F5F5F7', dim: 'rgb(245 245 247 / .34)', acc: '#6CB6CF' },
+  beam: { tile: '#23809F', edge: 'rgb(255 255 255 / .14)', ink: '#FFFFFF', dim: 'rgb(255 255 255 / .42)', acc: '#FFFFFF' },
+  deep: { tile: '#123E4D', edge: 'rgb(255 255 255 / .10)', ink: '#F2F7F9', dim: 'rgb(242 247 249 / .32)', acc: '#5FC0DE' },
+};
+const VARIANTS = [
+  { tone: 'dark', name: '深灰', note: '和面板默认的暗色一致（#1C1C1E），最安静；放在深色墙纸、深色程序坞上会和背景贴在一起，只靠一圈细边分开。' },
+  { tone: 'graphite', name: '石墨', note: '比深灰亮一级（#3A3A3C），深浅两种墙纸上都有轮廓，仍然是中性色。' },
+  { tone: 'beam', name: '品牌青', note: '整块底用品牌青（#23809F），白色剪贴板，选中那一行是实心白、其余半透明。程序坞里最好找，颜色只这一处。' },
+  { tone: 'deep', name: '深青', note: '介于深灰和品牌青之间（#123E4D），青色只在那一行；比品牌青沉，比深灰有颜色。' },
+];
+let uid = 0;
+
+// 剪贴板外框与夹子：外框在夹子处断开（与现在的菜单栏图标同一画法）
+const board = (c) => {
+  const m = `gap${uid++}`;
+  return `<mask id="${m}" maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="100"><rect width="100" height="100" fill="#fff"/><rect x="36" y="13.5" width="28" height="17" rx="8.5" fill="#000"/></mask>
+    <rect x="26" y="22" width="48" height="60" rx="10" fill="none" stroke="${c.ink}" stroke-width="5" mask="url(#${m})"/>
+    <rect x="39.5" y="16.5" width="21" height="11" rx="5.5" fill="${c.ink}"/>`;
+};
+const ticks = (c, xs, w, bottom, hs, hi) =>
+  hs.map((h, i) => `<rect x="${xs[i]}" y="${bottom - h}" width="${w}" height="${h}" rx="${w / 2}" fill="${i === hi ? c.acc : c.ink}"/>`).join('');
+
+const CANDS = [
+  {
+    key: 'A', name: '剪贴板', rec: true,
+    idea: '一看就知道是剪贴板工具。三行里亮着的一行是“找回来的那一条”。和现在的菜单栏图标同一个形状，菜单栏图标几乎不用改。',
+    draw: (c) => board(c) + `
+      <rect x="35" y="42" width="18" height="5" rx="2.5" fill="${c.dim}"/>
+      <rect x="35" y="52" width="30" height="6" rx="3" fill="${c.acc}"/>
+      <rect x="35" y="63" width="12" height="5" rx="2.5" fill="${c.dim}"/>`,
+    box: '22 13 56 72',
+  },
+  {
+    key: 'B', name: '刻度',
+    idea: '面板里那条复制频谱刻度带：每根刻线是一次复制，最高的一根亮着。和界面唯一的招牌对上，但不说明是剪贴板。',
+    draw: (c) => `<rect x="20" y="67" width="60" height="3" rx="1.5" fill="${c.dim}"/>` +
+      ticks(c, [23.75, 33.25, 42.75, 52.25, 61.75, 71.25], 5, 64.5, [14, 24, 10, 36, 18, 12], 3),
+    box: '18 26 64 48',
+  },
+  {
+    key: 'C', name: '剪贴板 + 刻度',
+    idea: 'A 的外形，里面换成刻度带。既说明是剪贴板，又带着界面的招牌；代价是 16 px 时里面的刻线会糊成一片。',
+    draw: (c) => board(c) + ticks(c, [33.25, 42.75, 52.25, 61.75], 5, 72, [10, 18, 28, 13], 2),
+    box: '22 13 56 72',
+  },
+  {
+    key: 'D', name: '浮上来的一条',
+    idea: '不画剪贴板，只画“一列记录里浮上来一条”，对应“只记得一点点，也找得回来”。最抽象，也最容易被看成普通的列表图标。',
+    draw: (c) => `
+      <rect x="25" y="25" width="50" height="12" rx="6" fill="${c.dim}"/>
+      <rect x="17" y="44" width="66" height="12" rx="6" fill="${c.acc}"/>
+      <rect x="25" y="63" width="50" height="12" rx="6" fill="${c.dim}"/>`,
+    box: '15 23 70 54',
+  },
+];
+
+// 整个图标：底板占画布 824/1024，四周留白同 macOS 图标规格（与 xpaste-logo.svg 相同的 viewBox）
+const icon = (cand, tone) => {
+  const c = PAL[tone];
+  return `<svg viewBox="-12.14 -12.14 124.28 124.28" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="方向 ${cand.key}">
+    <rect width="100" height="100" rx="22.5" fill="${c.tile}"/>
+    <rect x=".5" y=".5" width="99" height="99" rx="22" fill="none" stroke="${c.edge}"/>
+    ${cand.draw(c)}</svg>`;
+};
+const tmpl = (cand) => `<svg class="tmpl" viewBox="${cand.box}" xmlns="http://www.w3.org/2000/svg">${cand.draw(PAL.tmpl)}</svg>`;
+const current = () => `<img src="../brand/xpaste-logo.svg" alt="现在的图标">`;
+const placeholders = (tone) => [0, 1, 2].map((i) => `<i style="background:${tone === 'l' ? ['#FFFFFF', '#E3E5E8', '#F0F0F2'][i] : ['#3A3B3F', '#4A4B50', '#323337'][i]}"></i>`).join('');
+
+let tone = 'light';
+function render() {
+  uid = 0;
+  const all = [{ key: '现在', svg: current }, ...CANDS.map((c) => ({ key: c.key, svg: () => icon(c, tone) }))];
+  document.getElementById('compare').innerHTML = ['l', 'd'].map((w) => `
+    <div style="grid-column:1/-1"><h3>${w === 'l' ? '浅色墙纸' : '深色墙纸'}的程序坞（从左到右：现在、A、B、C、D）</h3>
+      <div class="desk ${w}"><div class="dock">${placeholders(w)}${all.map((a) => a.svg()).join('')}</div></div></div>`).join('') + `
+    <div style="grid-column:1/-1"><h3>32 px 与 16 px（Finder 列表、窗口标题栏、Windows 资源管理器）</h3>
+      <div class="lineup">${all.map((a) => `<figure><div class="sizes"><span><span style="width:32px;height:32px;display:block">${a.svg()}</span></span><span><span style="width:16px;height:16px;display:block">${a.svg()}</span></span></div><figcaption>${a.key}</figcaption></figure>`).join('')}</div></div>`;
+
+  const A = CANDS[0];
+  document.getElementById('variants').innerHTML = `
+    <div class="ctx"><div style="grid-column:1/-1"><h3>程序坞里四种放在一起（从左到右：现在、深灰、石墨、品牌青、深青）</h3><div class="stack">${['l', 'd'].map((w) => `<div class="desk ${w}"><div class="dock">${placeholders(w)}${current()}${VARIANTS.map((v) => icon(A, v.tone)).join('')}</div></div>`).join('')}</div></div></div>` +
+    VARIANTS.map((v) => `
+    <div class="ctx">
+      <div style="grid-column:span 2"><h3>${v.name}</h3><div class="sizes">${[128, 64, 32, 16].map((n) => `<span><span style="width:${n}px;height:${n}px;display:block">${icon(A, v.tone)}</span>${n}</span>`).join('')}</div><p class="note">${v.note}</p></div>
+      <div><h3>程序坞</h3><div class="stack">${['l', 'd'].map((w) => `<div class="desk ${w}"><div class="dock">${placeholders(w)}${icon(A, v.tone)}</div></div>`).join('')}</div></div>
+      <div><h3>Windows 任务栏 · 官网页头</h3><div class="stack"><div class="tb"><i></i><i></i><span class="on">${icon(A, v.tone)}</span><i></i></div><div class="site">${icon(A, v.tone)}xPaste<small>下载</small></div></div></div>
+    </div>`).join('');
+  document.getElementById('cands').innerHTML = CANDS.map((c) => `
+    <section class="card">
+      <div class="head">
+        <div class="big">${icon(c, tone)}</div>
+        <div class="txt"><h2>${c.key}　${c.name}${c.rec ? '<span class="tag">推荐</span>' : ''}</h2><p>${c.idea}</p></div>
+      </div>
+      <div class="ctx">
+        <div style="grid-column:span 2"><h3>各尺寸（实际像素）</h3><div class="sizes">${[128, 64, 32, 16].map((s) => `<span><span style="width:${s}px;height:${s}px;display:block">${icon(c, tone)}</span>${s}</span>`).join('')}</div></div>
+        <div><h3>程序坞</h3><div class="stack">${['l', 'd'].map((w) => `<div class="desk ${w}"><div class="dock">${placeholders(w)}${icon(c, tone)}</div></div>`).join('')}</div></div>
+        <div><h3>菜单栏（模板图，系统按明暗反色）</h3><div class="stack">${['l', 'd'].map((w) => `<div class="mb ${w}"><span class="dot"></span>${tmpl(c)}<span class="dot"></span><span>周日 17:41</span></div>`).join('')}</div></div>
+        <div><h3>Windows 任务栏</h3><div class="tb"><i></i><i></i><span class="on">${icon(c, tone)}</span><i></i></div></div>
+        <div><h3>官网页头</h3><div class="site">${icon(c, tone)}xPaste<small>下载</small></div></div>
+      </div>
+    </section>`).join('');
+  // 程序坞与任务栏里的 svg 尺寸由容器决定
+  document.querySelectorAll('.big svg, .sizes svg').forEach((s) => { s.style.width = '100%'; s.style.height = '100%'; });
+}
+
+function bindSeg(id, apply) {
+  const seg = document.getElementById(id);
+  seg.addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    seg.querySelectorAll('button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+    apply(b.dataset.v);
+  });
+}
+bindSeg('tileSeg', (v) => { tone = v; render(); });
+bindSeg('pageSeg', (v) => { document.documentElement.dataset.page = v; });
+// ?tile=dark&page=dark：直接打开深色（截图核对用）
+const q = new URLSearchParams(location.search);
+if (q.get('tile') === 'dark') document.querySelector('#tileSeg [data-v="dark"]').click();
+if (q.get('page') === 'dark') document.querySelector('#pageSeg [data-v="dark"]').click();
+render();
+</script>
+</body>
+</html>
