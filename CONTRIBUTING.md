@@ -87,14 +87,14 @@ cargo install cargo-xwin        # MSVC 运行库与 Windows SDK（首次运行�
 ## 签名与公证
 
 - **macOS**：安装包用 Developer ID Application 证书签名并公证。
-  - CI：`release.yml` 把仓库 Secrets 里的六个值传给 `make release`，打完包后检查 dmg 里的 `.app` 带有公证票据，没有就失败。
+  - CI：`release.yml` 把仓库 Secrets 里的六个值传给 `make release`，Tauri 签名并公证 `.app`；之后再把 dmg 本身提交公证、附上票据（Tauri 只公证 `.app`）。最后检查 dmg 和里面的 `.app` 都带公证票据、系统放行，否则失败，不发布。
     - `APPLE_CERTIFICATE`：证书连同私钥导出的 `.p12`，base64 编码
     - `APPLE_CERTIFICATE_PASSWORD`：`.p12` 的导出密码
     - `APPLE_SIGNING_IDENTITY`：证书名称，如 `Developer ID Application: <名字> (<TEAM ID>)`
     - `APPLE_ID`：Apple 账号
     - `APPLE_PASSWORD`：App 专用密码（在 account.apple.com 生成，不是账号密码）
     - `APPLE_TEAM_ID`：团队 ID
-  - 本地：钥匙串里装好证书，设置后四个环境变量再运行 `make release`。不设置时打出来的是未签名包。
+  - 本地：钥匙串里装好证书，设置后四个环境变量再运行 `make release`。不设置时打出来的是未签名包。本地只公证 `.app`，dmg 本身没有公证；正式发布以 CI 打出的包为准。
   - 签名后开启 Hardened Runtime，录屏的麦克风靠 `src-tauri/Entitlements.plist` 里的 `com.apple.security.device.audio-input`；以后用到摄像头、Apple 事件之类受限能力时在这里加对应的项。
 - **Windows**：还没有签名，拿到证书后：
   1. 把代码签名证书导入“当前用户 → 个人”证书存储。
