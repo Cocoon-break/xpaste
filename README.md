@@ -24,10 +24,11 @@ macOS 和 Windows 上免费、开源、纯本地的剪切板历史。<br>截图�
 
 - **截图里有个会议号**：截图和复制的图片在本机识别文字，搜那几个字，截图就排在最前。
 - **拼音首字母**：不用切输入法，打 `hy` 找到“会议”，打 `yinhang` 找到“银行”。
-- **文件里写过的一句话**：txt、md、代码文件的内容也能搜，忘了文件名也找得回来。
+- **文件里写过的一句话**：txt、md、代码文件的内容也能搜，macOS 上还有 PDF，忘了文件名也找得回来。
+- **是从哪个应用复制的**：输入应用名（拼音首字母也行），按 <kbd>Tab</kbd>，只在这个应用的记录里搜。
 - **大概是什么时候复制的**：复制频谱从 24 小时一路放大到 10 分钟，在时间里找。
 
-按 <kbd>⌘</kbd> <kbd>Shift</kbd> <kbd>V</kbd>（Windows <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>V</kbd>）唤起，按 <kbd>Enter</kbd> 贴回刚才的应用。还自带截图、贴图、录屏（仅 macOS）和划词翻译。全部功能见[使用说明](docs/使用说明.md#功能)。
+按 <kbd>⌘</kbd> <kbd>Shift</kbd> <kbd>V</kbd>（Windows <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>V</kbd>）唤起，按 <kbd>Enter</kbd> 贴回刚才的应用，按 <kbd>Shift</kbd> <kbd>Enter</kbd> 只贴文字、不带格式。嫌面板大，可以在设置里换成只有搜索框和列表的精简模式。还自带截图、贴图、录屏（仅 macOS）和划词翻译。全部功能见[使用说明](docs/使用说明.md#功能)。
 
 ## 下载
 
