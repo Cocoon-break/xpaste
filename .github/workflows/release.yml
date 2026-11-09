@@ -53,14 +53,39 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      # Secrets 缺失或公证没做成时在这里失败，不让未公证的包发出去
+      # Tauri 只公证 dmg 里的 .app，dmg 本身只签名：这里再把 dmg 提交公证并附上票据，
+      # 系统单独检查下载下来的 dmg 时也认作已公证（Apple 建议公证最外层的分发文件）
       - if: runner.os == 'macOS'
-        name: dmg 里的应用已公证
+        name: dmg 公证
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           for f in target/installers/xPaste_*.dmg; do
+            out=$(xcrun notarytool submit "$f" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait --output-format json) || true
+            echo "$out"
+            id=$(node -p "JSON.parse(process.argv[1]).id" "$out")
+            status=$(node -p "JSON.parse(process.argv[1]).status" "$out")
+            if [ "$status" != "Accepted" ]; then
+              xcrun notarytool log "$id" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" || true
+              echo "$f 公证没有通过：$status" >&2
+              exit 1
+            fi
+            xcrun stapler staple "$f"
+          done
+      # Secrets 缺失或公证没做成时在这里失败，不让未公证的包发出去：dmg 和里面的 .app 都要带公证票据，
+      # 且按“浏览器下载的文件”检查时系统放行
+      - if: runner.os == 'macOS'
+        name: dmg 与里面的应用都已公证
+        run: |
+          for f in target/installers/xPaste_*.dmg; do
+            xcrun stapler validate "$f"
+            spctl -a -t open --context context:primary-signature -vv "$f"
             m=$(mktemp -d)
             hdiutil attach -nobrowse -readonly -mountpoint "$m" "$f"
             xcrun stapler validate "$m/xPaste.app"
+            spctl -a -vv "$m/xPaste.app"
             hdiutil detach "$m"
           done
       # 再存一份不带版本号的文件名，官网用 releases/latest/download/<文件名> 固定链接到最新版
