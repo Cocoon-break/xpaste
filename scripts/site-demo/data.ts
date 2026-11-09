@@ -57,7 +57,8 @@ const HERO: Demo[] = [
   mk('code', 'const debounce = (fn, ms = 200) => {\n  let t;\n  return (...args) => {\n    clearTimeout(t);\n    t = setTimeout(() => fn(...args), ms);\n  };\n};', 'VS Code', 2, { lang: 'JavaScript', uses: 4 }),
   mk('image', '截图 2026-10-20 14.32.png', '截图', 5, img('meeting.webp', 1600, 1000, MEETING_OCR, 412_336)),
   mk('link', 'https://developer.mozilla.org/zh-CN/docs/Web/API/Clipboard_API', 'Chrome', 7, { linkTitle: 'Clipboard API - Web API | MDN', uses: 1 }),
-  mk('file', '需求评审纪要.md', '访达', 9, { ...file('Documents', '需求评审纪要.md', 2_184), ocrState: 1, fileText: NOTES_TEXT }),
+  // 纯文本文件不进文字识别（ocrState 0）：命中靠“搜索文本文件内容”读入的 fileText，预览里没有“图中文字”
+  mk('file', '需求评审纪要.md', '访达', 9, { ...file('Documents', '需求评审纪要.md', 2_184), fileText: NOTES_TEXT }),
   mk('text', '周四下午 3 点在 2 号会议室评审 xPaste v0.2，记得带上交互稿和动效参数表。', '微信', 14),
   mk('text', '腾讯会议号 482 913 776', '微信', 20),
   mk('file', '会议室预订表.xlsx', '访达', 26, file('Documents', '会议室预订表.xlsx', 48_211)),
