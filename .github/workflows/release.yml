@@ -44,7 +44,25 @@ jobs:
           pnpm check:version
           ver=$(node -p "require('./package.json').version")
           test "v$ver" = "$TAG" || { echo "标签 $TAG 与 package.json 版本 $ver 不一致" >&2; exit 1; }
+      # APPLE_* 来自仓库 Secrets：Tauri 把 .p12 导入临时钥匙串，签名并公证 macOS 包（Windows 上不起作用）
       - run: make release
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      # Secrets 缺失或公证没做成时在这里失败，不让未公证的包发出去
+      - if: runner.os == 'macOS'
+        name: dmg 里的应用已公证
+        run: |
+          for f in target/installers/xPaste_*.dmg; do
+            m=$(mktemp -d)
+            hdiutil attach -nobrowse -readonly -mountpoint "$m" "$f"
+            xcrun stapler validate "$m/xPaste.app"
+            hdiutil detach "$m"
+          done
       # 再存一份不带版本号的文件名，官网用 releases/latest/download/<文件名> 固定链接到最新版
       - name: 不带版本号的副本
         run: |
@@ -88,10 +106,6 @@ jobs:
 
             ## 第一次打开
 
-            安装包未签名。macOS 提示“xPaste 已损坏，无法打开”时，把 xPaste 拖进“应用程序”后在终端运行：
+            macOS 安装包已签名并公证，直接打开即可。从未签名的旧版本（0.6.0 及更早）升级后，“辅助功能”和“屏幕录制”权限要重新授予一次。
 
-            ```sh
-            xattr -dr com.apple.quarantine /Applications/xPaste.app
-            ```
-
-            Windows 提示“Windows 已保护你的电脑”时，点“更多信息 → 仍要运行”。
+            Windows 安装包未签名，提示“Windows 已保护你的电脑”时，点“更多信息 → 仍要运行”。
