@@ -45,6 +45,15 @@ pub enum Appearance {
     Dark,
 }
 
+/// 面板样式（M27 规则 1）：完整面板，或只有搜索栏和列表的精简面板。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PanelStyle {
+    #[default]
+    Full,
+    Compact,
+}
+
 /// 录屏清晰度（M24 规则 6）：高按屏幕实际像素，标准按逻辑尺寸，小文件在标准上再压低码率。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -106,6 +115,9 @@ pub struct Settings {
     pub appearance: Appearance,
     /// 逻辑像素
     pub panel_size: (f64, f64),
+    pub panel_style: PanelStyle,
+    /// 精简面板的尺寸，逻辑像素；与完整面板各自记住（M27 规则 2）
+    pub compact_size: (f64, f64),
     pub last_filter: String,
     /// 复制频谱收起（只剩标题行）
     pub spectrum_collapsed: bool,
@@ -170,6 +182,8 @@ impl Default for Settings {
             launch_at_login: true,
             appearance: Appearance::Dark,
             panel_size: (960.0, 640.0),
+            panel_style: PanelStyle::Full,
+            compact_size: (400.0, 520.0),
             last_filter: "all".into(),
             spectrum_collapsed: false,
             frequent_min_uses: 3,
@@ -398,6 +412,10 @@ impl Settings {
         if !(w >= 720.0 && h >= 520.0) {
             return fail("面板尺寸不能小于 720 × 520");
         }
+        let (w, h) = self.compact_size;
+        if !(w >= 360.0 && h >= 400.0) {
+            return fail("精简面板尺寸不能小于 360 × 400");
+        }
         Ok(())
     }
 }
@@ -542,6 +560,12 @@ pub struct RecordSummary {
     pub ocr_state: u8,
     /// 不为 None 即片段，值是列表第二行的摘要（M25 规则 10）；前端按它判断，不看 pinned
     pub snippet_body: Option<String>,
+    /// 文本、代码的行数（末尾空行不算），精简模式的单行补充用（M27 规则 4）
+    pub lines: Option<u32>,
+    /// 链接的地址（前 2048 字符）
+    pub url: Option<String>,
+    /// 文件记录的文件个数
+    pub files: Option<u32>,
 }
 
 impl fmt::Debug for RecordSummary {
@@ -1251,6 +1275,35 @@ mod tests {
     }
 
     #[test]
+    fn panel_style_defaults_and_old_json() {
+        let s = Settings::default();
+        assert_eq!(s.panel_style, PanelStyle::Full);
+        assert_eq!(s.compact_size, (400.0, 520.0));
+        // 升级前存的设置没有这两个字段（M27 规则 1）
+        let old: Settings = serde_json::from_str(r#"{"maxRecords":1000}"#).unwrap();
+        assert_eq!(
+            (old.panel_style, old.compact_size, old.max_records),
+            (PanelStyle::Full, (400.0, 520.0), 1000)
+        );
+        let c: Settings = serde_json::from_str(r#"{"panelStyle":"compact"}"#).unwrap();
+        assert_eq!(c.panel_style, PanelStyle::Compact);
+    }
+
+    #[test]
+    fn rejects_compact_size_below_minimum() {
+        let s = Settings {
+            compact_size: (340.0, 520.0),
+            ..Default::default()
+        };
+        assert_eq!(invalid(&s), "精简面板尺寸不能小于 360 × 400");
+        let ok = Settings {
+            compact_size: (360.0, 400.0),
+            ..Default::default()
+        };
+        assert!(ok.validate().is_ok());
+    }
+
+    #[test]
     fn kind_str_roundtrips_like_serde() {
         for (k, name) in KINDS {
             assert_eq!(k.as_str(), name);
@@ -1300,6 +1353,9 @@ mod tests {
             duration_sec: None,
             ocr_state: ocr_state::TEXT,
             snippet_body: None,
+            lines: None,
+            url: None,
+            files: None,
         };
         let d = RecordDetail {
             summary,

@@ -99,7 +99,12 @@ pub struct SavedSnippet {
 }
 
 const SUMMARY_SQL: &str = "SELECT r.id, r.kind, r.title, a.name, a.icon_path, r.copied_at, r.uses,
-  r.pinned, r.size, r.lang, r.meta, r.ocr_state, r.snippet_body FROM records r LEFT JOIN apps a ON a.id = r.app_id";
+  r.pinned, r.size, r.lang, r.meta, r.ocr_state, r.snippet_body,
+  CASE WHEN r.kind IN ('text', 'code') THEN length(rtrim(r.text, char(9, 10, 13, 32)))
+    - length(replace(rtrim(r.text, char(9, 10, 13, 32)), char(10), '')) + 1 END,
+  CASE WHEN r.kind = 'link' THEN substr(r.text, 1, 2048) END,
+  CASE WHEN r.kind = 'file' THEN json_array_length(r.paths) END
+  FROM records r LEFT JOIN apps a ON a.id = r.app_id";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Upsert {
@@ -1045,6 +1050,9 @@ impl Store {
                 .filter(|&d| d > 0.0),
             ocr_state: row.get(11)?,
             snippet_body,
+            lines: row.get(13)?,
+            url: row.get(14)?,
+            files: row.get(15)?,
         })
     }
 
@@ -1412,6 +1420,53 @@ pub(crate) mod tests {
             (Kind::Image, ocr_state::PENDING)
         );
         assert_eq!(s.detail(l[0].id).unwrap().unwrap().ocr_text, None);
+    }
+
+    #[test]
+    fn summary_reports_lines_url_and_files() {
+        let s = Store::open(&tmp()).unwrap();
+        let rows: [(&str, &str, Option<&str>, Option<&str>, Option<&str>); 7] = [
+            ("text", "a", Some("a\nb\n\nc\n"), None, None),
+            ("text", "a", Some("a\n\n"), None, None),
+            ("code", "一行", Some("一行"), None, None),
+            ("link", "A 站", Some("https://a.io/x"), None, Some("A 站")),
+            (
+                "file",
+                "a.txt",
+                None,
+                Some(r#"["/x/a.txt","/x/b.txt","/x/c.txt"]"#),
+                None,
+            ),
+            ("image", "截图", None, Some(r#"["/x/a.png"]"#), None),
+            ("video", "录屏", None, None, None),
+        ];
+        for (i, (kind, title, text, paths, link_title)) in rows.iter().enumerate() {
+            s.conn
+                .execute(
+                    "INSERT INTO records (hash, kind, title, text, paths, link_title, copied_at, size, search_text) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, '')",
+                    rusqlite::params![vec![i as u8], kind, title, text, paths, link_title, 100 - i as i64],
+                )
+                .unwrap();
+        }
+        let got: Vec<_> = s
+            .list_summaries()
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.lines, r.url, r.files))
+            .collect();
+        let url = Some("https://a.io/x".to_string());
+        assert_eq!(
+            got,
+            [
+                (Some(4), None, None),
+                (Some(1), None, None),
+                (Some(1), None, None),
+                (None, url, None),
+                (None, None, Some(3)),
+                (None, None, None),
+                (None, None, None),
+            ]
+        );
     }
 
     #[test]
