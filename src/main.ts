@@ -419,6 +419,8 @@ type SelectOpts = { scroll?: boolean; glide?: boolean; instant?: boolean; fade?:
 function select(id: number | null, { scroll = false, glide = true, instant = false, fade = true, indDur, indEase, pan }: SelectOpts = {}) {
   const changed = S.sel !== id;
   S.sel = id;
+  // 没有选中项（列表空了）时不留一块空的预览（M27 规则 8）
+  if (id === null) setPeek(false);
   const top = id === null ? undefined : shownTop(id);
   if (scroll && top !== undefined) {
     const st = scrollTo(top + padTop(), rowH(), list.scrollTop, list.clientHeight);
@@ -486,6 +488,11 @@ function setPeek(on: boolean) {
   if (on && S.sel === null) return;
   win.dataset.peek = String(on);
   if (on) $('#peekKey').textContent = q.value ? `${modKey()} Y` : '空格';
+  else {
+    // 预览里在播的视频跟着停；焦点在预览里时交还搜索框
+    pbody.querySelectorAll('video').forEach((v) => v.pause());
+    if (pbody.closest('.preview')!.contains(document.activeElement)) q.focus({ preventScroll: true });
+  }
 }
 // 精简搜索框只写“搜索”（M27 规则 3）
 const Q_PLACEHOLDER = q.placeholder;

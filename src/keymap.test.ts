@@ -117,7 +117,9 @@ const cx = (o: Partial<KeyCtx> = {}) => ctx({ compact: true, ...o });
 test('精简：搜索框为空按空格开关预览；有字时空格照常输入', () => {
   assert.deepEqual(keyAction(ev({ key: ' ' }), cx()), { t: 'peek' });
   assert.equal(keyAction(ev({ key: ' ' }), cx({ searchHasText: true })), null);
-  assert.deepEqual(keyAction(ev({ key: ' ' }), cx({ peek: true, searchHasText: true })), { t: 'peek' });
+  assert.deepEqual(keyAction(ev({ key: ' ' }), cx({ peek: true })), { t: 'peek' });
+  // 预览开着、搜索框有字时空格也照常输入（M27 规则 8），不关预览
+  assert.equal(keyAction(ev({ key: ' ' }), cx({ peek: true, searchHasText: true })), null);
   assert.equal(keyAction(ev({ key: ' ' }), cx({ inSearch: false, onControl: true })), null);
 });
 

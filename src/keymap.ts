@@ -68,7 +68,7 @@ export const keyAction = (e: KeyEv, c: KeyCtx): Action => {
   if (c.compact) {
     if (k === 'Escape' && c.peek) return { t: 'peekClose' };
     if (e.mod && lk === 'y' && !e.shift && !e.alt) return e.repeat ? null : { t: 'peek' };
-    if (k === ' ' && !e.mod && !e.ctrl && !e.alt && !c.onControl && (c.peek || !c.searchHasText)) return e.repeat ? null : { t: 'peek' };
+    if (k === ' ' && !e.mod && !e.ctrl && !e.alt && !c.onControl && !c.searchHasText) return e.repeat ? null : { t: 'peek' };
     if (c.filtered && !c.searchHasText && !c.onControl && ((k === 'Escape' && c.multi < 2) || (k === 'Backspace' && !e.mod))) return { t: 'clearFilter' };
   }
   // 片段（M25 规则 5、6）；翻译（M26 规则 2，多选时不可翻译）

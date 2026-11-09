@@ -1,6 +1,13 @@
 // 精简模式（M27）：单行列表每行显示什么、怎么分组。纯函数，不碰 DOM。
 import type { RecordSummary } from './api/types';
 import { esc, fmtDur, hl, host, isHttpUrl, isSnip, type Filter } from './format.ts';
+
+/** 地址里原样的域名与其余部分：`URL.host` 会转小写、把中文域名转成 xn--，拿它去切原文会切错 */
+const splitUrl = (url: string): [string, string] => {
+  const rest = url.replace(/^https?:\/\//i, '');
+  const i = rest.search(/[/?#]/);
+  return i < 0 ? [rest, ''] : [rest.slice(0, i), rest.slice(i)];
+};
 import { snippetHTML } from './ocr-label.ts';
 
 /** 行高、小标题高、置顶后细线占的高（M27 规则 4、6） */
@@ -17,12 +24,12 @@ export const rowParts = (r: RecordSummary, { q, mark, snippet }: { q: string; ma
   let title = hl(r.title, term), extra = '', rev = false;
   if (isSnip(r)) extra = esc(r.snippetBody!.split('\n')[0]);
   else if (r.kind === 'link' && r.url) {
-    const h = host(r.url);
-    if (h && r.title === r.url && isHttpUrl(r.url)) {
+    if (r.title === r.url && isHttpUrl(r.url)) {
+      const [h, path] = splitUrl(r.url);
       title = hl(h, term);
-      extra = hl(r.url.slice(r.url.indexOf(h) + h.length), term);
+      extra = hl(path, term);
       rev = true;
-    } else extra = esc(h);
+    } else extra = esc(host(r.url));
   } else if ((r.kind === 'text' || r.kind === 'code') && (r.lines ?? 0) > 1) extra = `${r.lines} 行`;
   else if (r.kind === 'video' && r.durationSec !== null) extra = fmtDur(r.durationSec);
   else if (r.kind === 'file' && (r.fileCount ?? 0) > 1) extra = `等 ${r.fileCount} 个文件`;

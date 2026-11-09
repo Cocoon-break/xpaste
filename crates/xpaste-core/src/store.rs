@@ -103,7 +103,7 @@ const SUMMARY_SQL: &str = "SELECT r.id, r.kind, r.title, a.name, a.icon_path, r.
   CASE WHEN r.kind IN ('text', 'code') THEN length(rtrim(r.text, char(9, 10, 13, 32)))
     - length(replace(rtrim(r.text, char(9, 10, 13, 32)), char(10), '')) + 1 END,
   CASE WHEN r.kind = 'link' THEN substr(r.text, 1, 2048) END,
-  CASE WHEN r.kind = 'file' THEN json_array_length(r.paths) END
+  CASE WHEN r.kind = 'file' AND json_valid(r.paths) THEN json_array_length(r.paths) END
   FROM records r LEFT JOIN apps a ON a.id = r.app_id";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1439,6 +1439,8 @@ pub(crate) mod tests {
             ),
             ("image", "截图", None, Some(r#"["/x/a.png"]"#), None),
             ("video", "录屏", None, None, None),
+            // 写坏的 paths 不能让整个列表读不出来
+            ("file", "坏.txt", None, Some("not json"), None),
         ];
         for (i, (kind, title, text, paths, link_title)) in rows.iter().enumerate() {
             s.conn
@@ -1463,6 +1465,7 @@ pub(crate) mod tests {
                 (Some(1), None, None),
                 (None, url, None),
                 (None, None, Some(3)),
+                (None, None, None),
                 (None, None, None),
                 (None, None, None),
             ]

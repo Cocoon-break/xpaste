@@ -26,6 +26,15 @@ test('无标题链接：标题位置是域名，补充是其余部分', () => {
   assert.deepEqual([p.title, p.extra, p.rev], ['freemyip.com', '/update?t=1', true]);
 });
 
+test('无标题链接：域名照原样取，不因大小写或非 ASCII 域名切错', () => {
+  const up = 'https://GitHub.com/foo?x=1';
+  assert.deepEqual(Object.values(rowParts(r({ kind: 'link', title: up, url: up }), { q: '' })).slice(0, 2), ['GitHub.com', '/foo?x=1']);
+  const idn = 'https://例子.测试/路径';
+  assert.deepEqual(Object.values(rowParts(r({ kind: 'link', title: idn, url: idn }), { q: '' })).slice(0, 2), ['例子.测试', '/路径']);
+  const bare = 'https://a.io';
+  assert.deepEqual(Object.values(rowParts(r({ kind: 'link', title: bare, url: bare }), { q: '' })).slice(0, 2), ['a.io', '']);
+});
+
 test('视频补充时长，多个文件补充个数，片段补充内容第一行', () => {
   assert.equal(rowParts(r({ kind: 'video', durationSec: 42 }), { q: '' }).extra, '00:42');
   assert.equal(rowParts(r({ kind: 'file', fileCount: 3 }), { q: '' }).extra, '等 3 个文件');
