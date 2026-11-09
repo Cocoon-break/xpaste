@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 签名后默认开启 Hardened Runtime：没有这一项，录屏的麦克风授权请求会被系统直接拒绝（M24） -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+</dict>
+</plist>
