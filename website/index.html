@@ -15,49 +15,59 @@
 <meta property="og:url" content="https://cocoon-break.github.io/xpaste/">
 <meta property="og:image" content="https://cocoon-break.github.io/xpaste/assets/og.jpg">
 <meta name="twitter:card" content="summary_large_image">
-<link rel="preload" href="assets/hero-0-light.webp" as="image" media="(prefers-color-scheme: light)">
-<link rel="preload" href="assets/hero-0-dark.webp" as="image" media="(prefers-color-scheme: dark)">
 <script type="application/ld+json">
-{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[
-{"@type":"Question","name":"xPaste 收费吗？","acceptedAnswer":{"@type":"Answer","text":"免费，代码开源。没有付费版本，也没有内购。"}},
+{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"xPaste 收费吗？","acceptedAnswer":{"@type":"Answer","text":"免费，代码开源。没有付费版本，也没有内购。"}},
 {"@type":"Question","name":"我复制的内容会上传到哪里吗？","acceptedAnswer":{"@type":"Answer","text":"不会。xPaste 没有账号、没有云同步、没有使用统计，数据只存在本机。日志里也不会出现剪切板内容、标题、文件路径和搜索词。唯一的例外是你手动发起的翻译。"}},
 {"@type":"Question","name":"翻译会把内容发到哪里？","acceptedAnswer":{"@type":"Answer","text":"只在你按翻译时发送要翻译的那一段文字。macOS 26 的系统翻译在本机完成；AI 翻译发到你自己在设置里填的 OpenAI 兼容接口，接本机的 Ollama 时不出本机。"}},
-{"@type":"Question","name":"识别图片里的文字需要联网或者下载模型吗？","acceptedAnswer":{"@type":"Answer","text":"不需要。xPaste 用系统自带的离线文字识别（macOS Vision、Windows.Media.Ocr），不联网、不上传，也不增加安装体积。"}},
-{"@type":"Question","name":"截图要什么权限？","acceptedAnswer":{"@type":"Answer","text":"macOS 上第一次截图前，要在系统设置 → 隐私与安全性 → 屏幕录制（macOS 15 起叫“录屏与系统录音”）里打开 xPaste，再退出并重新打开 xPaste。录屏用同一个权限，开着麦克风录制时系统会再问一次麦克风权限。Windows 不需要额外权限。"}},
-{"@type":"Question","name":"录屏为什么只有 macOS？","acceptedAnswer":{"@type":"Answer","text":"录屏先在 macOS 13 及以上做完，Windows 要换一套系统接口（Windows.Graphics.Capture 加 Media Foundation 编码），另做一期。现在 Windows 上没有录屏快捷键，设置里也没有录屏选项；截图和贴图两个系统都有。"}},
+{"@type":"Question","name":"按 Enter 为什么没有直接粘贴？","acceptedAnswer":{"@type":"Answer","text":"macOS 上自动粘贴需要“辅助功能”权限，在系统设置 → 隐私与安全性 → 辅助功能里打开 xPaste。没授权时 Enter 会复制好并提示，到目标应用里按 ⌘ V 就行。"}},
 {"@type":"Question","name":"支持哪些系统？","acceptedAnswer":{"@type":"Answer","text":"macOS 13 及以上（Apple 芯片与 Intel 各有安装包；13.0 个别样式不显示，建议 13.1 起），Windows 10 21H2 与 Windows 11（x64）。Windows 上没有录屏；翻译已在 Windows 实机上验收，截图、贴图、长截图还在验收中。Windows 11 on ARM 靠 x64 模拟运行、没测过；Windows 10 on ARM 不能运行，安装程序会说明原因。录屏带麦克风要 macOS 15，系统翻译要 macOS 26。"}},
-{"@type":"Question","name":"支持拼音或首字母搜索吗？","acceptedAnswer":{"@type":"Answer","text":"支持。关掉输入法直接打 huiyi 或 hy 就能找到“会议”，多音字也照顾到了（yinhang 能找到“银行”）。"}},
-{"@type":"Question","name":"macOS 提示“xPaste 已损坏，无法打开”怎么办？","acceptedAnswer":{"@type":"Answer","text":"0.6.0 及更早的版本没有签名，从浏览器下载后带隔离属性。在终端运行 xattr -dr com.apple.quarantine /Applications/xPaste.app，再正常打开即可。之后的版本已签名并公证，不会再出现这个提示。"}}
-]}
+{"@type":"Question","name":"macOS 提示“xPaste 已损坏，无法打开”怎么办？","acceptedAnswer":{"@type":"Answer","text":"0.6.0 及更早的版本没有签名，从浏览器下载后带隔离属性。在终端运行 xattr -dr com.apple.quarantine /Applications/xPaste.app，再正常打开即可。之后的版本已签名并公证，不会再出现这个提示。"}}]}
+</script>
+<script>
+// 访客手动选过主题的话，赶在首次绘制前套上，避免闪一下
+try { const t = localStorage.getItem('xp-theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch {}
 </script>
 <style>
 /* 视觉沿用应用里的「刻度」（docs/specs/2026-11-03-界面视觉规范-刻度-设计.md）：系统中性灰、系统字体、
-   一根品牌青只给主操作；不发光、不渐变。颜色只出现在真实界面截图和首屏下方那条复制刻度带里。 */
+   一根品牌青只给主操作；不发光、不渐变。会动的都是真的界面：website/demo/ 里是 src/ 的真实前端加演示数据。 */
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   --bg: #F5F5F7; --surface: #FFFFFF; --raised: #ECECEF;
   --line: rgb(0 0 0 / .08); --line-2: rgb(0 0 0 / .14);
   --fg: #1D1D1F; --muted: #5C5C64; --faint: #6E6E76;
   --accent: #0E7FA3; --accent-hover: #0B6E8E; --on-accent: #FFFFFF; --accent-ink: #0B6E8E;
   --g-text: #8A9AA3; --g-link: #5A78D6; --g-code: #28906C; --g-image: #B47A16; --g-video: #D45A4C; --g-file: #8C70D0;
-  --tick: rgb(0 0 0 / .18);
+  --tick: rgb(0 0 0 / .18); --sel: #BFDDF0;
   --shadow-win: 0 24px 48px -16px rgb(0 0 0 / .18);
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / .05);
+  --poster: url(assets/hero-3-light.webp);
   --ease: cubic-bezier(.22, 1, .36, 1);
   --ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace;
 }
+/* 暗色两处取值相同：跟随系统时，和访客手动选了深色时 */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
     --bg: #1C1C1E; --surface: #242426; --raised: #2C2C2F;
     --line: rgb(255 255 255 / .08); --line-2: rgb(255 255 255 / .14);
     --fg: #ECECEE; --muted: #ABABB2; --faint: #93939A;
-    --accent: #23809F; --accent-hover: #2B8CAE; --on-accent: #FFFFFF; --accent-ink: #6BB6CF;
+    --accent: #23809F; --accent-hover: #2B8CAE; --accent-ink: #6BB6CF;
     --g-text: #6F7F88; --g-link: #8DA2E6; --g-code: #6FC3A0; --g-image: #DDA65A; --g-video: #E58A80; --g-file: #AE9AE0;
-    --tick: rgb(255 255 255 / .18);
+    --tick: rgb(255 255 255 / .18); --sel: #2B4A5C;
     --shadow-win: 0 24px 48px -16px rgb(0 0 0 / .5);
-    --shadow-sm: none;
+    --poster: url(assets/hero-3-dark.webp);
   }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #1C1C1E; --surface: #242426; --raised: #2C2C2F;
+  --line: rgb(255 255 255 / .08); --line-2: rgb(255 255 255 / .14);
+  --fg: #ECECEE; --muted: #ABABB2; --faint: #93939A;
+  --accent: #23809F; --accent-hover: #2B8CAE; --accent-ink: #6BB6CF;
+  --g-text: #6F7F88; --g-link: #8DA2E6; --g-code: #6FC3A0; --g-image: #DDA65A; --g-video: #E58A80; --g-file: #AE9AE0;
+  --tick: rgb(255 255 255 / .18); --sel: #2B4A5C;
+  --shadow-win: 0 24px 48px -16px rgb(0 0 0 / .5);
+  --poster: url(assets/hero-3-dark.webp);
 }
 * { box-sizing: border-box; }
 html { scroll-padding-top: 72px; }
@@ -66,6 +76,7 @@ img { display: block; max-width: 100%; height: auto; }
 a { color: inherit; }
 h1, h2, h3, p, ul, ol, dl, dd, figure { margin: 0; }
 ul, ol { padding: 0; list-style: none; }
+button { font: inherit; color: inherit; }
 :focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; border-radius: 6px; }
 .wrap { max-width: 1168px; margin: 0 auto; padding: 0 24px; }
 .skip { position: absolute; left: 16px; top: -48px; padding: 8px 12px; border-radius: 8px; background: var(--fg); color: var(--bg); text-decoration: none; }
@@ -86,92 +97,83 @@ code { font: 13px/20px var(--mono); }
 
 /* 导航 */
 .nav { position: sticky; top: 0; z-index: 10; background: var(--bg); border-bottom: 1px solid var(--line); }
-.nav .wrap { display: flex; align-items: center; gap: 32px; height: 56px; }
+.nav .wrap { display: flex; align-items: center; gap: 24px; height: 56px; }
 .brand { display: inline-flex; align-items: center; gap: 8px; font: 600 17px/1 var(--ui); text-decoration: none; }
 .brand img { width: 24px; height: 24px; }
 .nav-links { display: flex; gap: 24px; margin-left: auto; }
-.nav-links a, .nav-gh { color: var(--muted); font-size: 14px; line-height: 20px; text-decoration: none; transition: color .15s var(--ease); }
-.nav-links a:hover, .nav-gh:hover { color: var(--fg); }
-.menu { display: none; position: relative; margin-left: auto; }
-.menu summary { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 8px; list-style: none; cursor: pointer; }
-.menu summary::-webkit-details-marker { display: none; }
-.menu summary .ic { width: 20px; height: 20px; }
-.menu nav { position: absolute; right: 0; top: 44px; display: grid; min-width: 176px; padding: 8px; border: 1px solid var(--line-2); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-win); }
-.menu nav a { padding: 8px 12px; border-radius: 6px; color: var(--fg); font-size: 15px; line-height: 24px; text-decoration: none; }
-.menu nav a:hover { background: var(--raised); }
+.nav-links a { color: var(--muted); font-size: 14px; line-height: 20px; text-decoration: none; transition: color .15s var(--ease); }
+.nav-links a:hover { color: var(--fg); }
+/* 主题：跟随系统 / 浅色 / 深色 */
+.theme { display: flex; padding: 2px; border-radius: 8px; background: var(--raised); }
+.theme button { display: grid; place-items: center; width: 32px; height: 28px; border: 0; border-radius: 6px; background: none; color: var(--faint); cursor: pointer; transition: background-color .15s var(--ease), color .15s var(--ease); }
+.theme button:hover { color: var(--fg); }
+.theme button[aria-pressed="true"] { background: var(--surface); color: var(--fg); box-shadow: 0 0 0 1px var(--line); }
 
-/* 首屏：标题在左，说明与操作在右，下面是真实面板 */
-.hero { padding: 80px 0 0; }
+/* 首屏 */
+.hero { padding: 72px 0 0; }
 .hero-head { display: grid; grid-template-columns: 7fr 5fr; gap: 48px; align-items: end; }
-h1 { font: 600 56px/1.14 var(--ui); letter-spacing: -.02em; text-wrap: balance; }
+h1 { font: 600 64px/1.12 var(--ui); letter-spacing: -.02em; }
+h1 span { display: inline-block; white-space: nowrap; }
 .sub { color: var(--muted); font-size: 17px; line-height: 28px; text-wrap: pretty; }
 .cta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
 .meta { margin-top: 16px; color: var(--faint); font-size: 13px; line-height: 20px; }
-.stage { margin-top: 64px; }
-.frames { position: relative; aspect-ratio: 3 / 2; filter: drop-shadow(var(--shadow-win)); }
-.frames picture { position: absolute; inset: 0; opacity: 0; transition: opacity .2s var(--ease); }
-.frames picture.on { opacity: 1; }
-.frames img { width: 100%; height: 100%; }
-.stage figcaption { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 16px; color: var(--faint); font-size: 13px; line-height: 20px; }
-.stage figcaption button { padding: 4px 8px; border: 0; border-radius: 6px; background: none; color: var(--muted); font: inherit; cursor: pointer; transition: background-color .15s var(--ease), color .15s var(--ease); }
-.stage figcaption button:hover { background: var(--raised); color: var(--fg); }
 
-/* 复制刻度带：全站唯一带类型色的图形（首屏下方）；小节之间的分隔用同一把尺子的中性刻度 */
-.band { margin-top: 56px; color: var(--faint); font-size: 12px; line-height: 16px; }
+/* 会动的演示：iframe 里是真实界面。默认不接收鼠标（免得滚动页面时被面板截住），点一下才交给访客 */
+.demo { margin-top: 56px; }
+.live { position: relative; overflow: hidden; border-radius: 12px; filter: drop-shadow(var(--shadow-win)); }
+.live iframe { display: block; width: 100%; height: 100%; border: 0; pointer-events: none; }
+.live.taken iframe { pointer-events: auto; }
+.live .take { position: absolute; inset: 0; width: 100%; border: 0; background: none; cursor: pointer; }
+.live.taken .take { display: none; }
+.live.taken { outline: 2px solid var(--accent-ink); outline-offset: 4px; }
+.live.panel { aspect-ratio: 3 / 2; background: var(--poster) center / cover no-repeat; }
+.live.small { width: 720px; height: 520px; }
+.live.strip { height: 300px; }
+.live.strip iframe { height: 640px; }
+.live.shot { aspect-ratio: 12 / 7; background: #151B47; }
+.bar2 { display: flex; align-items: center; gap: 12px; min-height: 32px; margin-top: 16px; color: var(--faint); font-size: 13px; line-height: 20px; }
+.bar2 .say2 { flex: 1; min-width: 0; }
+.bar2 button { height: 28px; padding: 0 10px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--surface); color: var(--muted); font-size: 13px; cursor: pointer; white-space: nowrap; transition: background-color .15s var(--ease), color .15s var(--ease); }
+.bar2 button:hover { background: var(--raised); color: var(--fg); }
+.chips { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; color: var(--faint); font-size: 13px; line-height: 20px; }
+.chips button { height: 28px; padding: 0 10px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--surface); color: var(--fg); font: 13px/1 var(--mono); cursor: pointer; transition: background-color .15s var(--ease); }
+.chips button:hover { background: var(--raised); }
+
+/* 复制刻度带：访客在页面上每复制一次，右端升起一条刻线 */
+.band { margin-top: 56px; color: var(--faint); font-size: 13px; line-height: 20px; }
 .band svg { display: block; width: 100%; height: 72px; }
 .band .base, .band .minor { stroke: var(--tick); }
 .band .t-text { stroke: var(--g-text); } .band .t-link { stroke: var(--g-link); } .band .t-code { stroke: var(--g-code); }
 .band .t-image { stroke: var(--g-image); } .band .t-video { stroke: var(--g-video); } .band .t-file { stroke: var(--g-file); }
-.band .ends { display: flex; justify-content: space-between; padding-top: 8px; }
+.band .mine { stroke: var(--accent-ink); stroke-width: 3; transform-box: fill-box; transform-origin: bottom; }
+.band .ends { display: flex; justify-content: space-between; gap: 16px; padding-top: 8px; }
+.band .ends b { color: var(--fg); font-weight: 500; }
 .rule { height: 9px; border: 0; margin: 0; border-top: 1px solid var(--tick); background: repeating-linear-gradient(90deg, var(--tick) 0 1px, transparent 1px 12px) 0 0 / 100% 4px no-repeat, repeating-linear-gradient(90deg, var(--tick) 0 1px, transparent 1px 120px) 0 0 / 100% 8px no-repeat; }
 
 section { padding: 96px 0; }
-.head { max-width: 720px; }
-h2 { font: 600 36px/1.2 var(--ui); letter-spacing: -.01em; text-wrap: balance; }
-.head p { margin-top: 16px; color: var(--muted); font-size: 17px; line-height: 28px; text-wrap: pretty; }
+h2 { font: 600 40px/1.18 var(--ui); letter-spacing: -.015em; text-wrap: balance; }
+.lede { margin-top: 16px; max-width: 560px; color: var(--muted); font-size: 17px; line-height: 28px; text-wrap: pretty; }
+.more { margin-top: 12px; color: var(--faint); font-size: 14px; line-height: 22px; }
 h3 { font: 600 18px/26px var(--ui); }
-h3 + p, .feat p { margin-top: 8px; color: var(--muted); font-size: 15px; line-height: 24px; text-wrap: pretty; }
-.q { margin-bottom: 12px; color: var(--faint); font-size: 13px; line-height: 20px; }
-.q code { padding: 2px 6px; border-radius: 6px; background: var(--raised); color: var(--fg); }
 
-/* 截图外框：像从应用里切下来的一块 */
-.shot { overflow: hidden; border: 1px solid var(--line-2); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-sm); }
-.shot img { width: 100%; }
-.shot.fix { width: fit-content; max-width: 100%; }
-.shot.fix img { width: var(--w); max-width: none; }
+/* 一幕：左边一句话，右边会动的界面 */
+.scene { display: grid; grid-template-columns: minmax(0, 1fr) 720px; gap: 48px; align-items: center; }
+.scene + .scene { margin-top: 112px; }
+.scene.flip { grid-template-columns: 720px minmax(0, 1fr); }
+.scene.flip .words { order: 2; }
+.scene.stack { display: block; }
+.scene.stack .demo { margin-top: 40px; }
+.scene .demo { margin-top: 0; min-width: 0; }
+.n { display: block; margin-bottom: 12px; color: var(--faint); font: 13px/20px var(--mono); }
 
-.lead { display: grid; grid-template-columns: 5fr 6fr; gap: 64px; align-items: center; margin-top: 64px; }
-.lead > * { min-width: 0; }
-.lead .shot { max-width: 523px; justify-self: end; }
-.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 64px; }
-.card { min-width: 0; padding: 24px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); }
-.card > div { min-width: 0; }
-.card .shot { border-radius: 8px; margin-bottom: 24px; box-shadow: none; }
-.card.wide { display: grid; grid-template-columns: 1fr 435px; gap: 48px; align-items: center; margin-top: 24px; }
-.card.wide .shot { margin: 0; }
-.card.full { margin-top: 24px; }
-.trio { display: grid; grid-template-columns: repeat(3, 1fr); gap: 48px; margin-top: 64px; }
-.trio > * { padding-top: 24px; border-top: 1px solid var(--line-2); }
-.keys { display: grid; grid-template-columns: 80px 1fr; gap: 8px 0; margin-top: 16px; color: var(--muted); font-size: 14px; line-height: 24px; }
-.ticks li { position: relative; padding-left: 16px; color: var(--muted); font-size: 15px; line-height: 24px; }
-.ticks li + li { margin-top: 4px; }
-.ticks li::before { content: ""; position: absolute; left: 0; top: 8px; width: 1px; height: 8px; background: var(--faint); }
-
-.cols3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 48px; margin-top: 48px; }
-.cols2 { display: grid; grid-template-columns: 1fr 1fr; gap: 32px 48px; }
-.tag { margin-left: 8px; color: var(--faint); font: 400 13px/20px var(--ui); }
-.note { margin-top: 48px; max-width: 880px; color: var(--faint); font-size: 14px; line-height: 24px; }
-.wideshot { margin-top: 64px; }
-.split { display: grid; grid-template-columns: 420px 1fr; gap: 64px; align-items: start; margin-top: 64px; }
-.split figure img { filter: drop-shadow(var(--shadow-win)); }
-.split figcaption { margin-top: 16px; color: var(--faint); font-size: 13px; line-height: 20px; }
-
-.steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 48px; margin-top: 48px; counter-reset: s; }
-.steps li { counter-increment: s; padding-top: 24px; border-top: 1px solid var(--line-2); }
-.steps li::before { content: counter(s); display: block; margin-bottom: 8px; color: var(--faint); font: 400 13px/20px var(--mono); }
+/* 翻译那一幕：一段被选中的终端输出，下面是真的翻译卡片 */
+.term { padding: 16px 20px; border: 1px solid var(--line-2); border-radius: 12px; background: var(--surface); font: 13px/22px var(--mono); color: var(--muted); overflow: hidden; }
+.term mark { background: var(--sel); color: var(--fg); }
+.cardbox { width: 420px; max-width: 100%; margin: 12px 0 0 40px; }
+.cardbox iframe { display: block; width: 100%; height: 170px; border: 0; }
 
 .say { max-width: 880px; font: 600 44px/1.25 var(--ui); letter-spacing: -.02em; text-wrap: balance; }
-.oss { display: grid; grid-template-columns: 5fr 6fr; gap: 64px; margin-top: 80px; }
+.oss { display: grid; grid-template-columns: 5fr 6fr; gap: 64px; margin-top: 64px; }
 .oss .btn { margin-top: 24px; }
 .facts > div { padding: 20px 0; border-top: 1px solid var(--line-2); }
 .facts > div:last-child { border-bottom: 1px solid var(--line-2); }
@@ -182,12 +184,11 @@ h3 + p, .feat p { margin-top: 8px; color: var(--muted); font-size: 15px; line-he
 .dl li { display: grid; grid-template-columns: 240px 1fr auto; gap: 24px; align-items: center; padding: 20px 0; border-bottom: 1px solid var(--line-2); }
 .dl b { font-weight: 600; font-size: 17px; line-height: 26px; }
 .dl span { color: var(--muted); font-size: 14px; line-height: 22px; }
-.help { display: grid; grid-template-columns: 7fr 5fr; gap: 48px; margin-top: 48px; color: var(--muted); font-size: 14px; line-height: 24px; }
+.help { display: grid; grid-template-columns: 7fr 5fr; gap: 48px; margin-top: 40px; color: var(--muted); font-size: 14px; line-height: 24px; }
 .help > div { min-width: 0; }
 .help b { display: block; margin-bottom: 4px; color: var(--fg); font-weight: 600; }
 .cmd { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 8px 8px 8px 16px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--surface); }
 .cmd code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; color: var(--fg); }
-.cmd-msg { min-height: 20px; margin-top: 4px; color: var(--faint); font-size: 13px; line-height: 20px; }
 
 .faqs { display: grid; grid-template-columns: 4fr 7fr; gap: 64px; align-items: start; }
 .faq details { border-top: 1px solid var(--line-2); }
@@ -207,43 +208,47 @@ footer nav { display: flex; gap: 24px; }
 footer nav a { color: var(--muted); font-size: 14px; line-height: 20px; text-decoration: none; transition: color .15s var(--ease); }
 footer nav a:hover { color: var(--fg); }
 
-/* 进场：主内容一次短促的淡入上移 */
 @media (prefers-reduced-motion: no-preference) {
-  .hero-head, .stage { animation: rise .45s var(--ease) both; }
-  .stage { animation-delay: .06s; }
+  .hero-head, .hero .demo { animation: rise .45s var(--ease) both; }
+  .hero .demo { animation-delay: .06s; }
   @keyframes rise { from { opacity: 0; transform: translateY(8px); } }
+  .band .mine { animation: grow .5s var(--ease) both; }
+  @keyframes grow { from { transform: scaleY(0); } }
 }
 
+@media (max-width: 1160px) {
+  .scene, .scene.flip { grid-template-columns: 1fr; gap: 32px; }
+  .scene.flip .words { order: 0; }
+}
 @media (max-width: 960px) {
-  .nav-links, .nav-gh { display: none; }
-  .menu { display: block; }
-  .nav .wrap { gap: 12px; }
-  .hero-head, .lead, .oss, .faqs, .split, .card.wide, .help { grid-template-columns: 1fr; gap: 32px; }
-  .lead .shot { justify-self: start; }
-  .split figure { max-width: 420px; }
-  .pair { grid-template-columns: 1fr; }
-  .trio, .cols3, .steps { grid-template-columns: 1fr; gap: 32px; }
-  .cols2 { grid-template-columns: 1fr; }
+  .nav-links { display: none; }
+  .theme { margin-left: auto; }
+  .hero-head, .oss, .faqs, .help { grid-template-columns: 1fr; gap: 32px; }
+  h1 { font-size: 48px; }
   .dl li { grid-template-columns: 1fr auto; }
   .dl span { grid-column: 1; grid-row: 2; }
   .dl li .btn { grid-row: 1 / span 2; grid-column: 2; }
 }
+/* 屏幕窄过面板的最小宽度：不整张缩小，按 0.82 倍只露出左边的搜索框与列表一栏 */
+@media (max-width: 784px) {
+  .live.panel, .live.small { width: 100%; height: 460px; aspect-ratio: auto; background-position: left top; background-size: auto 100%; }
+  .live.panel iframe, .live.small iframe { width: 720px; height: 561px; transform: scale(.82); transform-origin: 0 0; }
+  .live.strip { height: 246px; }
+  .live.strip iframe { position: absolute; right: 0; top: 0; width: 720px; height: 600px; transform: scale(.82); transform-origin: 100% 0; }
+  .live.shot { aspect-ratio: auto; height: calc((100vw - 32px) * .72); }
+  .live.shot iframe { width: 720px; height: 520px; transform: scale(calc((100vw - 32px) / 720px)); transform-origin: 0 0; }
+  .cardbox { margin-left: 0; }
+}
 @media (max-width: 640px) {
   .wrap { padding: 0 16px; }
   .hero { padding-top: 48px; }
-  h1 { font-size: 36px; line-height: 1.2; }
+  h1 { font-size: 38px; line-height: 1.18; }
   h2 { font-size: 28px; }
   .say { font-size: 30px; }
   section { padding: 64px 0; }
-  .stage { margin-top: 40px; }
-  /* 面板太密：手机上只看左边的搜索框与列表一栏，不整张缩小 */
-  .frames { aspect-ratio: auto; height: 520px; overflow: hidden; border-radius: 12px; filter: none; border: 1px solid var(--line-2); }
-  .frames img { width: 780px; max-width: none; height: 520px; }
-  .card { padding: 16px; }
-  /* 截图在手机上不整张缩小：保持接近原始大小，只露出一部分 */
-  .lead .shot { width: 100%; }
-  .lead .shot img { width: 480px; max-width: none; }
-  .wideshot img { width: 100%; height: 400px; object-fit: cover; object-position: 44% 100%; }
+  .scene + .scene { margin-top: 72px; }
+  .demo { margin-top: 40px; }
+  .band .ends span:nth-child(2) { display: none; }
   .dl li { grid-template-columns: 1fr; gap: 12px; }
   .dl li .btn { grid-row: auto; grid-column: 1; justify-self: start; }
   footer .wrap { flex-direction: column; align-items: flex-start; padding-top: 24px; padding-bottom: 24px; }
@@ -257,26 +262,18 @@ footer nav a:hover { color: var(--fg); }
   <div class="wrap">
     <a class="brand" href="#top"><img src="assets/logo.svg" alt="" width="24" height="24">xPaste</a>
     <nav class="nav-links" aria-label="主导航">
-      <a href="#features">功能</a>
+      <a href="#features">搜索</a>
       <a href="#capture">截图录屏</a>
       <a href="#translate">翻译</a>
-      <a href="#how">用法</a>
       <a href="#privacy">隐私</a>
       <a href="#faq">常见问题</a>
+      <a href="https://github.com/Cocoon-break/xpaste">GitHub</a>
     </nav>
-    <a class="nav-gh" href="https://github.com/Cocoon-break/xpaste">GitHub</a>
-    <details class="menu">
-      <summary aria-label="菜单"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></summary>
-      <nav aria-label="主导航">
-        <a href="#features">功能</a>
-        <a href="#capture">截图录屏</a>
-        <a href="#translate">翻译</a>
-        <a href="#how">用法</a>
-        <a href="#privacy">隐私</a>
-        <a href="#faq">常见问题</a>
-        <a href="https://github.com/Cocoon-break/xpaste">GitHub 源码</a>
-      </nav>
-    </details>
+    <div class="theme" role="group" aria-label="主题">
+      <button type="button" data-theme-opt="system" aria-pressed="true" aria-label="跟随系统" title="跟随系统"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></button>
+      <button type="button" data-theme-opt="light" aria-pressed="false" aria-label="浅色" title="浅色"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></button>
+      <button type="button" data-theme-opt="dark" aria-pressed="false" aria-label="深色" title="深色"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/></svg></button>
+    </div>
     <a class="btn sm" href="#download">下载</a>
   </div>
 </header>
@@ -286,9 +283,9 @@ footer nav a:hover { color: var(--fg); }
 <section class="hero" aria-labelledby="hero-title">
   <div class="wrap">
     <div class="hero-head">
-      <h1 id="hero-title">截图里的字也搜得到的剪切板历史</h1>
+      <h1 id="hero-title"><span>只记得一点点，</span><span>也找得回来</span></h1>
       <div>
-        <p class="sub">xPaste 记下你在 macOS 和 Windows 上复制过的每一条内容。按 <kbd>⌘</kbd> <kbd>Shift</kbd> <kbd>V</kbd> 唤起，截图里的字、文件里的内容、拼音首字母都能搜，按 <kbd>Enter</kbd> 贴回刚才的应用。自带截图、贴图和翻译，macOS 上还能录屏。</p>
+        <p class="sub">xPaste 是 macOS 和 Windows 上的剪切板历史。复制过的东西，截图里的字、文件里的内容、拼音首字母，都能搜到。</p>
         <div class="cta">
           <a class="btn primary" href="#download"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>下载 xPaste</a>
           <a class="btn" href="https://github.com/Cocoon-break/xpaste">在 GitHub 查看源码</a>
@@ -296,92 +293,57 @@ footer nav a:hover { color: var(--fg); }
         <p class="meta">免费、开源 · 数据只存在本机 · macOS 13+ 与 Windows 10 / 11</p>
       </div>
     </div>
-    <figure class="stage">
-      <div class="frames" id="frames" role="img" aria-label="xPaste 面板：在搜索框输入“会议号”，排在最前的是一张截图，说明写着识别文字中含“会议号：482 913 776”">
-        <picture class="on"><source media="(prefers-color-scheme: dark)" srcset="assets/hero-0-dark.webp"><img src="assets/hero-0-light.webp" width="960" height="640" alt="" fetchpriority="high"></picture>
-        <picture><source media="(prefers-color-scheme: dark)" srcset="assets/hero-1-dark.webp"><img src="assets/hero-1-light.webp" width="960" height="640" alt=""></picture>
-        <picture><source media="(prefers-color-scheme: dark)" srcset="assets/hero-2-dark.webp"><img src="assets/hero-2-light.webp" width="960" height="640" alt=""></picture>
-        <picture><source media="(prefers-color-scheme: dark)" srcset="assets/hero-3-dark.webp"><img src="assets/hero-3-light.webp" width="960" height="640" alt=""></picture>
-      </div>
-      <figcaption>
-        <span>搜“会议号”：排在最前的是一张截图，命中的是图里识别出的字</span>
-        <button type="button" id="demo-toggle" aria-pressed="false">暂停演示</button>
-      </figcaption>
-    </figure>
+    <div class="demo" data-scene="hero">
+      <div class="live panel" data-src="demo/index.html"><button class="take" type="button" aria-label="点一下，自己操作这个面板"></button></div>
+      <div class="bar2"><span class="say2" role="status">只记得截图里有个会议号：输入这三个字，那张截图就排在最前</span><button type="button" data-act="take">自己上手</button><button type="button" data-act="pause">暂停演示</button></div>
+      <p class="chips">这是真的面板，装的是演示数据。试试输入<button type="button" data-q="会议号">会议号</button><button type="button" data-q="hy">hy</button><button type="button" data-q="yinhang">yinhang</button><button type="button" data-q="灰度方案">灰度方案</button></p>
+    </div>
   </div>
-  <div class="band" aria-hidden="true">
-    <svg viewBox="0 0 1600 72" preserveAspectRatio="xMidYMax slice" fill="none" stroke-linecap="butt"><path class="base" d="M0 60.5H1600"/><path class="minor" d="M0.5 60v8M16.5 60v4M32.5 60v4M48.5 60v4M64.5 60v4M80.5 60v4M96.5 60v4M112.5 60v4M128.5 60v4M144.5 60v4M160.5 60v8M176.5 60v4M192.5 60v4M208.5 60v4M224.5 60v4M240.5 60v4M256.5 60v4M272.5 60v4M288.5 60v4M304.5 60v4M320.5 60v8M336.5 60v4M352.5 60v4M368.5 60v4M384.5 60v4M400.5 60v4M416.5 60v4M432.5 60v4M448.5 60v4M464.5 60v4M480.5 60v8M496.5 60v4M512.5 60v4M528.5 60v4M544.5 60v4M560.5 60v4M576.5 60v4M592.5 60v4M608.5 60v4M624.5 60v4M640.5 60v8M656.5 60v4M672.5 60v4M688.5 60v4M704.5 60v4M720.5 60v4M736.5 60v4M752.5 60v4M768.5 60v4M784.5 60v4M800.5 60v8M816.5 60v4M832.5 60v4M848.5 60v4M864.5 60v4M880.5 60v4M896.5 60v4M912.5 60v4M928.5 60v4M944.5 60v4M960.5 60v8M976.5 60v4M992.5 60v4M1008.5 60v4M1024.5 60v4M1040.5 60v4M1056.5 60v4M1072.5 60v4M1088.5 60v4M1104.5 60v4M1120.5 60v8M1136.5 60v4M1152.5 60v4M1168.5 60v4M1184.5 60v4M1200.5 60v4M1216.5 60v4M1232.5 60v4M1248.5 60v4M1264.5 60v4M1280.5 60v8M1296.5 60v4M1312.5 60v4M1328.5 60v4M1344.5 60v4M1360.5 60v4M1376.5 60v4M1392.5 60v4M1408.5 60v4M1424.5 60v4M1440.5 60v8M1456.5 60v4M1472.5 60v4M1488.5 60v4M1504.5 60v4M1520.5 60v4M1536.5 60v4M1552.5 60v4M1568.5 60v4M1584.5 60v4M1600.5 60v8"/><path class="t-link" stroke-width="2" d="M1393 60v-46M1422 60v-28M1526 60v-14M793 60v-10M1350 60v-11M1392 60v-9M591 60v-9M1059 60v-13M1202 60v-45M1249 60v-31M773 60v-45M340 60v-17M1159 60v-46M355 60v-8M663 60v-42M890 60v-12M1051 60v-47M1227 60v-9M231 60v-44M1079 60v-15M1471 60v-36M486 60v-36M1364 60v-36M1462 60v-37M1545 60v-45M187 60v-8"/><path class="t-text" stroke-width="2" d="M869 60v-16M980 60v-10M525 60v-35M803 60v-11M1385 60v-18M1572 60v-9M1416 60v-8M1595 60v-8M1411 60v-36M954 60v-41M933 60v-8M1211 60v-36M1035 60v-8M517 60v-22M935 60v-10M736 60v-13M1576 60v-9M1002 60v-9M1484 60v-28M1534 60v-8M1348 60v-30M1277 60v-8M732 60v-8M417 60v-13M762 60v-15M1406 60v-36M1109 60v-9M1471 60v-31M1008 60v-34M543 60v-9M1405 60v-10M328 60v-9M1410 60v-17M861 60v-29M1274 60v-16M1232 60v-16M1193 60v-50M873 60v-8M967 60v-11M1504 60v-46M476 60v-10M1553 60v-21M1186 60v-15M525 60v-33M1538 60v-40M1132 60v-30M605 60v-22M1429 60v-17M1368 60v-8M984 60v-29M1548 60v-42M1595 60v-19M1574 60v-44"/><path class="t-code" stroke-width="2" d="M1229 60v-11M1430 60v-17M805 60v-8M1578 60v-13M1333 60v-18M1520 60v-22M1162 60v-9M1225 60v-8M572 60v-8M1409 60v-8M1321 60v-14M722 60v-32M1307 60v-30M1528 60v-9M1373 60v-33M1340 60v-8M701 60v-37M1533 60v-9M999 60v-19M909 60v-47M1353 60v-12"/><path class="t-file" stroke-width="2" d="M1343 60v-20M1238 60v-9M1152 60v-8M1136 60v-8M618 60v-15M1327 60v-19M178 60v-25M502 60v-18M1021 60v-8M241 60v-43"/><path class="t-image" stroke-width="2" d="M1309 60v-12M1294 60v-21M1338 60v-52M267 60v-9"/><path class="t-video" stroke-width="2" d="M1496 60v-11M1214 60v-17M358 60v-10M1038 60v-33M825 60v-8M1268 60v-10"/></svg>
-    <div class="wrap ends"><span>更早</span><span>每条刻线是一次复制，越高内容越大</span><span>现在</span></div>
+  <div class="band">
+    <svg viewBox="0 0 1600 72" preserveAspectRatio="xMaxYMax slice" fill="none" aria-hidden="true"><path class="base" d="M0 60.5H1600"/><path class="minor" d="M0.5 60v8M16.5 60v4M32.5 60v4M48.5 60v4M64.5 60v4M80.5 60v4M96.5 60v4M112.5 60v4M128.5 60v4M144.5 60v4M160.5 60v8M176.5 60v4M192.5 60v4M208.5 60v4M224.5 60v4M240.5 60v4M256.5 60v4M272.5 60v4M288.5 60v4M304.5 60v4M320.5 60v8M336.5 60v4M352.5 60v4M368.5 60v4M384.5 60v4M400.5 60v4M416.5 60v4M432.5 60v4M448.5 60v4M464.5 60v4M480.5 60v8M496.5 60v4M512.5 60v4M528.5 60v4M544.5 60v4M560.5 60v4M576.5 60v4M592.5 60v4M608.5 60v4M624.5 60v4M640.5 60v8M656.5 60v4M672.5 60v4M688.5 60v4M704.5 60v4M720.5 60v4M736.5 60v4M752.5 60v4M768.5 60v4M784.5 60v4M800.5 60v8M816.5 60v4M832.5 60v4M848.5 60v4M864.5 60v4M880.5 60v4M896.5 60v4M912.5 60v4M928.5 60v4M944.5 60v4M960.5 60v8M976.5 60v4M992.5 60v4M1008.5 60v4M1024.5 60v4M1040.5 60v4M1056.5 60v4M1072.5 60v4M1088.5 60v4M1104.5 60v4M1120.5 60v8M1136.5 60v4M1152.5 60v4M1168.5 60v4M1184.5 60v4M1200.5 60v4M1216.5 60v4M1232.5 60v4M1248.5 60v4M1264.5 60v4M1280.5 60v8M1296.5 60v4M1312.5 60v4M1328.5 60v4M1344.5 60v4M1360.5 60v4M1376.5 60v4M1392.5 60v4M1408.5 60v4M1424.5 60v4M1440.5 60v8M1456.5 60v4M1472.5 60v4M1488.5 60v4M1504.5 60v4M1520.5 60v4M1536.5 60v4M1552.5 60v4M1568.5 60v4M1584.5 60v4M1600.5 60v8"/><path class="t-link" stroke-width="2" d="M1323 60v-46M1351 60v-28M1450 60v-14M754 60v-10M1283 60v-11M1323 60v-9M561 60v-9M1006 60v-13M1142 60v-45M1187 60v-31M734 60v-45M323 60v-17M1101 60v-46M337 60v-8M630 60v-42M845 60v-12M998 60v-47M1166 60v-9M220 60v-44M1025 60v-15M1397 60v-36M462 60v-36M1295 60v-36M1389 60v-37M1468 60v-45M178 60v-8"/><path class="t-text" stroke-width="2" d="M826 60v-16M931 60v-10M498 60v-35M763 60v-11M1316 60v-18M1493 60v-9M1345 60v-8M1515 60v-8M1340 60v-36M906 60v-41M887 60v-8M1150 60v-36M983 60v-8M492 60v-22M888 60v-10M699 60v-13M1497 60v-9M952 60v-9M1410 60v-28M1457 60v-8M1280 60v-30M1213 60v-8M695 60v-8M396 60v-13M724 60v-15M1336 60v-36M1054 60v-9M1397 60v-31M958 60v-34M516 60v-9M1335 60v-10M311 60v-9M1340 60v-17M818 60v-29M1211 60v-16M1170 60v-16M1133 60v-50M829 60v-8M919 60v-11M1429 60v-46M452 60v-10M1475 60v-21M1127 60v-15M498 60v-33M1461 60v-40M1076 60v-30M574 60v-22M1358 60v-17M1299 60v-8M935 60v-29M1470 60v-42M1515 60v-19M1495 60v-44"/><path class="t-code" stroke-width="2" d="M1168 60v-11M1359 60v-17M765 60v-8M1499 60v-13M1266 60v-18M1444 60v-22M1104 60v-9M1164 60v-8M543 60v-8M1339 60v-8M1255 60v-14M686 60v-32M1241 60v-30M1451 60v-9M1304 60v-33M1273 60v-8M666 60v-37M1456 60v-9M949 60v-19M863 60v-47M1285 60v-12"/><path class="t-file" stroke-width="2" d="M1276 60v-20M1176 60v-9M1095 60v-8M1080 60v-8M587 60v-15M1260 60v-19M169 60v-25M477 60v-18M970 60v-8M229 60v-43"/><path class="t-image" stroke-width="2" d="M1244 60v-12M1229 60v-21M1271 60v-52M254 60v-9"/><path class="t-video" stroke-width="2" d="M1421 60v-11M1153 60v-17M340 60v-10M986 60v-33M784 60v-8M1204 60v-10"/></svg>
+    <div class="wrap ends"><span>更早</span><span id="band-say">在这个页面上复制点什么：这里会升起一条刻线，上面的面板里也会多一条记录</span><span>现在</span></div>
   </div>
 </section>
 
-<section id="features" aria-labelledby="f-title">
+<section id="features" aria-label="搜索">
   <div class="wrap">
-    <div class="head">
-      <h2 id="f-title">截过一张图，只记得里面有个会议号</h2>
-      <p>图片里的字平时搜不到，复制过的文件忘了名字就找不回。xPaste 把截图、图片和文件里的内容一起放进搜索。</p>
+    <div class="scene" data-scene="pinyin">
+      <div class="words">
+        <span class="n">01</span>
+        <h2>只记得拼音首字母</h2>
+        <p class="lede">不用切输入法。打 hy 找到“会议”，打 yinhang 找到“银行”，命中的字直接标出来。</p>
+      </div>
+      <div class="demo">
+        <div class="live small" data-src="demo/index.html?spectrum=0"><button class="take" type="button" aria-label="点一下，自己操作这个面板"></button></div>
+        <div class="bar2"><span class="say2" role="status"></span><button type="button" data-act="take">自己上手</button><button type="button" data-act="pause">暂停演示</button></div>
+      </div>
     </div>
 
-    <div class="lead">
-      <div class="feat">
-        <h3>截图里的字能搜到</h3>
-        <p>截图和复制的图片在后台用系统自带的离线识别读出文字，不联网、不上传、不下载模型。命中时列表直接写明识别到的那句话，预览里可以看全文、一键复制。</p>
+    <div class="scene flip" data-scene="file">
+      <div class="words">
+        <span class="n">02</span>
+        <h2>只记得文件里的一句话</h2>
+        <p class="lede">忘了文件名也没关系。那份纪要里写过“灰度方案”，搜这四个字就够了。</p>
+        <p class="more">要先在设置里打开“搜索文本文件内容”</p>
       </div>
-      <figure class="shot"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/f-ocr-dark.webp"><img src="assets/f-ocr-light.webp" width="523" height="610" alt="预览区：一张会议通知截图，下方“图中文字”展开，列出识别出的会议号和入会密码" loading="lazy"></picture></figure>
+      <div class="demo">
+        <div class="live small" data-src="demo/index.html?spectrum=0"><button class="take" type="button" aria-label="点一下，自己操作这个面板"></button></div>
+        <div class="bar2"><span class="say2" role="status"></span><button type="button" data-act="take">自己上手</button><button type="button" data-act="pause">暂停演示</button></div>
+      </div>
     </div>
 
-    <div class="pair">
-      <article class="card">
-        <p class="q">搜 <code>hy</code></p>
-        <figure class="shot fix" style="--w:435px"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/f-pinyin-dark.webp"><img src="assets/f-pinyin-light.webp" width="435" height="272" alt="搜索 hy 的结果：四条记录标题里的“会议”两个字被高亮" loading="lazy"></picture></figure>
-        <h3>拼音、首字母都能搜</h3>
-        <p>不用切输入法，打 huiyi 或 hy 就能找到“会议”。多音字也认得，yinhang 能找到“银行”，命中的字直接高亮。</p>
-      </article>
-      <article class="card">
-        <p class="q">搜 <code>xPaste</code></p>
-        <figure class="shot fix" style="--w:435px"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/f-fts-dark.webp"><img src="assets/f-fts-light.webp" width="435" height="300" alt="搜索 xPaste 的结果：文本、截图里的字和代码里的 xPaste 都被高亮" loading="lazy"></picture></figure>
-        <h3>历史再多也不卡</h3>
-        <p>三个字符以上的搜索走本地全文索引，几百 MB 的历史文本也是毫秒级。连续输入会合并查询，不会越打越慢。</p>
-      </article>
-    </div>
-    <article class="card wide">
-      <div>
-        <h3>文件按内容找</h3>
-        <p>打开“搜索文本文件内容”后，txt、md、csv、json 和代码文件的内容也能搜，忘了文件名也找得回来。这个选项默认关着，由你决定要不要为此多占一点磁盘。</p>
+    <div class="scene stack" data-scene="time">
+      <div class="words">
+        <span class="n">03</span>
+        <h2>只记得大概是什么时候</h2>
+        <p class="lede">面板顶部的复制频谱，每条刻线是一次复制，越高内容越大。从 24 小时一路放大到 10 分钟，在时间里找。</p>
       </div>
-      <div>
-        <p class="q">搜 <code>灰度方案</code>，这四个字写在文件里，不在文件名里</p>
-        <figure class="shot fix" style="--w:435px"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/f-file-dark.webp"><img src="assets/f-file-light.webp" width="435" height="125" alt="搜索“灰度方案”的结果：一条文件记录“需求评审纪要.md”" loading="lazy"></picture></figure>
-      </div>
-    </article>
-    <article class="card full">
-      <figure class="shot fix" style="--w:922px"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/f-spectrum-dark.webp"><img src="assets/f-spectrum-light.webp" width="922" height="102" alt="复制频谱放大到最近一小时：时间轴上一条条不同颜色的刻线" loading="lazy"></picture></figure>
-      <h3>看得见的复制节奏</h3>
-      <p>面板顶部的复制频谱，每条刻线是一次复制。滚轮放大到几分钟，24h、6h、1h、10m 一键切换；“常用”分类按使用次数自动归类。</p>
-    </article>
-
-    <div class="trio">
-      <div>
-        <h3>隐私是硬约束，不是开关</h3>
-        <p>没有账号、没有云同步、没有使用统计。来自密码管理器或被系统标记为敏感的内容默认不记录；日志里从不出现剪切板内容、标题、文件路径和搜索词。唯一会联网的是你手动发起的翻译。</p>
-      </div>
-      <div>
-        <h3>两个系统，一套习惯</h3>
-        <p>macOS 与 Windows 共用同一份核心代码，交互、快捷键和外观一致，换电脑不用换工具。</p>
-        <p class="keys"><span>macOS</span><span><kbd>⌘</kbd> <kbd>Shift</kbd> <kbd>V</kbd></span><span>Windows</span><span><kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>V</kbd></span></p>
-      </div>
-      <div>
-        <h3>顺手的细节</h3>
-        <ul class="ticks" style="margin-top:8px">
-          <li>误删 5 秒内可以撤销</li>
-          <li>数字键直接粘贴前几条</li>
-          <li>搜索框为空时按退格，不会误删记录</li>
-          <li>Esc 先清搜索，再隐藏面板</li>
-          <li>面板出现在鼠标所在的显示器</li>
-          <li>常用的一段存成片段，搜名字就能粘贴内容</li>
-        </ul>
+      <div class="demo">
+        <div class="live strip" data-src="demo/index.html"><button class="take" type="button" aria-label="点一下，自己操作这个面板"></button></div>
+        <div class="bar2"><span class="say2" role="status"></span><button type="button" data-act="take">自己上手</button><button type="button" data-act="pause">暂停演示</button></div>
       </div>
     </div>
+    <p class="more" style="margin-top:64px">全部功能、快捷键和细节见 <a class="link" href="https://github.com/Cocoon-break/xpaste#readme">README</a>，各系统的支持情况见<a class="link" href="https://github.com/Cocoon-break/xpaste/blob/main/docs/%E8%AE%BE%E5%A4%87%E6%94%AF%E6%8C%81.md">设备支持</a></p>
   </div>
 </section>
 
@@ -389,26 +351,16 @@ footer nav a:hover { color: var(--fg); }
 
 <section id="capture" aria-labelledby="cap-title">
   <div class="wrap">
-    <div class="head">
-      <h2 id="cap-title">截完就能搜，录完就能贴</h2>
-      <p>截图、贴图和录屏都在 xPaste 里。截下的图进入历史，图里的字随后就能搜到；录下的视频也作为一条记录进入历史，可以直接粘贴。全部在本机处理。</p>
-    </div>
-    <figure class="shot wideshot"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/shot-dark.webp"><img src="assets/shot-light.webp" width="960" height="535" alt="截图遮罩：框选了一个窗口，选区里画了矩形和箭头，下方是标注工具条和颜色选择" loading="lazy"></picture></figure>
-    <div class="cols3">
-      <div>
-        <h3>截图与标注</h3>
-        <p>按 <kbd>⌥</kbd> <kbd>Shift</kbd> <kbd>A</kbd> 冻结所有屏幕，单击选中窗口、拖动框选，或按 <kbd>F</kbd> 选整块屏。<kbd>1</kbd>–<kbd>7</kbd> 依次是矩形、椭圆、箭头、画笔、马赛克、文字、序号。回车复制，截图进入历史；<kbd>⌘</kbd> <kbd>S</kbd> 存到截图文件夹，<kbd>O</kbd> 只复制图里的文字，<kbd>L</kbd> 长截图：自己往下滚，旁边有预览，回车完成。</p>
+    <div class="scene stack" data-scene="shot">
+      <div class="words">
+        <h2 id="cap-title">截完就能搜，录完就能贴</h2>
+        <p class="lede">截图、标注、贴图、长截图都在 xPaste 里，macOS 上还能录屏。截下的图直接进历史，图里的字马上就能搜。</p>
       </div>
-      <div>
-        <h3>贴图</h3>
-        <p>按 <kbd>P</kbd> 把截图钉在屏幕上，浮在其他窗口之上当参考。拖动换位置，滚轮缩放 20%–400%，双击关闭；右键可以复制、保存。退出 xPaste 后贴图不保留。</p>
-      </div>
-      <div>
-        <h3>录屏<span class="tag">仅 macOS</span></h3>
-        <p>按 <kbd>⌥</kbd> <kbd>Shift</kbd> <kbd>R</kbd>，用同样的方式选区域，倒计时 3 秒后录成 MP4（30 或 60 fps，清晰度可选），可以带系统声音和麦克风（麦克风要 macOS 15）。菜单栏显示计时，再按一次停止，视频存进 <code>~/Movies/xPaste</code> 并进入历史。</p>
+      <div class="demo">
+        <div class="live shot" data-src="demo/shot.html"><button class="take" type="button" aria-label="点一下，自己框选和标注"></button></div>
+        <div class="bar2"><span class="say2" role="status">拖出选区，按 1–7 选标注工具，回车复制</span><button type="button" data-act="take">自己上手</button><button type="button" data-act="pause">暂停演示</button></div>
       </div>
     </div>
-    <p class="note">Windows 上截图是 <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>A</kbd>，保存是 <kbd>Ctrl</kbd> <kbd>S</kbd>，暂不支持录屏。macOS 第一次截图前要授予“屏幕录制”权限。</p>
   </div>
 </section>
 
@@ -416,57 +368,18 @@ footer nav a:hover { color: var(--fg); }
 
 <section id="translate" aria-labelledby="tr-title">
   <div class="wrap">
-    <div class="head">
-      <h2 id="tr-title">选中就能翻，写完再翻也行</h2>
-      <p>面板里、截图里、任何应用里选中的文字都能翻译，也可以自己写一段再翻。用 macOS 自带的离线系统翻译，或者接任意 OpenAI 兼容接口；每段译文都标出用的是哪种，翻译中也能临时换用另一种。</p>
-    </div>
-    <div class="split">
-      <figure>
-        <picture><source media="(prefers-color-scheme: dark)" srcset="assets/card-dark.webp"><img src="assets/card-light.webp" width="420" height="161" alt="划词翻译卡片：上方是选中的英文原文，下方是中文译文，标着“系统翻译”，右下角是“复制译文”按钮" loading="lazy"></picture>
-        <figcaption>在终端里选中一段英文，按 <kbd>⌥</kbd> <kbd>Shift</kbd> <kbd>T</kbd></figcaption>
-      </figure>
-      <div class="cols2">
-        <div>
-          <h3>面板里翻译</h3>
-          <p>选中一条记录按 <kbd>⌘</kbd> <kbd>T</kbd>，译文显示在预览里并存下来，下次直接看。截图和文件也能翻，翻的是里面识别出的文字。</p>
-        </div>
-        <div>
-          <h3>截图翻译</h3>
-          <p>截图框选后按 <kbd>T</kbd>，先识别图里的字再翻译，译文卡片出现在选区旁，回车复制。</p>
-        </div>
-        <div>
-          <h3>划词翻译</h3>
-          <p>在浏览器、终端等任何应用里选中文字，按 <kbd>⌥</kbd> <kbd>Shift</kbd> <kbd>T</kbd>，译文出现在文字旁。点“对照原文”展开成两栏，可以直接改原文、换目标语言再翻。</p>
-        </div>
-        <div>
-          <h3>写完再翻</h3>
-          <p>点菜单栏图标的“翻译…”，或者不选文字直接按翻译快捷键。写一段中文按 <kbd>⌘</kbd> <kbd>↵</kbd> 翻成英文，再按一次复制，回到聊天框粘贴。没写完关掉，草稿还在。</p>
-        </div>
+    <div class="scene" data-scene="card">
+      <div class="words">
+        <h2 id="tr-title">选中就能翻，写完再翻也行</h2>
+        <p class="lede">在任何应用里选中文字，按一下快捷键，译文出现在文字旁。用 macOS 自带的离线翻译，或者接你自己的 AI 接口。</p>
+        <p class="more">只在你按翻译时，才发送那一段文字</p>
+      </div>
+      <div class="demo">
+        <div class="term" aria-hidden="true">$ npm install --dry-run<br>added 34 packages in 2s<br><mark>The dry run shows 34 new packages with no peer conflicts, and nothing already installed gets changed.</mark></div>
+        <div class="cardbox live" data-src="demo/card.html" style="filter:none;border-radius:0;overflow:visible"><button class="take" type="button" aria-label="点一下，自己操作这张翻译卡片"></button></div>
+        <div class="bar2"><span class="say2" role="status">在终端里选中一段英文，按 <kbd>⌥</kbd> <kbd>Shift</kbd> <kbd>T</kbd></span><button type="button" data-act="pause">暂停演示</button></div>
       </div>
     </div>
-    <p class="note">系统翻译要 macOS 26，缺语言包时在 xPaste 里一键下载；AI 翻译接任意 OpenAI 兼容接口，接本机的 Ollama 时翻译不出本机。只在你按翻译时发送那一段文字。Windows 上是 <kbd>Ctrl</kbd> <kbd>T</kbd> 与 <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>T</kbd>，只能用 AI 翻译。</p>
-  </div>
-</section>
-
-<div class="wrap"><hr class="rule"></div>
-
-<section id="how" aria-labelledby="how-title">
-  <div class="wrap">
-    <div class="head"><h2 id="how-title">三步，不用学</h2></div>
-    <ol class="steps">
-      <li>
-        <h3>照常复制</h3>
-        <p>文字、链接、代码、图片、视频、文件，复制和截图都会自动记下，按类型归好。</p>
-      </li>
-      <li>
-        <h3>按 <kbd>⌘</kbd> <kbd>Shift</kbd> <kbd>V</kbd></h3>
-        <p>面板出现在鼠标所在的显示器。直接打字搜索，拼音和首字母也行，图片和文件里的内容一起搜。Windows 上是 Ctrl + Shift + V。</p>
-      </li>
-      <li>
-        <h3>按 <kbd>Enter</kbd></h3>
-        <p>贴回刚才的应用。macOS 需要开启“辅助功能”权限；没授权时会复制好并提示你按 ⌘ V。</p>
-      </li>
-    </ol>
   </div>
 </section>
 
@@ -477,14 +390,14 @@ footer nav a:hover { color: var(--fg); }
     <p class="say">复制过的一切，都留在你的电脑上。没有账号，没有云，也没有统计</p>
     <div class="oss">
       <div>
-        <h2>每一行代码都能查</h2>
-        <p style="margin-top:16px;color:var(--muted)">说数据不离开本机，不该只靠一句承诺。xPaste 的代码全部在 GitHub 上，网络请求、日志写了什么，你都可以自己看。</p>
+        <h3>每一行代码都能查</h3>
+        <p class="lede" style="font-size:15px;line-height:24px">说数据不离开本机，不该只靠一句承诺。代码全部在 GitHub 上，网络请求、日志写了什么，你都可以自己看。</p>
         <a class="btn" href="https://github.com/Cocoon-break/xpaste">在 GitHub 查看源码</a>
       </div>
       <dl class="facts">
         <div><dt>本机 SQLite</dt><dd>macOS 存在 <code>~/Library/Application Support/xPaste/</code>，Windows 存在 <code>%APPDATA%\xPaste\</code></dd></div>
-        <div><dt>系统自带的文字识别</dt><dd>macOS Vision 与 Windows.Media.Ocr，离线运行，不增加安装体积</dd></div>
-        <div><dt>Rust 与 Tauri 2</dt><dd>两个系统共用同一份核心代码，界面一致</dd></div>
+        <div><dt>系统自带的文字识别</dt><dd>macOS Vision 与 Windows.Media.Ocr，离线运行，不上传图片</dd></div>
+        <div><dt>敏感内容默认不记录</dt><dd>来自密码管理器或被系统标记为敏感的内容不进历史，日志里也从不出现剪切板内容</dd></div>
       </dl>
     </div>
   </div>
@@ -494,10 +407,8 @@ footer nav a:hover { color: var(--fg); }
 
 <section id="download" aria-labelledby="dl-title">
   <div class="wrap">
-    <div class="head">
-      <h2 id="dl-title">免费下载，装上就能用</h2>
-      <p>下载的始终是最新版本。想看更新说明或旧版本，去<a class="link" href="https://github.com/Cocoon-break/xpaste/releases">版本历史</a>。永久免费，不用注册账号；不想用了直接删掉，数据目录写得清清楚楚。</p>
-    </div>
+    <h2 id="dl-title">免费下载，装上就能用</h2>
+    <p class="lede">永久免费，不用注册账号。更新说明和旧版本在<a class="link" href="https://github.com/Cocoon-break/xpaste/releases">版本历史</a>。</p>
     <ul class="dl">
       <li><b>macOS · Apple 芯片</b><span>macOS 13 及以上 · M 系列芯片的 Mac</span><a class="btn" href="https://github.com/Cocoon-break/xpaste/releases/latest/download/xPaste_aarch64.dmg"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>下载 .dmg</a></li>
       <li><b>macOS · Intel</b><span>macOS 13 及以上 · Intel 处理器的 Mac</span><a class="btn" href="https://github.com/Cocoon-break/xpaste/releases/latest/download/xPaste_x64.dmg"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>下载 .dmg</a></li>
@@ -506,13 +417,12 @@ footer nav a:hover { color: var(--fg); }
     <div class="help">
       <div>
         <b>macOS 第一次打开提示“已损坏”？</b>
-        0.6.0 及更早的版本没有签名，文件没有坏。之后的版本已签名并公证，不会再提示。还在用旧版本时，把 xPaste 拖进“应用程序”后，在终端运行这一行再打开：
+        0.6.0 及更早的版本没有签名，文件没有坏；之后的版本已签名并公证，不会再提示。还在用旧版本时，在终端运行这一行再打开：
         <div class="cmd"><code id="cmd">xattr -dr com.apple.quarantine /Applications/xPaste.app</code><button class="btn sm" type="button" id="copy"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M5 16H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h11a1 1 0 0 1 1 1v1"/></svg><span>复制</span></button></div>
-        <p class="cmd-msg" id="cmd-msg" role="status"></p>
       </div>
       <div>
         <b>Windows 提示“已保护你的电脑”？</b>
-        Windows 安装包没有签名。点“更多信息”，再点“仍要运行”。部分 Windows 10 没有 WebView2 运行时，安装程序会在线下载，需要联网。
+        Windows 安装包没有签名。点“更多信息”，再点“仍要运行”。
       </div>
     </div>
   </div>
@@ -522,20 +432,14 @@ footer nav a:hover { color: var(--fg); }
 
 <section id="faq" aria-labelledby="faq-title">
   <div class="wrap faqs">
-    <div class="head"><h2 id="faq-title">装之前，你可能想知道</h2></div>
+    <h2 id="faq-title">装之前，你可能想知道</h2>
     <div class="faq">
       <details><summary>xPaste 收费吗？<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary><div class="a">免费，代码开源。没有付费版本，也没有内购。</div></details>
       <details><summary>我复制的内容会上传到哪里吗？<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary><div class="a">不会。没有账号、没有云同步、没有使用统计，数据只存在本机。来自密码管理器或被系统标记为敏感的内容默认不记录；日志里也不会出现剪切板内容、标题、文件路径和搜索词。唯一的例外是翻译，见下一条。</div></details>
       <details><summary>翻译会把内容发到哪里？<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary><div class="a">只在你按翻译时，把要翻译的那一段文字发出去，复制、选中、唤起都不会。用 macOS 26 自带的系统翻译时在本机完成，不联网；用 AI 翻译时发到你自己在设置里填的 OpenAI 兼容接口，接本机的 Ollama 时同样不出本机。请求按系统代理设置发出。密码管理器里的内容和被标记为敏感的内容不翻译。</div></details>
-      <details><summary>识别图片文字要联网或者下载模型吗？<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary><div class="a">不需要。用的是系统自带的离线识别（macOS Vision、Windows.Media.Ocr），不增加安装体积。启动后第一次识别要加载系统模型，大约 8 秒，之后每张通常不到 1 秒。Windows 需要系统装有对应语言的 OCR 语言包。</div></details>
-      <details><summary>macOS 提示“xPaste 已损坏，无法打开”怎么办？<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary><div class="a">0.6.0 及更早的版本没有签名，从浏览器下载后带有隔离属性。在终端运行 <code>xattr -dr com.apple.quarantine /Applications/xPaste.app</code>，再正常打开即可。之后的版本已签名并公证，不会再出现这个提示。</div></details>
       <details><summary>按 Enter 为什么没有直接粘贴？<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary><div class="a">macOS 上自动粘贴需要“辅助功能”权限，在系统设置 → 隐私与安全性 → 辅助功能里打开 xPaste。没授权时 Enter 会复制好并提示，到目标应用里按 ⌘ V 就行。</div></details>
-      <details><summary>截图要什么权限？<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary><div class="a">macOS 上第一次截图前，要在系统设置 → 隐私与安全性 → 屏幕录制（macOS 15 起叫“录屏与系统录音”）里打开 xPaste，再退出并重新打开 xPaste。macOS 15 起系统会定期再问一次是否继续允许，这是系统行为。录屏用同一个权限，开着麦克风录制时系统会再问一次麦克风权限。Windows 不需要额外权限。</div></details>
-      <details><summary>录屏为什么只有 macOS？<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary><div class="a">录屏先在 macOS 13 及以上做完，Windows 要换一套系统接口（Windows.Graphics.Capture 加 Media Foundation 编码），另做一期。现在 Windows 上没有录屏快捷键，设置里也没有录屏选项；截图和贴图两个系统都有。</div></details>
       <details><summary>支持哪些系统？<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary><div class="a">macOS 13 及以上（Apple 芯片与 Intel 各有安装包；13.0 个别样式不显示，建议 13.1 起），Windows 10 21H2 与 Windows 11（x64）。Windows 上没有录屏；翻译已在 Windows 实机上验收，截图、贴图、长截图还在验收中，遇到问题欢迎在 GitHub 提 issue。Windows 11 on ARM 靠 x64 模拟运行、没测过；Windows 10 on ARM 不能运行，安装程序会说明原因。录屏带麦克风要 macOS 15，系统翻译要 macOS 26，不满足时对应选项不显示或不可用。完整的支持情况见 <a href="https://github.com/Cocoon-break/xpaste/blob/main/docs/%E8%AE%BE%E5%A4%87%E6%94%AF%E6%8C%81.md">设备支持</a>。</div></details>
-      <details><summary>能在两台电脑之间同步吗？<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary><div class="a">不能，也不打算做。同步和“数据不离开本机”冲突。</div></details>
-      <details><summary>支持拼音或首字母搜索吗？<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary><div class="a">支持。关掉输入法直接打 huiyi 或 hy 就能找到“会议”，多音字也照顾到了（yinhang 能找到“银行”）。</div></details>
-      <details><summary>历史记录会占多少磁盘？<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary><div class="a">取决于你复制了多少图片和文件。全文索引会让数据库增大约一半。设置里可以“清空历史…”，置顶的记录会保留。</div></details>
+      <details><summary>macOS 提示“xPaste 已损坏，无法打开”怎么办？<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary><div class="a">0.6.0 及更早的版本没有签名，从浏览器下载后带有隔离属性。在终端运行 <code>xattr -dr com.apple.quarantine /Applications/xPaste.app</code>，再正常打开即可。之后的版本已签名并公证，不会再出现这个提示。</div></details>
     </div>
   </div>
 </section>
@@ -545,7 +449,7 @@ footer nav a:hover { color: var(--fg); }
 <section class="final" aria-labelledby="final-title">
   <div class="wrap">
     <h2 id="final-title">复制过的一切，一键找回</h2>
-    <p>免费、开源、纯本地。截图里的字、文件里的内容，按一下就搜到。</p>
+    <p>免费、开源、纯本地</p>
     <div class="cta"><a class="btn primary" href="#download"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>下载 xPaste</a></div>
   </div>
 </section>
@@ -565,33 +469,145 @@ footer nav a:hover { color: var(--fg); }
 </footer>
 
 <script>
-// 首屏演示：四帧真实截图轮播（空搜索框 → 会 → 会议 → 会议号）。减少动态效果时停在最后一帧，不自动播放。
-(() => {
-  const frames = [...document.querySelectorAll('#frames picture')];
-  const btn = document.getElementById('demo-toggle');
-  const hold = [1600, 520, 520, 3600];
-  const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  let i = still ? frames.length - 1 : 0, timer = 0, paused = still;
-  const show = (n) => { i = n; frames.forEach((f, k) => f.classList.toggle('on', k === n)); };
-  const tick = () => { timer = setTimeout(() => { show((i + 1) % frames.length); tick(); }, hold[i]); };
-  const label = () => { btn.textContent = paused ? '播放演示' : '暂停演示'; btn.setAttribute('aria-pressed', String(paused)); };
-  btn.addEventListener('click', () => { paused = !paused; clearTimeout(timer); if (!paused) tick(); label(); });
-  show(i); label();
-  if (!paused) addEventListener('load', tick, { once: true });
-})();
+// —— 主题：跟随系统 / 浅色 / 深色，记在 localStorage，演示界面跟着换 ——
+const root = document.documentElement;
+const frames = new Set();
+const post = (frame, msg) => frame.contentWindow?.postMessage({ xp: true, ...msg }, '*');
+const themeNow = () => root.dataset.theme || 'system';
+function setTheme(v) {
+  if (v === 'light' || v === 'dark') root.dataset.theme = v; else delete root.dataset.theme;
+  try { v === 'system' ? localStorage.removeItem('xp-theme') : localStorage.setItem('xp-theme', v); } catch {}
+  document.querySelectorAll('[data-theme-opt]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.themeOpt === v)));
+  frames.forEach((f) => post(f, { type: 'theme', value: v }));
+}
+document.querySelectorAll('[data-theme-opt]').forEach((b) => b.addEventListener('click', () => setTheme(b.dataset.themeOpt)));
+setTheme(themeNow());
+
+// —— 会动的演示 ——
+// 每一幕是一个 iframe（website/demo/ 里的真实界面），没人动手时按下面的脚本自己演；
+// 访客点一下就接管（iframe 开始接收鼠标键盘），点到外面交还。系统设了“减少动态效果”时不自动演。
+const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const SCRIPTS = {
+  hero: [['say', '只记得截图里有个会议号：输入这三个字，那张截图就排在最前'], ['type', '会议号'], ['wait', 5200], ['type', ''], ['wait', 1600]],
+  pinyin: [['say', '输入 hy：标题里的“会议”被找到并标出来'], ['type', 'hy'], ['wait', 3600], ['say', '输入 yinhang：多音字“行”也认得'], ['type', 'yinhang'], ['wait', 3600], ['type', ''], ['wait', 1200]],
+  file: [['say', '输入“灰度方案”：命中的是文件里的内容，文件名里没有这四个字'], ['type', '灰度方案'], ['wait', 4800], ['type', ''], ['wait', 1400]],
+  time: [['say', '过去 24 小时'], ['span', '0'], ['wait', 2600], ['say', '放大到 6 小时'], ['span', '21600000'], ['wait', 2600], ['say', '放大到 1 小时'], ['span', '3600000'], ['wait', 2600], ['say', '放大到 10 分钟'], ['span', '600000'], ['wait', 3200]],
+  shot: [['play'], ['wait', 60000]],
+  card: [['card'], ['wait', 9500]],
+};
+const CARD = { source: 'The dry run shows 34 new packages with no peer conflicts, and nothing already installed gets changed.', text: '试运行显示 34 个新软件包，没有对等依赖冲突，已安装的内容都不会被改动。' };
+
+const scenes = [...document.querySelectorAll('[data-scene]')].map((el) => {
+  const live = el.querySelector('.live'), say = el.querySelector('.say2');
+  return { el, live, say, name: el.dataset.scene, frame: null, ready: false, seen: false, taken: false, paused: still, token: 0, idleSay: say.innerHTML };
+});
+const sceneOf = (win) => scenes.find((s) => s.frame && s.frame.contentWindow === win);
+const hero = scenes[0];
+
+function mount(s) {
+  if (s.frame) return;
+  const f = document.createElement('iframe');
+  const t = themeNow(), src = s.live.dataset.src;
+  f.src = t === 'system' ? src : src + (src.includes('?') ? '&' : '?') + 'theme=' + t;
+  f.title = s.live.querySelector('.take').getAttribute('aria-label').replace('点一下，自己', '可以') ;
+  f.setAttribute('allowtransparency', 'true');
+  s.live.prepend(f);
+  s.frame = f;
+  frames.add(f);
+}
+
+const wait = (s, token, ms) => new Promise((ok) => setTimeout(() => ok(token === s.token), ms));
+async function loop(s) {
+  const token = ++s.token;
+  for (;;) {
+    for (const [op, v] of SCRIPTS[s.name]) {
+      if (token !== s.token) return;
+      if (op === 'say') s.say.textContent = v;
+      else if (op === 'wait') { if (!(await wait(s, token, v))) return; }
+      else if (op === 'card') post(s.frame, { type: 'card', ...CARD });
+      else post(s.frame, { type: op, value: v });
+    }
+  }
+}
+// 该不该演：加载好了、在视口里、访客没接管、没按暂停
+function sync(s) {
+  const run = s.ready && s.seen && !s.taken && !s.paused;
+  if (run && !s.running) { s.running = true; void loop(s); }
+  else if (!run && s.running) { s.running = false; s.token += 1; if (s.name === 'shot') post(s.frame, { type: 'stop' }); }
+  const b = s.el.querySelector('[data-act="pause"]');
+  if (b) { b.textContent = s.paused ? '播放演示' : '暂停演示'; b.setAttribute('aria-pressed', String(s.paused)); b.hidden = s.taken; }
+  const t = s.el.querySelector('[data-act="take"]');
+  if (t) t.textContent = s.taken ? '交还演示' : '自己上手';
+}
+function take(s, on) {
+  if (s.taken === on || !s.frame) return;
+  s.taken = on;
+  s.live.classList.toggle('taken', on);
+  if (on) { s.say.textContent = '你在操作。点面板外面，或按“交还演示”，它会接着自己演'; s.frame.focus({ preventScroll: true }); }
+  else { s.say.innerHTML = s.idleSay; if (s.name === 'shot') s.frame.src = s.frame.src; }
+  sync(s);
+}
+
+addEventListener('message', (e) => {
+  const m = e.data;
+  if (!m || m.xp !== true) return;
+  const s = sceneOf(e.source);
+  if (!s) return;
+  if (m.type === 'ready') {
+    s.ready = true;
+    s.live.style.backgroundImage = 'none';
+    post(s.frame, { type: 'theme', value: themeNow() });
+    s.running = false;
+    s.token += 1;
+    sync(s);
+  } else if (m.type === 'pasted' && s.taken) s.say.textContent = `已粘贴“${m.title}”。装上 xPaste 后，它会直接贴回你刚才用的应用`;
+  else if (m.type === 'card-size') s.frame.style.height = Math.ceil(m.h) + 'px';
+});
+
+// 快到视口时才加载，露出四成才开演，离开就停
+const near = new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) { mount(scenes.find((s) => s.el === e.target)); near.unobserve(e.target); } }), { rootMargin: '600px 0px' });
+const inView = new IntersectionObserver((es) => es.forEach((e) => { const s = scenes.find((x) => x.el === e.target); s.seen = e.isIntersecting; if (!s.seen) take(s, false); sync(s); }), { threshold: 0.35 });
+scenes.forEach((s) => { near.observe(s.el); inView.observe(s.el); sync(s); });
+
+scenes.forEach((s) => {
+  s.live.querySelector('.take').addEventListener('click', () => take(s, true));
+  s.el.querySelector('[data-act="take"]')?.addEventListener('click', () => take(s, !s.taken));
+  s.el.querySelector('[data-act="pause"]')?.addEventListener('click', () => { s.paused = !s.paused; sync(s); });
+});
+// 点到演示外面：交还
+addEventListener('pointerdown', (e) => scenes.forEach((s) => { if (s.taken && !s.el.contains(e.target)) take(s, false); }));
+
+// 首屏下面的几个示例词：点一下，面板里就打出来
+document.querySelectorAll('[data-q]').forEach((b) => b.addEventListener('click', () => {
+  if (!hero.frame) return;
+  hero.paused = true; sync(hero);
+  hero.say.textContent = `输入“${b.dataset.q}”。点“自己上手”可以接着搜别的`;
+  post(hero.frame, { type: 'type', value: b.dataset.q });
+}));
+
+// —— 页面自己也“记”你的复制：刻度带右端升起一条刻线，首屏面板里多一条记录（只在这个页面里，不读剪切板） ——
+let copies = 0;
+function copied(text) {
+  const t = String(text).trim();
+  if (!t) return;
+  copies += 1;
+  const svg = document.querySelector('.band svg');
+  const tick = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  tick.setAttribute('class', 'mine');
+  tick.setAttribute('d', `M${1594 - (copies - 1) * 7} 60v-${Math.min(52, 14 + Math.round(Math.sqrt(t.length) * 4))}`);
+  svg.append(tick);
+  document.getElementById('band-say').innerHTML = `<b>记下了：${[...t].length} 个字。</b>它已经出现在上面的面板里，右边多了一条刻线`;
+  if (hero.frame) { hero.paused = true; sync(hero); post(hero.frame, { type: 'type', value: '' }); setTimeout(() => post(hero.frame, { type: 'copied', value: t }), 250); }
+}
+document.addEventListener('copy', () => copied(getSelection()));
 
 // 复制放行命令
-(() => {
-  const btn = document.getElementById('copy'), msg = document.getElementById('cmd-msg');
-  btn.addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText(document.getElementById('cmd').textContent); msg.textContent = '已复制，粘贴到终端后按回车'; }
-    catch { msg.textContent = '复制失败，请手动选中这一行'; }
-    setTimeout(() => { msg.textContent = ''; }, 4000);
-  });
-})();
-
-// 手机菜单：点了链接就收起
-document.querySelectorAll('.menu nav a').forEach((a) => a.addEventListener('click', () => a.closest('details').removeAttribute('open')));
+document.getElementById('copy').addEventListener('click', async (e) => {
+  const text = document.getElementById('cmd').textContent, label = e.currentTarget.querySelector('span');
+  try { await navigator.clipboard.writeText(text); label.textContent = '已复制'; copied(text); }
+  catch { label.textContent = '复制失败'; }
+  setTimeout(() => { label.textContent = '复制'; }, 2400);
+});
 </script>
 </body>
 </html>

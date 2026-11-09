@@ -1,0 +1,1 @@
+var e=-1/0;addEventListener(`compositionend`,()=>e=performance.now(),!0);var t=()=>performance.now()-e<100,n=e=>e.isComposing||e.keyCode===229||t();export{t as n,n as t};

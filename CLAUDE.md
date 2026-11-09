@@ -74,7 +74,7 @@ Cargo workspace 有三个 crate，依赖方向是单向的：
 
 - **GitHub flow**：`main` 受保护，必须开 PR，并且 macOS、Windows 两个 CI 检查都通过才能合并。改动都从 `main` 拉短分支（`feat/…`、`fix/…`、`chore/…`、`docs/…`）。
 - **发版**：在 `main` 上推送 `v<版本号>` 标签，由 `.github/workflows/release.yml` 打三个安装包，并另存一份不带版本号的文件名，供 `releases/latest/download/` 固定链接使用。
-- **官网**：`website/` 是纯静态页面。改动合并到 `main` 后，由 `.github/workflows/pages.yml` 发布到 https://cocoon-break.github.io/xpaste/ 。
+- **官网**：`website/` 是纯静态页面。改动合并到 `main` 后，由 `.github/workflows/pages.yml` 发布到 https://cocoon-break.github.io/xpaste/ 。首页上能操作的面板、卡片和截图遮罩是真实前端加演示数据（`scripts/site-demo/`），改了这些界面后跑 `make site-demo` 重新生成 `website/demo/` 并一起提交。
 - **文档位置**：
   - 产品规格：`docs/xPaste-功能规格说明.md`，带版本记录。
   - 设计文档：放在 `docs/specs/`。

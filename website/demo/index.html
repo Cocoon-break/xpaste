@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+  <head>
+
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>xPaste</title>
+    <script type="module" crossorigin src="./assets/index.js"></script>
+    <link rel="modulepreload" crossorigin href="./assets/translate.js">
+    <link rel="modulepreload" crossorigin href="./assets/ime.js">
+    <link rel="stylesheet" crossorigin href="./assets/index.css">
+  </head>
+  <body>
+    <section class="window" id="win" data-shown="false" aria-label="xPaste 剪切板历史">
+      <div class="titlebar" data-tauri-drag-region>
+        <b translate="no" data-tauri-drag-region>xPaste</b>
+        <span class="sub" data-tauri-drag-region>剪切板历史</span>
+        <button class="live" id="pauseBtn" type="button" aria-pressed="false"><i></i><span>正在记录</span></button>
+      </div>
+
+      <div class="searchbar">
+        <label class="search" for="q">
+          <span data-icon="search"></span>
+          <input id="q" name="q" type="search" placeholder="搜索内容或来源应用，例如“会议”或 Figma…" autocomplete="off" spellcheck="false"
+                 role="combobox" aria-controls="list" aria-expanded="true" aria-autocomplete="list" aria-label="搜索剪切板历史">
+          <button class="btn icon ghost sm" type="button" id="clearQ" aria-label="清除搜索" hidden><span data-icon="x"></span></button>
+          <span class="count" id="count" aria-live="polite"></span>
+        </label>
+        <button class="btn icon" type="button" id="settingsBtn" aria-label="设置"><span data-icon="sliders"></span></button>
+      </div>
+
+      <div class="spectrum" id="spectrum" data-collapsed="false">
+        <div class="sp-head"><span class="sp-title"><b>复制频谱</b> · <span id="spDesc">过去 24 小时</span></span><span class="presets" id="spPresets" aria-hidden="true"><button type="button" tabindex="-1" data-span="0">24h</button><button type="button" tabindex="-1" data-span="21600000">6h</button><button type="button" tabindex="-1" data-span="3600000">1h</button><button type="button" tabindex="-1" data-span="600000">10m</button></span><span class="stat" id="spStat"></span><button class="btn icon ghost" type="button" id="spToggle" aria-expanded="true" aria-controls="spTrack" aria-label="收起复制频谱"><span data-icon="chevron"></span></button></div>
+        <div class="sp-track has-early" id="spTrack" aria-hidden="true">
+          <div class="layer" id="spBars"></div>
+          <div class="sp-beam" id="spBeam"></div>
+          <span class="sp-now"></span>
+          <div class="sp-tip" id="spTip"></div>
+        </div>
+        <div class="sp-axis" id="spAxis" aria-hidden="true"></div>
+        <div class="sp-mini" id="spMini" aria-hidden="true"><span class="band"></span><canvas class="dots"></canvas><span class="win"></span></div>
+      </div>
+
+      <div class="tabs-scroll">
+        <div class="tabs" id="tabs">
+          <div class="tabs-base" id="tabsBase" role="group" aria-label="按类型筛选"></div>
+          <div class="tabs-over" id="tabsOver" aria-hidden="true"></div>
+        </div>
+      </div>
+
+      <div class="body">
+        <div class="list-col">
+          <div class="ghead snip-bar" id="snipBar" hidden>片段<span id="snipCount"></span><button class="btn sm new-snip" type="button" id="newSnipBtn" data-act="new"><span data-icon="plus"></span>新建片段<kbd data-modk="N"></kbd></button></div>
+          <div class="list" id="list" role="listbox" aria-label="剪切板历史">
+            <div class="list-inner">
+              <div class="sel-ind" id="ind" aria-hidden="true"></div>
+              <div id="rows"></div>
+            </div>
+          </div>
+        </div>
+        <section class="preview" aria-label="预览">
+          <header class="phead">
+            <div class="ptype" id="ptype"></div>
+            <div class="pact">
+              <button class="btn icon" type="button" id="trBtn" aria-label="翻译" hidden><span data-icon="translate"></span></button>
+              <button class="btn icon" type="button" id="pinBtn" aria-label="置顶" aria-pressed="false">
+                <span class="swap" data-state="a"><span data-s="a" data-icon="pin"></span><span data-s="b" data-icon="pinFill"></span></span>
+              </button>
+              <button class="btn icon" type="button" id="saveSnipBtn" aria-label="存为片段" title="存为片段"><span data-icon="snip"></span></button>
+              <button class="btn icon" type="button" id="editSnipBtn" aria-label="编辑片段" title="编辑片段" hidden><span data-icon="pencil"></span></button>
+              <button class="btn icon" type="button" id="delBtn" aria-label="删除"><span data-icon="trash"></span></button>
+              <button class="btn primary" type="button" id="copyBtn">
+                <span class="swap" data-state="a"><span data-s="a" data-icon="copy"></span><span data-s="b" data-icon="check"></span></span><span data-verb>复制</span><kbd>Enter</kbd>
+              </button>
+            </div>
+          </header>
+          <div class="pbody" id="pbody"></div>
+          <dl class="pmeta" id="pmeta"></dl>
+        </section>
+      </div>
+
+      <footer class="statusbar">
+        <span class="k" id="selHint"></span>
+        <span class="k"><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
+        <span class="k"><kbd class="mod"></kbd><kbd>1–9</kbd> <span data-verb="快速">快速复制</span></span>
+        <span class="k"><kbd class="mod"></kbd><kbd>P</kbd> 置顶</span>
+        <span class="k" id="trHint" hidden><kbd class="mod"></kbd><kbd>T</kbd> 翻译</span>
+        <span class="k"><kbd class="mod"></kbd><kbd>←→</kbd> 切换分类</span>
+        <span class="k" id="multiHint" hidden><kbd class="mod"></kbd> 点击 多选</span>
+        <span class="k"><kbd class="delmod" hidden>⌘</kbd><kbd class="del">Del</kbd> 删除</span>
+        <span class="k" id="undoHint" hidden><kbd class="mod"></kbd><kbd>Z</kbd> 撤销</span>
+        <span class="k"><kbd>Esc</kbd> <span id="escHint">隐藏</span></span>
+      </footer>
+
+      <div class="menu" id="menu" role="menu" aria-label="条目操作" data-open="false">
+        <button type="button" role="menuitem" data-m="copy" style="--i:0"><span data-icon="copy"></span><span data-verb>复制</span><kbd>Enter</kbd></button>
+        <button type="button" role="menuitem" data-m="pin" style="--i:1"><span data-icon="pin"></span><span id="mPin">置顶</span><kbd class="modp"></kbd></button>
+        <button type="button" role="menuitem" data-m="editSnippet" style="--i:2" hidden><span data-icon="pencil"></span>编辑片段…<kbd data-modk="E"></kbd></button>
+        <button type="button" role="menuitem" data-m="open" style="--i:3" hidden><span data-icon="link"></span><span id="mOpen"></span></button>
+        <button type="button" role="menuitem" data-m="translate" style="--i:4" hidden><span data-icon="translate"></span>翻译<kbd data-modk="T"></kbd></button>
+        <button type="button" role="menuitem" data-m="saveSnippet" style="--i:5"><span data-icon="snip"></span>存为片段…<kbd data-modk="S"></kbd></button>
+        <div class="sep" role="separator"></div>
+        <button type="button" role="menuitem" data-m="del" class="danger" style="--i:6"><span data-icon="trash"></span><span id="mDel">删除</span><kbd class="del">Del</kbd></button>
+      </div>
+
+      <div class="toast" id="toast" data-open="false">
+        <span class="t-ic" id="toastIc"></span>
+        <span id="toastMsg" role="status" aria-live="polite"></span>
+        <button class="toast-undo" id="undoBtn" type="button" hidden>
+          撤销
+          <svg viewBox="0 0 18 18" aria-hidden="true"><circle class="trk" cx="9" cy="9" r="7"/><circle class="prg" id="ring" cx="9" cy="9" r="7"/></svg>
+        </button>
+        <button class="toast-undo" id="toastAct" type="button" hidden></button>
+      </div>
+    </section>
+
+    <dialog id="settings" aria-labelledby="st-title">
+      <form id="settingsForm" novalidate>
+        <header class="dlg-head">
+          <h2 id="st-title">设置</h2>
+          <button class="btn icon ghost" type="button" data-close aria-label="关闭设置"><span data-icon="x"></span></button>
+        </header>
+        <div class="st-tabs" role="tablist" aria-label="设置分类" id="stTabs">
+          <button type="button" role="tab" id="st-tab-general" aria-controls="st-general" aria-selected="true">通用</button>
+          <button type="button" role="tab" id="st-tab-records" aria-controls="st-records" aria-selected="false" tabindex="-1">记录</button>
+          <button type="button" role="tab" id="st-tab-search" aria-controls="st-search" aria-selected="false" tabindex="-1">搜索</button>
+          <button type="button" role="tab" id="st-tab-shot" aria-controls="st-shot" aria-selected="false" tabindex="-1">截图</button>
+          <button type="button" role="tab" id="st-tab-rec" class="os-mac" aria-controls="st-rec" aria-selected="false" tabindex="-1">录屏</button>
+          <button type="button" role="tab" id="st-tab-translate" aria-controls="st-translate" aria-selected="false" tabindex="-1">翻译</button>
+          <span class="st-ind" aria-hidden="true"></span>
+        </div>
+        <div class="st-panes">
+          <section class="dlg-body" role="tabpanel" id="st-general" aria-labelledby="st-tab-general">
+            <div class="field" style="--i:0">
+              <label for="hotkey">唤起快捷键</label>
+              <input id="hotkey" name="hotkey" readonly autocomplete="off" spellcheck="false" aria-describedby="hotkeyHelp">
+              <p class="help" id="hotkeyHelp">点击输入框，然后按下新的组合键</p>
+            </div>
+            <div class="line" style="--i:1">
+              <span><b id="themeLabel">外观</b><small>点选即生效</small></span>
+              <div class="seg" id="themeSeg" role="radiogroup" aria-labelledby="themeLabel">
+                <span class="pill" aria-hidden="true"></span>
+                <button type="button" role="radio" data-theme-opt="system" aria-label="跟随系统" title="跟随系统"><span data-icon="monitor"></span></button>
+                <button type="button" role="radio" data-theme-opt="light" aria-label="亮色主题" title="亮色"><span data-icon="sun"></span></button>
+                <button type="button" role="radio" data-theme-opt="dark" aria-label="暗色主题" title="暗色"><span data-icon="moon"></span></button>
+              </div>
+            </div>
+            <div class="switches" style="--i:2">
+              <label class="switch"><span><b>开机时启动</b><small>登录系统后在后台待命</small></span><input type="checkbox" id="autostart" name="autostart" checked></label>
+              <label class="switch"><span><b>复制后移到顶部</b><small>再次使用的条目会排到列表最前</small></span><input type="checkbox" id="moveTop" name="moveTop" checked></label>
+            </div>
+            <div class="field" style="--i:3">
+              <div class="line"><span><label for="frequentIn"><b>进入“常用”的使用次数</b></label><small id="frequentHelp">同一条内容被复制这么多次后出现在“常用”</small></span><span class="suffix"><input type="number" id="frequentIn" min="2" max="99" step="1" inputmode="numeric" autocomplete="off" aria-describedby="frequentHelp frequentErr"><span>次</span></span></div>
+              <p class="err" id="frequentErr" hidden>请输入 2 到 99 之间的整数</p>
+            </div>
+            <div class="line" id="permRow" style="--i:4" hidden>
+              <span><b>自动粘贴权限</b><small id="permState"></small></span>
+              <button class="btn sm" type="button" id="permBtn" hidden>前往授权</button>
+            </div>
+            <div class="line" style="--i:5">
+              <span><b>日志</b><small id="logNote" aria-live="polite">遇到问题时导出，发给开发者协助排查；不含剪切板内容</small></span>
+              <button class="btn sm" type="button" id="logBtn">导出日志</button>
+            </div>
+          </section>
+          <section class="dlg-body" role="tabpanel" id="st-records" aria-labelledby="st-tab-records" inert>
+            <div class="cols" style="--i:0">
+              <div class="field">
+                <label for="retain">历史保留</label>
+                <select id="retain" name="retain">
+                  <option value="7">7 天</option><option value="30" selected>30 天</option><option value="90">90 天</option><option value="forever">永久</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="limit">最多保存</label>
+                <div class="suffix">
+                  <input id="limit" name="limit" type="number" inputmode="numeric" min="50" max="5000" step="50" value="500" autocomplete="off" aria-describedby="limitErr">
+                  <span>条</span>
+                </div>
+                <p class="err" id="limitErr" hidden>请输入 50 到 5000 之间、50 的整数倍</p>
+              </div>
+            </div>
+            <div class="field" style="--i:1">
+              <label for="ignore" id="ignoreLabel">不记录这些应用</label>
+              <div class="apps-box" id="ignoreBox"><span id="ignoreChips"></span><input id="ignore" role="combobox" aria-expanded="false" aria-controls="ignoreList" aria-autocomplete="list" autocomplete="off" spellcheck="false" placeholder="搜索已安装或正在运行的应用，回车添加"></div>
+              <ul class="apps-list" id="ignoreList" role="listbox" aria-labelledby="ignoreLabel" hidden></ul>
+            </div>
+            <div class="switches" style="--i:2">
+              <label class="switch"><span><b>跳过密码管理器与敏感内容</b><small>来自密码管理器或被标记为敏感的内容不会被记录</small></span><input type="checkbox" id="sensitive" name="sensitive" checked></label>
+            </div>
+            <div class="line" style="--i:3">
+              <span><b>片段</b><small id="snipNote" aria-live="polite">搜索名字就能粘贴出对应的内容；改名、改内容与删除在面板的“片段”分类里</small></span>
+              <button class="btn sm" type="button" id="stNewSnip"><span data-icon="plus"></span>新建片段…</button>
+            </div>
+            <div class="line" style="--i:4">
+              <span><b>历史记录</b><small id="clearNote" aria-live="polite">置顶记录与片段会保留</small></span>
+              <button class="btn sm" type="button" id="clearBtn">清空历史…</button>
+            </div>
+          </section>
+          <section class="dlg-body" role="tabpanel" id="st-search" aria-labelledby="st-tab-search" inert>
+            <div class="ocr-set" style="--i:0">
+              <div class="switches">
+                <label class="switch"><span><b>识别图片中的文字</b><small>在本机完成，不上传；识别结果只用于搜索和预览</small></span><input type="checkbox" id="ocrOn" name="ocrOn" checked aria-describedby="ocrUnsupported"></label>
+                <label class="switch" id="ocrBackfillRow"><span><b>为已有图片补识别</b><small>后台低速进行，面板打开时暂停</small></span><input type="checkbox" id="ocrBackfill" name="ocrBackfill" checked></label>
+              </div>
+              <small class="help" id="ocrProgress" hidden></small>
+              <small class="help" id="ocrUnsupported" hidden></small>
+            </div>
+            <div class="switches" style="--i:1">
+              <label class="switch"><span><b>搜索文本文件内容</b><small>复制 txt、md、csv、json、代码等文件时读入前 64 KB 供搜索，不显示；会让数据库变大</small></span><input type="checkbox" id="fileText" name="fileText"></label>
+            </div>
+          </section>
+          <section class="dlg-body" role="tabpanel" id="st-shot" aria-labelledby="st-tab-shot" inert>
+            <div class="st-group" style="--i:0">
+              <h3>截图</h3>
+              <div class="field">
+                <label for="shotHotkey">截图快捷键</label>
+                <input id="shotHotkey" readonly autocomplete="off" spellcheck="false" placeholder="未启用" aria-describedby="shotHotkeyHelp">
+                <p class="help" id="shotHotkeyHelp">点击输入框后按下新的组合键；按 ⌫ 清空表示不启用</p>
+              </div>
+              <div class="field">
+                <label for="shotDir">截图文件夹</label>
+                <div class="pick"><input id="shotDir" readonly autocomplete="off" spellcheck="false"><button class="btn" type="button" id="shotDirBtn" aria-describedby="shotDirErr">更改…</button></div>
+                <p class="err" id="shotDirErr" hidden></p>
+              </div>
+              <div class="switches">
+                <label class="switch"><span><b>保存截图时同时复制</b><small>按 <span class="mod"></span> S 保存的截图也进入历史</small></span><input type="checkbox" id="shotSaveCopy" checked></label>
+                <div class="line perm" id="shotPermRow" hidden>
+                  <span><b>屏幕录制权限</b><small>截图和录屏都需要</small></span>
+                  <span class="ok" id="shotPermOk" hidden><span data-icon="check"></span>已授权</span>
+                  <button class="btn sm" type="button" id="shotPermBtn" hidden>前往授权</button>
+                </div>
+              </div>
+            </div>
+            <div class="st-group" style="--i:1">
+              <h3>长截图</h3>
+              <div class="switches">
+                <label class="switch"><span><b>自动滚动</b><small>按 L 后自动往下滚到底；关着时自己滚，可按空格开始自动滚动</small></span><input type="checkbox" id="longAutoScroll"></label>
+              </div>
+            </div>
+          </section>
+          <!-- 录屏只在 macOS 上做（M24）：Windows 上标签与面板都隐藏 -->
+          <section class="dlg-body os-mac" role="tabpanel" id="st-rec" aria-labelledby="st-tab-rec" inert>
+            <div class="field" style="--i:0">
+              <label for="recHotkey">录屏快捷键</label>
+              <input id="recHotkey" readonly autocomplete="off" spellcheck="false" placeholder="未启用" aria-describedby="recHotkeyHelp">
+              <p class="help" id="recHotkeyHelp">点击输入框后按下新的组合键；按 ⌫ 清空表示不启用</p>
+            </div>
+            <div class="field" style="--i:1">
+              <label for="recDir">录屏文件夹</label>
+              <div class="pick"><input id="recDir" readonly autocomplete="off" spellcheck="false"><button class="btn" type="button" id="recDirBtn" aria-describedby="recDirErr">更改…</button></div>
+              <p class="err" id="recDirErr" hidden></p>
+            </div>
+            <div class="field" style="--i:2">
+              <div class="line"><span><label for="recQuality"><b>录屏清晰度</b></label><small id="recQualityHelp">高：按屏幕实际像素录，Retina 屏最清楚，文件最大；标准：按屏幕上显示的大小录，文字清楚，文件小很多；小文件：再压低码率，适合发聊天软件</small></span><select id="recQuality" aria-describedby="recQualityHelp"><option value="high">高</option><option value="standard" selected>标准</option><option value="small">小文件</option></select></div>
+            </div>
+            <div class="field" style="--i:3">
+              <div class="line"><span><label for="recFps"><b>录屏帧率</b></label><small id="recFpsHelp">60 fps 更流畅，文件也更大</small></span><select id="recFps" aria-describedby="recFpsHelp"><option value="30" selected>30 fps</option><option value="60">60 fps</option></select></div>
+            </div>
+            <div class="switches" style="--i:4">
+              <label class="switch"><span><b>录制系统声音</b><small>录进视频里的是电脑播放的声音</small></span><input type="checkbox" id="recSystemAudio"></label>
+              <label class="switch" id="recMicRow"><span><b>录制麦克风</b><small id="recMicNote">同时录下麦克风的声音</small></span><input type="checkbox" id="recMicrophone"></label>
+              <label class="switch"><span><b>录完复制到剪切板</b><small>视频作为一条记录进入历史，可直接粘贴</small></span><input type="checkbox" id="recCopy" checked></label>
+            </div>
+          </section>
+          <section class="dlg-body" role="tabpanel" id="st-translate" aria-labelledby="st-tab-translate" inert>
+            <div class="field" style="--i:0">
+              <label for="trHotkey">翻译快捷键</label>
+              <input id="trHotkey" readonly autocomplete="off" spellcheck="false" placeholder="未启用" aria-describedby="trHotkeyHelp">
+              <p class="help" id="trHotkeyHelp">在任何应用里选中文字后按下，译文显示在鼠标旁</p>
+            </div>
+            <div class="field" id="trEngineBox" style="--i:1">
+              <span class="lbl" id="trEngineLabel">默认翻译方式</span>
+              <div class="tr-pick" id="trEngine" role="radiogroup" aria-labelledby="trEngineLabel" aria-describedby="trEngineHelp">
+                <label><input type="radio" name="trEngine" value="system"><span><b>系统翻译</b><small>本机完成，不上传</small></span></label>
+                <label><input type="radio" name="trEngine" value="openai"><span><b>AI 翻译</b><small>用下方配置的接口</small></span></label>
+              </div>
+              <p class="help" id="trEngineHelp">面板、截图、划词翻译都默认用这一种；译文旁会标出用的是哪种，翻译中和翻译后都可以临时换用另一种</p>
+            </div>
+            <div class="field" style="--i:2">
+              <label for="trLang">目标语言</label>
+              <select id="trLang">
+                <option value="zh-Hans">简体中文</option><option value="zh-Hant">繁體中文</option><option value="en">English</option><option value="ja">日本語</option><option value="ko">한국어</option>
+              </select>
+            </div>
+            <div class="st-group" id="trSys" style="--i:3">
+              <h3>系统翻译</h3>
+              <p class="help">使用 macOS 自带的翻译，在本机完成，不上传，不需要配置接口</p>
+              <div class="line" id="trPackRow" hidden>
+                <span><b>语言包</b><small id="trPack" aria-live="polite"></small></span>
+                <button class="btn sm" type="button" id="trPackBtn" hidden>下载语言包</button>
+              </div>
+            </div>
+            <div class="st-group" id="trApi" style="--i:4">
+              <h3 id="trApiTitle">AI 翻译（OpenAI 兼容接口）</h3>
+              <p class="help" id="trPrivacy">翻译时，只把你选中要翻译的那段文字发送到下面的接口；不按翻译就不会发送任何内容。请求按系统代理设置发出，可能经过你在系统里设置的代理</p>
+              <div class="field">
+                <label for="trBaseUrl">接口地址（Base URL）</label>
+                <input id="trBaseUrl" autocomplete="off" spellcheck="false" placeholder="https://api.openai.com/v1" aria-describedby="trBaseUrlHelp trBaseUrlErr">
+                <p class="help" id="trBaseUrlHelp">兼容 OpenAI 接口的地址。用本机的 Ollama 可填 http://localhost:11434/v1，翻译不出本机</p>
+                <p class="err" id="trBaseUrlErr" hidden></p>
+              </div>
+              <div class="field">
+                <label for="trApiKey">API Key</label>
+                <div class="pick"><input id="trApiKey" type="password" autocomplete="off" spellcheck="false" aria-describedby="trApiKeyHelp"><button class="btn" type="button" id="trKeyBtn" aria-controls="trApiKey">显示</button></div>
+                <p class="help" id="trApiKeyHelp">只保存在本机</p>
+              </div>
+              <div class="field">
+                <label for="trModel">模型 ID</label>
+                <input id="trModel" autocomplete="off" spellcheck="false" placeholder="gpt-4o-mini">
+              </div>
+              <div class="line">
+                <span class="help tr-result" id="trTestResult" role="status" aria-live="polite"></span>
+                <button class="btn" type="button" id="trTestBtn">测试翻译</button>
+              </div>
+            </div>
+          </section>
+        </div>
+        <footer class="dlg-foot">
+          <button class="btn" type="button" data-close>取消</button>
+          <button class="btn primary" type="submit">保存设置</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="confirm" aria-labelledby="cf-title" aria-describedby="cfBody">
+      <header class="dlg-head">
+        <h2 id="cf-title"></h2>
+      </header>
+      <div class="dlg-body">
+        <p id="cfBody" style="--i:0"></p>
+      </div>
+      <footer class="dlg-foot">
+        <button class="btn" type="button" id="cfCancel">取消</button>
+        <button class="btn primary" type="button" id="cfOk"></button>
+      </footer>
+    </dialog>
+
+    <dialog id="snippet" aria-labelledby="snip-title">
+      <form id="snipForm" novalidate>
+        <header class="dlg-head">
+          <h2 id="snip-title">存为片段</h2>
+          <button class="btn icon ghost" type="button" data-close aria-label="关闭"><span data-icon="x"></span></button>
+        </header>
+        <div class="dlg-body">
+          <div class="field" style="--i:0">
+            <label for="snipName">名字</label>
+            <input id="snipName" maxlength="100" autocomplete="off" spellcheck="false" placeholder="例如：fmctl 批量执行" aria-describedby="snipNameHelp snipNameErr">
+            <p class="help" id="snipNameHelp">在面板里搜这个名字就能找到它，支持拼音与首字母</p>
+            <p class="err" id="snipNameErr" hidden>请填写名字</p>
+          </div>
+          <div class="field" style="--i:1" id="snipTextField">
+            <label for="snipText">内容</label>
+            <textarea id="snipText" rows="6" spellcheck="false" aria-describedby="snipTextErr"></textarea>
+            <p class="err" id="snipTextErr" hidden>请填写内容</p>
+          </div>
+          <div class="field" style="--i:1" id="snipFixedField" hidden>
+            <span class="lbl">内容</span>
+            <div class="snip-fixed" id="snipFixed"></div>
+            <p class="help">图片和文件的内容不能改，只能改名字</p>
+          </div>
+        </div>
+        <footer class="dlg-foot">
+          <button class="btn" type="button" data-close>取消</button>
+          <button class="btn primary" type="submit" id="snipSubmit">保存片段</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="onboard" aria-labelledby="ob-title" tabindex="-1">
+      <header class="dlg-head">
+        <h2 id="ob-title">欢迎使用 xPaste</h2>
+        <button class="btn icon ghost" type="button" data-close aria-label="关闭引导"><span data-icon="x"></span></button>
+      </header>
+      <div class="dlg-body" data-step="hotkey" hidden>
+        <p class="ob-lead" style="--i:0">在任意应用里按 <kbd id="obKey"></kbd> 唤起面板</p>
+        <div style="--i:1">
+          <p class="help" data-try>现在就试一次</p>
+          <p class="ob-ok" data-ok hidden><span data-icon="check"></span>成功，以后随时按它找回复制过的内容</p>
+        </div>
+      </div>
+      <div class="dlg-body" data-step="accessibility" hidden>
+        <p class="ob-lead" style="--i:0">自动粘贴需要“辅助功能”权限</p>
+        <p class="help" style="--i:1">授权后按 Enter 会直接粘贴到上一个应用；不授权也能用，按 Enter 只复制</p>
+        <div style="--i:2">
+          <button class="btn sm" type="button" id="obGrant" data-try>前往授权</button>
+          <p class="ob-ok" data-ok hidden><span data-icon="check"></span>已授予</p>
+        </div>
+      </div>
+      <div class="dlg-body" data-step="autostart" hidden>
+        <div class="switches" style="--i:0">
+          <label class="switch"><span><b>开机时启动</b><small>登录系统后在后台待命</small></span><input type="checkbox" id="obAutostart"></label>
+        </div>
+      </div>
+      <footer class="dlg-foot">
+        <span class="steps" id="obDots" role="img"></span>
+        <button class="btn" type="button" id="obSkip"></button>
+        <button class="btn primary" type="button" id="obNext"></button>
+      </footer>
+    </dialog>
+  </body>
+</html>
