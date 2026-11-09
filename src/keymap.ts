@@ -80,7 +80,8 @@ export const keyAction = (e: KeyEv, c: KeyCtx): Action => {
     if (k === ' ' && !e.mod && !e.ctrl && !e.alt && !c.onControl && !c.searchHasText) return e.repeat ? null : { t: 'peek' };
   }
   // 来源筛选（M29 规则 2、5）：Tab 把建议变成胶囊；搜索框为空时 ⌫、Esc 去掉胶囊，先于精简模式的分类标签
-  const emptyBack = !c.searchHasText && !c.onControl && ((k === 'Escape' && c.multi < 2) || (k === 'Backspace' && !e.mod));
+  // ⌫ 不连发：按住删搜索词，删空之后的连发不该顺手把胶囊、分类标签也去掉
+  const emptyBack = !c.searchHasText && !c.onControl && ((k === 'Escape' && c.multi < 2) || (k === 'Backspace' && !e.mod && !e.repeat));
   if (k === 'Tab' && c.sug && c.inSearch && !e.shift && !e.mod && !e.ctrl && !e.alt) return { t: 'acceptSug' };
   if (c.app && emptyBack) return { t: 'clearApp' };
   if (c.compact && c.filtered && emptyBack) return { t: 'clearFilter' };

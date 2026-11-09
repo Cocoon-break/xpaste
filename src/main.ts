@@ -22,7 +22,7 @@ import {
   onTranslateDelta,
 } from './api/events';
 import type { AppError, Appearance, Engines, FileEntry, PanelStyle, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
-import { appCounts, bestApp, fromApp } from './source';
+import { appCounts, bestApp, freshSug, fromApp, type Sug } from './source';
 import { COMPACT, compactGroups, compactHeadH, rowParts } from './compact';
 import { copyToast, needsAccessibility } from './copy-status';
 import {
@@ -136,7 +136,7 @@ const S = {
   /** 来源胶囊：只看来自这个应用的记录（M29）；隐藏面板时清空 */
   app: null as string | null,
   /** 搜索框右侧的建议“只看 xx · n 条” */
-  sug: null as { app: string; n: number } | null,
+  sug: null as Sug | null,
   sel: null as number | null,
   /** 多选（只在“片段”分类，M25 规则 6）：空或至少 2 条 */
   multi: new Set<number>(),
@@ -175,8 +175,8 @@ async function paintVerb() {
 const favMin = () => S.settings.frequentMinUses;
 const vis = () => fromApp(visible(S.records, S.filter, S.matchIds, favMin()), S.app);
 /** 当前分类下、不看搜索词的记录：建议的条数与胶囊下的总数都按它算（M29 规则 1、3） */
-const inCategory = () => visible(S.records, S.filter, null, favMin());
-const matches = (r: RecordSummary) => inFilter(r, S.filter, favMin(), S.matchIds !== null) && (S.matchIds === null || S.matchIds.has(r.id)) && fromApp([r], S.app).length > 0;
+const inCategory = () => [...S.records.values()].filter((r) => inFilter(r, S.filter, favMin(), false));
+const matches = (r: RecordSummary) => inFilter(r, S.filter, favMin(), S.matchIds !== null) && (S.matchIds === null || S.matchIds.has(r.id)) && (S.app === null || (r.app?.name === S.app && !isSnip(r)));
 const rowEl = (id: number | null) => (id === null ? null : document.getElementById('opt-' + id));
 const source = (r: RecordSummary) => r.app?.name || '未知来源';
 /** 行、选中光标与预览标签的类型色：片段统一用片段色（M25 规则 2） */
@@ -546,23 +546,32 @@ function paintApp() {
   escHintEl.textContent = escHint(!!S.q, S.multi.size >= 2, S.app !== null);
 }
 // 建议：输入对得上某个应用名（名字、全拼、首字母，由后端比对）时，取当前分类下记录最多的一个；序号丢弃先发后到的结果
-let sugSeq = 0;
+let sugSeq = 0, sugKey = '';
 function updateSug(v: string) {
-  const seq = ++sugSeq, t = v.trim();
-  const done = (s: typeof S.sug) => {
+  const t = v.trim(), key = `${S.app}\n${S.filter}\n${t}`;
+  // 输入事件立即调一次（不等搜索节流），随后 runSearch 再调时同一份输入不重发
+  if (key === sugKey) return;
+  sugKey = key;
+  const seq = ++sugSeq;
+  const done = (s: Sug | null) => {
     if (seq !== sugSeq) return;
     S.sug = s;
     paintApp();
   };
   if (S.app !== null || !t) return done(null);
   const c = appCounts(inCategory());
-  matchApps(t, [...c.keys()]).then((names) => done(bestApp(names, c)), () => done(null));
+  if (!c.size) return done(null);
+  matchApps(t, [...c.keys()]).then((names) => {
+    const b = bestApp(names, c);
+    done(b && { ...b, q: t });
+  }, () => done(null));
 }
 /** 设置或去掉来源胶囊；`clearQuery`：Tab 接受建议、点预览里的来源时，输入的字换成胶囊 */
 function setApp(app: string | null, clearQuery: boolean) {
   if (S.app === app) return;
   S.app = app;
   S.sug = null;
+  sugKey = '';
   S.multi.clear();
   if (clearQuery) q.value = '';
   paintApp();
@@ -668,7 +677,7 @@ function metaHTML(r: RecordSummary, d: RecordDetail | null) {
   const ocrable = r.kind === 'image' || (r.kind === 'file' && r.ocrState !== 0);
   if (ocrable && (r.ocrState !== 1 || d?.ocrText)) meta.push(['文字', reocrNow ? '识别中…' : ocrLabel(r.ocrState, d?.ocrText)]);
   // “来源”可点：只看这个应用（M29 规则 2）
-  return meta.map(([k, v]) => k === '来源' && r.app
+  return meta.map(([k, v]) => k === '来源' && r.app?.name
     ? `<div><dt>${k}</dt><dd><button class="src-btn" type="button" data-act="src" title="只看来自 ${esc(v)} 的记录">${esc(v)}</button></dd></div>`
     : `<div><dt>${k}</dt><dd title="${esc(v)}">${esc(v)}</dd></div>`).join('');
 }
@@ -1136,6 +1145,9 @@ spTrack.addEventListener('click', (e) => {
   if (!matches(hit.r)) {
     S.filter = 'all';
     persistFilter();
+    // 来源胶囊也会把这条筛掉（M29），一起去掉
+    S.app = null;
+    paintApp();
     q.value = '';
     renderTabs(false);
     runSearch('', { stagger: true });
@@ -2712,6 +2724,7 @@ const hidden = () => {
   S.multi.clear();
   // 来源胶囊同搜索词，不跨唤起保留（M29 规则 5）
   S.app = S.sug = null;
+  sugKey = '';
   paintApp();
   // 跨隐藏不复用详情（例如文件是否还在）
   bodyFor = null;
@@ -2766,7 +2779,7 @@ document.addEventListener('keydown', (e) => {
       selTranslatable: !!selR && translatable(selR),
       selPlain: !!selR && plainable(selR),
       app: S.app !== null,
-      sug: S.sug !== null,
+      sug: freshSug(S.sug, q.value) !== null,
       compact: S.settings.panelStyle === 'compact',
       peek: win.dataset.peek === 'true',
       filtered: S.filter !== 'all',
@@ -2816,7 +2829,10 @@ document.addEventListener('keydown', (e) => {
       return void (sel !== null && doTranslate(sel));
     case 'clearFilter': return setFilter('all', true);
     // 来源筛选（M29 规则 2、5）
-    case 'acceptSug': return void (S.sug && setApp(S.sug.app, true));
+    case 'acceptSug': {
+      const sug = freshSug(S.sug, q.value);
+      return void (sug && setApp(sug.app, true));
+    }
     case 'clearApp': return setApp(null, false);
     case 'selectAll': {
       S.multi = new Set(vis().filter((r) => !S.removing.has(r.id)).map((r) => r.id));
@@ -2956,9 +2972,13 @@ $('.sp-head').addEventListener('click', () => {
 });
 q.addEventListener('input', (e) => {
   if ((e as InputEvent).isComposing) return;
+  updateSug(q.value);
   typedSearch.push(q.value);
 });
-q.addEventListener('compositionend', () => typedSearch.push(q.value));
+q.addEventListener('compositionend', () => {
+  updateSug(q.value);
+  typedSearch.push(q.value);
+});
 clearQ.addEventListener('click', () => {
   q.value = '';
   runSearch('');
@@ -2969,7 +2989,7 @@ qSug.addEventListener('click', () => S.sug && setApp(S.sug.app, true));
 $('#qAppX').addEventListener('click', () => setApp(null, false));
 pmeta.addEventListener('click', (e) => {
   const r = S.sel === null ? undefined : S.records.get(S.sel);
-  if ((e.target as Element).closest('[data-act="src"]') && r?.app) setApp(r.app.name, true);
+  if ((e.target as Element).closest('[data-act="src"]') && r?.app?.name) setApp(r.app.name, true);
 });
 tabsBase.addEventListener('click', (e) => {
   const t = (e.target as Element).closest<HTMLElement>('[data-f]');

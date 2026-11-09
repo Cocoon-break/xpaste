@@ -185,3 +185,10 @@ test('来源筛选：Tab 接受建议，⌫ / Esc 去掉胶囊（M29 规则 2、
   // 多选时 Esc 先取消选择
   assert.deepEqual(k({ key: 'Escape' }, { app: true, multi: 2 }), { t: 'clearMulti' });
 });
+
+test('按住 ⌫ 删搜索词：删空之后的连发不去掉来源胶囊和分类标签', () => {
+  const k = (o: Partial<KeyEv>, c: Partial<KeyCtx> = {}) => keyAction(ev(o), ctx(c));
+  assert.equal(k({ key: 'Backspace', repeat: true }, { app: true }), null);
+  assert.equal(k({ key: 'Backspace', repeat: true }, { compact: true, filtered: true }), null);
+  assert.deepEqual(k({ key: 'Backspace' }, { compact: true, filtered: true }), { t: 'clearFilter' });
+});

@@ -113,6 +113,11 @@ async function translate(id: number) {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+/** 演示数据里中文应用名的全拼与首字母（真应用由 pinyin::name_matches 算） */
+const APP_PY: Record<string, string[]> = {
+  微信: ['weixin', 'wx'], 访达: ['fangda', 'fd'], 备忘录: ['beiwanglu', 'bwl'], 截图: ['jietu', 'jt'], 终端: ['zhongduan', 'zd'], 邮件: ['youjian', 'yj'],
+};
+
 const handlers: Record<string, (a: any) => unknown> = {
   bootstrap: (): Bootstrap => ({
     settings,
@@ -204,8 +209,15 @@ const handlers: Record<string, (a: any) => unknown> = {
   translate_status: () => ({ supported: true, pack: 'installed' }),
   translate_record: ({ id }) => translate(id),
   translate_test: () => 'Hello',
-  // 演示页面没有拼音索引，只按名字比对
-  match_apps: ({ q, names }) => (names as string[]).filter((n) => String(q).trim().length > 0 && n.toLowerCase().includes(String(q).trim().toLowerCase())),
+  // 与 pinyin::name_matches 同一套规则；演示页面没有拼音库，演示数据里的中文应用名在 APP_PY 里给出全拼与首字母
+  match_apps: ({ q, names }) => {
+    const t = String(q).trim().toLowerCase();
+    if (!t || (/^[\x00-\x7f]+$/.test(t) && t.length < 2)) return [];
+    return (names as string[]).filter((n) => {
+      const l = n.toLowerCase();
+      return l.includes(t) || l.replace(/ /g, '').includes(t) || (APP_PY[n] ?? []).some((p) => p.startsWith(t));
+    });
+  },
   export_logs: () => fail('internal', '演示页面不导出日志'),
   // 划词卡片（card.html）：窗口高度交给父页面去调
   trcard_resize: ({ h }) => void tell({ type: 'card-size', h }),

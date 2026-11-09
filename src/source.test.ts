@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { RecordSummary } from './api/types.ts';
-import { appCounts, bestApp, fromApp } from './source.ts';
+import { appCounts, bestApp, freshSug, fromApp } from './source.ts';
 
 const mk = (id: number, app: string | null, over: Partial<RecordSummary> = {}): RecordSummary => ({
   id, kind: 'text', title: '', app: app === null ? null : { name: app, icon: null }, copiedAt: 0, uses: 0, pinned: false,
@@ -26,4 +26,11 @@ test('bestApp 取命中的应用里记录最多的；一样多取名字短的；
   assert.deepEqual(bestApp(['Chrome Canary', 'Chrome'], c), { app: 'Chrome', n: 2 });
   assert.equal(bestApp(['备忘录'], c), null);
   assert.equal(bestApp([], c), null);
+});
+
+test('freshSug：建议是为别的输入算的（结果还没回来）时不算数，Tab 不接受', () => {
+  const sug = { app: '微信', n: 6, q: 'wx' };
+  assert.equal(freshSug(sug, ' wx '), sug);
+  assert.equal(freshSug(sug, 'wxpay'), null);
+  assert.equal(freshSug(null, 'wx'), null);
 });

@@ -259,7 +259,15 @@ pub async fn copy(
     plain: bool,
 ) -> Result<CopyResult, AppError> {
     let flavors = precheck(&state, id)?;
-    let flavors = if plain { plain_only(flavors) } else { flavors };
+    let flavors = if plain {
+        let (kind, text) = {
+            let store = state.store();
+            (store.summary(id)?.map(|s| s.kind), store.text(id)?)
+        };
+        kind.and_then(|k| plain_flavors(k, text)).unwrap_or(flavors)
+    } else {
+        flavors
+    };
     let bytes: usize = flavors.iter().map(|f| f.data.len()).sum();
     write_marked(&state, || xpaste_platform::write(&flavors)).inspect_err(|_| {
         log::warn!("写入剪切板失败 id={id} bytes={bytes}");
@@ -298,14 +306,12 @@ pub async fn copy(
     }
 }
 
-/// 粘贴为纯文本（M09 规则 7）：只留纯文本那一份，富文本、HTML 等格式不写回。
-/// 记录里没有纯文本格式（图片、文件）时原样写回。
-fn plain_only(flavors: Vec<Flavor>) -> Vec<Flavor> {
-    let plain = text_flavor("").format;
-    if !flavors.iter().any(|f| f.format == plain) {
-        return flavors;
-    }
-    flavors.into_iter().filter(|f| f.format == plain).collect()
+/// 粘贴为纯文本（M09 规则 7）：文本、代码、链接记录只写一份由正文生成的纯文本，富文本、HTML 等格式不写回。
+/// 不按格式名从原有 flavor 里挑：各应用放纯文本的格式名不一样，挑不到时会悄悄带着格式粘贴出去。
+/// 其余类型或没有正文时为 None，照常写回原格式。
+fn plain_flavors(kind: Kind, text: Option<String>) -> Option<Vec<Flavor>> {
+    let text = text.filter(|t| !t.is_empty())?;
+    matches!(kind, Kind::Text | Kind::Code | Kind::Link).then(|| vec![text_flavor(&text)])
 }
 
 /// 预览“复制文字”：只写一份纯文本，标记为自身写入（不入库、不计使用次数）。
@@ -476,20 +482,18 @@ mod tests {
     }
 
     #[test]
-    fn plain_only_keeps_text_flavor() {
-        let f = |format: &str| Flavor {
-            item: 0,
-            format: format.into(),
-            data: vec![1],
-        };
+    fn plain_flavors_only_for_text_kinds_with_text() {
         let plain = text_flavor("x").format;
-        let got = plain_only(vec![f("public.html"), f(&plain), f("public.rtf")]);
-        assert_eq!(
-            got.iter().map(|f| f.format.as_str()).collect::<Vec<_>>(),
-            [plain.as_str()]
-        );
-        // 没有纯文本格式（图片、文件）时原样写回
-        assert_eq!(plain_only(vec![f("public.png")]).len(), 1);
+        for kind in [Kind::Text, Kind::Code, Kind::Link] {
+            let got = plain_flavors(kind, Some("x".into())).unwrap();
+            assert_eq!(got.len(), 1);
+            assert_eq!(got[0].format, plain);
+        }
+        // 图片、视频、文件照常写回原格式；没有正文的也是
+        assert!(plain_flavors(Kind::File, Some("a.txt".into())).is_none());
+        assert!(plain_flavors(Kind::Image, None).is_none());
+        assert!(plain_flavors(Kind::Text, Some(String::new())).is_none());
+        assert!(plain_flavors(Kind::Text, None).is_none());
     }
 
     #[test]

@@ -626,6 +626,19 @@ impl Store {
         ids_in(&self.conn, &sql, &args)
     }
 
+    /// 未删除记录的正文全文（详情里的 `text` 超过 200 KB 会截断）；没有正文、已删除或不存在为 None。
+    pub fn text(&self, id: i64) -> Result<Option<String>, CoreError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT text FROM records WHERE id = ?1 AND deleted_at IS NULL",
+                [id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten())
+    }
+
     /// 未删除记录的识别状态；已删除或不存在为 None。
     pub fn ocr_state(&self, id: i64) -> Result<Option<u8>, CoreError> {
         Ok(self
@@ -2159,6 +2172,18 @@ pub(crate) mod tests {
         assert_eq!(ids(&s, "会议").len(), 1);
         assert_eq!(ids(&s, "").len(), 2);
     }
+    #[test]
+    fn text_returns_full_text() {
+        let mut s = mem();
+        let big = "x".repeat(300 * 1024);
+        let (Upsert::Added(id), _) = s.insert_or_merge(&rec(&big), 1, 500).unwrap() else {
+            panic!()
+        };
+        // 不受详情 200 KB 截断影响（M09 规则 7）
+        assert_eq!(s.text(id).unwrap().unwrap().len(), 300 * 1024);
+        assert_eq!(s.text(999).unwrap(), None);
+    }
+
     #[test]
     fn detail_truncates_long_text_and_checks_files() {
         let mut s = mem();
