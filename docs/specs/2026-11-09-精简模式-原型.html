@@ -1,0 +1,835 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>精简模式原型</title>
+<style>
+/* 设计变量照抄 src/tokens.css（「刻度」），原型单文件可直接双击打开 */
+:root {
+  color-scheme: dark;
+  --ink: #1C1C1E;
+  --glass: rgb(40 40 43 / .74); --sheet: rgb(20 20 22 / .55);
+  --glass-2: rgb(255 255 255 / .04); --glass-3: rgb(255 255 255 / .06);
+  --line: rgb(255 255 255 / .07); --line-2: rgb(255 255 255 / .09);
+  --fg: #ECECEE; --muted: #ABABB2; --faint: #93939A;
+  --c-text: #9CB3BF; --c-link: #8EA3E2; --c-code: #82C2A6; --c-image: #D6A35E; --c-video: #DE877E; --c-file: #AA97D4; --c-fav: #C8C27A; --c-snip: #CF93C0;
+  --g-text: #6F7F88; --g-link: #8DA2E6; --g-code: #6FC3A0; --g-image: #DDA65A; --g-video: #E58A80; --g-file: #AE9AE0;
+  --beam: #23809F; --beam-hover: #2B8CAE; --on-beam: #FFFFFF; --cursor: #5FA3BC; --danger: #C9434F;
+  --pop: rgb(38 38 41 / .96); --pop-solid: #262629;
+  --hover: rgb(255 255 255 / .06); --sel: rgb(255 255 255 / .075);
+  --seg-on: rgb(255 255 255 / .12); --seg-ring: 0 0 0 1px rgb(255 255 255 / .05);
+  --kbd-bg: rgb(255 255 255 / .07); --search-bg: rgb(0 0 0 / .22);
+  --shadow-win: 0 30px 80px -24px rgb(0 0 0 / .6); --shadow-pop: 0 12px 32px -12px rgb(0 0 0 / .6);
+  --mark-bg: rgb(214 163 94 / .28); --mark-fg: #F2D9B3;
+  --img-check: rgb(255 255 255 / .04);
+  --page: #161618; --desk: #2A2B30; --desk-2: #33343A;
+  --ease-enter: cubic-bezier(.22, 1, .36, 1); --ease-move: cubic-bezier(.25, 1, .5, 1); --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --ink: #F5F5F7;
+    --glass: rgb(228 229 234 / .84); --sheet: rgb(255 255 255 / .84);
+    --glass-2: rgb(0 0 0 / .035); --glass-3: rgb(0 0 0 / .05);
+    --line: rgb(0 0 0 / .08); --line-2: rgb(0 0 0 / .10);
+    --fg: #1D1D1F; --muted: #5C5C64; --faint: #6E6E76;
+    --c-text: #44707F; --c-link: #3E5DB5; --c-code: #2F7A5F; --c-image: #93600F; --c-video: #B24A40; --c-file: #6A50A8; --c-fav: #66701C; --c-snip: #95427F;
+    --g-text: #8A9AA3; --g-link: #5A78D6; --g-code: #28906C; --g-image: #B47A16; --g-video: #D45A4C; --g-file: #8C70D0;
+    --beam: #0E7FA3; --beam-hover: #0B6E8E; --cursor: #0E7FA3; --danger: #C8334A;
+    --pop: rgb(255 255 255 / .96); --pop-solid: #FFFFFF;
+    --hover: rgb(0 0 0 / .045); --sel: rgb(0 0 0 / .055);
+    --seg-on: #FFFFFF; --seg-ring: 0 0 0 1px rgb(0 0 0 / .06), 0 1px 2px rgb(0 0 0 / .08);
+    --kbd-bg: rgb(0 0 0 / .055); --search-bg: rgb(255 255 255 / .9);
+    --shadow-win: 0 30px 80px -24px rgb(0 0 0 / .28); --shadow-pop: 0 12px 32px -12px rgb(0 0 0 / .22);
+    --mark-bg: #FBE3A6; --mark-fg: #3A2A00;
+    --img-check: rgb(0 0 0 / .05);
+    --page: #ECECEF; --desk: #D9DAE0; --desk-2: #CDCED6;
+  }
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --ink: #F5F5F7;
+  --glass: rgb(228 229 234 / .84); --sheet: rgb(255 255 255 / .84);
+  --glass-2: rgb(0 0 0 / .035); --glass-3: rgb(0 0 0 / .05);
+  --line: rgb(0 0 0 / .08); --line-2: rgb(0 0 0 / .10);
+  --fg: #1D1D1F; --muted: #5C5C64; --faint: #6E6E76;
+  --c-text: #44707F; --c-link: #3E5DB5; --c-code: #2F7A5F; --c-image: #93600F; --c-video: #B24A40; --c-file: #6A50A8; --c-fav: #66701C; --c-snip: #95427F;
+  --g-text: #8A9AA3; --g-link: #5A78D6; --g-code: #28906C; --g-image: #B47A16; --g-video: #D45A4C; --g-file: #8C70D0;
+  --beam: #0E7FA3; --beam-hover: #0B6E8E; --cursor: #0E7FA3; --danger: #C8334A;
+  --pop: rgb(255 255 255 / .96); --pop-solid: #FFFFFF;
+  --hover: rgb(0 0 0 / .045); --sel: rgb(0 0 0 / .055);
+  --seg-on: #FFFFFF; --seg-ring: 0 0 0 1px rgb(0 0 0 / .06), 0 1px 2px rgb(0 0 0 / .08);
+  --kbd-bg: rgb(0 0 0 / .055); --search-bg: rgb(255 255 255 / .9);
+  --shadow-win: 0 30px 80px -24px rgb(0 0 0 / .28); --shadow-pop: 0 12px 32px -12px rgb(0 0 0 / .22);
+  --mark-bg: #FBE3A6; --mark-fg: #3A2A00;
+  --img-check: rgb(0 0 0 / .05);
+  --page: #ECECEF; --desk: #D9DAE0; --desk-2: #CDCED6;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { font: 14px/1.6 var(--font-ui); color: var(--fg); background: var(--page); -webkit-font-smoothing: antialiased; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--beam); outline-offset: 2px; }
+.ic { width: 16px; height: 16px; flex: none; display: block; }
+kbd {
+  font: 500 11px/1 var(--font-ui); display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 4px; color: var(--muted); background: var(--kbd-bg);
+}
+mark { background: var(--mark-bg); color: var(--mark-fg); border-radius: 3px; padding: 0 1px; }
+
+/* —— 文档外壳 —— */
+.doc { max-width: 1320px; margin: 0 auto; padding: 40px 32px 96px; }
+.doc-head { display: flex; align-items: flex-start; gap: 24px; margin-bottom: 32px; }
+.doc-head h1 { font-size: 22px; font-weight: 600; margin: 0 0 4px; }
+.doc-head p { margin: 0; color: var(--muted); max-width: 680px; }
+.seg { margin-left: auto; display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--glass-3); flex: none; }
+.seg button { height: 26px; padding: 0 10px; border: 0; border-radius: 6px; background: none; color: var(--muted); font-size: 12.5px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--seg-on); box-shadow: var(--seg-ring); color: var(--fg); }
+h2 { font-size: 15px; font-weight: 600; margin: 56px 0 6px; }
+h2 + p.intro { margin: 0 0 20px; color: var(--muted); }
+
+/* 桌面：面板浮在一个应用窗口上，位置按 M04 规则 2（水平居中、上三分之一） */
+.desk { position: relative; border-radius: 14px; background: var(--desk); overflow: hidden; display: flex; justify-content: center; padding: 56px 16px 64px; min-width: 0; }
+.desk::before { content: ""; position: absolute; left: 6%; right: 18%; top: 28px; bottom: -40px; border-radius: 10px; background: var(--desk-2); box-shadow: 0 0 0 1px var(--line); }
+.desk::after { content: ""; position: absolute; left: calc(6% + 24px); top: 48px; width: 40%; height: 140px; background: repeating-linear-gradient(to bottom, var(--line-2) 0 8px, transparent 8px 22px); opacity: .9; }
+.desk > * { position: relative; z-index: 1; }
+.desk .ghost-note { position: absolute; z-index: 2; left: 0; right: 0; top: 50%; text-align: center; color: var(--muted); font-size: 13px; opacity: 0; transition: opacity 160ms ease; pointer-events: none; }
+.desk.away .ghost-note { opacity: 1; }
+
+.hero { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 24px; align-items: start; }
+.keys { font-size: 13px; color: var(--muted); }
+.keys h3 { font-size: 13px; color: var(--fg); font-weight: 600; margin: 4px 0 10px; }
+.keys dl { display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; margin: 0 0 24px; align-items: center; }
+.keys dt { display: flex; gap: 3px; justify-content: flex-end; }
+.keys dd { margin: 0; }
+.keys label { display: flex; gap: 8px; align-items: center; margin: 6px 0; cursor: pointer; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: 24px; }
+.case > h3 { font-size: 13.5px; font-weight: 600; margin: 0 0 2px; }
+.case > p { margin: 0 0 10px; font-size: 12.5px; color: var(--muted); min-height: 40px; }
+.case .desk { padding: 28px 12px 32px; }
+
+table.map { border-collapse: collapse; width: 100%; font-size: 13px; }
+table.map th, table.map td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.map th { color: var(--faint); font-weight: 500; font-size: 12px; }
+table.map td:first-child { color: var(--muted); white-space: nowrap; }
+ol.calls { padding-left: 20px; color: var(--muted); font-size: 13px; }
+ol.calls li { margin: 6px 0; }
+ol.calls b { color: var(--fg); font-weight: 500; }
+
+/* —— 精简面板 —— */
+.cp {
+  position: relative; isolation: isolate; width: 400px; height: 520px; max-width: 100%;
+  display: grid; grid-template-rows: auto minmax(0, 1fr);
+  font: 13.5px/1.5 var(--font-ui); color: var(--fg);
+  background: var(--glass); -webkit-backdrop-filter: blur(40px) saturate(1.6); backdrop-filter: blur(40px) saturate(1.6);
+  border: 1px solid var(--line-2); border-radius: 14px; box-shadow: var(--shadow-win);
+  transition: opacity 140ms ease-out, transform 160ms ease-out;
+}
+.cp.gone { opacity: 0; transform: translateY(10px); pointer-events: none; }
+.bar { display: flex; align-items: center; gap: 4px; padding: 8px 8px 8px 8px; }
+.search {
+  flex: 1; min-width: 0; height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 11px;
+  background: var(--search-bg); border: 1px solid var(--line-2); border-radius: 9px; color: var(--muted);
+  transition: border-color 200ms ease;
+}
+.search:focus-within, .cp.static .search { border-color: var(--beam); }
+.search input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: var(--fg); font: inherit; font-size: 14px; padding: 0; }
+.search input::placeholder { color: var(--faint); }
+.chip { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: 6px; font-size: 12px; color: var(--fg); background: var(--seg-on); box-shadow: var(--seg-ring); }
+.chip i { width: 6px; height: 6px; border-radius: 50%; background: var(--tg, var(--muted)); }
+.count { flex: none; font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.paused { flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); padding: 2px 6px; border: 0; border-radius: 5px; background: none; cursor: pointer; }
+.paused i { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
+.paused:hover { background: var(--hover); }
+.more { flex: none; width: 28px; height: 28px; border: 0; border-radius: 7px; background: none; color: var(--muted); display: grid; place-items: center; cursor: pointer; }
+.more:hover, .more[aria-expanded="true"] { background: var(--glass-3); color: var(--fg); }
+
+.body { position: relative; min-height: 0; background: var(--sheet); border-top: 1px solid var(--line); border-radius: 0 0 13px 13px; }
+.list { height: 100%; overflow-y: auto; overscroll-behavior: contain; padding: 4px 6px 8px; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+.inner { position: relative; }
+/* 选中光标：独立一层滑动；左缘 2 × 14 的刻度是「刻度」的招牌，和完整面板同一个 */
+.selind { position: absolute; left: 0; right: 0; top: 0; height: 36px; border-radius: 7px; background: var(--sel); pointer-events: none; transition: transform 160ms var(--ease-move); }
+.selind::before { content: ""; position: absolute; left: 3px; top: 11px; width: 2px; height: 14px; border-radius: 1px; background: var(--cursor); }
+.selind.instant { transition: none; }
+.row { position: relative; height: 36px; display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 0 8px 0 12px; border-radius: 7px; cursor: default; user-select: none; }
+.row::before { content: ""; position: absolute; inset: 0; border-radius: inherit; background: var(--glass-2); opacity: 0; }
+@media (hover: hover) { .row:hover::before { opacity: 1; } }
+.lead { width: 20px; height: 20px; display: grid; place-items: center; color: var(--tc); position: relative; }
+.lead img { width: 20px; height: 20px; border-radius: 4px; object-fit: cover; display: block; box-shadow: 0 0 0 1px var(--line-2); }
+.lead .play { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; }
+.lead .play svg { width: 9px; height: 9px; }
+.ttl { min-width: 0; display: flex; align-items: baseline; gap: 8px; }
+.ttl .t { min-width: 0; flex: 0 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ttl .t.mono { font: 12.5px var(--font-mono); }
+.ttl .x { flex: 0 1000 auto; min-width: 24px; max-width: 60%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; color: var(--faint); }
+/* 无标题链接：域名完整显示，路径截断 */
+.ttl.rev .t { flex: none; max-width: 70%; }
+.ttl.rev .x { flex: 1 1 auto; max-width: none; }
+.ttl .tag { flex: none; font-size: 11.5px; color: var(--c-image); }
+.ttl .snip-name { color: var(--c-snip); }
+.row[aria-selected="true"] .x { color: var(--muted); }
+.tail { display: flex; align-items: center; gap: 4px; color: var(--faint); }
+.tail kbd { background: none; color: var(--faint); padding: 0 2px; font-variant-numeric: tabular-nums; }
+.row[aria-selected="true"] .tail kbd { color: var(--fg); }
+.tail .ic { width: 13px; height: 13px; }
+.glabel { height: 24px; display: flex; align-items: center; gap: 8px; padding: 4px 12px 0; font-size: 11px; color: var(--faint); }
+.glabel::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.divider { height: 1px; background: var(--line); margin: 4px 12px; }
+.row.gone { animation: out 200ms var(--ease-move) forwards; }
+@keyframes out { to { opacity: 0; transform: translateX(-24px); filter: blur(3px); } }
+
+.empty { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 12px; padding: 24px; text-align: center; color: var(--muted); font-size: 13px; }
+.empty small { color: var(--faint); font-size: 12px; }
+.btn { height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: var(--glass-3); color: var(--fg); font-size: 12.5px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.btn:hover { background: var(--hover); }
+
+/* 空格预览：盖在列表上，不改窗口大小；↑↓ 换条时内容跟着换（像访达的空格预览） */
+.peek {
+  position: absolute; inset: 6px; z-index: 3; display: grid; grid-template-rows: auto minmax(0, 1fr) auto;
+  background: var(--pop-solid); border: 1px solid var(--line-2); border-radius: 10px; box-shadow: var(--shadow-pop);
+  animation: peekIn 180ms var(--ease-enter);
+}
+@keyframes peekIn { from { opacity: 0; transform: scale(.98); } }
+.ph { display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 10px 0 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; color: var(--muted); }
+.ph .lab { display: inline-flex; gap: 6px; align-items: center; }
+.ph .lab .ic { color: var(--tc); width: 14px; height: 14px; }
+.ph .sp { flex: 1; }
+.ph .hint { display: inline-flex; gap: 4px; align-items: center; font-size: 11.5px; color: var(--faint); }
+.pb { overflow: auto; padding: 12px 14px; font-size: 13px; }
+.pb pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: inherit; }
+.pb pre.mono { font: 12.5px/1.6 var(--font-mono); }
+.pb .img { border-radius: 6px; overflow: hidden; background: repeating-conic-gradient(var(--img-check) 0 25%, transparent 0 50%) 0 0 / 16px 16px; box-shadow: 0 0 0 1px var(--line); }
+.pb .img img { display: block; width: 100%; }
+.pb .ocr { margin-top: 12px; font-size: 12px; color: var(--muted); }
+.pb .ocr b { display: block; font-weight: 500; color: var(--faint); margin-bottom: 4px; }
+.pb .ocr pre { font: 12px/1.6 var(--font-mono); color: var(--fg); }
+.pb .url { color: var(--c-link); word-break: break-all; font-size: 12.5px; }
+.pb .files div { display: flex; gap: 8px; align-items: center; padding: 4px 0; }
+.pb .files small { color: var(--faint); margin-left: auto; font-size: 11.5px; }
+.pm { padding: 8px 12px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+
+.menu {
+  position: absolute; z-index: 5; min-width: 196px; padding: 5px; border-radius: 10px;
+  background: var(--pop); border: 1px solid var(--line-2); box-shadow: var(--shadow-pop);
+  -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px);
+  animation: peekIn 160ms var(--ease-enter);
+}
+.menu button { width: 100%; height: 30px; display: flex; align-items: center; gap: 9px; padding: 0 8px; border: 0; border-radius: 6px; background: none; font-size: 13px; text-align: left; cursor: pointer; }
+.menu button .ic { color: var(--muted); }
+.menu button kbd { margin-left: auto; background: none; color: var(--faint); }
+.menu button:hover, .menu button.hot { background: color-mix(in srgb, var(--beam) 12%, transparent); }
+.menu .danger { color: var(--danger); }
+.menu .danger .ic { color: var(--danger); }
+.menu .sep { height: 1px; background: var(--line-2); margin: 5px 7px; }
+
+.toast {
+  position: absolute; z-index: 6; left: 50%; bottom: 12px; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 10px; max-width: calc(100% - 24px); padding: 6px 6px 6px 12px; border-radius: 9px;
+  background: var(--pop); border: 1px solid var(--line-2); box-shadow: var(--shadow-pop); font-size: 12.5px; white-space: nowrap;
+  animation: toastIn 220ms var(--ease-enter);
+}
+.toast:not(:has(button)) { padding-right: 12px; }
+.toast .ic { color: var(--muted); width: 14px; height: 14px; }
+.toast button { height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: var(--glass-3); font-size: 12px; cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+.toast button kbd { height: 16px; background: none; padding: 0; }
+@keyframes toastIn { from { opacity: 0; transform: translate(-50%, 6px); } }
+
+/* 设置：还是完整面板那一份表单，在精简窗口里铺满整个窗口，不留遮罩边（400 宽放不下居中的 500 宽对话框） */
+.sheet { position: absolute; inset: 0; z-index: 7; display: flex; flex-direction: column; border-radius: 13px; background: var(--pop-solid); animation: peekIn 200ms var(--ease-enter); font-size: 13px; }
+.sh-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 8px 2px 18px; }
+.sh-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.sh-tabs { display: flex; gap: 2px; padding: 4px 10px 0; border-bottom: 1px solid var(--line); flex: none; }
+.sh-tabs button { position: relative; height: 32px; padding: 0 8px; border: 0; background: none; color: var(--muted); font-size: 13px; cursor: pointer; border-radius: 7px 7px 0 0; }
+.sh-tabs button[aria-selected="true"] { color: var(--fg); font-weight: 500; }
+.sh-tabs button[aria-selected="true"]::after { content: ""; position: absolute; left: 6px; right: 6px; bottom: -1px; height: 2px; border-radius: 2px; background: var(--beam); }
+.sh-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 14px 18px 18px; display: grid; gap: 16px; align-content: start; scrollbar-width: thin; }
+.sh-body .fld label { display: block; font-weight: 500; margin-bottom: 6px; }
+.sh-body .inp { height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 7px; border: 1px solid var(--line-2); background: var(--search-bg); font-variant-numeric: tabular-nums; }
+.sh-body .help { margin: 6px 0 0; color: var(--faint); font-size: 12px; }
+.stline { display: flex; align-items: center; gap: 12px; }
+.stline > span:first-child { min-width: 0; flex: 1; }
+.stline span b { display: block; font-weight: 500; }
+.stline span small { display: block; color: var(--faint); font-size: 12px; line-height: 1.45; }
+.stline .seg { margin-left: auto; }
+.stline .seg button { display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; }
+.sw { flex: none; width: 34px; height: 20px; border-radius: 10px; background: var(--beam); position: relative; }
+.sw::after { content: ""; position: absolute; top: 2px; right: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; }
+.sw.off { background: var(--glass-3); box-shadow: inset 0 0 0 1px var(--line-2); }
+.sw.off::after { right: auto; left: 2px; }
+.sh-same { color: var(--faint); font-size: 12.5px; }
+.sh-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--line); flex: none; }
+.btn.primary { background: var(--beam); color: var(--on-beam); font-weight: 600; }
+.btn.primary:hover { background: var(--beam-hover); }
+
+@media (max-width: 900px) {
+  .hero { grid-template-columns: minmax(0, 1fr); }
+  .doc { padding: 24px 16px 64px; }
+  .doc-head { flex-direction: column; }
+  .seg { margin-left: 0; }
+  .grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+</style>
+</head>
+<body>
+<main class="doc">
+  <header class="doc-head">
+    <div>
+      <h1>精简模式 · 原型</h1>
+      <p>2026-11-09。设置里打开后，唤起的是一个只有搜索框和列表的小面板。上面这个可以直接操作，下面列出各种状态。</p>
+    </div>
+    <div class="seg" id="themeSeg" role="group" aria-label="主题">
+      <button type="button" data-t="system" aria-pressed="true">跟随系统</button>
+      <button type="button" data-t="light" aria-pressed="false">亮色</button>
+      <button type="button" data-t="dark" aria-pressed="false">暗色</button>
+    </div>
+  </header>
+
+  <section class="hero">
+    <div class="desk" id="live"><span class="ghost-note" id="awayNote"></span></div>
+    <aside class="keys">
+      <h3>试一试</h3>
+      <dl>
+        <dt><kbd>↑</kbd><kbd>↓</kbd></dt><dd>选择</dd>
+        <dt><kbd>Enter</kbd></dt><dd>粘贴到刚才的应用</dd>
+        <dt><kbd>⌘</kbd><kbd>1–9</kbd></dt><dd>直接粘贴第几条</dd>
+        <dt><kbd>空格</kbd></dt><dd>预览（搜索框有字时用 <kbd>⌘</kbd><kbd>Y</kbd>）</dd>
+        <dt><kbd>⌘</kbd><kbd>←→</kbd></dt><dd>切换分类，搜索框里出现一个标签</dd>
+        <dt><kbd>⌘</kbd><kbd>P</kbd></dt><dd>置顶</dd>
+        <dt><kbd>⌘</kbd><kbd>⌫</kbd></dt><dd>删除，<kbd>⌘</kbd><kbd>Z</kbd> 撤销</dd>
+        <dt><kbd>Esc</kbd></dt><dd>先关预览，再清空搜索，最后隐藏</dd>
+        <dt>右键</dt><dd>条目菜单</dd>
+      </dl>
+      <h3>试这些词</h3>
+      <dl>
+        <dt><kbd>hy</kbd></dt><dd>拼音首字母找到“会议”</dd>
+        <dt><kbd>837</kbd></dt><dd>截图里的会议号</dd>
+        <dt><kbd>灰度方案</kbd></dt><dd>md 文件里的一句话</dd>
+        <dt><kbd>fm</kbd></dt><dd>片段排在最前</dd>
+      </dl>
+      <h3>原型开关</h3>
+      <label><input type="checkbox" id="optPerm" checked> 已授予辅助功能权限</label>
+      <label><input type="checkbox" id="optPaused"> 暂停记录</label>
+      <label><input type="checkbox" id="optEmpty"> 没有任何记录</label>
+    </aside>
+  </section>
+
+  <h2>各种情况</h2>
+  <p class="intro">都是同一个面板组件，只是起始状态不同。</p>
+  <div class="grid" id="gallery"></div>
+
+  <h2>和完整面板的对应</h2>
+  <p class="intro">功能没有删，只是不占界面：要用时靠快捷键、右键和右上角的菜单。</p>
+  <table class="map">
+    <thead><tr><th>完整面板</th><th>精简模式</th></tr></thead>
+    <tbody>
+      <tr><td>标题栏、记录状态</td><td>去掉。暂停记录在右上角菜单里；暂停时搜索框右侧显示“已暂停”，点一下继续</td></tr>
+      <tr><td>复制频谱</td><td>不显示</td></tr>
+      <tr><td>分类标签</td><td><kbd>⌘</kbd><kbd>←→</kbd> 照常切换，当前分类变成搜索框里的一个标签；搜索框为空时按 <kbd>⌫</kbd> 去掉</td></tr>
+      <tr><td>右侧预览</td><td><kbd>空格</kbd> 盖在列表上预览，<kbd>↑↓</kbd> 换条时跟着换；搜索框有字时空格是输入，改用 <kbd>⌘</kbd><kbd>Y</kbd></td></tr>
+      <tr><td>每行两行字、缩略图 36 px</td><td>一行 36 px 高：类型图标或 20 px 缩略图 + 标题 + 一个淡色补充（域名、行数、时长、几个文件）</td></tr>
+      <tr><td>分组标题 今天 / 昨天 / 更早</td><td>不显示；置顶和其余记录之间一条细线；搜索命中片段时仍有“片段”一组</td></tr>
+      <tr><td>来源应用、时间、大小</td><td>预览底部</td></tr>
+      <tr><td>悬停按钮“置顶”“粘贴”</td><td>不显示，靠双击、右键和快捷键</td></tr>
+      <tr><td>置顶、翻译、存为片段、删除</td><td>右键菜单，快捷键不变；<kbd>⌘</kbd><kbd>T</kbd> 打开预览并在下面出译文</td></tr>
+      <tr><td>底部快捷键提示栏</td><td>不显示</td></tr>
+      <tr><td>设置按钮</td><td>右上角菜单，<kbd>⌘</kbd><kbd>,</kbd>；同一份设置，铺满精简窗口</td></tr>
+    </tbody>
+  </table>
+
+  <h2>我替你定的几处</h2>
+  <p class="intro">都可以改，告诉我哪条不对。</p>
+  <ol class="calls">
+    <li><b>是一个设置，不是临时切换。</b>设置“通用”里加“面板样式：完整 / 精简”，默认完整。精简面板右上角菜单里的“切换到完整面板”改的也是这个设置。</li>
+    <li><b>尺寸 400 × 520</b>，可以拖大小，最小 360 × 400，单独记住，不和完整面板共用。出现位置不变：鼠标所在屏幕，水平居中，上三分之一。</li>
+    <li><b>搜索能力不缩水</b>：拼音、图中文字、文件内容照常能搜。命中在图里的字时，这一行的标题换成“图中文字 …命中片段…”；命中在正文或文件内容里时，标题后面淡色写“内容含 …”。</li>
+    <li><b>链接没有页面标题时</b>，域名完整显示，路径截断，不再从中间截成一长串（截图里 Maccy 的问题）。</li>
+    <li><b>图片统一 20 px 方形缩略图</b>，行高不跟图片走，列表不会忽高忽低。看大图按空格。</li>
+    <li><b>多行文本</b>只显示第一行，后面淡色写“6 行”，不把换行符画成 ↵。</li>
+    <li><b>清空历史、退出不放在面板里</b>，留在设置和菜单栏图标里，避免和记录挤在一起被误点。</li>
+    <li><b>设置不另开窗口，也不临时把窗口撑大</b>：还是现在那一份表单，在精简窗口里铺满整个窗口（不再是居中的 500 宽对话框加遮罩），标签一行放得下，内容多的页上下滚动。面板失焦隐藏、未保存丢弃等规则照 M04 规则 3 不变。</li>
+    <li><b>“面板样式”跟着“保存设置”生效</b>，不像“外观”那样点选即生效：避免设置还开着时窗口在底下变大变小。保存后面板当场换样式，不用重新唤起。</li>
+  </ol>
+</main>
+
+<script>
+// —— 图标（1.5 描边，16px，currentColor） ——
+const P = {
+  search: '<circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/>',
+  text: '<path d="M3 4h10M3 8h10M3 12h6"/>',
+  link: '<path d="M6.5 9.5l3-3M7 4.6l1-1a2.8 2.8 0 0 1 4 4l-1 1M9 11.4l-1 1a2.8 2.8 0 0 1-4-4l1-1"/>',
+  code: '<path d="m5.5 4.5-3 3.5 3 3.5M10.5 4.5l3 3.5-3 3.5"/>',
+  image: '<rect x="2.5" y="3" width="11" height="10" rx="2"/><circle cx="6" cy="6.5" r="1"/><path d="m3 12 3.5-3.5 2.5 2.5 1.5-1.5 2.5 2.5"/>',
+  video: '<rect x="2.5" y="3.5" width="11" height="9" rx="2"/><path d="m7 6.3 2.8 1.7L7 9.7z"/>',
+  file: '<path d="M4 2.5h5l3 3v8H4z"/><path d="M9 2.5v3h3"/>',
+  snip: '<path d="M4.5 3.5h7M4.5 6.5h7M4.5 9.5h4"/><path d="M10 10.5l1.5 2 2.5-3.5"/>',
+  pin: '<path d="M6 2.5h4M7 2.5v3.8L4.8 9h6.4L9 6.3V2.5M8 9v4.5"/>',
+  more: '<circle cx="4" cy="8" r=".6"/><circle cx="8" cy="8" r=".6"/><circle cx="12" cy="8" r=".6"/>',
+  copy: '<rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M3.5 10.5v-6a1 1 0 0 1 1-1h6"/>',
+  eye: '<path d="M1.8 8s2.2-4.3 6.2-4.3S14.2 8 14.2 8s-2.2 4.3-6.2 4.3S1.8 8 1.8 8z"/><circle cx="8" cy="8" r="1.8"/>',
+  tr: '<path d="M2.5 4h6M5.5 2.5V4c0 2.5-1.3 4.5-3 5.5M4.3 6.5c.8 1.5 2.2 2.6 3.7 3"/><path d="m8.5 13.5 2.5-6 2.5 6M9.3 11.5h3.4"/>',
+  trash: '<path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5"/>',
+  full: '<rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M7 3v10M7 6h7"/>',
+  pause: '<path d="M6 4v8M10 4v8"/>',
+  play: '<path d="m6 4 6 4-6 4z"/>',
+  gear: '<circle cx="8" cy="8" r="2"/><path d="M8 1.8v1.7M8 12.5v1.7M1.8 8h1.7M12.5 8h1.7M3.6 3.6l1.2 1.2M11.2 11.2l1.2 1.2M3.6 12.4l1.2-1.2M11.2 4.8l1.2-1.2"/>',
+  check: '<path d="m3.5 8.5 3 3 6-7"/>',
+  undo: '<path d="M5 6.5h5a3 3 0 0 1 0 6H7"/><path d="M7 4 4.5 6.5 7 9"/>',
+  x: '<path d="m4.5 4.5 7 7M11.5 4.5l-7 7"/>',
+  monitor: '<rect x="2" y="3" width="12" height="8" rx="1.5"/><path d="M6 13.5h4M8 11v2.5"/>',
+  sun: '<circle cx="8" cy="8" r="2.6"/><path d="M8 1.8v1.4M8 12.8v1.4M1.8 8h1.4M12.8 8h1.4M3.6 3.6l1 1M11.4 11.4l1 1M3.6 12.4l1-1M11.4 4.6l1-1"/>',
+  moon: '<path d="M13 9.5A5.5 5.5 0 0 1 6.5 3a5.5 5.5 0 1 0 6.5 6.5z"/>',
+};
+const ic = (n, cls = 'ic') => `<svg class="${cls}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n]}</svg>`;
+
+// —— 演示用的缩略图（矢量画的截图，缩放不糊） ——
+const svg = s => 'data:image/svg+xml,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 100">${s}</svg>`);
+const lines = (x, y, n, w, c, gap = 8) => Array.from({ length: n }, (_, i) => `<rect x="${x}" y="${y + i * gap}" width="${w * (.55 + ((i * 37) % 45) / 100)}" height="3" rx="1.5" fill="${c}"/>`).join('');
+const THUMB = {
+  meet: svg(`<rect width="160" height="100" fill="#FFFFFF"/><rect width="160" height="14" fill="#2F6BFF"/><rect x="8" y="5" width="34" height="4" rx="2" fill="#fff"/><rect x="12" y="26" width="58" height="6" rx="2" fill="#1D1D1F"/><rect x="12" y="40" width="96" height="10" rx="2" fill="#2F6BFF"/>${lines(12, 60, 4, 110, '#C4C7CF')}`),
+  term: svg(`<rect width="160" height="100" fill="#121214"/><rect width="160" height="10" fill="#2A2A2E"/><circle cx="7" cy="5" r="2" fill="#FF5F57"/><circle cx="14" cy="5" r="2" fill="#FEBC2E"/><circle cx="21" cy="5" r="2" fill="#28C840"/>${lines(8, 18, 3, 120, '#6FD08C')}${lines(8, 44, 5, 140, '#D7D7DB')}`),
+  ui: svg(`<rect width="160" height="100" fill="#F4F4F6"/><rect width="38" height="100" fill="#E4E4E9"/>${lines(6, 10, 9, 26, '#A9AAB4', 9)}${[0, 1, 2, 3, 4].map(c => [0, 1, 2].map(r => `<rect x="${48 + c * 22}" y="${14 + r * 26}" width="16" height="16" rx="4" fill="${['#5A78D6', '#D6A35E', '#6FC3A0', '#DE877E', '#AE9AE0'][(c + r) % 5]}"/>`).join('')).join('')}`),
+  chart: svg(`<rect width="160" height="100" fill="#FFFFFF"/><rect x="10" y="8" width="50" height="5" rx="2" fill="#1D1D1F"/>${[30, 44, 38, 52, 61, 48, 70].map((h, i) => `<rect x="${14 + i * 20}" y="${90 - h}" width="12" height="${h}" rx="2" fill="${i === 6 ? '#0E7FA3' : '#C9CDD6'}"/>`).join('')}`),
+  video: svg(`<rect width="160" height="100" fill="#23262E"/><rect x="18" y="14" width="124" height="72" rx="6" fill="#F4F4F6"/><rect x="18" y="14" width="124" height="10" rx="3" fill="#D9DAE0"/>${lines(28, 34, 5, 90, '#B9BCC6')}`),
+};
+
+// —— 演示数据（与官网演示同一批场景） ——
+const RECS = [
+  { id: 1, type: 'code', title: "fmctl exec --all 'systemctl restart nginx'", pinned: true, app: '终端', when: '11月6日 16:02', uses: 12, size: '41 字符' },
+  { id: 2, type: 'link', title: 'GitHub - Cocoon-break/xpaste', host: 'github.com', url: 'https://github.com/Cocoon-break/xpaste', pinned: true, app: 'Safari', when: '11月5日 09:40', uses: 5 },
+  { id: 3, type: 'image', title: '截图 2026-11-09 10.21.png', thumb: 'meet', ocr: '腾讯会议\n会议号 837 2049 1185\n主题：需求评审\n时间：11月9日 14:00–15:00', app: '截图', when: '今天 10:21', size: '1280 × 800 · 图中文字 38 字' },
+  { id: 4, type: 'text', title: '周四会议纪要', body: '周四会议纪要\n1. 灰度方案下周一开始，先放 5%\n2. 拼音首字母搜索不加设置开关\n3. 精简模式先出原型\n4. 下次评审：11月13日\n\n记录：产品组', app: '备忘录', when: '今天 10:18', size: '58 字', py: [['huiyi', 'hy', '会议'], ['jiyao', 'jy', '纪要']] },
+  { id: 5, type: 'link', title: '', host: 'freemyip.com', path: '/update?token=d1cd536ea25eda3b9125d3e2&domain=lanzx.freemyip.com&verbose=yes', app: 'Chrome', when: '今天 10:05' },
+  { id: 6, type: 'image', title: '截图 2026-11-09 09.58.png', thumb: 'term', ocr: '~ % smolvm machine ls\nNAME   STATE    CPUS  MEMORY\nbsdev  running  2     2048 MiB\ncs     stopped  8     8192 MiB', app: '截图', when: '今天 09:58', size: '1440 × 560 · 图中文字 64 字' },
+  { id: 7, type: 'file', title: '需求评审纪要.md', path: '~/Documents/产品/需求评审纪要.md', content: '## 结论\n灰度方案按 5% → 30% → 全量推进', app: '访达', when: '今天 09:41', size: '6 KB' },
+  { id: 8, type: 'code', title: '(crontab -l;echo "*/20 * * * * curl -s https://freemyip.com/update?token=…")|crontab -', app: '终端', when: '今天 09:30', size: '96 字符' },
+  { id: 9, type: 'video', title: '录屏 2026-11-09 09.12.mov', thumb: 'video', dur: '0:42', app: '录屏', when: '今天 09:12', size: '1920 × 1080 · 0:42 · 8.4 MB' },
+  { id: 10, type: 'text', title: '招商银行 转账备注：十一月房租', app: '微信', when: '今天 08:57', size: '15 字', py: [['zhaoshangyinhang', 'zsyh', '招商银行'], ['yinhang', 'yh', '银行']] },
+  { id: 11, type: 'file', title: '设计稿-v3.fig', more: 2, files: [['设计稿-v3.fig', '18.2 MB'], ['图标导出.zip', '2.1 MB'], ['配色.png', '320 KB']], app: '访达', when: '今天 08:40' },
+  { id: 12, type: 'code', title: 'xattr -cr /Applications/xPaste.app', app: '终端', when: '昨天 21:14', uses: 4, size: '34 字符' },
+  { id: 13, type: 'image', title: '截图 2026-11-08 18.40.png', thumb: 'ui', ocr: '设置  通用  记录  搜索  截图', app: '截图', when: '昨天 18:40', size: '1600 × 1000 · 图中文字 10 字' },
+  { id: 14, type: 'text', title: 'freemyip', app: 'Chrome', when: '昨天 17:02', size: '8 字' },
+  { id: 15, type: 'link', title: 'xPaste — 只记得一点点，也找得回来', host: 'cocoon-break.github.io', url: 'https://cocoon-break.github.io/xpaste/', app: 'Safari', when: '昨天 16:20' },
+  { id: 16, type: 'text', title: '灰度发布检查清单', body: '灰度发布检查清单\n- 监控面板\n- 回滚脚本\n- 值班表\n- 公告文案', app: '备忘录', when: '昨天 15:48', size: '30 字' },
+  { id: 17, type: 'image', title: '截图 2026-11-08 15.02.png', thumb: 'chart', ocr: '十月活跃用户 12,480', app: '截图', when: '昨天 15:02', size: '1200 × 760 · 图中文字 10 字' },
+  { id: 18, type: 'text', title: '下午三点前把周报发到产品组', app: '飞书', when: '昨天 11:30', size: '13 字' },
+  { id: 19, type: 'code', title: 'pnpm exec vite build --config scripts/site-demo/vite.config.mjs', app: '终端', when: '11月7日 22:10', size: '62 字符' },
+  { id: 20, type: 'link', title: 'Homebrew Formulae', host: 'formulae.brew.sh', url: 'https://formulae.brew.sh', app: 'Safari', when: '11月7日 20:45' },
+  { id: 21, type: 'text', title: '收货地址：上海市徐汇区漕溪北路 88 号', app: '微信', when: '11月7日 18:03', size: '19 字' },
+  { id: 22, type: 'video', title: '演示录屏-搜索.mov', thumb: 'video', dur: '1:18', app: '录屏', when: '11月7日 16:40', size: '1920 × 1080 · 1:18 · 15.2 MB' },
+  { id: 23, type: 'text', title: '会议室 B302，记得带转接头', app: '飞书', when: '11月7日 10:12', size: '14 字', py: [['huiyishi', 'hys', '会议室']] },
+  { id: 24, type: 'code', title: 'git push origin --delete docs/readme-brand', app: '终端', when: '11月6日 19:30', size: '41 字符' },
+];
+const SNIPS = [
+  { id: 101, type: 'snip', title: 'fmctl 批量执行', body: "fmctl exec --all '{命令}'", app: '片段', when: '11月2日 创建' },
+  { id: 102, type: 'snip', title: '邮件落款', body: '张三 | 产品设计\n电话 138 0000 0000', app: '片段', when: '10月30日 创建' },
+];
+const CATS = [
+  { k: 'all', n: '全部' }, { k: 'fav', n: '常用', c: '--c-fav' }, { k: 'snip', n: '片段', c: '--c-snip' },
+  { k: 'text', n: '文本', c: '--g-text' }, { k: 'link', n: '链接', c: '--g-link' }, { k: 'code', n: '代码', c: '--g-code' },
+  { k: 'image', n: '图片', c: '--g-image' }, { k: 'video', n: '视频', c: '--g-video' }, { k: 'file', n: '文件', c: '--g-file' },
+];
+const TYPE = { text: ['文本', '--c-text'], link: ['链接', '--c-link'], code: ['代码', '--c-code'], image: ['图片', '--c-image'], video: ['视频', '--c-video'], file: ['文件', '--c-file'], snip: ['片段', '--c-snip'] };
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const hl = (s, term) => {
+  if (!term) return esc(s);
+  const i = s.toLowerCase().indexOf(term.toLowerCase());
+  return i < 0 ? esc(s) : esc(s.slice(0, i)) + '<mark>' + esc(s.slice(i, i + term.length)) + '</mark>' + esc(s.slice(i + term.length));
+};
+const linkTitle = r => r.title || r.host;
+const textOf = r => [r.title, r.body, r.host, r.path, r.url].filter(Boolean).join('\n');
+
+// 搜索命中：标题（含拼音）> 链接地址 > 来源应用 > 图中文字 > 正文 / 文件内容（M05 规则 2、11）
+function match(r, q) {
+  const ql = q.toLowerCase(), has = s => s && s.toLowerCase().includes(ql);
+  if (has(r.title)) return { k: 'title', term: q };
+  if (/^[a-z]{2,}$/.test(ql)) for (const [full, init, word] of r.py || []) {
+    if (ql.length === 2 ? init === ql : (full.startsWith(ql) || init === ql)) return { k: 'title', term: word };
+  }
+  if (r.type === 'link' && (has(r.host) || has(r.path) || has(r.url))) return { k: 'addr', term: q };
+  if (has(r.app)) return { k: 'app', term: q };
+  if (has(r.ocr)) return { k: 'ocr', term: q };
+  if (has(r.body) || has(r.content)) return { k: 'body', term: q };
+  return null;
+}
+function ocrSnip(text, term) {
+  const flat = text.replace(/\s+/g, ' '), i = flat.toLowerCase().indexOf(term.toLowerCase());
+  const a = Math.max(0, i - 4), b = Math.min(flat.length, i + term.length + 14);
+  return (a > 0 ? '…' : '') + esc(flat.slice(a, i)) + '<mark>' + esc(flat.slice(i, i + term.length)) + '</mark>' + esc(flat.slice(i + term.length, b)) + (b < flat.length ? '…' : '');
+}
+
+class Compact {
+  constructor(host, opts = {}) {
+    this.host = host; this.live = !!opts.live;
+    this.s = Object.assign({ q: '', cat: 0, sel: 0, peek: false, menu: null, toast: null, paused: false, empty: false, perm: true, recs: RECS.map(r => ({ ...r })), trash: null }, opts.state || {});
+    host.insertAdjacentHTML('beforeend', `
+      <section class="cp${this.live ? '' : ' static'}" aria-label="xPaste 剪切板历史（精简）">
+        <div class="bar">
+          <label class="search">${ic('search')}<span class="chipbox"></span>
+            <input type="text" placeholder="搜索" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="true" aria-label="搜索剪切板历史">
+            <span class="count" aria-live="polite"></span><span class="pausebox"></span>
+          </label>
+          <button class="more" type="button" aria-label="更多" aria-haspopup="menu" aria-expanded="false">${ic('more')}</button>
+        </div>
+        <div class="body"><div class="list" role="listbox" aria-label="剪切板历史"><div class="inner"><div class="selind instant"></div><div class="rows"></div></div></div></div>
+      </section>`);
+    this.el = host.lastElementChild;
+    this.$ = sel => this.el.querySelector(sel);
+    this.input = this.$('input'); this.input.value = this.s.q;
+    if (!this.live) { this.input.readOnly = true; this.input.tabIndex = -1; this.$('.more').tabIndex = -1; }
+    this.bind();
+    this.render();
+  }
+
+  items() {
+    const s = this.s; if (s.empty) return [];
+    const cat = CATS[s.cat].k, q = s.q.trim(), out = [];
+    if (cat === 'snip' || (q && cat === 'all')) {
+      const hits = SNIPS.map(r => ({ r, hit: q ? (match(r, q) || (/^[a-z]{2,}$/i.test(q) && r.title.toLowerCase().startsWith(q.toLowerCase()) ? { k: 'title', term: q } : null)) : null })).filter(x => !q || x.hit);
+      if (hits.length && cat === 'all') out.push({ g: '片段' });
+      out.push(...hits);
+    }
+    if (cat === 'snip') return out;
+    let base = s.recs.filter(r => cat === 'all' || (cat === 'fav' ? (r.uses || 0) >= 3 : r.type === cat));
+    if (cat === 'fav') base = [...base].sort((a, b) => b.uses - a.uses);
+    let rows = base.map(r => ({ r, hit: q ? match(r, q) : null })).filter(x => !q || x.hit);
+    if (cat !== 'fav') {
+      const pin = rows.filter(x => x.r.pinned), rest = rows.filter(x => !x.r.pinned);
+      if (out.length && rows.length) out.push({ g: '记录' });
+      out.push(...pin); if (pin.length && rest.length && !(out.length && q)) out.push({ div: true }); out.push(...rest);
+    } else out.push(...rows);
+    return out;
+  }
+  selectable() { return this.list.filter(x => x.r); }
+  cur() { return this.selectable()[this.s.sel]?.r; }
+
+  rowHTML(x, n, selected) {
+    const { r, hit } = x, [, tc] = TYPE[r.type];
+    let lead;
+    if (r.thumb) lead = `<img src="${THUMB[r.thumb]}" alt="">${r.type === 'video' ? `<span class="play"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M5 3.5 12.5 8 5 12.5z"/></svg></span>` : ''}`;
+    else lead = ic(r.type === 'snip' ? 'snip' : r.type);
+    const term = hit && hit.term;
+    let ttl, rev = false;
+    const tcls = r.type === 'code' ? 't mono' : 't';
+    if (hit && hit.k === 'ocr') {
+      ttl = `<span class="tag">图中文字</span><span class="t">${ocrSnip(r.ocr, term)}</span>`;
+    } else {
+      let t = r.type === 'link' ? linkTitle(r) : r.title, x2 = '';
+      if (r.type === 'snip') { t = `<span class="snip-name">${hl(r.title, hit?.k === 'title' ? term : '')}</span>`; x2 = esc(r.body.split('\n')[0]); }
+      else {
+        t = hl(t, hit?.k === 'title' || (hit?.k === 'addr' && !r.title) ? term : '');
+        if (r.type === 'link') { if (r.title) x2 = hl(r.host, hit?.k === 'addr' ? term : ''); else { rev = true; x2 = hl(r.path, hit?.k === 'addr' ? term : ''); } }
+        else if (r.body && r.body.split('\n').length > 1) x2 = `${r.body.split('\n').filter(Boolean).length} 行`;
+        else if (r.type === 'video') x2 = r.dur;
+        else if (r.more) x2 = `等 ${r.more + 1} 个文件`;
+        if (hit?.k === 'body') x2 = `内容含“<mark>${esc(term)}</mark>”`;
+        if (hit?.k === 'app') x2 = `来自 ${hl(r.app, term)}`;
+      }
+      ttl = `<span class="${tcls}">${t}</span>${x2 ? `<span class="x">${x2}</span>` : ''}`;
+    }
+    const tail = `${r.pinned ? ic('pin') : ''}${n < 9 ? `<kbd>⌘${n + 1}</kbd>` : ''}`;
+    return `<div class="row" role="option" aria-selected="${selected}" data-n="${n}" style="--tc:var(${tc})"><span class="lead">${lead}</span><span class="ttl${rev ? ' rev' : ''}">${ttl}</span><span class="tail">${tail}</span></div>`;
+  }
+
+  render(instant) {
+    const s = this.s;
+    this.list = this.items();
+    const sel = this.selectable();
+    if (s.sel >= sel.length) s.sel = Math.max(0, sel.length - 1);
+    const cat = CATS[s.cat];
+    this.$('.chipbox').innerHTML = s.cat ? `<span class="chip" style="--tg:var(${cat.c})"><i></i>${cat.n}</span>` : '';
+    this.input.placeholder = s.cat ? '' : '搜索';
+    this.$('.count').textContent = (s.q.trim() || s.cat) && !s.empty ? `${sel.length} 条` : '';
+    this.$('.pausebox').innerHTML = s.paused ? `<button class="paused" type="button" title="点击继续记录"><i></i>已暂停</button>` : '';
+    let n = 0, html = '';
+    for (const x of this.list) {
+      if (x.g) html += `<div class="glabel">${x.g}</div>`;
+      else if (x.div) html += `<div class="divider"></div>`;
+      else { html += this.rowHTML(x, n, n === s.sel); n++; }
+    }
+    this.$('.rows').innerHTML = html;
+    const body = this.$('.body');
+    // 浮层每次整块重画；已经开着的不再播入场动画，设置页同一标签保留滚动位置（否则点一下就闪一下）
+    const was = new Set(['.peek', '.menu', '.toast', '.sheet'].filter(c => this.el.querySelector(c)));
+    const oldSheet = this.el.querySelector(':scope > .sheet .sh-body'), stScroll = oldSheet ? oldSheet.scrollTop : 0, stTab = this.lastTab;
+    body.querySelectorAll('.empty,.peek').forEach(e => e.remove());
+    this.el.querySelectorAll(':scope > .menu, :scope > .toast, :scope > .sheet').forEach(e => e.remove());
+    const ind = this.$('.selind');
+    ind.style.display = sel.length ? '' : 'none';
+    if (!sel.length) body.insertAdjacentHTML('beforeend', this.emptyHTML());
+    const row = this.$(`.row[data-n="${s.sel}"]`);
+    if (row) {
+      if (instant) ind.classList.add('instant'); else ind.classList.remove('instant');
+      ind.style.transform = `translateY(${row.offsetTop}px)`;
+      const list = this.$('.list'), top = row.offsetTop, bot = top + 36 + 8;
+      if (top < list.scrollTop) list.scrollTop = top - 4; else if (bot > list.scrollTop + list.clientHeight) list.scrollTop = bot - list.clientHeight;
+      if (instant) requestAnimationFrame(() => ind.classList.remove('instant'));
+    }
+    if (s.peek && this.cur()) body.insertAdjacentHTML('beforeend', this.peekHTML(this.cur()));
+    if (s.menu) this.el.insertAdjacentHTML('beforeend', this.menuHTML(s.menu));
+    if (s.toast) this.el.insertAdjacentHTML('beforeend', this.toastHTML(s.toast));
+    if (s.settings) this.el.insertAdjacentHTML('beforeend', this.settingsHTML());
+    for (const c of was) { const e = this.el.querySelector(c); if (e) e.style.animation = 'none'; }
+    const sb = this.el.querySelector(':scope > .sheet .sh-body');
+    if (sb && (s.stTab || 0) === stTab) sb.scrollTop = stScroll;
+    this.lastTab = s.stTab || 0;
+    this.$('.more').setAttribute('aria-expanded', String(s.menu?.kind === 'more'));
+  }
+
+  emptyHTML() {
+    const s = this.s, q = s.q.trim(), cat = CATS[s.cat];
+    if (s.empty) return `<div class="empty">还没有记录，复制一次就会出现在这里<small>随时按 ⌘ ⇧ V 唤起</small></div>`;
+    if (!q && cat.k === 'fav') return `<div class="empty">还没有常用记录。同一条内容复制 3 次以上就会出现在这里</div>`;
+    const what = s.cat ? `${cat.n}记录` : '记录';
+    return `<div class="empty">${q ? `没有匹配“${esc(q)}”的${what}` : `还没有${what}`}<button class="btn" type="button" data-act="clear">${s.cat ? '清除搜索与筛选' : '清除搜索'}</button></div>`;
+  }
+
+  peekHTML(r) {
+    const [name, tc] = TYPE[r.type];
+    let body;
+    if (r.type === 'image') body = `<div class="img"><img src="${THUMB[r.thumb]}" alt=""></div>${r.ocr ? `<div class="ocr"><b>图中文字</b><pre>${hl(r.ocr, this.s.q.trim())}</pre></div>` : ''}`;
+    else if (r.type === 'video') body = `<div class="img"><img src="${THUMB[r.thumb]}" alt=""></div>`;
+    else if (r.type === 'link') body = `<pre>${esc(linkTitle(r))}</pre><p class="url">${esc(r.url || ('https://' + r.host + r.path))}</p>`;
+    else if (r.type === 'file') body = `<div class="files">${(r.files || [[r.title, r.size]]).map(([f, z]) => `<div style="--tc:var(--c-file)"><span class="lead">${ic('file')}</span>${esc(f)}<small>${esc(z)}</small></div>`).join('')}</div>${r.path ? `<p style="color:var(--faint);font-size:12px;margin:8px 0 0">${esc(r.path)}</p>` : ''}`;
+    else body = `<pre class="${r.type === 'code' || r.type === 'snip' ? 'mono' : ''}">${hl(r.body || r.title, this.s.q.trim())}</pre>`;
+    const meta = [r.app, r.when, r.size, r.uses ? `用过 ${r.uses} 次` : ''].filter(Boolean).join(' · ');
+    return `<div class="peek" role="dialog" aria-label="预览"><div class="ph" style="--tc:var(${tc})"><span class="lab">${ic(r.type)}${name}</span><span class="sp"></span><span class="hint"><kbd>Enter</kbd>${this.s.perm ? '粘贴' : '复制'}</span><span class="hint"><kbd>${this.s.q.trim() ? '⌘Y' : '空格'}</kbd>关闭</span></div><div class="pb">${body}</div><div class="pm">${esc(meta)}</div></div>`;
+  }
+
+  menuHTML(m) {
+    const verb = this.s.perm ? '粘贴' : '复制';
+    if (m.kind === 'more') return `<div class="menu" role="menu" style="right:8px;top:46px">
+      <button type="button" data-act="full">${ic('full')}切换到完整面板</button>
+      <button type="button" data-act="pause">${ic(this.s.paused ? 'play' : 'pause')}${this.s.paused ? '继续记录' : '暂停记录'}</button>
+      <div class="sep"></div>
+      <button type="button" data-act="settings">${ic('gear')}设置…<kbd>⌘,</kbd></button></div>`;
+    const r = this.cur(); if (!r) return '';
+    const tr = r.type === 'text' || r.type === 'code';
+    return `<div class="menu" role="menu" style="left:${m.x}px;top:${m.y}px">
+      <button type="button" data-act="paste" class="${m.hot ? 'hot' : ''}">${ic('copy')}${verb}<kbd>Enter</kbd></button>
+      <button type="button" data-act="peek">${ic('eye')}预览<kbd>空格</kbd></button>
+      <button type="button" data-act="pin">${ic('pin')}${r.pinned ? '取消置顶' : '置顶'}<kbd>⌘P</kbd></button>
+      ${tr ? `<button type="button" data-act="tr">${ic('tr')}翻译<kbd>⌘T</kbd></button>` : ''}
+      ${r.type === 'snip' ? '' : `<button type="button" data-act="snip">${ic('snip')}存为片段…<kbd>⌘S</kbd></button>`}
+      <div class="sep"></div>
+      <button type="button" data-act="del" class="danger">${ic('trash')}删除<kbd>⌘⌫</kbd></button></div>`;
+  }
+
+  // 设置：只画“通用”页，其余标签和完整面板相同；“面板样式”是新增的一行
+  settingsHTML() {
+    const s = this.s, tab = s.stTab || 0, style = s.stStyle || 'compact';
+    const tabs = ['通用', '记录', '搜索', '截图', '录屏', '翻译'].map((t, i) => `<button type="button" role="tab" aria-selected="${i === tab}" data-tab="${i}">${t}</button>`).join('');
+    const general = `
+      <div class="fld"><label>唤起快捷键</label><div class="inp">⌘ ⇧ V</div><p class="help">点击输入框，然后按下新的组合键</p></div>
+      <div class="stline"><span><b>外观</b><small>点选即生效</small></span><div class="seg"><button type="button" aria-pressed="true" aria-label="跟随系统">${ic('monitor')}</button><button type="button" aria-pressed="false" aria-label="亮色">${ic('sun')}</button><button type="button" aria-pressed="false" aria-label="暗色">${ic('moon')}</button></div></div>
+      <div class="stline"><span><b>面板样式</b><small>${style === 'compact' ? '只有搜索框和列表，按空格预览' : '分类、复制频谱和右侧预览'}${style !== 'compact' ? '；关掉设置后换成完整面板' : ''}</small></span><div class="seg"><button type="button" data-style="full" aria-pressed="${style === 'full'}">完整</button><button type="button" data-style="compact" aria-pressed="${style === 'compact'}">精简</button></div></div>
+      <div class="stline"><span><b>开机时启动</b><small>登录系统后在后台待命</small></span><span class="sw"></span></div>
+      <div class="stline"><span><b>复制后移到顶部</b><small>再次使用的条目会排到列表最前</small></span><span class="sw"></span></div>
+      <div class="stline"><span><b>进入“常用”的使用次数</b><small>同一条内容被复制这么多次后出现在“常用”</small></span><div class="inp" style="width:64px">3 次</div></div>
+      <div class="stline"><span><b>日志</b><small>遇到问题时导出，发给开发者协助排查；不含剪切板内容</small></span><button class="btn" type="button">导出日志</button></div>`;
+    const translate = `
+      <div class="fld"><label>翻译快捷键</label><div class="inp" style="color:var(--faint)">未启用</div><p class="help">在任何应用里选中文字后按下，译文显示在鼠标旁</p></div>
+      <div class="fld"><label>默认翻译方式</label><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div class="inp" style="height:auto;padding:8px 10px;border-color:var(--beam);display:block"><b style="font-weight:500">系统翻译</b><small style="display:block;color:var(--faint);font-size:12px">本机完成，不上传</small></div>
+        <div class="inp" style="height:auto;padding:8px 10px;display:block"><b style="font-weight:500">AI 翻译</b><small style="display:block;color:var(--faint);font-size:12px">用下方配置的接口</small></div></div>
+        <p class="help">面板、截图、划词翻译都默认用这一种</p></div>
+      <div class="fld"><label>目标语言</label><div class="inp">简体中文</div></div>
+      <div class="fld"><label>AI 翻译（OpenAI 兼容接口）</label><p class="help" style="margin:0 0 10px">翻译时，只把你选中要翻译的那段文字发送到下面的接口；不按翻译就不会发送任何内容</p>
+        <label style="font-weight:400;color:var(--muted)">接口地址（Base URL）</label><div class="inp" style="color:var(--faint)">https://api.openai.com/v1</div>
+        <label style="font-weight:400;color:var(--muted);margin-top:10px">API Key</label><div style="display:flex;gap:8px"><div class="inp" style="flex:1">••••••••••••</div><button class="btn" type="button">显示</button></div>
+        <label style="font-weight:400;color:var(--muted);margin-top:10px">模型 ID</label><div class="inp" style="color:var(--faint)">gpt-4o-mini</div>
+        <div style="display:flex;justify-content:flex-end;margin-top:10px"><button class="btn" type="button">测试翻译</button></div></div>`;
+    return `<div class="sheet" role="dialog" aria-label="设置">
+      <div class="sh-head"><h2>设置</h2><button class="more" type="button" data-act="stClose" aria-label="关闭设置">${ic('x')}</button></div>
+      <div class="sh-tabs" role="tablist">${tabs}</div>
+      <div class="sh-body">${tab === 0 ? general : tab === 5 ? translate : `<p class="sh-same">和完整面板的“${['通用', '记录', '搜索', '截图', '录屏', '翻译'][tab]}”页相同，内容多时在这里上下滚动。</p>`}</div>
+      <div class="sh-foot"><button class="btn" type="button" data-act="stClose">取消</button><button class="btn primary" type="button" data-act="stSave">保存设置</button></div>
+    </div>`;
+  }
+
+  toastHTML(t) {
+    return `<div class="toast" role="status">${ic(t.icon || 'check')}<span>${t.msg}</span>${t.act ? `<button type="button" data-act="${t.act}">${t.label}${t.kbd ? `<kbd>${t.kbd}</kbd>` : ''}</button>` : ''}</div>`;
+  }
+
+  // —— 交互（只有上面那个可操作的面板接） ——
+  toast(t, ms = 3200) {
+    this.s.toast = t; this.render();
+    clearTimeout(this.tt); this.tt = setTimeout(() => { this.s.toast = null; this.render(); }, ms);
+  }
+  away(note, after) {
+    const desk = this.host; desk.querySelector('.ghost-note').textContent = note;
+    this.el.classList.add('gone'); desk.classList.add('away');
+    setTimeout(() => { after && after(); this.el.classList.remove('gone'); desk.classList.remove('away'); this.input.focus(); }, 1100);
+  }
+  paste(r) {
+    if (!r) return;
+    if (!this.s.perm) return this.toast({ msg: '已复制，在目标应用中按 ⌘ V 粘贴', act: 'grant', label: '前往授权' }, 4200);
+    this.s.peek = false; this.s.menu = null;
+    this.away('已粘贴到备忘录 · 0.9 秒后重新唤起', () => {
+      const s = this.s; s.q = ''; this.input.value = ''; s.sel = 0;
+      if (r.type !== 'snip' && !r.pinned) { s.recs = [r, ...s.recs.filter(x => x !== r)]; }
+      this.render(true);
+    });
+  }
+  del() {
+    const r = this.cur(); if (!r || r.type === 'snip') return;
+    const row = this.$(`.row[data-n="${this.s.sel}"]`); row && row.classList.add('gone');
+    setTimeout(() => {
+      const s = this.s; s.trash = { r, at: s.recs.indexOf(r) }; s.recs = s.recs.filter(x => x !== r); s.menu = null;
+      this.toast({ icon: 'trash', msg: '已删除', act: 'undo', label: '撤销', kbd: '⌘Z' }, 5000);
+    }, 180);
+  }
+  undo() {
+    const t = this.s.trash; if (!t) return;
+    this.s.recs.splice(t.at, 0, t.r); this.s.trash = null;
+    this.s.sel = this.selectable().findIndex(x => x.r === t.r);
+    this.toast({ icon: 'undo', msg: '已恢复' }, 1600);
+  }
+  pin() {
+    const r = this.cur(); if (!r || r.type === 'snip') return;
+    r.pinned = !r.pinned; this.s.menu = null; this.render();
+    this.s.sel = this.selectable().findIndex(x => x.r === r); this.render();
+  }
+  act(a) {
+    const s = this.s;
+    if (a === 'clear') { s.q = ''; s.cat = 0; this.input.value = ''; s.sel = 0; this.render(true); this.input.focus(); return; }
+    if (a === 'paste') return this.paste(this.cur());
+    if (a === 'peek') { s.menu = null; s.peek = true; return this.render(); }
+    if (a === 'pin') return this.pin();
+    if (a === 'del') return this.del();
+    if (a === 'undo') return this.undo();
+    if (a === 'pause') { s.paused = !s.paused; s.menu = null; document.getElementById('optPaused').checked = s.paused; return this.toast({ icon: s.paused ? 'pause' : 'play', msg: s.paused ? '已暂停记录' : '继续记录' }, 1800); }
+    s.menu = null;
+    if (a === 'settings') { s.settings = true; s.peek = false; return this.render(); }
+    if (a === 'stClose' || a === 'stSave') {
+      s.settings = false; s.stTab = 0;
+      const toFull = a === 'stSave' && s.stStyle === 'full'; s.stStyle = 'compact';
+      this.render();
+      if (toFull) this.away('设置已保存 · 面板换成完整样式（原型里 0.9 秒后回到精简）');
+      return;
+    }
+    const msg = { full: '原型：面板样式改为“完整”，下次唤起是完整面板', tr: '原型：打开预览，在原文下面出译文', snip: '原型：打开“存为片段”对话框', grant: '原型：打开系统设置的辅助功能页' }[a];
+    if (msg) this.toast({ icon: 'check', msg }, 2400);
+  }
+  bind() {
+    if (!this.live) return;
+    const s = this.s;
+    this.input.addEventListener('input', () => { s.q = this.input.value; s.sel = 0; if (s.peek && !s.q.trim()) {} this.render(true); });
+    this.el.addEventListener('click', e => {
+      const a = e.target.closest('[data-act]');
+      if (a) return this.act(a.dataset.act);
+      const tb = e.target.closest('[data-tab]'); if (tb) { s.stTab = +tb.dataset.tab; return this.render(); }
+      const sy = e.target.closest('[data-style]'); if (sy) { s.stStyle = sy.dataset.style; return this.render(); }
+      if (s.settings) return;
+      if (e.target.closest('.paused')) return this.act('pause');
+      if (e.target.closest('.more')) { s.menu = s.menu?.kind === 'more' ? null : { kind: 'more' }; return this.render(); }
+      const row = e.target.closest('.row');
+      if (s.menu) { s.menu = null; this.render(); }
+      if (row) { s.sel = +row.dataset.n; this.render(); }
+      if (!e.target.closest('.menu')) this.input.focus();
+    });
+    // 焦点一直留在搜索框：点行、右键都不抢走，键盘照常可用
+    this.el.addEventListener('mousedown', e => { if (e.target !== this.input) e.preventDefault(); });
+    this.el.addEventListener('dblclick', e => { const row = e.target.closest('.row'); if (row) { s.sel = +row.dataset.n; this.paste(this.cur()); } });
+    this.el.addEventListener('contextmenu', e => {
+      const row = e.target.closest('.row'); if (!row) return;
+      e.preventDefault(); s.sel = +row.dataset.n;
+      const b = this.el.getBoundingClientRect();
+      s.menu = { kind: 'row', x: Math.min(e.clientX - b.left, b.width - 204), y: Math.min(e.clientY - b.top, b.height - 230) };
+      this.render();
+    });
+    document.addEventListener('mousedown', e => { if (s.menu && !this.el.contains(e.target)) { s.menu = null; this.render(); } });
+    this.el.addEventListener('keydown', e => {
+      const k = e.key, mod = e.metaKey || e.ctrlKey, q = s.q.trim(), n = this.selectable().length;
+      if (s.settings) { e.preventDefault(); if (k === 'Escape') this.act('stClose'); return; }
+      if (s.menu) { if (k === 'Escape') { s.menu = null; this.render(); e.preventDefault(); } return; }
+      if (k === 'ArrowDown' || k === 'ArrowUp') {
+        e.preventDefault();
+        if (mod) s.sel = k === 'ArrowDown' ? n - 1 : 0; else s.sel = Math.max(0, Math.min(n - 1, s.sel + (k === 'ArrowDown' ? 1 : -1)));
+        return this.render();
+      }
+      if (mod && (k === 'ArrowLeft' || k === 'ArrowRight')) { e.preventDefault(); s.cat = (s.cat + (k === 'ArrowRight' ? 1 : CATS.length - 1)) % CATS.length; s.sel = 0; s.peek = false; return this.render(true); }
+      if (k === 'Enter' && !e.isComposing) { e.preventDefault(); return this.paste(this.cur()); }
+      if (k === 'Escape') {
+        e.preventDefault();
+        if (s.peek) { s.peek = false; return this.render(); }
+        if (s.q || s.cat) return this.act('clear');
+        return this.away('已隐藏 · 0.9 秒后重新唤起');
+      }
+      if (k === ' ' && (s.peek || !q)) { e.preventDefault(); s.peek = !s.peek; return this.render(); }
+      if (mod && k.toLowerCase() === 'y') { e.preventDefault(); s.peek = !s.peek; return this.render(); }
+      if (mod && /^[1-9]$/.test(k)) { e.preventDefault(); return this.paste(this.selectable()[+k - 1]?.r); }
+      if (mod && k.toLowerCase() === 'p') { e.preventDefault(); return this.pin(); }
+      if (mod && k.toLowerCase() === 'z' && s.trash && !q) { e.preventDefault(); return this.undo(); }
+      if (mod && k === 'Backspace') { e.preventDefault(); return this.del(); }
+      if (mod && k.toLowerCase() === 't') { e.preventDefault(); return this.act('tr'); }
+      if (mod && k === ',') { e.preventDefault(); return this.act('settings'); }
+      if (k === 'Backspace' && !s.q && s.cat) { e.preventDefault(); s.cat = 0; return this.render(true); }
+    });
+  }
+}
+
+// —— 可操作的面板 ——
+const desk = document.getElementById('live');
+const live = new Compact(desk, { live: true });
+live.input.focus({ preventScroll: true });
+document.getElementById('optPerm').onchange = e => { live.s.perm = e.target.checked; live.render(); };
+document.getElementById('optPaused').onchange = e => { live.s.paused = e.target.checked; live.render(); };
+document.getElementById('optEmpty').onchange = e => { live.s.empty = e.target.checked; live.render(true); };
+
+// —— 各种情况 ——
+const idx = (c, id) => c.selectable().findIndex(x => x.r.id === id);
+const CASES = [
+  ['刚唤起', '置顶在前，和其余记录之间一条细线；前 9 条有序号，对应 ⌘1–9。', {}],
+  ['字面搜索“会议”', '标题里的命中标亮；截图里的字命中时，标题换成命中的那一段。计数在搜索框右侧。', { q: '会议' }],
+  ['拼音首字母“hy”', '两个字母只匹配标题的首字母；标亮的是汉字，不是字母。', { q: 'hy' }],
+  ['图中文字“837”', '命中在截图里时，标题换成命中的那一小段，不改行高。', { q: '837' }],
+  ['文件和正文里的一句话', '标题不含关键词时，标题后面写“内容含 …”，告诉你为什么出现。', { q: '灰度方案' }],
+  ['片段排在最前', '“全部”下搜索命中片段时，片段自成一组排在前面，名字用片段色。', { q: 'fm' }],
+  ['按分类筛选', '⌘→ 切到“图片”，分类变成搜索框里的标签；搜索框为空时按 ⌫ 去掉。', { cat: 6 }],
+  ['链接没有页面标题', '域名完整显示，路径在后面淡色、截断，不再从中间截成一长串。', { q: 'freemyip' }],
+  ['没有结果', '说清楚在哪个范围里没找到，给一个清除按钮。', { q: '发票', cat: 4 }],
+  ['还没有记录', '第一次用、或刚清空历史。', { empty: true }],
+  ['暂停记录', '搜索框右侧一个“已暂停”，点一下继续；面板其他部分不变。', { paused: true }],
+  ['空格预览图片', '盖在列表上，下面是图中文字；底部是来源、时间、尺寸。↑↓ 换条时预览跟着换。', { peek: true, pick: 3 }],
+  ['空格预览长文本', '多行文本在列表里只占一行，写“6 行”；预览里看全文。', { peek: true, pick: 4 }],
+  ['预览多个文件', '列出每个文件的名字和大小。', { peek: true, pick: 11 }],
+  ['右键菜单', '完整面板的条目操作都在这里，快捷键不变。', { menu: { kind: 'row', x: 120, y: 150, hot: true }, pick: 4 }],
+  ['右上角菜单', '切到完整面板、暂停记录、设置。清空历史和退出不放在面板里。', { menu: { kind: 'more' } }],
+  ['删除后可撤销', '⌘⌫ 删除，行滑出；提示条里可以撤销，⌘Z 也行。', { toast: { icon: 'trash', msg: '已删除', act: 'undo', label: '撤销', kbd: '⌘Z' }, drop: 4 }],
+  ['没有辅助功能权限', 'Enter 只复制，面板不隐藏，提示去目标应用里粘贴。', { perm: false, toast: { msg: '已复制，在目标应用中按 ⌘ V 粘贴', act: 'grant', label: '前往授权' } }],
+  ['常用', '⌘← 切到“常用”，按使用次数排，没有置顶分隔线。', { cat: 1 }],
+  ['设置', '⌘, 或右上角菜单打开。和完整面板是同一份设置，铺满精简窗口，窗口不变大；内容多的页上下滚动。Esc 或“取消”关掉，回到列表。', { settings: true }],
+  ['设置里改成“完整”', '保存后关掉设置，面板当场换成完整样式；没保存就关掉，什么也不变。', { settings: true, stStyle: 'full' }],
+  ['设置 · 翻译', '最长的一页（AI 翻译接口）在 400 宽里照常能填，上下滚动。', { settings: true, stTab: 5 }],
+];
+const gal = document.getElementById('gallery');
+for (const [title, desc, st] of CASES) {
+  const card = document.createElement('div'); card.className = 'case';
+  card.innerHTML = `<h3>${title}</h3><p>${desc}</p><div class="desk" inert></div>`;
+  gal.append(card);
+  const { pick, drop, ...state } = st;
+  if (drop) state.recs = RECS.filter(r => r.id !== drop).map(r => ({ ...r }));
+  const c = new Compact(card.querySelector('.desk'), { state });
+  if (pick) { c.s.sel = idx(c, pick); c.render(true); }
+  else c.render(true);
+}
+
+// —— 主题 ——
+const seg = document.getElementById('themeSeg');
+seg.addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  seg.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  if (b.dataset.t === 'system') document.documentElement.removeAttribute('data-theme'); else document.documentElement.dataset.theme = b.dataset.t;
+});
+</script>
+</body>
+</html>
