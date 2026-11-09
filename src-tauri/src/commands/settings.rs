@@ -64,8 +64,9 @@ pub fn save_settings_inner(state: &AppState, mut s: Settings) -> Result<(), AppE
     s.normalize();
     s.validate()?;
     let mut cur = state.settings();
-    // 面板尺寸只由 panel::remember_size 写：持锁取当前值，不用调用方早先的快照
+    // 面板尺寸只由 panel::remember_size 写：持锁取当前值，不用调用方早先的快照（精简尺寸同理，M27 规则 2）
     s.panel_size = cur.panel_size;
+    s.compact_size = cur.compact_size;
     state.store().save_settings(&s)?;
     *cur = s;
     Ok(())
@@ -106,6 +107,8 @@ pub fn changed_fields(old: &Settings, new: &Settings) -> Vec<&'static str> {
             "spectrumCollapsed",
             old.spectrum_collapsed != new.spectrum_collapsed,
         ),
+        ("panelStyle", old.panel_style != new.panel_style),
+        ("compactSize", old.compact_size != new.compact_size),
         (
             "frequentMinUses",
             old.frequent_min_uses != new.frequent_min_uses,
@@ -217,6 +220,7 @@ pub fn commit_settings(
     let old = state.settings().clone();
     // 面板尺寸只由拖动记忆（panel::remember_size）写；这里只为 changed 不含 panelSize，落库时 save_settings_inner 持锁再取
     settings.panel_size = old.panel_size;
+    settings.compact_size = old.compact_size;
     let changed = changed_fields(&old, &settings);
     let hotkey_changed = hotkeys_changed(&changed);
     // register 会先注销全部快捷键，失败时要把旧的四个注册回去
@@ -285,6 +289,9 @@ pub fn save_settings(
     emit_removed(&app, &removed);
     if changed.contains(&"appearance") {
         crate::panel::apply_theme(&app, appearance);
+    }
+    if changed.contains(&"panelStyle") {
+        crate::panel::apply_style(&app);
     }
     match action {
         HotkeyAction::Register => crate::tray::set_hotkey_label(&hotkey),
@@ -448,6 +455,15 @@ mod tests {
     }
 
     #[test]
+    fn save_settings_inner_keeps_live_compact_size() {
+        let state = AppState::for_test();
+        state.settings().compact_size = (420.0, 560.0);
+        save_settings_inner(&state, Settings::default()).unwrap();
+        assert_eq!(state.settings().compact_size, (420.0, 560.0));
+        assert_eq!(state.store().load_settings().compact_size, (420.0, 560.0));
+    }
+
+    #[test]
     fn commit_settings_trims_translate_fields_before_validate() {
         let state = AppState::for_test();
         let new = Settings {
@@ -486,6 +502,7 @@ mod tests {
             appearance: xpaste_core::Appearance::Light,
             panel_size: (1000.0, 700.0),
             spectrum_collapsed: true,
+            panel_style: xpaste_core::PanelStyle::Compact,
             frequent_min_uses: 5,
             ocr_enabled: false,
             ocr_backfill: false,
@@ -511,6 +528,7 @@ mod tests {
                 "appearance",
                 "panelSize",
                 "spectrumCollapsed",
+                "panelStyle",
                 "frequentMinUses",
                 "ocrEnabled",
                 "ocrBackfill",

@@ -1425,7 +1425,7 @@ pub(crate) mod tests {
     #[test]
     fn summary_reports_lines_url_and_files() {
         let s = Store::open(&tmp()).unwrap();
-        let rows: [(&str, &str, Option<&str>, Option<&str>, Option<&str>); 7] = [
+        let rows = [
             ("text", "a", Some("a\nb\n\nc\n"), None, None),
             ("text", "a", Some("a\n\n"), None, None),
             ("code", "一行", Some("一行"), None, None),
