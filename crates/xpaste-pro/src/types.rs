@@ -79,4 +79,6 @@ pub enum LicenseError {
     Revoked,
     /// 授权码的大版本低于应用的大版本，带授权码的 major
     OldMajor(u32),
+    /// 授权码没能写进本机，只带 io 错误信息，不含授权码和邮箱
+    Io(String),
 }
