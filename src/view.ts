@@ -110,3 +110,15 @@ export const snippetTextChange = (current: string, baseline: string, readOnly: b
   const nl = (s: string) => s.replace(/\r\n?/g, '\n');
   return readOnly || nl(current) === nl(baseline) ? null : current;
 };
+
+/** 文字类记录：能粘贴为纯文本（M09 规则 7）、能合并粘贴（规则 8）。后端 plain_flavors / merged_text 用同一组类型 */
+export const isTextKind = (k: RecordSummary['kind']): boolean => k === 'text' || k === 'code' || k === 'link';
+
+/** 选中的这几条能不能合并粘贴（M09 规则 8）：都是文字类（含这几类的片段），图片、视频、文件不行 */
+export const mergeable = (rs: RecordSummary[]): boolean => rs.length > 0 && rs.every((r) => isTextKind(r.kind));
+
+/** Shift 连选（M25 规则 6）：从锚点到 `to` 的连续几行，顺序从锚点往 `to`（就是合并粘贴的先后）；往回按会收回 */
+export const extendRange = (vis: RecordSummary[], anchor: number, to: number): number[] => {
+  const ids = rangeIds(vis, anchor, to);
+  return vis.findIndex((r) => r.id === anchor) <= vis.findIndex((r) => r.id === to) ? ids : ids.reverse();
+};

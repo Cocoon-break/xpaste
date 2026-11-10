@@ -626,6 +626,30 @@ impl Store {
         ids_in(&self.conn, &sql, &args)
     }
 
+    /// 库里是否已有这个内容哈希的记录（含软删除的：再次复制时会被合并回来）。
+    pub fn has_hash(&self, hash: &[u8; 32]) -> Result<bool, CoreError> {
+        Ok(self
+            .conn
+            .query_row("SELECT 1 FROM records WHERE hash = ?1", [&hash[..]], |_| {
+                Ok(())
+            })
+            .optional()?
+            .is_some())
+    }
+
+    /// 未删除记录的正文全文（详情里的 `text` 超过 200 KB 会截断）；没有正文、已删除或不存在为 None。
+    pub fn text(&self, id: i64) -> Result<Option<String>, CoreError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT text FROM records WHERE id = ?1 AND deleted_at IS NULL",
+                [id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten())
+    }
+
     /// 未删除记录的识别状态；已删除或不存在为 None。
     pub fn ocr_state(&self, id: i64) -> Result<Option<u8>, CoreError> {
         Ok(self
@@ -683,6 +707,28 @@ impl Store {
             )
             .optional()?
             .unwrap_or(false))
+    }
+
+    /// 文字类片段的名字与正文，按创建顺序（导出用，M25 规则 11）；图片、文件片段不在其中。
+    pub fn text_snippets(&self) -> Result<Vec<(String, String)>, CoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT title, text FROM records
+             WHERE snippet_body IS NOT NULL AND deleted_at IS NULL AND text IS NOT NULL AND kind IN ('text', 'code', 'link')
+             ORDER BY id",
+        )?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// 片段总数（含图片、文件片段）。
+    pub fn count_snippets(&self) -> Result<u32, CoreError> {
+        Ok(self.conn.query_row(
+            "SELECT count(*) FROM records WHERE snippet_body IS NOT NULL AND deleted_at IS NULL",
+            [],
+            |r| r.get(0),
+        )?)
     }
 
     /// 新建文字片段（M25 规则 10）：不去重、不挂来源应用、不做容量裁剪，库里按置顶存。
@@ -2159,6 +2205,27 @@ pub(crate) mod tests {
         assert_eq!(ids(&s, "会议").len(), 1);
         assert_eq!(ids(&s, "").len(), 2);
     }
+    #[test]
+    fn has_hash_sees_existing_records() {
+        let mut s = mem();
+        let r = rec("x");
+        assert!(!s.has_hash(&r.hash).unwrap());
+        s.insert_or_merge(&r, 1, 500).unwrap();
+        assert!(s.has_hash(&r.hash).unwrap());
+    }
+
+    #[test]
+    fn text_returns_full_text() {
+        let mut s = mem();
+        let big = "x".repeat(300 * 1024);
+        let (Upsert::Added(id), _) = s.insert_or_merge(&rec(&big), 1, 500).unwrap() else {
+            panic!()
+        };
+        // 不受详情 200 KB 截断影响（M09 规则 7）
+        assert_eq!(s.text(id).unwrap().unwrap().len(), 300 * 1024);
+        assert_eq!(s.text(999).unwrap(), None);
+    }
+
     #[test]
     fn detail_truncates_long_text_and_checks_files() {
         let mut s = mem();

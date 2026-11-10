@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "panel",
-  "description": "只给面板的权限：设置里选截图文件夹",
+  "description": "只给面板的权限：设置里选截图文件夹，导出、导入片段时选文件",
   "windows": ["panel"],
-  "permissions": ["dialog:allow-open"]
+  "permissions": ["dialog:allow-open", "dialog:allow-save"]
 }

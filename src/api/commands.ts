@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { open } from '@tauri-apps/plugin-dialog';
+import { open, save } from '@tauri-apps/plugin-dialog';
 import type {
   Bootstrap,
   CopyResult,
@@ -11,6 +11,8 @@ import type {
   TranslateStatus,
   Translated,
   UpdateInfo,
+  ExportReport,
+  ImportReport,
 } from './types';
 
 export const bootstrap = () => invoke<Bootstrap>('bootstrap');
@@ -21,7 +23,8 @@ export const frontendReady = () => invoke<void>('frontend_ready');
 /** 有对话框打开时后端不因失焦或快捷键隐藏面板。 */
 /** `open`：设置、确认框或片段对话框开着（快捷键不隐藏面板）；`keep`：片段对话框开着或正在选文件夹（失焦也不隐藏，M04 规则 3） */
 export const setDialogOpen = (open: boolean, keep: boolean) => invoke<void>('set_dialog_open', { open, keep });
-export const copy = (id: number, paste: boolean) => invoke<CopyResult>('copy', { id, paste });
+/** `plain`：只写回纯文本那一份，去掉字体、颜色等格式（M09 规则 7） */
+export const copy = (id: number, paste: boolean, plain = false) => invoke<CopyResult>('copy', { id, paste, plain });
 /** 只写纯文本，标记为自身写入，不产生新记录。 */
 export const copyTextPlain = (text: string) => invoke<void>('copy_text_plain', { text });
 export const requestAccessibility = () => invoke<void>('request_accessibility');
@@ -34,10 +37,21 @@ export const overlayBegin = (rec: boolean) => invoke<void>('overlay_begin', { re
 export const trcardPress = () => invoke<void>('trcard_press');
 /** 系统的选择文件夹对话框；取消返回 null。 */
 export const pickFolder = (defaultPath?: string) => open({ directory: true, defaultPath }) as Promise<string | null>;
+/** 系统的保存文件对话框；取消返回 null */
+export const pickSavePath = (defaultPath: string) => save({ defaultPath, filters: [{ name: 'JSON', extensions: ['json'] }] }) as Promise<string | null>;
+/** 系统的打开文件对话框（单个 JSON）；取消返回 null */
+export const pickJsonFile = () => open({ multiple: false, directory: false, filters: [{ name: 'JSON', extensions: ['json'] }] }) as Promise<string | null>;
+export const exportSnippets = (path: string) => invoke<ExportReport>('export_snippets', { path });
+export const importSnippets = (path: string) => invoke<ImportReport>('import_snippets', { path });
+/** 合并粘贴（M09 规则 8）：按 ids 的顺序用换行连成一段纯文本，粘贴一次 */
+export const copyMerged = (ids: number[], paste: boolean) => invoke<CopyResult>('copy_merged', { ids, paste });
 export const openUrl = (url: string) => invoke<void>('open_url', { url });
 export const revealFile = (path: string) => invoke<void>('reveal_file', { path });
 export const exportLogs = () => invoke<string>('export_logs');
 export const updateAvailable = () => invoke<UpdateInfo | null>('update_available');
+
+/** 来源筛选的建议（M29 规则 1）：`names` 里对得上输入的应用名（名字、全拼、首字母） */
+export const matchApps = (q: string, names: string[]) => invoke<string[]>('match_apps', { q, names });
 
 export const getRecord = (id: number) => invoke<RecordDetail | null>('get_record', { id });
 export const search = (q: string) => invoke<SearchHit[]>('search', { q });

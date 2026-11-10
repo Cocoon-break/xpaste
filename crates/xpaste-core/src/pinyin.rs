@@ -13,6 +13,20 @@ pub fn is_pinyin_query(q: &str) -> bool {
     q.len() >= 2 && q.bytes().all(|b| b.is_ascii_alphabetic())
 }
 
+/// 应用名是否对得上输入（来源筛选的建议，M29 规则 1）：名字的一部分（不分大小写，可省略空格）、
+/// 全拼的开头或首字母。拉丁字母至少 2 个，汉字 1 个起。
+pub fn name_matches(name: &str, q: &str) -> bool {
+    let q = q.trim().to_lowercase();
+    if q.is_empty() || (q.is_ascii() && q.len() < 2) {
+        return false;
+    }
+    let n = name.to_lowercase();
+    n.contains(&q)
+        || n.replace(' ', "").contains(&q)
+        // 拼音只认从名字第一个字起：xin 命中“微信”里的“信”不算（M29 规则 1）
+        || (is_pinyin_query(&q) && find(name, &q).is_some_and(|h| name.starts_with(&h)))
+}
+
 /// 一个汉字：`reads[0]` 是默认读音，其后为去重后的其他读音。
 type Han = (char, Vec<&'static str>);
 
@@ -249,6 +263,27 @@ fn find_by(s: &str, q: &str, full: bool) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn name_matches_by_substring_pinyin_and_initials() {
+        assert!(name_matches("微信", "wx"));
+        assert!(name_matches("微信", "weixin"));
+        assert!(name_matches("微信", "wei"));
+        assert!(name_matches("企业微信", "微信"));
+        assert!(name_matches("微信", "微"));
+        assert!(name_matches("VS Code", "vs"));
+        assert!(name_matches("VS Code", "vscode"));
+        assert!(name_matches("Chrome", " CHR "));
+        // 单个拉丁字母不算：打第一个字母就跳出建议太吵
+        assert!(!name_matches("Chrome", "c"));
+        assert!(!name_matches("微信", ""));
+        assert!(!name_matches("微信", "发票"));
+        assert!(!name_matches("Chrome", "wx"));
+        // 拼音只认名字开头：xin 是“信”，在“微信”中间，不建议
+        assert!(!name_matches("微信", "xin"));
+        assert!(!name_matches("企业微信", "wx"));
+        assert!(name_matches("企业微信", "qywx"));
+    }
 
     #[test]
     fn is_pinyin_query_rules() {

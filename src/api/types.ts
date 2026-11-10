@@ -256,3 +256,7 @@ export type CardAgain = { seq: number; engine: string };
 
 /** 本次运行发现的新版本（M28 规则 4）；`url` 是该版本的 Release 页 */
 export type UpdateInfo = { version: string; current: string; url: string };
+
+/** 片段导出、导入的结果（M25 规则 11） */
+export type ExportReport = { exported: number; skipped: number };
+export type ImportReport = { imported: number; skipped: number; invalid: number };

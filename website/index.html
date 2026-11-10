@@ -327,7 +327,19 @@ footer nav a:hover { color: var(--fg); }
         <span class="n">02</span>
         <h2>只记得文件里的一句话</h2>
         <p class="lede">忘了文件名也没关系。那份纪要里写过“灰度方案”，搜这四个字就够了。</p>
-        <p class="more">要先在设置里打开“搜索文本文件内容”</p>
+        <p class="more">要先在设置里打开“搜索文本文件内容”。txt、md、代码文件都行，macOS 上 PDF 里的文字也能搜</p>
+      </div>
+      <div class="demo">
+        <div class="live small" data-src="demo/index.html?spectrum=0"><button class="take" type="button" aria-label="点一下，自己操作这个面板"></button></div>
+        <div class="bar2"><span class="say2" role="status"></span><button type="button" data-act="take">自己上手</button><button type="button" data-act="pause">暂停演示</button></div>
+      </div>
+    </div>
+
+    <div class="scene" data-scene="source">
+      <div class="words">
+        <span class="n">03</span>
+        <h2>只记得来自哪个应用</h2>
+        <p class="lede">输入应用名，拼音首字母也行。打 wx，按一下 Tab，就只在微信的记录里找。</p>
       </div>
       <div class="demo">
         <div class="live small" data-src="demo/index.html?spectrum=0"><button class="take" type="button" aria-label="点一下，自己操作这个面板"></button></div>
@@ -337,7 +349,7 @@ footer nav a:hover { color: var(--fg); }
 
     <div class="scene stack" data-scene="time">
       <div class="words">
-        <span class="n">03</span>
+        <span class="n">04</span>
         <h2>只记得大概是什么时候</h2>
         <p class="lede">面板顶部的复制频谱，每条刻线是一次复制，越高内容越大。从 24 小时一路放大到 10 分钟，在时间里找。</p>
       </div>
@@ -445,6 +457,9 @@ footer nav a:hover { color: var(--fg); }
       <details><summary>我复制的内容会上传到哪里吗？<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary><div class="a">不会。没有账号、没有云同步、没有使用统计，数据只存在本机。来自密码管理器或被系统标记为敏感的内容默认不记录；日志里也不会出现剪切板内容、标题、文件路径和搜索词。唯一的例外是翻译，见下一条。</div></details>
       <details><summary>翻译会把内容发到哪里？<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary><div class="a">只在你按翻译时，把要翻译的那一段文字发出去，复制、选中、唤起都不会。用 macOS 26 自带的系统翻译时在本机完成，不联网；用 AI 翻译时发到你自己在设置里填的 OpenAI 兼容接口，接本机的 Ollama 时同样不出本机。请求按系统代理设置发出。密码管理器里的内容和被标记为敏感的内容不翻译。</div></details>
       <details><summary>按 Enter 为什么没有直接粘贴？<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary><div class="a">macOS 上自动粘贴需要“辅助功能”权限，在系统设置 → 隐私与安全性 → 辅助功能里打开 xPaste。没授权时 Enter 会复制好并提示，到目标应用里按 ⌘ V 就行。</div></details>
+      <details><summary>能只粘贴文字，不带网页上的字体和颜色吗？<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary><div class="a">能。选中一条文本、代码或链接，按 Shift + Enter（或右键“粘贴为纯文本”），粘贴出去的只有文字本身。直接按 Enter 则保留原来的格式。</div></details>
+      <details><summary>能一次粘贴好几条吗？<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary><div class="a">能。按住 ⌘（Windows 上 Ctrl）点几条文字，行上出现 1、2、3 的序号，按 Enter 就按这个顺序连成一段、每条一行贴出去。常用的几段还可以存成片段，设置里能把片段导出成一个文件，换电脑后导入。</div></details>
+      <details><summary>面板太大了，能只留搜索框和列表吗？<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary><div class="a">能。设置“通用”里把“面板样式”改成“精简”，面板就只剩搜索框和一行一条的列表，按空格预览选中的那一条。分类、置顶、片段、翻译这些功能都还在，用快捷键和右键菜单。</div></details>
       <details><summary>支持哪些系统？<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary><div class="a">macOS 13 及以上（Apple 芯片与 Intel 各有安装包；13.0 个别样式不显示，建议 13.1 起），Windows 10 21H2 与 Windows 11（x64）。Windows 上没有录屏；翻译已在 Windows 实机上验收，截图、贴图、长截图还在验收中，遇到问题欢迎在 GitHub 提 issue。Windows 11 on ARM 靠 x64 模拟运行、没测过；Windows 10 on ARM 不能运行，安装程序会说明原因。录屏带麦克风要 macOS 15，系统翻译要 macOS 26，不满足时对应选项不显示或不可用。完整的支持情况见 <a href="https://github.com/Cocoon-break/xpaste/blob/main/docs/%E8%AE%BE%E5%A4%87%E6%94%AF%E6%8C%81.md">设备支持</a>。</div></details>
       <details><summary>macOS 提示“xPaste 已损坏，无法打开”怎么办？<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary><div class="a">0.6.0 及更早的版本没有签名，从浏览器下载后带有隔离属性。在终端运行 <code>xattr -dr com.apple.quarantine /Applications/xPaste.app</code>，再正常打开即可。之后的版本已签名并公证，不会再出现这个提示。</div></details>
     </div>
@@ -497,6 +512,7 @@ const SCRIPTS = {
   hero: [['say', '只记得截图里有个会议号：输入这三个字，那张截图就排在最前'], ['type', '会议号'], ['wait', 5200], ['type', ''], ['wait', 1600]],
   pinyin: [['say', '输入 hy：标题里的“会议”被找到并标出来'], ['type', 'hy'], ['wait', 3600], ['say', '输入 yinhang：多音字“行”也认得'], ['type', 'yinhang'], ['wait', 3600], ['type', ''], ['wait', 1200]],
   file: [['say', '输入“灰度方案”：命中的是文件里的内容，文件名里没有这四个字'], ['type', '灰度方案'], ['wait', 4800], ['type', ''], ['wait', 1400]],
+  source: [['say', '输入 wx：搜索框右边出现“只看 微信”'], ['type', 'wx'], ['wait', 3000], ['say', '按 Tab：wx 变成胶囊，列表只剩微信的记录'], ['key', 'Tab'], ['wait', 2800], ['say', '接着输入“会议”：只在微信的记录里找'], ['type', '会议'], ['wait', 4200], ['type', ''], ['wait', 400], ['key', 'Backspace'], ['wait', 1200]],
   time: [['say', '过去 24 小时'], ['span', '0'], ['wait', 2600], ['say', '放大到 6 小时'], ['span', '21600000'], ['wait', 2600], ['say', '放大到 1 小时'], ['span', '3600000'], ['wait', 2600], ['say', '放大到 10 分钟'], ['span', '600000'], ['wait', 3200]],
   shot: [['play'], ['wait', 60000]],
   card: [['card'], ['wait', 9500]],

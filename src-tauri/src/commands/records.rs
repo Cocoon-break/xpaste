@@ -77,6 +77,16 @@ pub fn search(state: State<'_, AppState>, q: String) -> Result<Vec<SearchHit>, A
     Ok(state.store().search_hits(&q)?)
 }
 
+/// 来源筛选的建议（M29 规则 1）：`names` 里对得上输入的应用名，顺序不变。
+/// 应用名由前端从已加载的记录里给，这里只做名字、拼音与首字母的比对。
+#[tauri::command]
+pub fn match_apps(q: String, names: Vec<String>) -> Vec<String> {
+    names
+        .into_iter()
+        .filter(|n| xpaste_core::pinyin::name_matches(n, &q))
+        .collect()
+}
+
 #[tauri::command(async)]
 pub fn set_pinned(
     app: AppHandle,
@@ -246,15 +256,77 @@ pub async fn copy(
     state: State<'_, AppState>,
     id: i64,
     paste: bool,
+    plain: bool,
 ) -> Result<CopyResult, AppError> {
-    let flavors = precheck(&state, id)?;
+    // 纯文本能由正文生成时不必读原有 flavor（长富文本的 RTF / HTML 可能有几 MB）
+    let plain = if plain {
+        let store = state.store();
+        let kind = store.live_summary(id)?.map(|s| s.kind);
+        kind.and_then(|k| plain_flavors(k, store.text(id).ok().flatten()))
+    } else {
+        None
+    };
+    let flavors = match plain {
+        Some(f) => f,
+        None => precheck(&state, id)?,
+    };
+    write_then_paste(&app, &state, &flavors, &[id], paste).await
+}
+
+/// 合并粘贴（M09 规则 8）：把几条文字按给的顺序用换行连成一段，作为纯文本写回并粘贴一次；每条的使用次数各 +1。
+#[tauri::command(async)]
+pub async fn copy_merged(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    ids: Vec<i64>,
+    paste: bool,
+) -> Result<CopyResult, AppError> {
+    let text = merged_text(&state, &ids)?;
+    write_then_paste(&app, &state, &[text_flavor(&text)], &ids, paste).await
+}
+
+/// 几条文本、代码、链接记录的正文按顺序以换行连接；少于 2 条、有图片 / 文件 / 不存在的记录时报错。
+fn merged_text(state: &AppState, ids: &[i64]) -> Result<String, AppError> {
+    if ids.len() < 2 {
+        return Err(AppError::Invalid("至少选两条才能合并粘贴".into()));
+    }
+    let store = state.store();
+    let mut parts = Vec::with_capacity(ids.len());
+    let gone = || AppError::Invalid("选中的记录有的已被删除，请重新选择".into());
+    for &id in ids {
+        let kind = store.live_summary(id)?.ok_or_else(gone)?.kind;
+        if !matches!(kind, Kind::Text | Kind::Code | Kind::Link) {
+            return Err(AppError::Invalid(
+                "选中的里有图片或文件，不能合并粘贴".into(),
+            ));
+        }
+        parts.push(store.text(id)?.ok_or_else(gone)?);
+    }
+    Ok(parts.join("\n"))
+}
+
+/// 写入剪切板、给 `ids` 各记一次使用，再按 `paste` 决定只复制还是隐藏面板去粘贴。
+async fn write_then_paste(
+    app: &AppHandle,
+    state: &AppState,
+    flavors: &[Flavor],
+    ids: &[i64],
+    paste: bool,
+) -> Result<CopyResult, AppError> {
     let bytes: usize = flavors.iter().map(|f| f.data.len()).sum();
-    write_marked(&state, || xpaste_platform::write(&flavors)).inspect_err(|_| {
-        log::warn!("写入剪切板失败 id={id} bytes={bytes}");
+    let label = if ids.len() == 1 {
+        format!("id={}", ids[0])
+    } else {
+        format!("n={}", ids.len())
+    };
+    write_marked(state, || xpaste_platform::write(flavors)).inspect_err(|_| {
+        log::warn!("写入剪切板失败 {label} bytes={bytes}");
     })?;
     let move_to_top = state.settings().move_to_top;
-    state.store().bump_use(id, move_to_top, now_ms())?;
-    emit_summary(&app, RECORD_UPDATED, id);
+    for &id in ids {
+        state.store().bump_use(id, move_to_top, now_ms())?;
+        emit_summary(app, RECORD_UPDATED, id);
+    }
     if !paste {
         return Ok(CopyResult::Copied);
     }
@@ -268,15 +340,15 @@ pub async fn copy(
             Ok(CopyResult::CopiedOnly { reason })
         }
         PastePlan::Paste => {
-            crate::panel::hide(&app);
-            match paste_on_main(&app, target).await {
+            crate::panel::hide(app);
+            match paste_on_main(app, target).await {
                 Ok(()) => {
-                    log::info!("已模拟粘贴 id={id} bytes={bytes}");
+                    log::info!("已模拟粘贴 {label} bytes={bytes}");
                     Ok(CopyResult::Pasted)
                 }
                 Err(e) => {
-                    log::warn!("模拟粘贴失败 id={id}：{e}");
-                    crate::panel::reshow(&app);
+                    log::warn!("模拟粘贴失败 {label}：{e}");
+                    crate::panel::reshow(app);
                     Ok(CopyResult::CopiedOnly {
                         reason: REASON_PASTE_FAILED,
                     })
@@ -284,6 +356,14 @@ pub async fn copy(
             }
         }
     }
+}
+
+/// 粘贴为纯文本（M09 规则 7）：文本、代码、链接记录只写一份由正文生成的纯文本，富文本、HTML 等格式不写回。
+/// 不按格式名从原有 flavor 里挑：各应用放纯文本的格式名不一样，挑不到时会悄悄带着格式粘贴出去。
+/// 其余类型或没有正文时为 None，照常写回原格式。
+fn plain_flavors(kind: Kind, text: Option<String>) -> Option<Vec<Flavor>> {
+    let text = text.filter(|t| !t.is_empty())?;
+    matches!(kind, Kind::Text | Kind::Code | Kind::Link).then(|| vec![text_flavor(&text)])
 }
 
 /// 预览“复制文字”：只写一份纯文本，标记为自身写入（不入库、不计使用次数）。
@@ -414,6 +494,47 @@ mod tests {
     }
 
     #[test]
+    fn merged_text_joins_in_given_order_and_refuses_media() {
+        let state = AppState::for_test();
+        let a = insert(
+            &state,
+            Snapshot {
+                text: Some("收件人：王小明".into()),
+                flavors: vec![text_flavor("收件人：王小明")],
+                ..Default::default()
+            },
+        );
+        let b = insert(
+            &state,
+            Snapshot {
+                text: Some("电话 138".into()),
+                flavors: vec![text_flavor("电话 138")],
+                ..Default::default()
+            },
+        );
+        // 按给的顺序连，各条之间一个换行（M09 规则 8）
+        assert_eq!(
+            merged_text(&state, &[b, a]).unwrap(),
+            "电话 138\n收件人：王小明"
+        );
+        // 图片、文件不能合并；不存在的记录也不行
+        let f = insert_file_record(&state, "/nonexistent/a.png");
+        assert!(matches!(
+            merged_text(&state, &[a, f]),
+            Err(AppError::Invalid(_))
+        ));
+        // 已删除、不存在的记录不说成“有图片或文件”
+        let gone = |r: Result<String, AppError>| matches!(r, Err(AppError::Invalid(m)) if m.contains("已被删除"));
+        assert!(gone(merged_text(&state, &[a, 999])));
+        state.store().soft_delete(&[b], 1).unwrap();
+        assert!(gone(merged_text(&state, &[a, b])));
+        assert!(matches!(
+            merged_text(&state, &[a]),
+            Err(AppError::Invalid(_))
+        ));
+    }
+
+    #[test]
     fn copy_refuses_when_a_file_is_missing() {
         let state = AppState::for_test();
         let id = insert_file_record(&state, "/nonexistent/xpaste-missing.txt");
@@ -451,6 +572,21 @@ mod tests {
             insert_text_record_without_flavors(&state)
         )));
         std::fs::remove_file(&f).unwrap();
+    }
+
+    #[test]
+    fn plain_flavors_only_for_text_kinds_with_text() {
+        let plain = text_flavor("x").format;
+        for kind in [Kind::Text, Kind::Code, Kind::Link] {
+            let got = plain_flavors(kind, Some("x".into())).unwrap();
+            assert_eq!(got.len(), 1);
+            assert_eq!(got[0].format, plain);
+        }
+        // 图片、视频、文件照常写回原格式；没有正文的也是
+        assert!(plain_flavors(Kind::File, Some("a.txt".into())).is_none());
+        assert!(plain_flavors(Kind::Image, None).is_none());
+        assert!(plain_flavors(Kind::Text, Some(String::new())).is_none());
+        assert!(plain_flavors(Kind::Text, None).is_none());
     }
 
     #[test]

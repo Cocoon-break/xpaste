@@ -51,6 +51,9 @@ async function type(text: string) {
   }
 }
 
+/** 演示按键：在搜索框上发一次 keydown（Tab 把来源建议变成胶囊，⌫ 去掉胶囊，M29） */
+const key = (k: string) => document.querySelector('#q')?.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+
 function theme(v: string) {
   const root = document.documentElement;
   if (v === 'light' || v === 'dark') root.dataset.theme = v;
@@ -63,6 +66,7 @@ addEventListener('message', (e: MessageEvent) => {
   const v = String(m.value ?? '');
   if (m.type === 'theme') theme(v);
   else if (m.type === 'type') void type(v);
+  else if (m.type === 'key') key(v);
   else if (m.type === 'filter') click(`#tabsBase button[data-f="${CSS.escape(v)}"]`);
   else if (m.type === 'span') click(`#spPresets button[data-span="${CSS.escape(v)}"]`);
   else if (m.type === 'copied') addCopied(v);

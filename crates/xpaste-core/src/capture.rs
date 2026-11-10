@@ -46,6 +46,7 @@ pub fn build_record_with(
         bitmap,
         url_title,
         source: app,
+        file_texts,
         ..
     } = snapshot;
     let is_file_kind = matches!(kind, Kind::Image | Kind::Video | Kind::File);
@@ -97,11 +98,15 @@ pub fn build_record_with(
     // 标题也要能搜到：位图截图没有文本与路径，否则只剩来源应用名可搜
     parts.push(title.to_lowercase());
     if file_text && kind == Kind::File {
-        parts.extend(
-            files_text(&paths, FILE_TEXT_BYTES)
-                .iter()
-                .map(|t| t.to_lowercase()),
-        );
+        let texts = files_text(&paths, FILE_TEXT_BYTES);
+        // 平台层读出的 PDF 文字接在后面，共用同一份预算
+        let mut left = FILE_TEXT_BYTES - texts.iter().map(String::len).sum::<usize>();
+        parts.extend(texts.iter().map(|t| t.to_lowercase()));
+        for t in &file_texts {
+            let t = prefix(t, left);
+            left -= t.len();
+            parts.push(t.to_lowercase());
+        }
     }
     let search_text = parts.join("\n");
 
@@ -223,6 +228,15 @@ fn file_name(p: &Path) -> String {
         || p.display().to_string(),
         |n| n.to_string_lossy().into_owned(),
     )
+}
+
+/// `s` 不超过 `max` 字节的前缀，截在字符边界。
+fn prefix(s: &str, max: usize) -> &str {
+    let mut end = max.min(s.len());
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
 }
 
 /// 目录与不存在的文件记 0。
@@ -472,6 +486,26 @@ mod tests {
             .search_text;
         assert!(!st.contains("季度预算"));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn platform_file_texts_enter_search_text_within_budget() {
+        // 平台层读出的 PDF 文字：只在开关开着、文件记录时进搜索文本，与文本类文件共用预算
+        let snap = || Snapshot {
+            file_paths: vec!["/nonexistent/报销.pdf".into()],
+            file_texts: vec!["发票号 INV-2026".into(), "é".repeat(FILE_TEXT_BYTES)],
+            ..Default::default()
+        };
+        let st = build_record_with(snap(), Kind::File, 0, true).search_text;
+        assert!(st.contains("发票号 inv-2026"), "{}", st.len());
+        assert!(st.len() < FILE_TEXT_BYTES + 1024, "{}", st.len());
+        assert!(
+            !build_record(snap(), Kind::File, 0)
+                .search_text
+                .contains("inv-2026")
+        );
+        let st = build_record_with(snap(), Kind::Image, 0, true).search_text;
+        assert!(!st.contains("inv-2026"));
     }
     #[test]
     fn bitmap_title_is_searchable() {

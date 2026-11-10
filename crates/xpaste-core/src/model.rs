@@ -461,6 +461,8 @@ pub struct Snapshot {
     pub url_title: Option<String>,
     pub sensitive: bool,
     pub source: Option<AppInfo>,
+    /// 应用层用系统接口从文件里读出的文字（PDF）：只进搜索文本，不显示、不参与去重（M05 规则 2）
+    pub file_texts: Vec<String>,
 }
 
 impl fmt::Debug for Snapshot {

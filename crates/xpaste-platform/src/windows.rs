@@ -878,6 +878,11 @@ fn prop_u32(store: &IPropertyStore, key: &PROPERTYKEY) -> Option<u32> {
     prop(store, key, |v| unsafe { PropVariantToUInt32(v) }.ok())
 }
 
+/// Windows 没有系统自带的 PDF 文字接口（Windows.Data.Pdf 只能渲染），PDF 内容不进搜索（M05 规则 2）。
+pub fn pdf_text(_path: &Path, _max_bytes: usize) -> Option<String> {
+    None
+}
+
 /// 属性库读时长、尺寸、方向、帧率与编码，换算见 `winfmt::video_meta_from_props`。
 /// 打不开或没有视频尺寸时返回 None。
 pub fn video_meta(path: &Path) -> Option<xpaste_core::VideoMeta> {

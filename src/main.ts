@@ -1,7 +1,7 @@
 import './styles.css';
 import { attachConsole, info } from './api/log';
 import {
-  accessibilityGranted, bootstrap, clearHistory, exportLogs, updateAvailable, copy, copyTextPlain, countUnpinned, createSnippet, deleteRecords, finishOnboarding, frontendReady, getRecord, hidePanel, hotkeyStatus, installedApps,
+  accessibilityGranted, bootstrap, clearHistory, exportLogs, exportSnippets, importSnippets, pickJsonFile, pickSavePath, updateAvailable, matchApps, copy, copyMerged, copyTextPlain, countUnpinned, createSnippet, deleteRecords, finishOnboarding, frontendReady, getRecord, hidePanel, hotkeyStatus, installedApps,
   ocrProgress, openUrl, overlayBegin, pickFolder, prunePreview, reocr, requestAccessibility, requestScreenCapture, revealFile, saveSettings, saveSnippet, screenCaptureGranted, search, trcardPress,
   setDialogOpen, setPaused, setPinned, translateEngines, translateDownload, translateRecord, translateStatus, translateTest, undoDelete, updateSnippet,
 } from './api/commands';
@@ -22,6 +22,7 @@ import {
   onTranslateDelta,
 } from './api/events';
 import type { AppError, Appearance, Engines, FileEntry, PanelStyle, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
+import { appCounts, bestApp, freshSug, fromApp, type Sug } from './source';
 import { COMPACT, compactGroups, compactHeadH, rowParts } from './compact';
 import { copyToast, needsAccessibility } from './copy-status';
 import {
@@ -30,7 +31,7 @@ import {
 } from './format';
 import { hotkeyFromEvent, hotkeyLabel } from './hotkey';
 import { keyAction } from './keymap';
-import { copyVerb, escHint, openLabel } from './labels';
+import { copyVerb, escHint, exportNote, fileTextHelp, importNote, openLabel, snippetExportName } from './labels';
 import { ocrLabel, ocrProgressLabel, snippetHTML } from './ocr-label';
 import { searchGate } from './search-gate';
 import { otherEngine, staleDelta, translatable, trAfterDelta, trAfterEnd, trBlockHTML, type Engine, type Tr } from './translate';
@@ -44,7 +45,7 @@ import { addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFre
 import { composing, justComposed } from './ime';
 import { errorControl, revealsFocus, shownTabTarget } from './settings-tabs';
 import {
-  armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, nextSelection, pruneMulti, rangeIds, snippetTextChange, UNDO_MS, visible, type UndoState,
+  armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, isTextKind, extendRange, mergeable, nextSelection, pruneMulti, snippetTextChange, UNDO_MS, visible, type UndoState,
 } from './view';
 import { layout, range, ROW_H, scrollTo, topOf, type Cell } from './virtual-list';
 
@@ -132,8 +133,14 @@ const S = {
   snippets: new Map<number, string>(),
   // 拼音命中的原汉字：高亮用它代替查询词
   marks: new Map<number, string>(),
+  /** 来源胶囊：只看来自这个应用的记录（M29）；隐藏面板时清空 */
+  app: null as string | null,
+  /** 搜索框右侧的建议“只看 xx · n 条” */
+  sug: null as Sug | null,
   sel: null as number | null,
-  /** 多选（只在“片段”分类，M25 规则 6）：空或至少 2 条 */
+  /** Shift 连选的锚点：从这一行连到当前行（M25 规则 6）；多选里没有它时以当前选中行为锚点 */
+  anchor: null as number | null,
+  /** 多选（M25 规则 6，所有分类）：空或至少 2 条，插入顺序就是合并粘贴的先后 */
   multi: new Set<number>(),
   detail: null as RecordDetail | null,
   undo: null as UndoState,
@@ -168,8 +175,10 @@ async function paintVerb() {
 
 // —— 数据视图 ——
 const favMin = () => S.settings.frequentMinUses;
-const vis = () => visible(S.records, S.filter, S.matchIds, favMin());
-const matches = (r: RecordSummary) => inFilter(r, S.filter, favMin(), S.matchIds !== null) && (S.matchIds === null || S.matchIds.has(r.id));
+const vis = () => fromApp(visible(S.records, S.filter, S.matchIds, favMin()), S.app);
+/** 当前分类下、不看搜索词的记录：建议的条数与胶囊下的总数都按它算（M29 规则 1、3） */
+const inCategory = () => [...S.records.values()].filter((r) => inFilter(r, S.filter, favMin(), false));
+const matches = (r: RecordSummary) => inFilter(r, S.filter, favMin(), S.matchIds !== null) && (S.matchIds === null || S.matchIds.has(r.id)) && (S.app === null || (r.app?.name === S.app && !isSnip(r)));
 const rowEl = (id: number | null) => (id === null ? null : document.getElementById('opt-' + id));
 const source = (r: RecordSummary) => r.app?.name || '未知来源';
 /** 行、选中光标与预览标签的类型色：片段统一用片段色（M25 规则 2） */
@@ -188,16 +197,18 @@ const titleHTML = (r: RecordSummary) => {
 const idxLabel = (i: number) => (!compact() ? String(i + 1) : S.platform.os === 'macos' ? `⌘${i + 1}` : `Ctrl+${i + 1}`);
 const newSnipHTML = () => `<button class="btn sm new-snip" type="button" data-act="new">${svg('plus')}新建片段<kbd>${modKey()} N</kbd></button>`;
 
+/** 多选里的顺序（1 起），就是合并粘贴的先后（M09 规则 8）；不在多选里为空 */
+const multiN = (r: RecordSummary) => (S.multi.has(r.id) ? String([...S.multi].indexOf(r.id) + 1) : '');
 const thumb = (r: RecordSummary) =>
   r.kind === 'image' && r.thumb
-    ? `<span class="thumb"><img src="${esc(r.thumb)}" alt="" width="36" height="36">${r.ocrState === 1 ? '<span class="ocr-badge" aria-hidden="true">T</span>' : ''}</span>`
-  : r.kind === 'video' && r.thumb ? `<span class="thumb"><img src="${esc(r.thumb)}" alt="" width="36" height="36"><span class="play">${svg('play')}</span></span>`
-  : `<span class="thumb">${svg(r.kind)}${r.kind === 'file' && r.ocrState === 1 ? '<span class="ocr-badge" aria-hidden="true">T</span>' : ''}</span>`;
+    ? `<span class="thumb" data-n="${multiN(r)}"><img src="${esc(r.thumb)}" alt="" width="36" height="36">${r.ocrState === 1 ? '<span class="ocr-badge" aria-hidden="true">T</span>' : ''}</span>`
+  : r.kind === 'video' && r.thumb ? `<span class="thumb" data-n="${multiN(r)}"><img src="${esc(r.thumb)}" alt="" width="36" height="36"><span class="play">${svg('play')}</span></span>`
+  : `<span class="thumb" data-n="${multiN(r)}">${svg(r.kind)}${r.kind === 'file' && r.ocrState === 1 ? '<span class="ocr-badge" aria-hidden="true">T</span>' : ''}</span>`;
 
 const metaLine = (r: RecordSummary) => {
   // 片段：内容摘要 + 用过 N 次，不显示来源与时间（M25 规则 2）
   const parts = r.snippetBody !== null ? [`<span class="snip-of">${hl(r.snippetBody, S.q)}</span>`, `用过 ${fmtInt(r.uses)} 次`]
-    : [esc(source(r)), rel(r.copiedAt), r.kind === 'video' && r.durationSec !== null ? fmtDur(r.durationSec) : fmtBytes(r.size)];
+    : [...(S.app === null ? [esc(source(r))] : []), rel(r.copiedAt), r.kind === 'video' && r.durationSec !== null ? fmtDur(r.durationSec) : fmtBytes(r.size)];
   if (isFav(r, favMin())) parts.push(`<span class="uses">用过 ${fmtInt(r.uses)} 次</span>`);
   // 命中来自图中文字时片段放最前：它是这一行出现在结果里的原因，放末尾在常见宽度下关键词会被省略号截掉
   const snip = S.snippets.get(r.id);
@@ -229,9 +240,10 @@ const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id ===
 /** 总数（M25 规则 2）：“片段”分类是片段数，“全部”搜索时是历史数加片段数，其余是历史数 */
 function setCount(n: number) {
   const c = counts(S.records, favMin());
-  const total = S.filter === 'snip' ? c.snip : S.filter === 'all' && S.matchIds ? c.all + c.snip : c.all;
+  // 有来源胶囊时分母是这个应用在当前分类下的条数（M29 规则 3）
+  const total = S.app !== null ? fromApp(inCategory(), S.app).length : S.filter === 'snip' ? c.snip : S.filter === 'all' && S.matchIds ? c.all + c.snip : c.all;
   // 精简模式只在有搜索词或分类标签时显示“N 条”（M27 规则 7）
-  const html = !compact() ? `${fmtInt(n)}<small>/ ${fmtInt(total)}</small>` : S.q.trim() || S.filter !== 'all' ? `${fmtInt(n)} 条` : '';
+  const html = !compact() ? `${fmtInt(n)}<small>/ ${fmtInt(total)}</small>` : S.q.trim() || S.filter !== 'all' || S.app !== null ? `${fmtInt(n)} 条` : '';
   if (countEl.innerHTML === html) return;
   countEl.innerHTML = html;
   fx(countEl, [{ transform: 'translateY(6px)', opacity: 0, filter: 'blur(3px)' }, { transform: 'none', opacity: 1, filter: 'blur(0)' }], { duration: 260, easing: EASE_ENTER });
@@ -241,6 +253,12 @@ let bootError = '';
 function emptyHTML() {
   if (bootError) return `<div class="empty"><span class="ring">${svg('inbox')}</span><p>无法读取历史记录：${esc(bootError)}</p></div>`;
   const qq = S.q.trim(), f = S.filter;
+  // 来源胶囊下搜不到：说明是在哪个应用里没找到，给一个按钮去掉胶囊再搜同一个词（M29 规则 4）
+  if (S.app !== null) {
+    return qq
+      ? `<div class="empty"><span class="ring">${svg('search')}</span><p>${esc(S.app)} 的记录里没有“${esc(qq)}”</p><button class="btn sm" type="button" data-act="widen">在全部来源里搜索“${esc(qq)}”</button></div>`
+      : `<div class="empty"><span class="ring">${svg('inbox')}</span><p>没有来自 ${esc(S.app)} 的${f === 'all' ? '' : FL[f]}记录</p><button class="btn sm" type="button" data-act="reset">清除搜索与筛选</button></div>`;
+  }
   const msg = qq ? `没有匹配“${esc(qq)}”的${f === 'all' ? '' : FL[f]}记录`
     : f === 'fav' ? `还没有常用记录。同一条内容复制 ${favMin()} 次以上就会出现在这里`
     : f === 'snip' ? '还没有片段。在历史记录上右键“存为片段…”，或在设置里新建'
@@ -284,9 +302,22 @@ function paintBeam(row: HTMLElement | null) {
 /** `glide`：已渲染的元素位置变了就用这条 transition 过去（插入 / 删除时下方的行补位）；transitionend 后清掉。
  *  `glideBusy`：元素正在补位途中（连续删除）时改用它，不再空停一段延迟 */
 // 多选时行尾快捷按钮收起、Esc 提示改成取消选择（M25 规则 6）；多选的每次变化都会走 paintRows 或空列表
+const multiBar = $('#multiBar'), multiBarText = $('#multiBarText');
+/** 多选里的记录，按选中顺序 */
+const multiRecords = () => [...S.multi].map((id) => S.records.get(id)).filter((r): r is RecordSummary => !!r);
+const multiUnit = (rs: RecordSummary[]) => (rs.length && rs.every(isSnip) ? '个片段' : '条');
 function paintMultiUi() {
   list.classList.toggle('multi', S.multi.size >= 2);
-  escHintEl.textContent = escHint(!!S.q, S.multi.size >= 2);
+  const rs = multiRecords(), bulk = rs.length >= 2;
+  multiBar.hidden = !bulk;
+  if (bulk) {
+    const ok = mergeable(rs);
+    multiBarText.textContent = ok ? `已选 ${rs.length} ${multiUnit(rs)}` : `已选 ${rs.length} ${multiUnit(rs)}，含图片或文件`;
+    const mb = multiBar.querySelector<HTMLButtonElement>('[data-bulk="merge"]')!;
+    mb.disabled = !ok;
+    mb.firstChild!.textContent = `合并${copyVerb(S.canPaste)}`;
+  }
+  escHintEl.textContent = escHint(!!S.q, S.multi.size >= 2, S.app !== null);
 }
 function paintRows({ stagger = false, glide = '', glideBusy = '' } = {}) {
   paintMultiUi();
@@ -371,7 +402,6 @@ function renderList({ scroll = false, stagger = false, base = 0, glide = '' } = 
   const snip = S.filter === 'snip';
   snipBar.hidden = !snip || !v.length;
   $('#snipCount').textContent = String(v.length);
-  $('#multiHint').hidden = !snip;
   rowsEl.style.setProperty('--base', base + 'ms');
   if (!v.length) {
     S.cells = [];
@@ -446,12 +476,17 @@ function setMulti() {
   renderPreview();
 }
 // 鼠标多选（“片段”分类，M25 规则 6）：Mod 点击切换，Shift 点击从选中行连选到这一行；之后选中跟到这一行
+const anchorOf = () => (S.anchor !== null && S.multi.has(S.anchor) ? S.anchor : S.sel);
 function multiTo(id: number, range: boolean) {
   const v = vis().filter((r) => !S.removing.has(r.id));
-  if (range && S.sel !== null) rangeIds(v, S.sel, id).forEach((x) => S.multi.add(x));
-  else {
+  const anchor = anchorOf();
+  if (range && anchor !== null) {
+    S.anchor = anchor;
+    S.multi = new Set(extendRange(v, anchor, id));
+  } else {
     if (!S.multi.size && S.sel !== null) S.multi.add(S.sel);
     if (!S.multi.delete(id)) S.multi.add(id);
+    S.anchor = id;
   }
   if (S.multi.size < 2) S.multi.clear();
   paintRows();
@@ -465,8 +500,12 @@ function move(d: 1 | -1, instant: boolean, extend = false) {
   const n = Math.max(0, Math.min(v.length - 1, i + d));
   const had = S.multi.size;
   if (extend) {
-    if (S.sel !== null) S.multi.add(S.sel);
-    S.multi.add(v[n].id);
+    // 从锚点连到移到的这一行：往回按会把多出来的收回（M25 规则 6）
+    const anchor = anchorOf();
+    if (anchor !== null) {
+      S.anchor = anchor;
+      S.multi = new Set(extendRange(v, anchor, v[n].id));
+    }
     if (S.multi.size < 2) S.multi.clear();
   } else S.multi.clear();
   if (extend || had) paintRows();
@@ -496,9 +535,73 @@ function setPeek(on: boolean) {
 }
 // 精简搜索框只写“搜索”（M27 规则 3）
 const Q_PLACEHOLDER = q.placeholder;
+const qPlaceholder = (style: PanelStyle = S.settings.panelStyle) =>
+  S.app !== null ? ([...S.app].length > 8 ? '只在这个应用里搜索' : `在 ${S.app} 的记录里搜索`) : style === 'compact' ? '搜索' : Q_PLACEHOLDER;
 function setStyleRoot(style: PanelStyle) {
   root.dataset.style = style;
-  q.placeholder = style === 'compact' ? '搜索' : Q_PLACEHOLDER;
+  q.placeholder = qPlaceholder(style);
+}
+
+// —— 来源筛选（M29）——
+const qApp = $('#qApp'), qSug = $<HTMLButtonElement>('#qSug');
+const appIconOf = (name: string) => {
+  for (const r of S.records.values()) if (r.app?.name === name && r.app.icon) return r.app.icon;
+  return null;
+};
+const setAppIcon = (host: HTMLElement, name: string) => {
+  const img = host.querySelector('img')!, src = appIconOf(name);
+  img.hidden = !src;
+  if (src) img.src = src;
+};
+function paintApp() {
+  qApp.hidden = S.app === null;
+  if (S.app !== null) {
+    qApp.title = `只看来自 ${S.app} 的记录`;
+    qApp.children[1].textContent = S.app;
+    setAppIcon(qApp, S.app);
+  }
+  qSug.hidden = S.sug === null;
+  if (S.sug) {
+    qSug.title = `只看来自 ${S.sug.app} 的记录`;
+    qSug.querySelector('.nm')!.textContent = `只看 ${S.sug.app}`;
+    qSug.querySelector('small')!.textContent = `${fmtInt(S.sug.n)} 条`;
+    setAppIcon(qSug, S.sug.app);
+  }
+  q.placeholder = qPlaceholder();
+  escHintEl.textContent = escHint(!!S.q, S.multi.size >= 2, S.app !== null);
+}
+// 建议：输入对得上某个应用名（名字、全拼、首字母，由后端比对）时，取当前分类下记录最多的一个；序号丢弃先发后到的结果
+let sugSeq = 0, sugKey = '';
+function updateSug(v: string) {
+  const t = v.trim(), key = `${S.app}\n${S.filter}\n${t}`;
+  // 输入事件立即调一次（不等搜索节流），随后 runSearch 再调时同一份输入不重发
+  if (key === sugKey) return;
+  sugKey = key;
+  const seq = ++sugSeq;
+  const done = (s: Sug | null) => {
+    if (seq !== sugSeq) return;
+    S.sug = s;
+    paintApp();
+  };
+  if (S.app !== null || !t) return done(null);
+  const c = appCounts(inCategory());
+  if (!c.size) return done(null);
+  matchApps(t, [...c.keys()]).then((names) => {
+    const b = bestApp(names, c);
+    done(b && { ...b, q: t });
+  }, () => done(null));
+}
+/** 设置或去掉来源胶囊；`clearQuery`：Tab 接受建议、点预览里的来源时，输入的字换成胶囊 */
+function setApp(app: string | null, clearQuery: boolean) {
+  if (S.app === app) return;
+  S.app = app;
+  S.sug = null;
+  sugKey = '';
+  S.multi.clear();
+  if (clearQuery) q.value = '';
+  paintApp();
+  void runSearch(q.value);
+  q.focus();
 }
 // 换面板样式（M27 规则 1）：窗口尺寸由后端 apply_style 改，这里换布局并按新行高重排
 function applyStyle(style: PanelStyle) {
@@ -598,7 +701,10 @@ function metaHTML(r: RecordSummary, d: RecordDetail | null) {
   // 文件记录里夹着图片时也识别：不含图片的文件记录状态永远是 0，不显示字段
   const ocrable = r.kind === 'image' || (r.kind === 'file' && r.ocrState !== 0);
   if (ocrable && (r.ocrState !== 1 || d?.ocrText)) meta.push(['文字', reocrNow ? '识别中…' : ocrLabel(r.ocrState, d?.ocrText)]);
-  return meta.map(([k, v]) => `<div><dt>${k}</dt><dd title="${esc(v)}">${esc(v)}</dd></div>`).join('');
+  // “来源”可点：只看这个应用（M29 规则 2）
+  return meta.map(([k, v]) => k === '来源' && r.app?.name
+    ? `<div><dt>${k}</dt><dd><button class="src-btn" type="button" data-act="src" title="只看来自 ${esc(v)} 的记录">${esc(v)}</button></dd></div>`
+    : `<div><dt>${k}</dt><dd title="${esc(v)}">${esc(v)}</dd></div>`).join('');
 }
 
 // 摘要立即渲染；正文异步取详情，序号过期的结果丢弃。同一条只取一次（摘要更新只刷新头部与信息栏）
@@ -621,7 +727,8 @@ function renderPreview(fade = false) {
   const r = S.sel === null ? undefined : S.records.get(S.sel);
   // 头部按钮（M25 规则 4）：历史是置顶、存为片段、删除、复制；片段是编辑、删除、复制。多选时只剩删除（规则 6）
   const bulk = S.multi.size >= 2, snip = !!r && isSnip(r);
-  [pinBtn, copyBtn, delBtn, saveSnipBtn, editSnipBtn].forEach((b) => (b.disabled = !r || (bulk && b !== delBtn)));
+  const rs = bulk ? multiRecords() : [], canMerge = bulk && mergeable(rs);
+  [pinBtn, copyBtn, delBtn, saveSnipBtn, editSnipBtn].forEach((b) => (b.disabled = !r || (bulk && b !== delBtn && !(b === copyBtn && canMerge))));
   pinBtn.hidden = saveSnipBtn.hidden = snip;
   // 翻译入口只对可翻译的单条记录出现（M26 规则 1）
   trBtn.hidden = $('#trHint').hidden = !r || bulk || !translatable(r);
@@ -631,13 +738,15 @@ function renderPreview(fade = false) {
     ++detailSeq;
     bodyFor = null;
     S.detail = null;
-    const its = vis().filter((x) => S.multi.has(x.id)), n = its.length;
-    $('#selHint').textContent = `已选 ${n} 个片段`;
-    ptype.innerHTML = `<span class="tchip" data-type="snip">${svg('snip')}已选 ${n} 个片段</span>`;
+    // 按选中顺序列出，就是合并粘贴的先后（M09 规则 8）；图片、文件不能合并，列在里面但变淡
+    const n = rs.length, unit = multiUnit(rs), allSnip = rs.every(isSnip), bad = rs.filter((x) => !mergeable([x])).length;
+    $('#selHint').textContent = `已选 ${n} ${unit}`;
+    ptype.innerHTML = `<span class="tchip" data-type="${allSnip ? 'snip' : 'all'}">${svg(allSnip ? 'snip' : 'copy')}已选 ${n} ${unit}</span>`;
     pbody.style.opacity = pbody.style.filter = '';
-    pbody.innerHTML = `<div class="bulk"><ul>${its.map((x) => `<li>${esc(x.title)}</li>`).join('')}</ul>
-      <div class="row-act"><button class="btn danger" type="button" data-bulk="del">${svg('trash')}删除 ${n} 个片段</button><button class="btn" type="button" data-bulk="clear">取消选择</button></div>
-      <p class="help">删除后 5 秒内可以撤销。片段只能在这里删除，“清空历史”不会动它们。</p></div>`;
+    pbody.innerHTML = `<div class="bulk"><ol>${rs.map((x) => `<li class="${mergeable([x]) ? '' : 'no'}">${esc(x.title)}${mergeable([x]) ? '' : `（${LABEL[x.kind]}，不能合并）`}</li>`).join('')}</ol>
+      <p class="help">${bad ? `选中的 ${n} ${unit}里有 ${bad} 条图片、视频或文件，不能合并粘贴` : `按上面的顺序，每条之间一个换行，作为纯文本${copyVerb(S.canPaste)}一次`}</p>
+      <div class="row-act"><button class="btn primary" type="button" data-bulk="merge" ${canMerge ? '' : 'disabled'}>合并${copyVerb(S.canPaste)} ${n} ${unit}<kbd>Enter</kbd></button><button class="btn danger" type="button" data-bulk="del">${svg('trash')}删除 ${n} ${unit}</button><button class="btn" type="button" data-bulk="clear">取消选择</button></div>
+      <p class="help">删除后 5 秒内可以撤销。${allSnip ? '片段只能在这里删除，“清空历史”不会动它们。' : ''}</p></div>`;
     pmeta.innerHTML = '';
     return;
   }
@@ -1064,6 +1173,9 @@ spTrack.addEventListener('click', (e) => {
   if (!matches(hit.r)) {
     S.filter = 'all';
     persistFilter();
+    // 来源胶囊也会把这条筛掉（M29），一起去掉
+    S.app = null;
+    paintApp();
     q.value = '';
     renderTabs(false);
     runSearch('', { stagger: true });
@@ -1137,6 +1249,7 @@ function setFilter(k: Filter, instant: boolean) {
   S.multi.clear();
   persistFilter();
   renderTabs(instant);
+  updateSug(S.q);
   // M06 规则 6：切换分类后回到顶部并选中第一条
   list.scrollTop = 0;
   S.sel = null;
@@ -1186,7 +1299,8 @@ function runSearch(v: string, opts: { stagger?: boolean; base?: number; timed?: 
   typedSearch.cancel();
   S.q = v;
   clearQ.hidden = !v;
-  escHintEl.textContent = escHint(!!v, S.multi.size >= 2);
+  escHintEl.textContent = escHint(!!v, S.multi.size >= 2, S.app !== null);
+  updateSug(v);
   return new Promise((settled) =>
     fetchMatches(v, () => {
       list.scrollTop = 0;
@@ -1233,12 +1347,30 @@ function toast(msg: string, { undo = false, icon = 'check' as keyof typeof I, ac
 // —— 操作 ——
 // 结果以后端事件为准：copy 之后 record-updated 带来新的 uses / copiedAt
 let copyTimer = 0;
-function copyRecord(id: number) {
+/** 文本、代码、链接可以只粘贴纯文本那一份（M09 规则 7） */
+const plainable = (r: Pick<RecordSummary, 'kind'>) => isTextKind(r.kind);
+
+/** 合并粘贴多选（M09 规则 8）：都是文字类才能合；成功后退出多选 */
+function pasteSelection() {
+  const ids = [...S.multi];
+  if (ids.length < 2 || !mergeable(multiRecords())) return;
+  copyMerged(ids, true).then(
+    (res) => {
+      const msg = copyToast(res, S.platform.os, null);
+      if (msg) toast(msg, { icon: 'check', action: needsAccessibility(res) ? { label: '前往授权', run: () => void requestAccessibility().catch((e: AppError) => toast(e.message, { icon: 'copy' })) } : undefined });
+      S.multi.clear();
+      setMulti();
+    },
+    (err: AppError) => toast(err.message, { icon: 'copy' }),
+  );
+}
+
+function copyRecord(id: number, plain = false) {
   const before = S.records.get(id);
   // 多选时复制不可用（M25 规则 6）
   if (!before || S.removing.has(id) || S.multi.size >= 2) return;
   // 粘贴成功由后端直接隐藏面板（无淡出）；只复制或失败时面板不动
-  copy(id, true).then(
+  copy(id, true, plain).then(
     (res) => {
       const cur = S.records.get(id);
       // 事件可能还没到；并发的置顶、补全更新也不会让次数变少
@@ -1358,7 +1490,7 @@ function remove(ids: number[]) {
         renderSpectrum();
       }, reduced.matches ? 0 : 360);
       const r = rs[0];
-      toast(ids.length > 1 ? `已删除 ${ids.length} 个片段` : `已删除${isSnip(r) ? '片段' : ''}“${truncate(r.title, 14)}”`, { undo: true, icon: 'trash' });
+      toast(ids.length > 1 ? `已删除 ${ids.length} ${multiUnit(rs)}` : `已删除${isSnip(r) ? '片段' : ''}“${truncate(r.title, 14)}”`, { undo: true, icon: 'trash' });
       S.undo = armUndo(S.undo, ids, r.title, Date.now());
       paintUndoHint();
       setTimeout(paintUndoHint, UNDO_MS);
@@ -1421,13 +1553,14 @@ function openMenu(id: number, x: number, y: number, viaKb: boolean, detail = det
   $('#mOpen').textContent = open ?? '';
   // 历史：粘贴、置顶、按类型的动作、存为片段…；片段：粘贴、编辑片段…、按类型的动作（M25 规则 6）
   $('[data-m="copy"]').hidden = bulk;
+  $('[data-m="copyPlain"]').hidden = bulk || !plainable(r);
   $('[data-m="peek"]').hidden = bulk || !compact();
   $('[data-m="pin"]').hidden = bulk || snip;
   $('[data-m="editSnippet"]').hidden = bulk || !snip;
   $('[data-m="saveSnippet"]').hidden = bulk || snip;
   $('[data-m="translate"]').hidden = bulk || !translatable(r);
   $('#menu .sep').hidden = bulk;
-  $('#mDel').textContent = bulk ? `删除 ${S.multi.size} 个片段` : '删除';
+  $('#mDel').textContent = bulk ? `删除 ${S.multi.size} ${multiUnit(multiRecords())}` : '删除';
   // stagger 序号按可见项重排，隐藏的项不留空拍
   menu.querySelectorAll<HTMLElement>('button:not([hidden])').forEach((b, i) => b.style.setProperty('--i', String(i)));
   menuReturn = document.activeElement as HTMLElement | null;
@@ -2148,6 +2281,9 @@ function openSettings() {
   clearNote.textContent = '置顶记录与片段会保留';
   logNote.textContent = LOG_NOTE;
   snipNote.textContent = SNIP_NOTE;
+  const hasSnip = counts(S.records, favMin()).snip > 0;
+  snipIoNote.textContent = hasSnip ? SNIP_IO_NOTE : '还没有片段可以导出';
+  snipExportBtn.disabled = !hasSnip;
   const st = S.settings;
   draftStyle = st.panelStyle;
   paintStyle();
@@ -2212,6 +2348,7 @@ function openSettings() {
   ocrOnIn.checked = st.ocrEnabled;
   ocrBackfillIn.checked = st.ocrBackfill;
   fileTextIn.checked = st.searchFileText;
+  $('#fileTextHelp').textContent = fileTextHelp(S.platform.os);
   paintOcrBackfill();
   pollOcr();
   ocrTimer ||= window.setInterval(pollOcr, 2000);
@@ -2481,6 +2618,30 @@ async function submitSnippet() {
   else toast(mode === 'edit' ? '片段已更新' : mode === 'new' ? `已新建片段“${name}”，搜索这个名字就能找到` : `已存为片段“${name}”，搜索这个名字就能找到`, { icon: 'snip' });
 }
 $('#stNewSnip').addEventListener('click', () => void openSnippet('new'));
+// 片段备份（M25 规则 11）：系统的保存 / 打开窗口会抢走面板的焦点，期间失焦不隐藏（同选文件夹）；结果写在这一行里
+const snipIoNote = $('#snipIoNote'), snipExportBtn = $<HTMLButtonElement>('#snipExportBtn');
+const SNIP_IO_NOTE = snipIoNote.textContent!;
+function snipIo(run: () => Promise<string | null>) {
+  picking = true;
+  syncDialogOpen();
+  run().then((msg) => msg && (snipIoNote.textContent = msg), (err: AppError) => (snipIoNote.textContent = `${err.message ?? String(err)}`)).finally(() => {
+    picking = false;
+    syncDialogOpen();
+  });
+}
+snipExportBtn.addEventListener('click', () => snipIo(async () => {
+  const path = await pickSavePath(snippetExportName(new Date()));
+  if (!path) return null;
+  const r = await exportSnippets(path);
+  return exportNote(r, path.split(/[\\/]/).pop() ?? path);
+}));
+$('#snipImportBtn').addEventListener('click', () => snipIo(async () => {
+  const path = await pickJsonFile();
+  if (!path) return null;
+  const res = await importSnippets(path);
+  if (res.imported) snipExportBtn.disabled = false;
+  return importNote(res);
+}));
 
 // —— 首次启动引导（M18） ——
 // 与设置对话框同一套弹入 / 150ms 收起。每步一个 .dlg-body，切步时新显示的那个重放 rowIn。
@@ -2631,6 +2792,10 @@ const hidden = () => {
   instantly(spMini, true, () => spMini.classList.remove('show'));
   win.dataset.shown = 'false';
   S.multi.clear();
+  // 来源胶囊同搜索词，不跨唤起保留（M29 规则 5）
+  S.app = S.sug = null;
+  sugKey = '';
+  paintApp();
   // 跨隐藏不复用详情（例如文件是否还在）
   bodyFor = null;
   details.clear();
@@ -2682,6 +2847,9 @@ document.addEventListener('keydown', (e) => {
       inSnip: S.filter === 'snip',
       multi: S.multi.size,
       selTranslatable: !!selR && translatable(selR),
+      selPlain: !!selR && plainable(selR),
+      app: S.app !== null,
+      sug: freshSug(S.sug, q.value) !== null,
       compact: S.settings.panelStyle === 'compact',
       peek: win.dataset.peek === 'true',
       filtered: S.filter !== 'all',
@@ -2698,7 +2866,8 @@ document.addEventListener('keydown', (e) => {
     case 'menuClose': return closeMenu(true);
     case 'menuMove': return moveMenuFocus(a.d);
     case 'move': return move(a.d, a.instant);
-    case 'copy': return void (sel !== null && copyRecord(sel));
+    case 'copy': return S.multi.size >= 2 ? pasteSelection() : void (sel !== null && copyRecord(sel));
+    case 'copyPlain': return void (sel !== null && copyRecord(sel, true));
     case 'copyIndex': {
       // 多选时复制不可用（M25 规则 6）
       const r = S.multi.size >= 2 ? undefined : vis()[a.i];
@@ -2729,6 +2898,12 @@ document.addEventListener('keydown', (e) => {
       setPeek(true);
       return void (sel !== null && doTranslate(sel));
     case 'clearFilter': return setFilter('all', true);
+    // 来源筛选（M29 规则 2、5）
+    case 'acceptSug': {
+      const sug = freshSug(S.sug, q.value);
+      return void (sug && setApp(sug.app, true));
+    }
+    case 'clearApp': return setApp(null, false);
     case 'selectAll': {
       S.multi = new Set(vis().filter((r) => !S.removing.has(r.id)).map((r) => r.id));
       return setMulti();
@@ -2867,13 +3042,34 @@ $('.sp-head').addEventListener('click', () => {
 });
 q.addEventListener('input', (e) => {
   if ((e as InputEvent).isComposing) return;
+  updateSug(q.value);
   typedSearch.push(q.value);
 });
-q.addEventListener('compositionend', () => typedSearch.push(q.value));
+q.addEventListener('compositionend', () => {
+  updateSug(q.value);
+  typedSearch.push(q.value);
+});
 clearQ.addEventListener('click', () => {
   q.value = '';
   runSearch('');
   q.focus();
+});
+// 精简模式多选的底部操作栏（M09 规则 8）
+multiBar.addEventListener('click', (e) => {
+  const bk = (e.target as Element).closest<HTMLElement>('[data-bulk]')?.dataset.bulk;
+  if (bk === 'merge') pasteSelection();
+  else if (bk === 'clear') {
+    S.multi.clear();
+    setMulti();
+  }
+  q.focus({ preventScroll: true });
+});
+// 来源筛选（M29）：点建议变成胶囊；点胶囊上的 × 去掉胶囊、搜索词保留；点预览信息栏的“来源”只看这个应用
+qSug.addEventListener('click', () => S.sug && setApp(S.sug.app, true));
+$('#qAppX').addEventListener('click', () => setApp(null, false));
+pmeta.addEventListener('click', (e) => {
+  const r = S.sel === null ? undefined : S.records.get(S.sel);
+  if ((e.target as Element).closest('[data-act="src"]') && r?.app?.name) setApp(r.app.name, true);
 });
 tabsBase.addEventListener('click', (e) => {
   const t = (e.target as Element).closest<HTMLElement>('[data-f]');
@@ -2894,8 +3090,11 @@ const itemOf = (e: Event) => {
 };
 list.addEventListener('click', (e) => {
   const t = e.target as Element;
+  if (t.closest('[data-act="widen"]')) return setApp(null, false);
   if (t.closest('[data-act="reset"]')) {
     q.value = '';
+    S.app = null;
+    paintApp();
     S.filter = 'all';
     persistFilter();
     renderTabs(false);
@@ -2908,7 +3107,7 @@ list.addEventListener('click', (e) => {
   if (id === null) return;
   const qa = t.closest<HTMLElement>('[data-qa]')?.dataset.qa;
   const mod = S.platform.os === 'macos' ? e.metaKey : e.ctrlKey;
-  if (!qa && S.filter === 'snip' && (mod || e.shiftKey)) return multiTo(id, e.shiftKey);
+  if (!qa && (mod || e.shiftKey)) return multiTo(id, e.shiftKey);
   // 不带修饰键的单击退出多选（M25 规则 6）
   if (S.multi.size) {
     S.multi.clear();
@@ -2939,7 +3138,7 @@ list.addEventListener('contextmenu', (e) => {
 });
 
 pinBtn.addEventListener('click', (e) => S.sel !== null && togglePin(S.sel, e.detail !== 0));
-copyBtn.addEventListener('click', () => S.sel !== null && copyRecord(S.sel));
+copyBtn.addEventListener('click', () => (S.multi.size >= 2 ? pasteSelection() : S.sel !== null && copyRecord(S.sel)));
 trBtn.addEventListener('click', () => S.sel !== null && doTranslate(S.sel));
 // 设置对话框留在确认框下面；列表与频谱由 records-removed 刷新
 $('#clearBtn').addEventListener('click', () => void confirmClear().then((m) => m && (clearNote.textContent = m)));
@@ -2959,6 +3158,7 @@ menu.addEventListener('click', (e) => {
   if (!m || id === null) return;
   closeMenu(true);
   if (m === 'copy') copyRecord(id);
+  if (m === 'copyPlain') copyRecord(id, true);
   if (m === 'peek') setPeek(true);
   if (m === 'pin') togglePin(id, mouse);
   if (m === 'open') openFromMenu(id);
@@ -3001,6 +3201,7 @@ pbody.addEventListener('click', (e) => {
   const bk = t.closest<HTMLElement>('[data-bulk]');
   if (bk) {
     if (bk.dataset.bulk === 'del') remove([...S.multi]);
+    else if (bk.dataset.bulk === 'merge') pasteSelection();
     else {
       S.multi.clear();
       setMulti();
