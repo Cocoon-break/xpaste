@@ -239,6 +239,10 @@ pub fn run() {
                 api.prevent_close();
                 line::hide(window.app_handle());
             }
+            // 晾衣绳失焦（点了别的应用）：收起时不再把键盘切回拿键盘前的窗口
+            if window.label() == line::LABEL && matches!(event, WindowEvent::Focused(false)) {
+                line::blur();
+            }
             // 截图遮罩（shot-*）与贴图（pin-*）失焦不处理
             if window.label() != "panel" {
                 return;

@@ -276,7 +276,7 @@ pub fn hang_record(
 /// 面板的挂钩按钮、面板可见时的便签快捷键：挂上 `id`（None 为最新一条）后放下绳子亮一下，没挂成由晾衣绳页面提示
 #[tauri::command(async)]
 pub fn line_hang_from_panel(app: AppHandle, id: Option<i64>) {
-    crate::line::hang_and_flash(&app, id);
+    crate::line::hang_and_flash(&app, id, false);
 }
 
 /// 面板里把行拖出顶边，每帧最多一次：`x`、`y` 为光标的屏幕逻辑坐标

@@ -178,6 +178,7 @@ pub fn changed_fields(old: &Settings, new: &Settings) -> Vec<&'static str> {
             "translateHotkey",
             old.translate_hotkey != new.translate_hotkey,
         ),
+        ("lineHotkey", old.line_hotkey != new.line_hotkey),
     ]
     .into_iter()
     .filter_map(|(name, changed)| changed.then_some(name))
@@ -597,6 +598,7 @@ mod tests {
             rec_quality: xpaste_core::RecQuality::High,
             rec_fps: 60,
             translate_hotkey: "Alt+Shift+U".into(),
+            line_hotkey: "Alt+Shift+J".into(),
             ..Settings::default()
         };
         assert_eq!(
@@ -623,7 +625,8 @@ mod tests {
                 "recCopy",
                 "recQuality",
                 "recFps",
-                "translateHotkey"
+                "translateHotkey",
+                "lineHotkey"
             ]
         );
     }
@@ -776,6 +779,19 @@ mod tests {
         .unwrap();
         assert_eq!(calls, 0);
         assert_eq!(changed, ["maxRecords"]);
+        // 只改了便签快捷键也要重新注册
+        let new = Settings {
+            max_records: 1000,
+            line_hotkey: "Alt+Shift+J".into(),
+            ..Settings::default()
+        };
+        let changed = commit_settings(&state, new, |_, _, _, _, _| {
+            calls += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(calls, 1);
+        assert_eq!(changed, ["lineHotkey"]);
     }
 
     #[test]
