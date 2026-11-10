@@ -127,7 +127,7 @@ pub fn place_in_work_area(work: Rect, (w, h): (f64, f64)) -> (f64, f64) {
     (x, y)
 }
 
-fn window(app: &AppHandle) -> Option<WebviewWindow> {
+pub(crate) fn window(app: &AppHandle) -> Option<WebviewWindow> {
     let w = app.get_webview_window(LABEL);
     if w.is_none() {
         log::warn!("找不到面板窗口");
