@@ -354,6 +354,7 @@ pub fn run() {
             commands::line::line_restore,
             commands::line::line_copy,
             commands::line::line_open,
+            commands::line::line_preview_src,
             commands::line::line_ready,
             commands::line::line_resize,
             commands::line::line_hide,
