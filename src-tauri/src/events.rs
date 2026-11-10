@@ -42,7 +42,7 @@ pub const LINE_DROP: &str = "line-drop";
 /// 绳子放下期间光标进出便签区域，只发给 `line`：`{ inside }`，变了才发。区域是晾衣绳窗口往上延到屏幕顶端（含菜单栏那一条），
 /// 页面据此在离开 350 ms 后收起。
 pub const LINE_POINTER: &str = "line-pointer";
-/// 便签的提醒到了，只发给 `line`：`{ id }`，每张到期的发一次（先发 `line-show { how: "remind" }`）；页面让那张高亮。
+/// 便签的提醒到了，只发给 `line`：`{ id }`，每张到期的发一次，同时放下绳子（`line-show { how: "remind" }`，经主线程发出，通常比它晚到，先后不保证，页面不依赖顺序）；页面让那张高亮。
 pub const LINE_REMIND: &str = "line-remind";
 
 /// 冻结完成，发给每块屏的遮罩 `shot-<i>`（载荷见 `shot::BeginPayload`）。
