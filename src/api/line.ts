@@ -2,6 +2,7 @@
 // 面板用挂、拖到顶端、Pro 状态与授权码；其余命令和 line-* 事件给晾衣绳页面用。
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type { Kind } from './types';
 
@@ -46,6 +47,8 @@ export interface LineView {
   notes: NoteDto[];
   /** 已挂着的记录 id：面板据此画刻线 */
   hung: number[];
+  /** 便签快捷键的显示标签，没启用为空串 */
+  hotkey: string;
 }
 
 /** 晾衣绳放下的方式：`peek` 只露绳子，`mouse` 鼠标放下，`flash` 快捷键挂上后亮一下，`kbd` 键盘打开，`drag` 拖着东西到顶端 */
@@ -93,6 +96,17 @@ export const lineHide = () => invoke<void>('line_hide');
 export const lineHidden = () => invoke<void>('line_hidden');
 /** 拿键盘（true）或交还（false） */
 export const lineKeyboard = (on: boolean) => invoke<void>('line_keyboard', { on });
+/** 试用结束的提示条上点“输入授权码”：唤起面板并打开设置的 Pro 标签 */
+export const openProSettings = () => invoke<void>('open_panel_settings', { tab: 'pro' });
+
+/** 从别的应用拖文件到晾衣绳窗口：`x` 为窗口内的逻辑坐标 */
+export type FileDrag = { type: 'over'; x: number } | { type: 'drop'; x: number; paths: string[] } | { type: 'leave' };
+export const onLineFileDrag = (cb: (d: FileDrag) => void): Promise<UnlistenFn> =>
+  getCurrentWebview().onDragDropEvent(({ payload: p }) => {
+    if (p.type === 'leave') return cb({ type: 'leave' });
+    const x = p.position.x / devicePixelRatio;
+    cb(p.type === 'drop' ? { type: 'drop', x, paths: p.paths } : { type: 'over', x });
+  });
 
 const target = () => ({ target: getCurrentWindow().label });
 
@@ -112,6 +126,9 @@ export const onLineToast = (cb: (t: LineToast) => void): Promise<UnlistenFn> =>
 /** 面板里拖着行到了顶端：光标的屏幕坐标（逻辑像素） */
 export const onLineDrag = (cb: (x: number, y: number) => void): Promise<UnlistenFn> =>
   listen<{ x: number; y: number }>('line-drag', (e) => cb(e.payload.x, e.payload.y), target());
+/** 绳子放下期间光标进出便签区域（晾衣绳窗口往上延到屏幕顶端），变了才发 */
+export const onLinePointer = (cb: (inside: boolean) => void): Promise<UnlistenFn> =>
+  listen<{ inside: boolean }>('line-pointer', (e) => cb(e.payload.inside), target());
 /** 面板里拖着行在顶端松手：记录 id 与光标的屏幕 x */
 export const onLineDrop = (cb: (id: number, x: number) => void): Promise<UnlistenFn> =>
   listen<{ id: number; x: number }>('line-drop', (e) => cb(e.payload.id, e.payload.x), target());

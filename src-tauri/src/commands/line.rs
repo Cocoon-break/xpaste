@@ -44,6 +44,8 @@ pub struct LineView {
     pub notes: Vec<NoteDto>,
     /// 已挂着的记录 id，面板据此画刻线
     pub hung: Vec<i64>,
+    /// 便签快捷键的显示标签（如 `⌥ + Shift + N`），没启用为空串；空绳子的提示用它
+    pub hotkey: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -182,17 +184,23 @@ fn dto(line: &Line, note: Note) -> NoteDto {
 }
 
 pub fn view(state: &AppState) -> LineView {
+    // 先取设置再锁 line，两把锁不同时持有
+    let hotkey = match state.settings().line_hotkey.as_str() {
+        "" => String::new(),
+        k => crate::hotkey::label(k),
+    };
     let line = state.line();
     LineView {
         available: xpaste_pro::AVAILABLE,
         pro: line.status(now()),
         notes: line.notes().iter().map(|n| dto(&line, n.clone())).collect(),
         hung: line.hung_records(),
+        hotkey,
     }
 }
 
-/// 写命令成功后广播完整视图；调用时不能持有 `line` 锁
-fn changed(app: &AppHandle) {
+/// 写命令成功后广播完整视图；调用时不能持有 `line`、`settings` 锁
+pub fn changed(app: &AppHandle) {
     emit(app, LINE_CHANGED, view(&app.state::<AppState>()));
 }
 
@@ -772,6 +780,15 @@ mod tests {
             let e = AppError::from(state.line().activate("XP1-a.b", 0).err().unwrap());
             assert_eq!(e.to_string(), "这个版本不含晾衣绳");
         }
+    }
+
+    #[test]
+    fn view_carries_hotkey_label() {
+        let state = AppState::for_test();
+        state.settings().line_hotkey = "Alt+Shift+N".into();
+        assert_eq!(view(&state).hotkey, crate::hotkey::label("Alt+Shift+N"));
+        state.settings().line_hotkey = String::new();
+        assert_eq!(view(&state).hotkey, "");
     }
 
     #[test]

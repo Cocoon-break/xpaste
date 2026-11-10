@@ -43,8 +43,10 @@ pub fn bootstrap_inner(state: &AppState) -> Result<Bootstrap, AppError> {
         (records, store.kv_get("onboarded")?.is_none())
     };
     log::info!("bootstrap 返回 {} 条记录", records.len());
+    // 先取出设置、放开锁：view 里还要锁 settings
+    let settings = state.settings().clone();
     Ok(Bootstrap {
-        settings: state.settings().clone(),
+        settings,
         platform: PlatformInfo {
             os: xpaste_platform::OS,
             material: crate::panel::material(),
@@ -350,6 +352,10 @@ pub fn save_settings(
             }
         }
         HotkeyAction::None => {}
+    }
+    // 空绳子的提示里写着便签快捷键
+    if changed.contains(&"lineHotkey") {
+        crate::commands::line::changed(&app);
     }
     if changed.contains(&"launchAtLogin") {
         set_autostart(&app, launch);

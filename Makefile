@@ -31,7 +31,7 @@ dev-isolated: ## 启动开发版，数据目录隔离在 .xpaste-dev/（自动�
 
 fmt: ## 格式化 Rust 代码
 	cargo fmt --all
-ifneq ($(wildcard pro),)
+ifneq ($(wildcard pro/Makefile),)
 	$(MAKE) -C pro fmt
 endif
 
@@ -43,7 +43,7 @@ ifneq ($(HAS_WIN_TARGET),0)
 	cargo clippy -p xpaste-platform --all-targets --target $(WIN_TARGET) -- -D warnings
 endif
 	pnpm check:version
-ifneq ($(wildcard pro),)
+ifneq ($(wildcard pro/Makefile),)
 	$(MAKE) -C pro fmt-check
 	$(MAKE) -C pro tool-check
 endif

@@ -164,7 +164,7 @@ const S = {
   /** 当前可见条数，供 aria-setsize */
   count: 0,
   /** 晾衣绳：不含晾衣绳的版本 available 为 false，挂钩按钮、已挂刻线与“Pro”标签都不出现 */
-  line: { available: false, pro: { state: 'unavailable' }, notes: [], hung: [] } as LineView,
+  line: { available: false, pro: { state: 'unavailable' }, notes: [], hung: [], hotkey: '' } as LineView,
 };
 const menuOpen = () => menu.dataset.open === 'true' || moreMenu.dataset.open === 'true';
 

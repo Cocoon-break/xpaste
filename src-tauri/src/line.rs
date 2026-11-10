@@ -1,9 +1,9 @@
 //! 晾衣绳浮层窗口 `line` 与屏幕顶端检测（只在带 Pro 的构建里启动）。
 //! 窗口启动时预建、隐藏；macOS 是不激活应用的 NSPanel（同划词卡片），前台应用不变。
 //! 检测线程每 16 ms 采样光标：碰到顶端先只露绳子（peek），停 200 ms 或甩上去才放下；
-//! 放下后线程不再采样，收起由页面决定（离开、Esc、快捷键挂上后停够时间）。
+//! 放下后线程接着采样，只把光标进出便签区域（`line-pointer`）告诉页面，收起由页面决定（离开、Esc、快捷键挂上后停够时间）。
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -11,7 +11,9 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use crate::error::AppError;
-use crate::events::{LINE_DRAG, LINE_HANG_SELECTED, LINE_HIDE, LINE_SHOW, LINE_TOAST, emit_to};
+use crate::events::{
+    LINE_DRAG, LINE_HANG_SELECTED, LINE_HIDE, LINE_POINTER, LINE_SHOW, LINE_TOAST, emit_to,
+};
 use crate::panel::{Rect, on_main};
 use crate::state::AppState;
 
@@ -50,6 +52,8 @@ const TICK: Duration = Duration::from_millis(16);
 const SCREENS_TTL: Duration = Duration::from_secs(1);
 /// 窗口初始高度（逻辑像素）；页面渲染后经 `line_resize` 改
 const H0: f64 = 240.0;
+/// 发出 `line-hide` 后页面这么久还没调 `line_hidden`（页面卡住、崩了），后端自己收起
+const HIDDEN_FALLBACK: Duration = Duration::from_millis(1000);
 
 #[derive(Clone, Copy)]
 enum Phase {
@@ -128,6 +132,16 @@ pub fn at_top_edge(c: (f64, f64), rects: &[Rect]) -> bool {
         .is_some_and(|r| c.1 - r.y <= 1.0 && !rects.iter().any(|o| contains(o, (c.0, r.y - 1.0))))
 }
 
+/// 光标在便签区域里：晾衣绳窗口的矩形往上延到所在屏的顶端（菜单栏那一条也算，光标停在顶端时就在那里）。
+/// `win` 与 `rects`、`c` 同一坐标空间。
+pub fn pointer_inside(c: (f64, f64), win: Rect, rects: &[Rect]) -> bool {
+    let top = rects
+        .iter()
+        .find(|r| contains(r, (win.x, win.y)))
+        .map_or(win.y, |r| r.y);
+    c.0 >= win.x && c.0 < win.x + win.w && c.1 >= top && c.1 < win.y + win.h
+}
+
 /// 窗口这一侧的状态。`how` 为 None：窗口已隐藏（页面调过 `line_hidden`）。
 struct Shown {
     how: Option<How>,
@@ -167,10 +181,27 @@ pub fn ready() {
     log::info!("晾衣绳页面就绪，开始检测顶端");
 }
 
-/// 绳子已放下（只露绳子不算）：检测线程据此停止采样
-fn is_open() -> bool {
-    shown().how.is_some_and(|h| h != How::Peek)
+/// 绳子已放下（只露绳子不算）时窗口的矩形，换到检测线程的坐标空间（除以 `k` 之后）；没放下为 None。
+/// macOS 两边都是点；Windows 窗口按所在屏缩放记的逻辑像素，检测线程按主屏缩放，差一个 sf / k。
+fn open_rect(k: f64) -> Option<Rect> {
+    let s = shown();
+    s.how.filter(|&h| h != How::Peek)?;
+    let f = if cfg!(target_os = "macos") {
+        1.0
+    } else {
+        s.sf / k
+    };
+    let w = s.work;
+    Some(Rect {
+        x: w.x * f,
+        y: w.y * f,
+        w: w.w * f,
+        h: s.h.min(w.h) * f,
+    })
 }
+
+/// 每次放下、收起加一：收起兜底只在这期间没再放下、也没收完时生效
+static GEN: AtomicU64 = AtomicU64::new(0);
 
 /// 预建窗口并起检测线程。只在带 Pro 的构建里调用。
 pub fn start(app: &AppHandle) {
@@ -295,23 +326,17 @@ fn prewarm(app: &AppHandle) {
     }
 }
 
-/// 检测线程：每 16 ms 采样光标，屏幕矩形缓存 1 s；绳子放下期间不采样。
+/// 检测线程：每 16 ms 采样光标，屏幕矩形缓存 1 s；绳子放下期间只报光标进出便签区域。
 fn detect(app: &AppHandle) {
     let t0 = Instant::now();
     let mut edge = Edge::default();
     let mut screens = (Vec::new(), 1.0);
     let mut read_at: Option<Instant> = None;
+    // 上次报给页面的进出；每次放下后先报一次
+    let mut inside: Option<bool> = None;
     loop {
         std::thread::sleep(TICK);
         if !READY.load(Ordering::Relaxed) {
-            continue;
-        }
-        if is_open() {
-            // 收起后先离开顶端才会再放下：按 Esc 收起时光标还在顶端，不立刻又放下来
-            edge = Edge {
-                last: None,
-                phase: Phase::Open,
-            };
             continue;
         }
         if read_at.is_none_or(|t| t.elapsed() >= SCREENS_TTL) {
@@ -326,10 +351,30 @@ fn detect(app: &AppHandle) {
             continue;
         };
         let (rects, k) = (&screens.0, screens.1);
+        let c = (x / k, y / k);
+        if let Some(win) = open_rect(k) {
+            // 收起后先离开顶端才会再放下：按 Esc 收起时光标还在顶端，不立刻又放下来
+            edge = Edge {
+                last: None,
+                phase: Phase::Open,
+            };
+            let now_in = pointer_inside(c, win, rects);
+            if inside != Some(now_in) {
+                inside = Some(now_in);
+                emit_to(
+                    app,
+                    LABEL,
+                    LINE_POINTER,
+                    serde_json::json!({ "inside": now_in }),
+                );
+            }
+            continue;
+        }
+        inside = None;
         let t = t0.elapsed().as_millis() as u64;
         // 拖文件、拖记录到顶端时主键按着
         let button = xpaste_platform::mouse_button_down();
-        match edge.step((x / k, y / k), rects, t, button) {
+        match edge.step(c, rects, t, button) {
             Some(EdgeEvent::Peek) => show(app, How::Peek),
             Some(EdgeEvent::Open(how)) => show(app, how),
             Some(EdgeEvent::Leave) => hide(app),
@@ -383,6 +428,7 @@ pub fn show(app: &AppHandle, how: How) {
             }
             let first = s.how.is_none();
             s.how = Some(how);
+            GEN.fetch_add(1, Ordering::Relaxed);
             first
         };
         if first && let Err(e) = place(app, &w) {
@@ -450,9 +496,25 @@ fn apply(w: &WebviewWindow, work: Rect, sf: f64, h: f64) -> tauri::Result<()> {
 }
 
 /// 发 `line-hide`；页面收起后调 `line_hidden`，窗口才真正隐藏。
+/// 1 s 内页面没调 `line_hidden`、其间也没再放下，就自己收起，免得页面卡住时窗口一直挡在顶端。
 pub fn hide(app: &AppHandle) {
-    if shown().how.is_some() {
-        emit_to(app, LABEL, LINE_HIDE, ());
+    if shown().how.is_none() {
+        return;
+    }
+    emit_to(app, LABEL, LINE_HIDE, ());
+    let g = GEN.fetch_add(1, Ordering::Relaxed) + 1;
+    let app = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("line-hide".into())
+        .spawn(move || {
+            std::thread::sleep(HIDDEN_FALLBACK);
+            if GEN.load(Ordering::Relaxed) == g && shown().how.is_some() {
+                log::warn!("晾衣绳页面没有报告收完，直接收起");
+                hidden(&app);
+            }
+        });
+    if let Err(e) = spawned {
+        log::warn!("晾衣绳收起兜底线程启动失败：{e}");
     }
 }
 
@@ -662,6 +724,31 @@ mod tests {
             e.step((100.0, 0.0), &[MAIN], 200, true),
             Some(EdgeEvent::Open(How::Drag))
         );
+    }
+
+    #[test]
+    fn pointer_inside_covers_menu_bar_strip() {
+        // 工作区从菜单栏下面 25 起，窗口高 300
+        let win = Rect {
+            x: 0.0,
+            y: 25.0,
+            w: 1440.0,
+            h: 300.0,
+        };
+        assert!(pointer_inside((100.0, 0.0), win, &[MAIN]));
+        assert!(pointer_inside((100.0, 324.0), win, &[MAIN]));
+        assert!(!pointer_inside((100.0, 325.0), win, &[MAIN]));
+        // 副屏在右边：窗口横向之外不算
+        let right = Rect {
+            x: 1440.0,
+            y: 0.0,
+            w: 1920.0,
+            h: 1080.0,
+        };
+        assert!(!pointer_inside((1500.0, 0.0), win, &[MAIN, right]));
+        // 找不到所在屏时只算窗口本身
+        assert!(!pointer_inside((100.0, 10.0), win, &[]));
+        assert!(pointer_inside((100.0, 30.0), win, &[]));
     }
 
     #[test]

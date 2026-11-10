@@ -38,6 +38,9 @@ pub const LINE_HIDE: &str = "line-hide";
 pub const LINE_DRAG: &str = "line-drag";
 /// 面板里拖着行在顶端松手，只发给 `line`：`{ id, x }`，页面按 x 算出位置后调 `line_hang_record`。
 pub const LINE_DROP: &str = "line-drop";
+/// 绳子放下期间光标进出便签区域，只发给 `line`：`{ inside }`，变了才发。区域是晾衣绳窗口往上延到屏幕顶端（含菜单栏那一条），
+/// 页面据此在离开 350 ms 后收起。
+pub const LINE_POINTER: &str = "line-pointer";
 
 /// 冻结完成，发给每块屏的遮罩 `shot-<i>`（载荷见 `shot::BeginPayload`）。
 pub const SHOT_BEGIN: &str = "shot-begin";
