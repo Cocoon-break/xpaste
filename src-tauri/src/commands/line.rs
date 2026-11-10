@@ -526,6 +526,30 @@ pub fn line_open(app: AppHandle, state: State<'_, AppState>, id: u64) -> Result<
     }
 }
 
+/// 大卡片里要播放的源视频：只有视频便签，且源文件还在
+fn video_path(note: &Note) -> Option<&Path> {
+    (note.kind == Kind::Video)
+        .then(|| note.paths.first())
+        .flatten()
+        .map(Path::new)
+        .filter(|p| p.is_file())
+}
+
+/// 大卡片里播放视频：只把这张便签的源视频授权给 asset 协议，返回它的 asset URL；源文件已移动或删除时为 None
+#[tauri::command(async)]
+pub fn line_preview_src(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: u64,
+) -> Result<Option<String>, AppError> {
+    let note = find(&state.line(), id)?;
+    let Some(p) = video_path(&note) else {
+        return Ok(None);
+    };
+    app.asset_protocol_scope().allow_file(p)?;
+    Ok(Some(asset_url(p)))
+}
+
 /// 页面开始监听 line-show 后调用；之前不检测顶端
 #[tauri::command]
 pub fn line_ready() {
@@ -640,6 +664,26 @@ mod tests {
             source: None,
             created_at: 0,
         }
+    }
+
+    #[test]
+    fn preview_src_only_for_existing_video() {
+        let f =
+            std::env::temp_dir().join(format!("xpaste-line-preview-{}.mov", std::process::id()));
+        std::fs::write(&f, b"x").unwrap();
+        let mut v = note(Kind::Video, "录屏.mov");
+        v.paths = vec![f.to_string_lossy().into()];
+        assert_eq!(video_path(&v), Some(f.as_path()));
+        // 文件便签不授权
+        let file = Note {
+            kind: Kind::File,
+            ..v.clone()
+        };
+        assert_eq!(video_path(&file), None);
+        // 源文件不在了、没有路径
+        std::fs::remove_file(&f).unwrap();
+        assert_eq!(video_path(&v), None);
+        assert_eq!(video_path(&note(Kind::Video, "a.mov")), None);
     }
 
     #[test]

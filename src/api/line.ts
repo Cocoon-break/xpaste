@@ -80,6 +80,8 @@ export const lineRestore = (note: Note, at: number) => invoke<void>('line_restor
 export const lineCopy = (id: number) => invoke<CopyNote>('line_copy', { id });
 /** 链接用浏览器打开，文件在访达 / 资源管理器里显示 */
 export const lineOpen = (id: number) => invoke<void>('line_open', { id });
+/** 大卡片里播放视频：源视频的 asset URL；源文件已移动或删除时为 null */
+export const linePreviewSrc = (id: number) => invoke<string | null>('line_preview_src', { id });
 /** 面板里拖着的记录：晾衣绳页面画跟手的影子便签用。`thumbUrl` 为图片、视频缩略图的 asset URL */
 export type DragItem = { id: number; kind: Kind; title: string; thumbUrl: string | null };
 /** 面板里把行拖出顶边：坐标为屏幕逻辑像素。第一次放下绳子，之后把位置和记录转给晾衣绳页面 */
