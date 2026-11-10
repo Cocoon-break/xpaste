@@ -239,6 +239,16 @@ pub fn run() {
                 api.prevent_close();
                 line::hide(window.app_handle());
             }
+            // 排查“面板挂完便签后点外面、按 Esc 都不收起”：记下面板与晾衣绳的焦点变化（只有窗口名）
+            if (window.label() == "panel" || window.label() == line::LABEL)
+                && let WindowEvent::Focused(f) = event
+            {
+                log::info!(
+                    "焦点 {} {}",
+                    window.label(),
+                    if *f { "获得" } else { "失去" }
+                );
+            }
             // 晾衣绳失焦（点了别的应用）：收起时不再把键盘切回拿键盘前的窗口
             if window.label() == line::LABEL && matches!(event, WindowEvent::Focused(false)) {
                 line::blur();
@@ -251,7 +261,9 @@ pub fn run() {
                 // 失焦即隐藏，设置、确认框开着也一样；例外见 panel::blur_hides（M04 规则 3）
                 WindowEvent::Focused(false) => {
                     let app = window.app_handle();
-                    if panel::blur_hides(app) {
+                    let hides = panel::blur_hides(app);
+                    log::info!("面板失焦，按规则{}", if hides { "隐藏" } else { "保留" });
+                    if hides {
                         panel::hide(app);
                     }
                 }

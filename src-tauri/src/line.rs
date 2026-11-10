@@ -465,6 +465,7 @@ pub fn show(app: &AppHandle, how: How) {
 
 /// 同 `show`，`line-show` 另带要选中的便签 `id`（键盘落在它上面）。
 fn show_selecting(app: &AppHandle, how: How, select: Option<u64>) {
+    log::info!("晾衣绳放下 {how:?}");
     on_main(app, move |app| {
         let Some(w) = app.get_webview_window(LABEL) else {
             return log::warn!("找不到晾衣绳窗口");
@@ -511,6 +512,10 @@ fn front(app: &AppHandle, w: &WebviewWindow, focus: bool) -> tauri::Result<()> {
 }
 
 fn take_keyboard(app: &AppHandle, w: &WebviewWindow) -> tauri::Result<()> {
+    log::info!(
+        "晾衣绳拿键盘，面板可见 {}",
+        crate::panel::window(app).is_some_and(|p| p.is_visible().unwrap_or(false))
+    );
     {
         let mut s = shown();
         if !s.keyboard {
@@ -582,6 +587,7 @@ pub fn hide(app: &AppHandle) {
 
 /// 页面播完收起：撤下窗口、恢复点击穿透，拿过键盘时交还；之后检测线程继续采样。
 pub fn hidden(app: &AppHandle) {
+    log::info!("晾衣绳收起");
     let back = {
         let mut s = shown();
         s.how = None;
