@@ -542,12 +542,19 @@ fn place(app: &AppHandle, w: &WebviewWindow) -> tauri::Result<()> {
         return Ok(());
     };
     let (sf, wa) = (m.scale_factor(), m.work_area());
-    let work = Rect {
-        x: wa.position.x as f64 / sf,
-        y: wa.position.y as f64 / sf,
-        w: wa.size.width as f64 / sf,
-        h: wa.size.height as f64 / sf,
-    };
+    let screen_top = m.position().y as f64 / sf;
+    let notch =
+        xpaste_platform::notch_inset(m.position().x as f64 / sf, m.size().width as f64 / sf);
+    let work = below_notch(
+        Rect {
+            x: wa.position.x as f64 / sf,
+            y: wa.position.y as f64 / sf,
+            w: wa.size.width as f64 / sf,
+            h: wa.size.height as f64 / sf,
+        },
+        screen_top,
+        notch,
+    );
     let h = {
         let mut s = shown();
         s.work = work;
@@ -555,6 +562,19 @@ fn place(app: &AppHandle, w: &WebviewWindow) -> tauri::Result<()> {
         s.h
     };
     apply(w, work, sf, h)
+}
+
+/// 工作区顶端高于刘海下沿时（菜单栏自动隐藏、全屏应用），往下让到刘海下面，免得中间的便签被刘海盖住。
+pub fn below_notch(work: Rect, screen_top: f64, notch: f64) -> Rect {
+    let top = screen_top + notch;
+    if work.y >= top {
+        return work;
+    }
+    Rect {
+        y: top,
+        h: (work.h - (top - work.y)).max(0.0),
+        ..work
+    }
 }
 
 /// 摆窗口：macOS 用逻辑坐标（点），Windows 按所在屏缩放换成物理像素（同划词卡片）。高度不超过工作区。
@@ -685,6 +705,27 @@ pub fn keyboard(app: &AppHandle, on: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn work_area_moves_below_notch_only_when_needed() {
+        let r = |y, h| Rect {
+            x: 0.0,
+            y,
+            w: 1512.0,
+            h,
+        };
+        // 菜单栏常显：工作区已在菜单栏（比刘海高）下面，不动
+        assert_eq!(below_notch(r(37.0, 945.0), 0.0, 32.0), r(37.0, 945.0));
+        // 菜单栏自动隐藏：工作区从 0 开始，让到刘海下面
+        assert_eq!(below_notch(r(0.0, 982.0), 0.0, 32.0), r(32.0, 950.0));
+        // 没有刘海
+        assert_eq!(below_notch(r(0.0, 900.0), 0.0, 0.0), r(0.0, 900.0));
+        // 副屏在主屏上方（全局 y 为负）
+        assert_eq!(
+            below_notch(r(-1080.0, 1080.0), -1080.0, 0.0),
+            r(-1080.0, 1080.0)
+        );
+    }
 
     #[test]
     fn duplicate_selects_only_when_line_is_down() {
