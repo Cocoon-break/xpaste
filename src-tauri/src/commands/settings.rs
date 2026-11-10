@@ -241,6 +241,10 @@ pub fn commit_settings(
 ) -> Result<Vec<&'static str>, AppError> {
     // 先去空白再校验、比较：粘贴带空格的 Base URL 不该报错，也不该算作改动（M26 规则 6）
     settings.normalize();
+    // 不含晾衣绳的版本里设置页没有便签快捷键：撞上了就让出，不能报一个用户看不到的错
+    if !xpaste_pro::AVAILABLE {
+        settings.yield_line_hotkey();
+    }
     settings.validate()?;
     let old = state.settings().clone();
     // 面板尺寸只由拖动记忆（panel::remember_size）写；这里只为 changed 不含 panelSize，落库时 save_settings_inner 持锁再取
@@ -503,6 +507,27 @@ mod tests {
         save_settings_inner(&state, Settings::default()).unwrap();
         assert_eq!(state.settings().compact_size, (420.0, 560.0));
         assert_eq!(state.store().load_settings().compact_size, (420.0, 560.0));
+    }
+
+    /// 不含晾衣绳的版本：唤起设成 Alt+Shift+N 照常保存，便签快捷键让出；含晾衣绳的版本照常报冲突。
+    #[test]
+    fn line_hotkey_clash_yields_only_without_line() {
+        let state = AppState::for_test();
+        let new = Settings {
+            hotkey: "Alt+Shift+N".into(),
+            ..Settings::default()
+        };
+        let r = commit_settings(&state, new, |_, _, _, _, _| Ok(()));
+        if xpaste_pro::AVAILABLE {
+            assert!(matches!(
+                r,
+                Err(AppError::Core(CoreError::InvalidSettings(_)))
+            ));
+        } else {
+            r.unwrap();
+            assert_eq!(state.settings().line_hotkey, "");
+            assert_eq!(state.store().load_settings().line_hotkey, "");
+        }
     }
 
     #[test]

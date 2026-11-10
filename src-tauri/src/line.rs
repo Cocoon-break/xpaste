@@ -209,7 +209,7 @@ fn toast_for(err: Option<&AppError>) -> Toast {
     }
 }
 
-/// 便签快捷键按下：面板可见 → 让面板挂它选中的记录；否则挂最新一条。
+/// 便签快捷键按下（读库、写便签文件等重活都在单独的线程里做，不占主线程）：面板可见 → 让面板挂它选中的记录；否则挂最新一条。
 /// 无论挂没挂成都放下绳子亮一下；成功由 `hang_record` 通知面板，失败给 `line` 窗口发提示。
 pub fn hotkey_pressed(app: &AppHandle) {
     let visible = app

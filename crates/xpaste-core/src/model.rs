@@ -320,6 +320,11 @@ impl Settings {
             self.translate_hotkey.clear();
         }
         // 便签快捷键同理：升级前别的快捷键已用了 Alt+Shift+N 的，读出为不启用
+        self.yield_line_hotkey();
+    }
+
+    /// 便签快捷键与别的快捷键冲突时停用它（读出设置时用；不含晾衣绳的版本保存设置时也用，用户看不到这一项）。
+    pub fn yield_line_hotkey(&mut self) {
         if self.line_hotkey_clash().is_some() {
             self.line_hotkey.clear();
         }
