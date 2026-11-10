@@ -18,6 +18,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { ref: "${{ env.TAG }}" }
+      # 官方安装包带上私有的 Pro 代码：PRO_DEPLOY_KEY 是 xpaste-pro 仓库的只读 deploy key
+      - uses: actions/checkout@v4
+        with: { repository: Cocoon-break/xpaste-pro, path: pro, ssh-key: "${{ secrets.PRO_DEPLOY_KEY }}" }
+      - name: 确认已带上 Pro
+        run: test -f pro/rust/mod.rs && test -f pro/web/line.html
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with: { node-version: 25, cache: pnpm }
@@ -53,6 +58,8 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      - name: 前端产物里有晾衣绳页面
+        run: test -f dist/pro/web/line.html
       # Tauri 只公证 dmg 里的 .app，dmg 本身只签名：这里再把 dmg 提交公证并附上票据，
       # 系统单独检查下载下来的 dmg 时也认作已公证（Apple 建议公证最外层的分发文件）
       - if: runner.os == 'macOS'
