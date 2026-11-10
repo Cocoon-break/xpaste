@@ -13,6 +13,7 @@ mod longshot;
 mod ocr;
 mod panel;
 mod rec;
+mod remind;
 mod shot;
 pub mod state;
 mod translate;
@@ -350,6 +351,7 @@ pub fn run() {
             commands::line::line_edit,
             commands::line::line_paste_image,
             commands::line::line_reorder,
+            commands::line::line_remind,
             commands::line::line_remove,
             commands::line::line_restore,
             commands::line::line_copy,

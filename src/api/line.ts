@@ -26,6 +26,8 @@ export interface Note {
   source: string | null;
   /** Unix 秒 */
   createdAt: number;
+  /** 提醒时刻（Unix 秒），没有提醒为 null */
+  remindAt: number | null;
 }
 
 /** `Note` 加上图片的 asset URL，可直接用作 `<img src>`。 */
@@ -51,8 +53,9 @@ export interface LineView {
   hotkey: string;
 }
 
-/** 晾衣绳放下的方式：`peek` 只露绳子，`mouse` 鼠标放下，`flash` 快捷键挂上后亮一下，`kbd` 键盘打开，`drag` 拖着东西到顶端 */
-export type How = 'peek' | 'mouse' | 'flash' | 'kbd' | 'drag';
+/** 晾衣绳放下的方式：`peek` 只露绳子，`mouse` 鼠标放下，`flash` 快捷键挂上后亮一下，`kbd` 键盘打开，`drag` 拖着东西到顶端，
+ *  `remind` 提醒到点（不拿键盘，随后为每张到期的便签发 line-remind） */
+export type How = 'peek' | 'mouse' | 'flash' | 'kbd' | 'drag' | 'remind';
 
 /** `line_copy` 的结果：`copiedPath` 为原记录没了，复制的是文件路径文字 */
 export type CopyNote = { result: 'copied' } | { result: 'copiedPath' };
@@ -74,6 +77,8 @@ export const lineEdit = (id: number, body: string | null, memo: string | null) =
 export const linePasteImage = (id: number, png: Uint8Array) =>
   invoke<NoteDto>('line_paste_image', png, { headers: { 'x-note-id': String(id) } });
 export const lineReorder = (ids: number[]) => invoke<void>('line_reorder', { ids });
+/** 设（`at` 为 Unix 秒）或取消（null）提醒；过去的时刻马上到期 */
+export const lineRemind = (id: number, at: number | null) => invoke<NoteDto>('line_remind', { id, at });
 /** 返回摘下的便签与它原来的位置；撤销时把 id 交给 lineRestore */
 export const lineRemove = (id: number) => invoke<[NoteDto, number]>('line_remove', { id });
 /** 撤销摘下：后端放回它留的那份，`at` 不给放回原来的位置 */
@@ -135,6 +140,9 @@ export const onLineDrag = (cb: (x: number, y: number, item: DragItem) => void): 
 /** 绳子放下期间光标进出便签区域（晾衣绳窗口往上延到屏幕顶端），变了才发 */
 export const onLinePointer = (cb: (inside: boolean) => void): Promise<UnlistenFn> =>
   listen<{ inside: boolean }>('line-pointer', (e) => cb(e.payload.inside), target());
+/** 便签的提醒到了：每张到期的发一次，页面让它高亮 */
+export const onLineRemind = (cb: (id: number) => void): Promise<UnlistenFn> =>
+  listen<{ id: number }>('line-remind', (e) => cb(e.payload.id), target());
 /** 面板里拖着行在顶端松手：记录 id 与光标的屏幕 x */
 export const onLineDrop = (cb: (id: number, x: number) => void): Promise<UnlistenFn> =>
   listen<{ id: number; x: number }>('line-drop', (e) => cb(e.payload.id, e.payload.x), target());

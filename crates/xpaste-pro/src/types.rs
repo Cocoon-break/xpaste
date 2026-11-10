@@ -26,6 +26,9 @@ pub struct Note {
     pub record_id: Option<i64>,
     pub source: Option<String>,
     pub created_at: i64,
+    /// 提醒时刻（Unix 秒），没有提醒为 None；旧的 line.json 没有这个字段
+    #[serde(default)]
+    pub remind_at: Option<i64>,
 }
 
 /// 新挂的便签：`Note` 去掉 id、创建时间和图片文件名，加上要复制进 `line/` 的源文件。不派生 `Debug`：里面有正文。
