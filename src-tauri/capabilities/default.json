@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "面板、截图遮罩、贴图、录屏边框与划词卡片窗口的基础权限",
-  "windows": ["panel", "shot-*", "pin-*", "rec-frame", "tr-card"],
+  "description": "面板、截图遮罩、贴图、录屏边框、划词卡片与晾衣绳窗口的基础权限",
+  "windows": ["panel", "shot-*", "pin-*", "rec-frame", "tr-card", "line"],
   "permissions": ["core:default", "log:default", "core:window:allow-start-dragging"]
 }

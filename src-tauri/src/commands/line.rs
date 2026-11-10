@@ -485,6 +485,30 @@ pub fn line_open(app: AppHandle, state: State<'_, AppState>, id: u64) -> Result<
     }
 }
 
+/// 晾衣绳页面按内容报高度
+#[tauri::command]
+pub fn line_resize(app: AppHandle, h: f64) {
+    crate::line::resize(&app, h);
+}
+
+/// 页面要收起（离开便签区域、Esc、快捷键挂上后停够时间）：发 `line-hide`，页面收完再调 `line_hidden`
+#[tauri::command]
+pub fn line_hide(app: AppHandle) {
+    crate::line::hide(&app);
+}
+
+/// 页面播完收起，窗口真正隐藏
+#[tauri::command]
+pub fn line_hidden(app: AppHandle) {
+    crate::line::hidden(&app);
+}
+
+/// 页面要键盘（`true`）或交还（`false`）
+#[tauri::command]
+pub fn line_keyboard(app: AppHandle, on: bool) {
+    crate::line::keyboard(&app, on);
+}
+
 #[tauri::command(async)]
 pub fn pro_status(state: State<'_, AppState>) -> Pro {
     state.line().status(now())

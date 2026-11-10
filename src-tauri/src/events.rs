@@ -25,6 +25,10 @@ pub const CONFIRM_CLEAR: &str = "confirm-clear";
 
 /// 晾衣绳的便签或 Pro 状态变了，载荷是完整的 `commands::line::LineView`；面板据此更新已挂的刻线。
 pub const LINE_CHANGED: &str = "line-changed";
+/// 晾衣绳窗口放下，只发给 `line`：`{ how }`，见 `line::How`（`peek` 只露绳子；peek 之后再放下只换 `how`，窗口不挪）。
+pub const LINE_SHOW: &str = "line-show";
+/// 晾衣绳要收起，只发给 `line`：页面播完收起后调 `line_hidden`，窗口才真正隐藏。
+pub const LINE_HIDE: &str = "line-hide";
 
 /// 冻结完成，发给每块屏的遮罩 `shot-<i>`（载荷见 `shot::BeginPayload`）。
 pub const SHOT_BEGIN: &str = "shot-begin";

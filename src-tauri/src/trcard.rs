@@ -450,11 +450,12 @@ fn apply(w: &WebviewWindow, p: &Placement) -> tauri::Result<()> {
 }
 
 /// 上屏，`focus` 时拿键盘；macOS 上不激活应用，前台应用保持不变（同 `shot::show_overlay`）。主线程调用。
-fn front(app: &AppHandle, w: &WebviewWindow, focus: bool) -> tauri::Result<()> {
+/// 晾衣绳窗口也用它（`w` 须已转成 NSPanel）。
+pub(crate) fn front(app: &AppHandle, w: &WebviewWindow, focus: bool) -> tauri::Result<()> {
     #[cfg(target_os = "macos")]
     {
         use tauri_nspanel::ManagerExt;
-        match app.get_webview_panel(LABEL) {
+        match app.get_webview_panel(w.label()) {
             // orderFrontRegardless + makeKeyWindow
             Ok(p) if focus => p.show(),
             Ok(p) => p.order_front_regardless(),

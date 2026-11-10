@@ -8,6 +8,7 @@ pub mod error;
 mod events;
 mod hotkey;
 mod housekeeping;
+mod line;
 mod longshot;
 mod ocr;
 mod panel;
@@ -146,6 +147,9 @@ pub fn run() {
             clipboard::start(app.handle().clone());
             shot::prewarm(app.handle());
             trcard::prewarm(app.handle());
+            if xpaste_pro::AVAILABLE {
+                line::start(app.handle());
+            }
             // 首次启动直接显示面板与引导（AC-M18-01）
             if first_run {
                 app.state::<AppState>()
@@ -210,6 +214,13 @@ pub fn run() {
                 api.prevent_close();
                 let app = window.app_handle();
                 trcard::close(app, trcard::current(app));
+            }
+            // 晾衣绳同理，Alt+F4 当作 Esc：收起
+            if window.label() == line::LABEL
+                && let WindowEvent::CloseRequested { api, .. } = event
+            {
+                api.prevent_close();
+                line::hide(window.app_handle());
             }
             // 截图遮罩（shot-*）与贴图（pin-*）失焦不处理
             if window.label() != "panel" {
@@ -307,6 +318,10 @@ pub fn run() {
             commands::line::line_restore,
             commands::line::line_copy,
             commands::line::line_open,
+            commands::line::line_resize,
+            commands::line::line_hide,
+            commands::line::line_hidden,
+            commands::line::line_keyboard,
             commands::line::pro_status,
             commands::line::pro_activate
         ])
