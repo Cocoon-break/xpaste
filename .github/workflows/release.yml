@@ -58,6 +58,12 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      # 标记 pro.json.tmp 来自 pro/rust/trial.rs，只有带 Pro 编译的二进制里才有；改名时两处同步
+      - name: 确认 Rust 侧带上 Pro
+        run: |
+          bin=target/release/xpaste
+          [ "$RUNNER_OS" = Windows ] && bin=$bin.exe
+          grep -a -q 'pro.json.tmp' "$bin" || { echo "$bin 里没有 Pro 标记：Rust 侧没带上 Pro" >&2; exit 1; }
       - name: 前端产物里有晾衣绳页面
         run: test -f dist/pro/web/line.html
       # Tauri 只公证 dmg 里的 .app，dmg 本身只签名：这里再把 dmg 提交公证并附上票据，
