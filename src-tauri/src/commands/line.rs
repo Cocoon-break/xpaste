@@ -485,6 +485,12 @@ pub fn line_open(app: AppHandle, state: State<'_, AppState>, id: u64) -> Result<
     }
 }
 
+/// 页面开始监听 line-show 后调用；之前不检测顶端
+#[tauri::command]
+pub fn line_ready() {
+    crate::line::ready();
+}
+
 /// 晾衣绳页面按内容报高度
 #[tauri::command]
 pub fn line_resize(app: AppHandle, h: f64) {

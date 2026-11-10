@@ -3,6 +3,7 @@
 //! 检测线程每 16 ms 采样光标：碰到顶端先只露绳子（peek），停 200 ms 或甩上去才放下；
 //! 放下后线程不再采样，收起由页面决定（离开、Esc、快捷键挂上后停够时间）。
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -156,6 +157,15 @@ fn shown() -> MutexGuard<'static, Shown> {
     SHOWN.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// 页面已开始监听 `line-show`；之前检测线程只睡，不检测顶端（页面没加载好时放下的窗口会挡住顶端的点击）
+static READY: AtomicBool = AtomicBool::new(false);
+
+/// 页面开始监听 line-show 后调用；之前不检测顶端
+pub fn ready() {
+    READY.store(true, Ordering::Relaxed);
+    log::info!("晾衣绳页面就绪，开始检测顶端");
+}
+
 /// 绳子已放下（只露绳子不算）：检测线程据此停止采样
 fn is_open() -> bool {
     shown().how.is_some_and(|h| h != How::Peek)
@@ -213,6 +223,9 @@ fn detect(app: &AppHandle) {
     let mut read_at: Option<Instant> = None;
     loop {
         std::thread::sleep(TICK);
+        if !READY.load(Ordering::Relaxed) {
+            continue;
+        }
         if is_open() {
             // 收起后先离开顶端才会再放下：按 Esc 收起时光标还在顶端，不立刻又放下来
             edge = Edge {
@@ -228,14 +241,15 @@ fn detect(app: &AppHandle) {
                 Err(e) => log::debug!("晾衣绳读取屏幕失败：{e}"),
             }
         }
-        let Ok(c) = app.cursor_position() else {
+        // 不用 app.cursor_position()：它要等主线程应答，每秒 60 次会一直唤醒主线程
+        let Some((x, y)) = xpaste_platform::pointer_position() else {
             continue;
         };
-        let (rects, psf) = (&screens.0, screens.1);
+        let (rects, k) = (&screens.0, screens.1);
         let t = t0.elapsed().as_millis() as u64;
         // 拖文件、拖记录到顶端时主键按着
         let button = xpaste_platform::mouse_button_down();
-        match edge.step((c.x / psf, c.y / psf), rects, t, button) {
+        match edge.step((x / k, y / k), rects, t, button) {
             Some(EdgeEvent::Peek) => show(app, How::Peek),
             Some(EdgeEvent::Open(how)) => show(app, how),
             Some(EdgeEvent::Leave) => hide(app),
@@ -244,10 +258,16 @@ fn detect(app: &AppHandle) {
     }
 }
 
-/// 全部屏幕的矩形与主屏缩放，光标除以主屏缩放后与之同一空间。换算同 `panel::monitor_contains`：
-/// macOS 的光标按主屏缩放、显示器按各自缩放，都换回点；Windows 都是物理像素，统一除以主屏缩放，屏与屏相接的关系不变。
+/// 全部屏幕的矩形，以及 `pointer_position` 要除的系数，除完与矩形同一空间：
+/// macOS 的指针已是点（主屏左上为原点），显示器按各自缩放换回点，系数为 1；
+/// Windows 的指针与显示器都是物理像素（Per-Monitor-v2），统一除以主屏缩放：混合 DPI 下屏与屏相接的关系不变，
+/// 主屏上的单位就是逻辑像素（顶端 1 px、甩的速度都按它算）。
 fn read_screens(app: &AppHandle) -> tauri::Result<(Vec<Rect>, f64)> {
-    let psf = app.primary_monitor()?.map_or(1.0, |m| m.scale_factor());
+    let psf = if cfg!(target_os = "macos") {
+        1.0
+    } else {
+        app.primary_monitor()?.map_or(1.0, |m| m.scale_factor())
+    };
     let rects = app
         .available_monitors()?
         .iter()
