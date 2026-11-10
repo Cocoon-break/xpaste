@@ -255,24 +255,27 @@ pub fn hotkey_pressed(app: &AppHandle) {
     // 读库与写便签文件，不占着快捷键回调所在的主线程
     if let Err(e) = std::thread::Builder::new()
         .name("line-hotkey".into())
-        .spawn(move || hang_and_flash(&app, None))
+        .spawn(move || hang_and_flash(&app, None, true))
     {
         log::warn!("便签快捷键线程启动失败：{e}");
     }
 }
 
-/// 已经挂着、绳子也放下着（只露一截不算）：改成键盘操作并选中那张，返回它的 id；否则 None，照常亮一下并提示。
-fn select_on_duplicate(shown: Option<How>, err: Option<&AppError>) -> Option<u64> {
+/// 快捷键挂的已经挂着、绳子也放下着（只露一截不算）：改成键盘操作并选中那张，返回它的 id；否则 None，照常亮一下并提示。
+/// 面板里挂的（`select` 为 false）从不选中：拿键盘会让面板失焦隐藏。
+fn select_on_duplicate(shown: Option<How>, err: Option<&AppError>, select: bool) -> Option<u64> {
     match err {
-        Some(AppError::LineDuplicate(id)) if shown.is_some_and(|h| h != How::Peek) => Some(*id),
+        Some(AppError::LineDuplicate(id)) if select && shown.is_some_and(|h| h != How::Peek) => {
+            Some(*id)
+        }
         _ => None,
     }
 }
 
 /// 挂上记录 `id`（None 为最新一条）：挂上了就放下绳子亮一下（已放下时续亮）；
-/// 已经挂着时，绳子放下着就改成键盘操作并选中那张，收着就亮一下、提示“已经挂着了”并让那张轻摆；其余没挂成的亮一下并提示。
-/// 便签快捷键与面板的挂钩按钮共用；要读库、写便签文件，不在主线程调用。
-pub fn hang_and_flash(app: &AppHandle, id: Option<i64>) {
+/// 已经挂着时，`select`（快捷键）且绳子放下着就改成键盘操作并选中那张，否则亮一下、提示“已经挂着了”并让那张轻摆；
+/// 其余没挂成的亮一下并提示。便签快捷键与面板的挂钩按钮共用；要读库、写便签文件，不在主线程调用。
+pub fn hang_and_flash(app: &AppHandle, id: Option<i64>, select: bool) {
     let state = app.state::<AppState>();
     let id = match id {
         Some(id) => Ok(Some(id)),
@@ -291,7 +294,7 @@ pub fn hang_and_flash(app: &AppHandle, id: Option<i64>) {
     };
     let err = res.err();
     let how = shown().how;
-    if let Some(sel) = select_on_duplicate(how, err.as_ref().and_then(Option::as_ref)) {
+    if let Some(sel) = select_on_duplicate(how, err.as_ref().and_then(Option::as_ref), select) {
         return show_selecting(app, How::Kbd, Some(sel));
     }
     show(app, How::Flash);
@@ -605,6 +608,13 @@ pub fn resize(app: &AppHandle, h: f64) {
     }
 }
 
+/// 晾衣绳窗口失去键盘（用户点了别的应用）：键盘已在用户点的地方，收起时不再切回原来的窗口。
+pub fn blur() {
+    let mut s = shown();
+    s.keyboard = false;
+    s.previous = None;
+}
+
 /// 页面要键盘（点到便签、进入编辑）或交还。交还只在 Windows 上切回原来的窗口；
 /// macOS 上键盘留到用户点别处或绳子收起（orderOut 时系统交还）。
 pub fn keyboard(app: &AppHandle, on: bool) {
@@ -639,14 +649,16 @@ mod tests {
     fn duplicate_selects_only_when_line_is_down() {
         let dup = AppError::LineDuplicate(7);
         for how in [How::Flash, How::Mouse, How::Kbd, How::Drag] {
-            assert_eq!(select_on_duplicate(Some(how), Some(&dup)), Some(7));
+            assert_eq!(select_on_duplicate(Some(how), Some(&dup), true), Some(7));
+            // 面板里挂的从不选中
+            assert_eq!(select_on_duplicate(Some(how), Some(&dup), false), None);
         }
-        assert_eq!(select_on_duplicate(None, Some(&dup)), None);
-        assert_eq!(select_on_duplicate(Some(How::Peek), Some(&dup)), None);
+        assert_eq!(select_on_duplicate(None, Some(&dup), true), None);
+        assert_eq!(select_on_duplicate(Some(How::Peek), Some(&dup), true), None);
         // 挂上了、或别的错误：照常亮一下
-        assert_eq!(select_on_duplicate(Some(How::Flash), None), None);
+        assert_eq!(select_on_duplicate(Some(How::Flash), None, true), None);
         assert_eq!(
-            select_on_duplicate(Some(How::Mouse), Some(&AppError::LineExpired)),
+            select_on_duplicate(Some(How::Mouse), Some(&AppError::LineExpired), true),
             None
         );
     }
