@@ -30,7 +30,8 @@ pub const LINE_HANG_SELECTED: &str = "line-hang-selected";
 /// 快捷键没挂成时的提示，只发给 `line`：`{ text, action?, id? }`，见 `line::Toast`。
 /// `action` 为 `"pro"` 时提示条带“输入授权码”按钮；`id` 是已挂着的那张便签，页面让它轻摆一下。
 pub const LINE_TOAST: &str = "line-toast";
-/// 晾衣绳窗口放下，只发给 `line`：`{ how }`，见 `line::How`（`peek` 只露绳子；peek 之后再放下只换 `how`，窗口不挪）。
+/// 晾衣绳窗口放下，只发给 `line`：`{ how, id }`，见 `line::How`（`peek` 只露绳子；peek 之后再放下只换 `how`，窗口不挪）。
+/// `id` 不为 null 时是要选中的便签：快捷键挂的内容已经挂着、绳子又放下着，键盘落在那张上。
 pub const LINE_SHOW: &str = "line-show";
 /// 晾衣绳要收起，只发给 `line`：页面播完收起后调 `line_hidden`，窗口才真正隐藏。
 pub const LINE_HIDE: &str = "line-hide";

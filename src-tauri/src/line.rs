@@ -240,41 +240,16 @@ fn toast_for(err: Option<&AppError>) -> Toast {
     }
 }
 
-/// 便签快捷键按下时做什么，见 `hotkey_action`。
-#[derive(PartialEq, Debug)]
-enum HotkeyAction {
-    /// 绳子已由鼠标或快捷键放下：改成键盘操作，不挂东西
-    Keyboard,
-    /// 面板可见：让面板挂它选中的记录
-    Panel,
-    /// 挂最新一条记录
-    HangLatest,
-}
-
-/// 绳子已经放下（鼠标或快捷键挂上后亮着）时再按快捷键，改成键盘操作；否则面板可见挂选中的，不可见挂最新一条。
-fn hotkey_action(shown: Option<How>, panel_visible: bool) -> HotkeyAction {
-    if matches!(shown, Some(How::Flash | How::Mouse)) {
-        HotkeyAction::Keyboard
-    } else if panel_visible {
-        HotkeyAction::Panel
-    } else {
-        HotkeyAction::HangLatest
-    }
-}
-
-/// 便签快捷键按下（读库、写便签文件等重活都在单独的线程里做，不占主线程）：见 `hotkey_action`。
-/// 挂的时候无论挂没挂成都放下绳子亮一下；成功由 `hang_record` 通知面板，失败给 `line` 窗口发提示。
+/// 便签快捷键按下（读库、写便签文件等重活都在单独的线程里做，不占主线程）：面板可见 → 让面板挂它选中的记录；否则挂最新一条。
+/// 结果怎么显示见 `hang_and_flash`。
 pub fn hotkey_pressed(app: &AppHandle) {
     let visible = app
         .get_webview_window("panel")
         .is_some_and(|w| w.is_visible().unwrap_or(false));
-    // 先取出来再判断：持着 SHOWN 锁调 show 会锁第二次
-    let how = shown().how;
-    match hotkey_action(how, visible) {
-        HotkeyAction::Keyboard => return show(app, How::Kbd),
+    if visible {
         // 只发给面板：隐藏的晾衣绳窗口可能也载入了面板前端
-        HotkeyAction::Panel => return emit_to(app, "panel", LINE_HANG_SELECTED, ()),
-        HotkeyAction::HangLatest => {}
+        emit_to(app, "panel", LINE_HANG_SELECTED, ());
+        return;
     }
     let app = app.clone();
     // 读库与写便签文件，不占着快捷键回调所在的主线程
@@ -286,7 +261,16 @@ pub fn hotkey_pressed(app: &AppHandle) {
     }
 }
 
-/// 挂上记录 `id`（None 为最新一条）后放下绳子亮一下，挂没挂成都放下；没挂成给 `line` 窗口发提示。
+/// 已经挂着、绳子也放下着（只露一截不算）：改成键盘操作并选中那张，返回它的 id；否则 None，照常亮一下并提示。
+fn select_on_duplicate(shown: Option<How>, err: Option<&AppError>) -> Option<u64> {
+    match err {
+        Some(AppError::LineDuplicate(id)) if shown.is_some_and(|h| h != How::Peek) => Some(*id),
+        _ => None,
+    }
+}
+
+/// 挂上记录 `id`（None 为最新一条）：挂上了就放下绳子亮一下（已放下时续亮）；
+/// 已经挂着时，绳子放下着就改成键盘操作并选中那张，收着就亮一下、提示“已经挂着了”并让那张轻摆；其余没挂成的亮一下并提示。
 /// 便签快捷键与面板的挂钩按钮共用；要读库、写便签文件，不在主线程调用。
 pub fn hang_and_flash(app: &AppHandle, id: Option<i64>) {
     let state = app.state::<AppState>();
@@ -294,19 +278,25 @@ pub fn hang_and_flash(app: &AppHandle, id: Option<i64>) {
         Some(id) => Ok(Some(id)),
         None => state.store().latest_live_id(),
     };
-    let toast = match id {
+    // Err(None)：剪切板里还没有记录
+    let res = match id {
         Ok(Some(id)) => crate::commands::line::hang_record(app, &state, id, None)
-            .err()
-            .map(|e| toast_for(Some(&e))),
-        Ok(None) => Some(toast_for(None)),
+            .map(|_| ())
+            .map_err(Some),
+        Ok(None) => Err(None),
         Err(e) => {
             log::warn!("读取最新记录失败：{e}");
-            Some(toast_for(Some(&e.into())))
+            Err(Some(e.into()))
         }
     };
+    let err = res.err();
+    let how = shown().how;
+    if let Some(sel) = select_on_duplicate(how, err.as_ref().and_then(Option::as_ref)) {
+        return show_selecting(app, How::Kbd, Some(sel));
+    }
     show(app, How::Flash);
-    if let Some(t) = toast {
-        emit_to(app, LABEL, LINE_TOAST, t);
+    if let Some(e) = err {
+        emit_to(app, LABEL, LINE_TOAST, toast_for(e.as_ref()));
     }
 }
 
@@ -442,6 +432,11 @@ fn read_screens(app: &AppHandle) -> tauri::Result<(Vec<Rect>, f64)> {
 /// 放到光标所在屏工作区顶端，宽为工作区宽，发 `line-show { how }`。
 /// 已放下时不退回只露绳子；只露绳子之后再放下只换 `how`，窗口不挪。`Kbd` 拿键盘，其余不拿。
 pub fn show(app: &AppHandle, how: How) {
+    show_selecting(app, how, None);
+}
+
+/// 同 `show`，`line-show` 另带要选中的便签 `id`（键盘落在它上面）。
+fn show_selecting(app: &AppHandle, how: How, select: Option<u64>) {
     on_main(app, move |app| {
         let Some(w) = app.get_webview_window(LABEL) else {
             return log::warn!("找不到晾衣绳窗口");
@@ -463,7 +458,12 @@ pub fn show(app: &AppHandle, how: How) {
         if let Err(e) = w.set_ignore_cursor_events(how == How::Peek) {
             log::warn!("晾衣绳设置点击穿透失败：{e}");
         }
-        emit_to(app, LABEL, LINE_SHOW, serde_json::json!({ "how": how }));
+        emit_to(
+            app,
+            LABEL,
+            LINE_SHOW,
+            serde_json::json!({ "how": how, "id": select }),
+        );
         let r = if how == How::Kbd {
             take_keyboard(app, &w)
         } else if first {
@@ -533,7 +533,16 @@ pub fn hide(app: &AppHandle) {
         .name("line-hide".into())
         .spawn(move || {
             std::thread::sleep(HIDDEN_FALLBACK);
-            if GEN.load(Ordering::Relaxed) == g && shown().how.is_some() {
+            // 判断与清空在同一把锁里：中间插进来的 show 会先加 GEN
+            let fire = {
+                let mut s = shown();
+                let fire = GEN.load(Ordering::Relaxed) == g && s.how.is_some();
+                if fire {
+                    s.how = None;
+                }
+                fire
+            };
+            if fire {
                 log::warn!("晾衣绳页面没有报告收完，直接收起");
                 hidden(&app);
             }
@@ -627,16 +636,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn hotkey_on_dropped_line_switches_to_keyboard() {
-        use HotkeyAction::*;
-        for how in [How::Flash, How::Mouse] {
-            assert_eq!(hotkey_action(Some(how), false), Keyboard);
-            assert_eq!(hotkey_action(Some(how), true), Keyboard);
+    fn duplicate_selects_only_when_line_is_down() {
+        let dup = AppError::LineDuplicate(7);
+        for how in [How::Flash, How::Mouse, How::Kbd, How::Drag] {
+            assert_eq!(select_on_duplicate(Some(how), Some(&dup)), Some(7));
         }
-        for how in [None, Some(How::Peek), Some(How::Kbd), Some(How::Drag)] {
-            assert_eq!(hotkey_action(how, true), Panel);
-            assert_eq!(hotkey_action(how, false), HangLatest);
-        }
+        assert_eq!(select_on_duplicate(None, Some(&dup)), None);
+        assert_eq!(select_on_duplicate(Some(How::Peek), Some(&dup)), None);
+        // 挂上了、或别的错误：照常亮一下
+        assert_eq!(select_on_duplicate(Some(How::Flash), None), None);
+        assert_eq!(
+            select_on_duplicate(Some(How::Mouse), Some(&AppError::LineExpired)),
+            None
+        );
     }
 
     #[test]

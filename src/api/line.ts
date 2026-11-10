@@ -118,8 +118,9 @@ export const onLineHangSelected = (cb: () => void): Promise<UnlistenFn> =>
   listen('line-hang-selected', () => cb(), target());
 
 // 下面只发给 `line` 窗口
-export const onLineShow = (cb: (how: How) => void): Promise<UnlistenFn> =>
-  listen<{ how: How }>('line-show', (e) => cb(e.payload.how), target());
+/** `id`：要选中的便签（快捷键挂的内容已经挂着、绳子放下着时，键盘落在它上面） */
+export const onLineShow = (cb: (how: How, id: number | null) => void): Promise<UnlistenFn> =>
+  listen<{ how: How; id?: number | null }>('line-show', (e) => cb(e.payload.how, e.payload.id ?? null), target());
 export const onLineHide = (cb: () => void): Promise<UnlistenFn> => listen('line-hide', () => cb(), target());
 export const onLineToast = (cb: (t: LineToast) => void): Promise<UnlistenFn> =>
   listen<LineToast>('line-toast', (e) => cb(e.payload), target());
