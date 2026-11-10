@@ -163,6 +163,8 @@ pub struct Settings {
     pub translate_lang: String,
     /// 划词翻译全局快捷键；空字符串表示不启用（M15、M26 规则 18）
     pub translate_hotkey: String,
+    /// 把最近复制或面板选中的记录挂上晾衣绳的全局快捷键；空字符串表示不启用
+    pub line_hotkey: String,
 }
 
 impl Default for Settings {
@@ -210,6 +212,7 @@ impl Default for Settings {
             translate_model: String::new(),
             translate_lang: "zh-Hans".into(),
             translate_hotkey: "Alt+Shift+T".into(),
+            line_hotkey: "Alt+Shift+N".into(),
         }
     }
 }
@@ -316,6 +319,34 @@ impl Settings {
         if self.translate_hotkey_clash().is_some() {
             self.translate_hotkey.clear();
         }
+        // 便签快捷键同理：升级前别的快捷键已用了 Alt+Shift+N 的，读出为不启用
+        if self.line_hotkey_clash().is_some() {
+            self.line_hotkey.clear();
+        }
+    }
+
+    /// 便签快捷键与哪个快捷键是同一组合（按唤起、截图、录屏、翻译的顺序）；录屏只在 macOS 上比。
+    fn line_hotkey_clash(&self) -> Option<&'static str> {
+        if self.line_hotkey.is_empty() {
+            return None;
+        }
+        let key = hotkey_key(&self.line_hotkey);
+        [
+            ("唤起", self.hotkey.as_str()),
+            ("截图", self.shot_hotkey.as_str()),
+            (
+                "录屏",
+                if cfg!(target_os = "macos") {
+                    self.rec_hotkey.as_str()
+                } else {
+                    ""
+                },
+            ),
+            ("翻译", self.translate_hotkey.as_str()),
+        ]
+        .into_iter()
+        .find(|(_, k)| !k.is_empty() && hotkey_key(k) == key)
+        .map(|(name, _)| name)
     }
 
     /// 翻译快捷键与哪个快捷键是同一组合（按唤起、截图、录屏的顺序）；录屏只在 macOS 上比（M24：别处不注册录屏快捷键）。
@@ -386,6 +417,12 @@ impl Settings {
         }
         if let Some(name) = self.translate_hotkey_clash() {
             return fail(&format!("翻译快捷键不能与{name}快捷键相同"));
+        }
+        if !self.line_hotkey.is_empty() && !has_modifier(&self.line_hotkey) {
+            return fail("便签快捷键至少需要包含 Mod 或 Alt");
+        }
+        if let Some(name) = self.line_hotkey_clash() {
+            return fail(&format!("便签快捷键不能与{name}快捷键相同"));
         }
         if !matches!(self.translate_engine.as_str(), "" | "system" | "openai") {
             return fail("翻译引擎只能是系统翻译或 OpenAI 兼容接口");
@@ -1137,6 +1174,47 @@ mod tests {
                 .is_ok()
         );
         assert!(with("Alt+Space", "Alt+Shift+A", "R").validate().is_ok());
+    }
+
+    #[test]
+    fn line_hotkey_conflict_is_invalid() {
+        assert_eq!(Settings::default().line_hotkey, "Alt+Shift+N");
+        assert!(Settings::default().validate().is_ok());
+        let with = |line: &str| Settings {
+            hotkey: "Alt+Space".into(),
+            line_hotkey: line.into(),
+            ..Default::default()
+        };
+        assert!(with("").validate().is_ok());
+        assert_eq!(invalid(&with("N")), "便签快捷键至少需要包含 Mod 或 Alt");
+        assert_eq!(
+            invalid(&with(" alt+SPACE")),
+            "便签快捷键不能与唤起快捷键相同"
+        );
+        assert_eq!(
+            invalid(&with("Option+Shift+A")),
+            "便签快捷键不能与截图快捷键相同"
+        );
+        assert_eq!(
+            invalid(&with("Alt+Shift+T")),
+            "便签快捷键不能与翻译快捷键相同"
+        );
+    }
+
+    /// 旧版设置的 JSON 里没有 lineHotkey：读出默认值；唤起已用了 Alt+Shift+N 的读出为不启用。
+    #[test]
+    fn line_hotkey_defaults_when_missing_and_yields_on_clash() {
+        let (s, dropped) = Settings::from_json_lenient(r#"{"maxRecords":1000}"#).unwrap();
+        assert_eq!(s.line_hotkey, "Alt+Shift+N");
+        assert!(dropped.is_empty());
+        let s: Settings = serde_json::from_str(r#"{"hotkey":"Alt+Space"}"#).unwrap();
+        assert_eq!(s.line_hotkey, "Alt+Shift+N");
+        let (s, dropped) = Settings::from_json_lenient(r#"{"hotkey":"Alt+Shift+N"}"#).unwrap();
+        assert_eq!(
+            (s.hotkey.as_str(), s.line_hotkey.as_str()),
+            ("Alt+Shift+N", "")
+        );
+        assert!(dropped.is_empty(), "{dropped:?}");
     }
 
     #[test]

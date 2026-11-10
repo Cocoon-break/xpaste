@@ -100,11 +100,12 @@ pub fn run() {
                 Store::open(&data_dir).inspect_err(|e| log::error!("打开数据库失败：{e}"))?;
             let first_run = matches!(store.kv_get("onboarded"), Ok(None));
             let settings = store.load_settings();
-            let (hotkey, shot_hotkey, rec_hotkey, tr_hotkey, appearance) = (
+            let (hotkey, shot_hotkey, rec_hotkey, tr_hotkey, line_hotkey, appearance) = (
                 settings.hotkey.clone(),
                 settings.shot_hotkey.clone(),
                 settings.rec_hotkey.clone(),
                 settings.translate_hotkey.clone(),
+                settings.line_hotkey.clone(),
                 settings.appearance,
             );
             let enrich = enrich::start(app.handle().clone());
@@ -127,17 +128,31 @@ pub fn run() {
             if let Err(e) = tray::setup(app) {
                 log::warn!("托盘图标创建失败：{e}");
             }
-            if let Err(e) =
-                hotkey::register(app.handle(), &hotkey, &shot_hotkey, &rec_hotkey, &tr_hotkey)
-            {
+            if let Err(e) = hotkey::register(
+                app.handle(),
+                &hotkey,
+                &shot_hotkey,
+                &rec_hotkey,
+                &tr_hotkey,
+                &line_hotkey,
+            ) {
                 log::warn!("快捷键注册失败：{e}");
-                // register 只报第一个失败，截图、录屏、翻译是否注册上另查；它们失败只提示，不标记托盘
+                // register 只报第一个失败，截图、录屏、翻译、便签是否注册上另查；它们失败只提示，不标记托盘
                 let panel_failed = matches!(e, error::AppError::HotkeyTaken);
-                let (shot_failed, rec_failed, tr_failed) =
-                    hotkey::unregistered(app.handle(), &shot_hotkey, &rec_hotkey, &tr_hotkey);
-                if let Some(body) =
-                    hotkey::failure_notice(panel_failed, shot_failed, rec_failed, tr_failed)
-                {
+                let (shot_failed, rec_failed, tr_failed, line_failed) = hotkey::unregistered(
+                    app.handle(),
+                    &shot_hotkey,
+                    &rec_hotkey,
+                    &tr_hotkey,
+                    &line_hotkey,
+                );
+                if let Some(body) = hotkey::failure_notice(
+                    panel_failed,
+                    shot_failed,
+                    rec_failed,
+                    tr_failed,
+                    line_failed,
+                ) {
                     notify(app.handle(), &body);
                 }
                 if panel_failed {
@@ -177,7 +192,7 @@ pub fn run() {
                     if longshot::key(shortcut) {
                         return;
                     }
-                    let (p, s, r, t) = {
+                    let (p, s, r, t, l) = {
                         let st = app.state::<AppState>();
                         let s = st.settings();
                         (
@@ -185,15 +200,17 @@ pub fn run() {
                             s.shot_hotkey.clone(),
                             s.rec_hotkey.clone(),
                             s.translate_hotkey.clone(),
+                            s.line_hotkey.clone(),
                         )
                     };
-                    match hotkey::role_of(shortcut, &p, &s, &r, &t) {
+                    match hotkey::role_of(shortcut, &p, &s, &r, &t, &l) {
                         Some(hotkey::Role::Panel) => {
                             panel::toggle(app, timing.then(now_unix_ms), panel::Trigger::Hotkey)
                         }
                         Some(hotkey::Role::Shot) => hotkey::shot_pressed(app),
                         Some(hotkey::Role::Rec) => hotkey::rec_pressed(app),
                         Some(hotkey::Role::Translate) => hotkey::translate_pressed(app),
+                        Some(hotkey::Role::Line) => line::hotkey_pressed(app),
                         None => {}
                     }
                 })

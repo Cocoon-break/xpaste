@@ -235,6 +235,16 @@ pub fn line_hang_record(
     id: i64,
     at: Option<usize>,
 ) -> Result<NoteDto, AppError> {
+    hang_record(&app, &state, id, at)
+}
+
+/// `line_hang_record` 与便签快捷键共用：读出记录、挂上、通知面板
+pub fn hang_record(
+    app: &AppHandle,
+    state: &AppState,
+    id: i64,
+    at: Option<usize>,
+) -> Result<NoteDto, AppError> {
     // 先读 store 再锁 line，两把锁不同时持有
     let d = {
         let store = state.store();
@@ -245,13 +255,13 @@ pub fn line_hang_record(
     }
     .ok_or_else(|| AppError::Invalid("记录不存在".into()))?;
     let source = d.summary.app.as_ref().map(|a| a.name.clone());
-    let note = add(&state, note_from_detail(&d, source), at)?;
+    let note = add(state, note_from_detail(&d, source), at)?;
     log::info!(
         "便签 挂上 id={} 记录={id} kind={:?}",
         note.note.id,
         note.note.kind
     );
-    changed(&app);
+    changed(app);
     Ok(note)
 }
 

@@ -55,7 +55,7 @@ test('formToSettings 只改表单字段，其余（含外观：点选即保存�
     recHotkey: 'Alt+Shift+R', recDir: '', recSystemAudio: false, recMicrophone: false, recCopy: true,
     recQuality: 'standard', recFps: 30,
     translateEngine: '', translateBaseUrl: 'https://api.openai.com/v1', translateApiKey: '', translateModel: '', translateLang: 'zh-Hans',
-    translateHotkey: 'Alt+Shift+T',
+    translateHotkey: 'Alt+Shift+T', lineHotkey: 'Alt+Shift+N',
   };
   assert.deepEqual(
     formToSettings(base, {
@@ -74,7 +74,7 @@ test('formToSettings 只改表单字段，其余（含外观：点选即保存�
       recHotkey: 'Alt+Shift+T', recDir: '/y', recSystemAudio: true, recMicrophone: true, recCopy: false,
       recQuality: 'small', recFps: 60,
       translateEngine: '', translateBaseUrl: 'https://api.openai.com/v1', translateApiKey: '', translateModel: '', translateLang: 'zh-Hans',
-    translateHotkey: 'Alt+Shift+T',
+      translateHotkey: 'Alt+Shift+T', lineHotkey: 'Alt+Shift+N',
     },
   );
 });

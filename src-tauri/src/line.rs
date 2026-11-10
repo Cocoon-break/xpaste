@@ -10,8 +10,10 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
-use crate::events::{LINE_HIDE, LINE_SHOW, emit_to};
+use crate::error::AppError;
+use crate::events::{LINE_HANG_SELECTED, LINE_HIDE, LINE_SHOW, LINE_TOAST, emit_to};
 use crate::panel::{Rect, on_main};
+use crate::state::AppState;
 
 pub const LABEL: &str = "line";
 pub const PAGE: &str = "pro/web/line.html";
@@ -25,7 +27,6 @@ pub enum How {
     /// 鼠标放下；点到便签时页面调 `line_keyboard(true)` 再拿键盘
     Mouse,
     /// 快捷键挂上后亮一下，不拿键盘
-    #[allow(dead_code)] // 便签快捷键接上后用到
     Flash,
     /// 键盘打开，拿键盘
     Kbd,
@@ -180,6 +181,70 @@ pub fn start(app: &AppHandle) {
         .spawn(move || detect(&app))
     {
         log::warn!("晾衣绳检测线程启动失败：{e}");
+    }
+}
+
+/// `line-toast` 的载荷
+#[derive(Clone, Serialize, PartialEq, Debug)]
+pub struct Toast {
+    pub text: String,
+    /// `"pro"`：提示条带“输入授权码”按钮
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<&'static str>,
+    /// 已挂着的那张便签
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<u64>,
+}
+
+/// 快捷键没挂成时的提示；没有记录时 `err` 为 None。
+fn toast_for(err: Option<&AppError>) -> Toast {
+    let text = err.map_or_else(|| "剪切板里还没有内容".to_owned(), ToString::to_string);
+    Toast {
+        text,
+        action: matches!(err, Some(AppError::LineExpired)).then_some("pro"),
+        id: match err {
+            Some(AppError::LineDuplicate(id)) => Some(*id),
+            _ => None,
+        },
+    }
+}
+
+/// 便签快捷键按下：面板可见 → 让面板挂它选中的记录；否则挂最新一条。
+/// 无论挂没挂成都放下绳子亮一下；成功由 `hang_record` 通知面板，失败给 `line` 窗口发提示。
+pub fn hotkey_pressed(app: &AppHandle) {
+    let visible = app
+        .get_webview_window("panel")
+        .is_some_and(|w| w.is_visible().unwrap_or(false));
+    if visible {
+        // 只发给面板：隐藏的晾衣绳窗口可能也载入了面板前端
+        emit_to(app, "panel", LINE_HANG_SELECTED, ());
+        return;
+    }
+    let app = app.clone();
+    // 读库与写便签文件，不占着快捷键回调所在的主线程
+    if let Err(e) = std::thread::Builder::new()
+        .name("line-hotkey".into())
+        .spawn(move || {
+            let state = app.state::<AppState>();
+            let latest = state.store().latest_live_id();
+            let toast = match latest {
+                Ok(Some(id)) => match crate::commands::line::hang_record(&app, &state, id, None) {
+                    Ok(_) => None,
+                    Err(e) => Some(toast_for(Some(&e))),
+                },
+                Ok(None) => Some(toast_for(None)),
+                Err(e) => {
+                    log::warn!("读取最新记录失败：{e}");
+                    Some(toast_for(Some(&e.into())))
+                }
+            };
+            show(&app, How::Flash);
+            if let Some(t) = toast {
+                emit_to(&app, LABEL, LINE_TOAST, t);
+            }
+        })
+    {
+        log::warn!("便签快捷键线程启动失败：{e}");
     }
 }
 
@@ -458,6 +523,23 @@ pub fn keyboard(app: &AppHandle, on: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn toast_texts_and_extras() {
+        let t = toast_for(None);
+        assert_eq!(
+            (t.text.as_str(), t.action, t.id),
+            ("剪切板里还没有内容", None, None)
+        );
+        let t = toast_for(Some(&AppError::LineDuplicate(7)));
+        assert_eq!(
+            (t.text.as_str(), t.action, t.id),
+            ("已经挂着了", None, Some(7))
+        );
+        let t = toast_for(Some(&AppError::LineExpired));
+        assert_eq!(t.action, Some("pro"));
+        assert!(t.text.starts_with("试用已结束"));
+    }
 
     const MAIN: Rect = Rect {
         x: 0.0,

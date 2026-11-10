@@ -17,6 +17,8 @@ pub enum AppError {
     RecHotkeyTaken,
     #[error("翻译快捷键已被其他应用占用，请换一个")]
     TranslateHotkeyTaken,
+    #[error("便签快捷键已被其他应用占用，请换一个")]
+    LineHotkeyTaken,
     /// 参数不合法（非 http 链接、记录不存在等）
     #[error("{0}")]
     Invalid(String),
@@ -68,6 +70,7 @@ impl AppError {
             Self::ShotHotkeyTaken => "shotHotkeyTaken",
             Self::RecHotkeyTaken => "recHotkeyTaken",
             Self::TranslateHotkeyTaken => "translateHotkeyTaken",
+            Self::LineHotkeyTaken => "lineHotkeyTaken",
             Self::Invalid(_) => "invalid",
             Self::TranslateConfig => "translateConfig",
             Self::TranslatePack { .. } => "translatePack",

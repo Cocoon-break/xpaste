@@ -53,6 +53,8 @@ export interface Settings {
   translateLang: string;
   /** 划词翻译全局快捷键；'' 表示不启用（M15、M26 规则 18） */
   translateHotkey: string;
+  /** 把最近复制或面板选中的记录挂上晾衣绳的全局快捷键；'' 表示不启用 */
+  lineHotkey: string;
 }
 
 export interface PlatformInfo {
@@ -159,6 +161,7 @@ export interface AppError {
     | 'shotHotkeyTaken'
     | 'recHotkeyTaken'
     | 'translateHotkeyTaken'
+    | 'lineHotkeyTaken'
     | 'invalidSettings'
     | 'invalid'
     | 'internal'
