@@ -165,11 +165,16 @@ export interface AppError {
     | 'translateConfig'
     | 'translatePack'
     | 'translateOs'
-    | 'translate';
+    | 'translate'
+    | 'line'
+    | 'lineExpired'
+    | 'duplicate';
   message: string;
   /** 只有 translatePack：识别出的源语言代码与目标语言代码，下载语言包并重试时用（M26 规则 17） */
   source?: string;
   target?: string;
+  /** 只有 duplicate：已经挂着的那张便签的 id */
+  id?: number;
 }
 
 /** `translate_record` 的结果：去掉首尾空白的译文与实际翻成的语言代码（M26 规则 8、9）。 */

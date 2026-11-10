@@ -23,6 +23,9 @@ pub const OPEN_SETTINGS: &str = "open-settings";
 /// 托盘“清空历史…”：面板显示后打开清空确认。
 pub const CONFIRM_CLEAR: &str = "confirm-clear";
 
+/// 晾衣绳的便签或 Pro 状态变了，载荷是完整的 `commands::line::LineView`；面板据此更新已挂的刻线。
+pub const LINE_CHANGED: &str = "line-changed";
+
 /// 冻结完成，发给每块屏的遮罩 `shot-<i>`（载荷见 `shot::BeginPayload`）。
 pub const SHOT_BEGIN: &str = "shot-begin";
 /// 截图已结束，发给每块屏的遮罩；载荷是结束的那一次的代数，遮罩据此放掉冻结帧（M23 规则 11）。

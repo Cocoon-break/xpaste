@@ -1,5 +1,6 @@
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 use xpaste_core::CoreError;
+use xpaste_pro::{LicenseError, LineError};
 
 /// 命令返回给前端的错误，序列化为 `{ kind, message }`（`translatePack` 另带 `source`、`target`）。
 #[derive(Debug, thiserror::Error)]
@@ -41,6 +42,18 @@ pub enum AppError {
     Tauri(#[from] tauri::Error),
     #[error(transparent)]
     Opener(#[from] tauri_plugin_opener::Error),
+    /// 晾衣绳与授权码的错误，消息见 `From<LineError>` / `From<LicenseError>`
+    #[error("{0}")]
+    Line(&'static str),
+    /// 授权码只适用于更早的大版本，带授权码的 major
+    #[error("这个授权码只适用于 {0}.x")]
+    LicenseOldMajor(u32),
+    /// 试用已结束：面板据 `kind` 在提示条上带“输入授权码”按钮
+    #[error("试用已结束，挂新便签要 xPaste Pro")]
+    LineExpired,
+    /// 同一条内容已挂着，带已有便签的 id，序列化为 `id`：前端让那张便签轻摆一下
+    #[error("已经挂着了")]
+    LineDuplicate(u64),
     /// 截图与贴图读写文件；`io::Error` 的消息不含路径
     #[error(transparent)]
     Io(#[from] std::io::Error),
@@ -60,6 +73,9 @@ impl AppError {
             Self::TranslatePack { .. } => "translatePack",
             Self::TranslateOs => "translateOs",
             Self::Translate(_) => "translate",
+            Self::Line(_) | Self::LicenseOldMajor(_) => "line",
+            Self::LineExpired => "lineExpired",
+            Self::LineDuplicate(_) => "duplicate",
             Self::Core(CoreError::InvalidSettings(_)) => "invalidSettings",
             Self::Core(_) | Self::Tauri(_) | Self::Opener(_) | Self::Io(_) => "internal",
         }
@@ -75,7 +91,44 @@ impl Serialize for AppError {
             s.serialize_field("source", from)?;
             s.serialize_field("target", to)?;
         }
+        if let Self::LineDuplicate(id) = self {
+            s.serialize_field("id", id)?;
+        }
         s.end()
+    }
+}
+
+impl From<LineError> for AppError {
+    fn from(e: LineError) -> Self {
+        match e {
+            LineError::Unavailable => Self::Line("这个版本不含晾衣绳"),
+            LineError::Expired => Self::LineExpired,
+            LineError::Full => Self::Line("绳子挂满了（12 张），先摘下几张"),
+            LineError::Duplicate(id) => Self::LineDuplicate(id),
+            LineError::TooLarge => Self::Line("内容太大，便签里放不下"),
+            LineError::NotFound => Self::Line("这张便签已经摘下了"),
+            // 只带 io 错误类型，不含路径
+            LineError::Io(kind) => {
+                log::warn!("便签保存失败：{kind}");
+                Self::Line("便签保存失败，请重试")
+            }
+        }
+    }
+}
+
+impl From<LicenseError> for AppError {
+    fn from(e: LicenseError) -> Self {
+        match e {
+            LicenseError::Unavailable => Self::Line("这个版本不含晾衣绳"),
+            LicenseError::Format => Self::Line("授权码格式不对"),
+            LicenseError::Invalid => Self::Line("授权码无效"),
+            LicenseError::Revoked => Self::Line("这个授权码已停用"),
+            LicenseError::OldMajor(major) => Self::LicenseOldMajor(major),
+            LicenseError::Io(kind) => {
+                log::warn!("授权码保存失败：{kind}");
+                Self::Line("授权码保存失败，请重试")
+            }
+        }
     }
 }
 

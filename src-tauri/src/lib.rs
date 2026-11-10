@@ -84,7 +84,7 @@ pub fn run() {
             if isolated {
                 log::info!("数据目录已由 XPASTE_DATA_DIR 覆盖，不启用单实例");
                 // tauri.conf.json 的 assetProtocol.scope 只覆盖默认数据目录
-                for sub in ["images", "thumbs", "icons", "pins"] {
+                for sub in ["images", "thumbs", "icons", "pins", "line"] {
                     if let Err(e) = app
                         .asset_protocol_scope()
                         .allow_directory(data_dir.join(sub), true)
@@ -295,7 +295,20 @@ pub fn run() {
             commands::translate::trcard_close,
             commands::translate::trcard_blur,
             commands::translate::trcard_focus,
-            commands::translate::trcard_resize
+            commands::translate::trcard_resize,
+            commands::line::line_view,
+            commands::line::line_hang_record,
+            commands::line::line_hang_paths,
+            commands::line::line_add,
+            commands::line::line_edit,
+            commands::line::line_paste_image,
+            commands::line::line_reorder,
+            commands::line::line_remove,
+            commands::line::line_restore,
+            commands::line::line_copy,
+            commands::line::line_open,
+            commands::line::pro_status,
+            commands::line::pro_activate
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

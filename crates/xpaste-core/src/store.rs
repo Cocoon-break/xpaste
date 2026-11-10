@@ -697,6 +697,19 @@ impl Store {
         )?)
     }
 
+    /// 最近复制的那条记录：没有软删除、不是片段；没有时为 None。
+    pub fn latest_live_id(&self) -> Result<Option<i64>, CoreError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id FROM records WHERE deleted_at IS NULL AND snippet_body IS NULL
+                 ORDER BY copied_at DESC, id DESC LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
     pub fn is_snippet(&self, id: i64) -> Result<bool, CoreError> {
         Ok(self
             .conn
@@ -2019,6 +2032,22 @@ pub(crate) mod tests {
         assert_eq!(removed.len(), 1);
         assert_eq!(s.list_summaries().unwrap().len(), 3);
         assert!(s.list_summaries().unwrap().iter().any(|r| r.id == first));
+    }
+    #[test]
+    fn latest_live_id_skips_deleted_and_snippets() {
+        let mut s = mem();
+        assert_eq!(s.latest_live_id().unwrap(), None);
+        let (Upsert::Added(a), _) = s.insert_or_merge(&rec("a"), 1, 500).unwrap() else {
+            panic!()
+        };
+        let (Upsert::Added(b), _) = s.insert_or_merge(&rec("b"), 2, 500).unwrap() else {
+            panic!()
+        };
+        // 片段的 copied_at 最新，也不算
+        s.create_snippet("n", "片段", 3).unwrap();
+        assert_eq!(s.latest_live_id().unwrap(), Some(b));
+        s.soft_delete(&[b], 4).unwrap();
+        assert_eq!(s.latest_live_id().unwrap(), Some(a));
     }
     #[test]
     fn live_summary_hides_soft_deleted() {

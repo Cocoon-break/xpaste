@@ -306,7 +306,7 @@ fn merged_text(state: &AppState, ids: &[i64]) -> Result<String, AppError> {
 }
 
 /// 写入剪切板、给 `ids` 各记一次使用，再按 `paste` 决定只复制还是隐藏面板去粘贴。
-async fn write_then_paste(
+pub(crate) async fn write_then_paste(
     app: &AppHandle,
     state: &AppState,
     flavors: &[Flavor],
@@ -373,7 +373,7 @@ pub fn copy_text_plain(state: State<'_, AppState>, text: String) -> Result<(), A
 }
 
 /// 写一份纯文本并标记为自身写入；截图的识别文字也走这里。
-fn write_text_plain(state: &AppState, text: &str) -> Result<(), AppError> {
+pub(crate) fn write_text_plain(state: &AppState, text: &str) -> Result<(), AppError> {
     write_text_plain_via(state, text, xpaste_platform::write)
 }
 
@@ -386,7 +386,7 @@ fn write_text_plain_via(
 }
 
 /// 设计 8.5 第 1–2 步：记录存在、文件都在、有可写回的 flavor。任何一步不满足都不碰剪切板。
-fn precheck(state: &AppState, id: i64) -> Result<Vec<Flavor>, AppError> {
+pub(crate) fn precheck(state: &AppState, id: i64) -> Result<Vec<Flavor>, AppError> {
     let store = state.store();
     let detail = store
         .detail(id)?
@@ -402,7 +402,7 @@ fn precheck(state: &AppState, id: i64) -> Result<Vec<Flavor>, AppError> {
 }
 
 /// 写剪切板期间置 `writing`，成功后记下序号，让监听线程跳过这次自身写入。
-fn write_marked(
+pub(crate) fn write_marked(
     state: &AppState,
     f: impl FnOnce() -> Result<u64, PlatformError>,
 ) -> Result<(), AppError> {
