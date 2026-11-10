@@ -21,6 +21,8 @@ import {
   onShotNeedPermission,
   onTranslateDelta,
 } from './api/events';
+import { lineDragDrop, lineDragHover, lineHangFromPanel, onLineChanged, onLineHangSelected, proActivate, type LineView } from './api/line';
+import { proLine } from './pro-status';
 import type { AppError, Appearance, Engines, FileEntry, PanelStyle, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
 import { appCounts, bestApp, freshSug, fromApp, type Sug } from './source';
 import { COMPACT, compactGroups, compactHeadH, rowParts } from './compact';
@@ -84,6 +86,8 @@ const I = {
   pencil: '<path d="M4 16l1-4 8-8 3 3-8 8z"/><path d="M11.5 5.5l3 3"/>',
   // 翻译：“文”与“A”（M26 规则 2）
   translate: '<path d="M3 5h7M6.5 3.5V5M8.7 5c-.7 3-2.5 5.2-5.2 6.5M5.2 7.6c.9 1.7 2.3 2.9 4 3.6"/><path d="m10.5 16.5 3-7.5 3 7.5M11.6 14h3.8"/>',
+  // 挂到晾衣绳：衣架
+  hang: '<path d="M8 5.5a2 2 0 1 1 2 2V9"/><path d="M10 9 3 14.5h14z"/>',
 };
 const svg = (n: keyof typeof I, cls = '') =>
   `<svg class="ic ${cls}" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n]}</svg>`;
@@ -159,6 +163,8 @@ const S = {
   total: 0,
   /** 当前可见条数，供 aria-setsize */
   count: 0,
+  /** 晾衣绳：不含晾衣绳的版本 available 为 false，挂钩按钮、已挂刻线与“Pro”标签都不出现 */
+  line: { available: false, pro: { state: 'unavailable' }, notes: [], hung: [] } as LineView,
 };
 const menuOpen = () => menu.dataset.open === 'true' || moreMenu.dataset.open === 'true';
 
@@ -216,9 +222,9 @@ const metaLine = (r: RecordSummary) => {
   return parts.join(' · ');
 };
 
-const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id === S.newId) => `
+const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id === S.newId, hung = S.line.hung.includes(r.id)) => `
     <div class="item${isNew ? ' is-new' : ''}${S.removing.has(r.id) ? ' is-removing' : ''}${S.multi.has(r.id) ? ' is-multi' : ''}${stagger && i < 12 ? ' stg' : ''}" data-id="${r.id}" style="--i:${i}">
-      <div class="row" role="option" id="opt-${r.id}" aria-selected="false" aria-posinset="${i + 1}" aria-label="${esc(r.title)}，${isSnip(r) ? '片段，' : ''}${LABEL[r.kind]}${S.snippets.has(r.id) ? `，识别文字中含“${esc(S.snippets.get(r.id))}”` : ''}" data-type="${typeOf(r)}">
+      <div class="row" role="option" id="opt-${r.id}" aria-selected="false" aria-posinset="${i + 1}" aria-label="${esc(r.title)}，${isSnip(r) ? '片段，' : ''}${LABEL[r.kind]}${S.snippets.has(r.id) ? `，识别文字中含“${esc(S.snippets.get(r.id))}”` : ''}${hung ? '，已挂在晾衣绳上' : ''}" data-type="${typeOf(r)}">
         <div class="row-in">
           ${thumb(r)}
           <div class="main">
@@ -226,10 +232,11 @@ const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id ===
             <div class="meta">${metaLine(r)}</div>
           </div>
           <div class="tail">
-            ${r.pinned ? `<span class="pin-mark">${svg('pinFill')}</span>` : ''}${i < 9 ? `<kbd class="idx">${idxLabel(i)}</kbd>` : ''}
+            ${hung ? '<span class="hung" aria-label="已挂在晾衣绳上"></span>' : ''}${r.pinned ? `<span class="pin-mark">${svg('pinFill')}</span>` : ''}${i < 9 ? `<kbd class="idx">${idxLabel(i)}</kbd>` : ''}
             <span class="qa" aria-hidden="true">
               ${isSnip(r) ? `<button type="button" tabindex="-1" data-qa="edit" title="编辑片段">${svg('pencil')}</button>`
                 : `<button type="button" tabindex="-1" data-qa="pin" title="${r.pinned ? '取消置顶' : '置顶'}">${svg(r.pinned ? 'pinFill' : 'pin')}</button>`}
+              ${S.line.available ? `<button type="button" tabindex="-1" data-qa="hang" title="挂到晾衣绳">${svg('hang')}</button>` : ''}
               <button type="button" tabindex="-1" data-qa="copy" title="${copyVerb(S.canPaste)}">${svg('copy')}</button>
             </span>
           </div>
@@ -882,10 +889,11 @@ function revealTr(id: number) {
   if (d) pbody.scrollBy({ top: d, behavior: reduced.matches ? 'auto' : 'smooth' });
 }
 // 设置已开着时停在原来的标签（M26 规则 19）
-const openTrSettings = () => {
-  if (!dlg.classList.contains('is-shown')) stTab = stTabs.findIndex((t) => t.id === 'st-tab-translate');
+const openSettingsAt = (tab: string) => {
+  if (!dlg.classList.contains('is-shown')) stTab = stTabs.findIndex((t) => t.id === tab);
   openSettings();
 };
+const openTrSettings = () => openSettingsAt('st-tab-translate');
 // 已有译文或正在翻译：只滚到区块，不发请求；上次失败、中断时等同重新翻译。again：先丢掉旧译文再请求。
 // engine：换用按钮单次指定的方式，不改设置；翻译中也能换用，后端中止进行中的请求（M26 规则 16）
 function doTranslate(id: number, again = false, engine?: Engine) {
@@ -1895,6 +1903,35 @@ function optHotkey(id: string, idle = OPT_IDLE) {
 }
 const shotKey = optHotkey('shotHotkey'), recKey = optHotkey('recHotkey');
 const trKey = optHotkey('trHotkey', '在任何应用里选中文字后按下，译文显示在鼠标旁');
+const lineKey = optHotkey('lineHotkey', '把最近复制的一条挂到晾衣绳上；面板开着时挂选中的那条');
+
+// “Pro”标签（只在含晾衣绳的版本里显示）：状态行、授权码激活。激活失败写在输入框下方（提示条会被设置框盖住）
+const proStatusEl = $('#proStatus'), proCodeIn = $<HTMLInputElement>('#proCode'), proCodeErr = $('#proCodeErr'), proActBtn = $<HTMLButtonElement>('#proActBtn');
+function paintProErr(msg = '') {
+  proCodeErr.textContent = msg;
+  proCodeErr.hidden = !msg;
+  proCodeIn.setAttribute('aria-invalid', String(!!msg));
+  paintStErr();
+}
+function activatePro() {
+  const code = proCodeIn.value.trim();
+  if (!code || proActBtn.disabled) return;
+  proActBtn.disabled = true;
+  void proActivate(code).then((p) => {
+    S.line.pro = p;
+    proStatusEl.textContent = proLine(p);
+    proCodeIn.value = '';
+    paintProErr();
+  }, (err: AppError) => paintProErr(err.message)).finally(() => (proActBtn.disabled = false));
+}
+proActBtn.addEventListener('click', activatePro);
+// 在输入框里按 Enter 是激活，不是保存设置
+proCodeIn.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' || e.isComposing) return;
+  e.preventDefault();
+  activatePro();
+});
+proCodeIn.addEventListener('input', () => paintProErr());
 
 // 截图、录屏文件夹：设置里存空字符串表示默认文件夹，输入框只显示默认路径的写法。
 // 取消选择不改；选好的路径只在保存时写回。失败写在这一行下方（提示条会被设置框盖住）
@@ -2293,6 +2330,10 @@ function openSettings() {
   shotKey.reset(st.shotHotkey);
   recKey.reset(st.recHotkey);
   trKey.reset(st.translateHotkey);
+  lineKey.reset(st.lineHotkey);
+  proStatusEl.textContent = proLine(S.line.pro);
+  proCodeIn.value = '';
+  paintProErr();
   // 启动时被其他应用占用、没注册上的快捷键：只发过系统通知（可能被关掉），这里在录制框下标红、标签上出红点
   void hotkeyStatus().then((h) => {
     const taken = (name: string) => `${name}快捷键被其他应用占用，没有生效，请换一个`;
@@ -2300,6 +2341,7 @@ function openSettings() {
     if (h.shot) shotKey.setHelp(taken('截图'), true);
     if (h.rec && S.platform.os === 'macos') recKey.setHelp(taken('录屏'), true);
     if (h.translate) trKey.setHelp(taken('翻译'), true);
+    if (h.line && S.line.available) lineKey.setHelp(taken('便签'), true);
   }, (e: AppError) => void info(`读取快捷键状态失败 kind=${e.kind}`));
   shotDir.pending = st.shotDir;
   shotDir.paint();
@@ -2436,7 +2478,7 @@ async function submitSettings() {
     moveToTop: moveTopIn.checked, launchAtLogin: autostartIn.checked, updateCheck: updCheckIn.checked, ocrEnabled: ocrOnIn.checked, ocrBackfill: ocrBackfillIn.checked, searchFileText: fileTextIn.checked,
     shotHotkey: shotKey.pending, shotDir: shotDir.pending, shotSaveCopy: shotSaveCopyIn.checked, longAutoScroll: longAutoIn.checked,
     recHotkey: recKey.pending, recDir: recDir.pending, recSystemAudio: recSystemAudioIn.checked, recMicrophone: recMicIn.checked, recCopy: recCopyIn.checked,
-    recQuality: recQualityIn.value, recFps: recFpsIn.value, panelStyle: draftStyle,
+    recQuality: recQualityIn.value, recFps: recFpsIn.value, panelStyle: draftStyle, lineHotkey: lineKey.pending,
   });
   // 翻译字段不经 SettingsForm；末尾的 / 由后端去掉。engine 没动过就原样写回（可能是空串）
   Object.assign(s, {
@@ -2473,7 +2515,7 @@ async function submitSettings() {
       showStControl(hotkeyIn);
       setHotkeyHelp(err.message, true);
     } else if (at) {
-      const f = { shotHotkey: shotKey, recHotkey: recKey, trHotkey: trKey }[at];
+      const f = { shotHotkey: shotKey, recHotkey: recKey, trHotkey: trKey, lineHotkey: lineKey }[at];
       showStControl(f.input);
       f.setHelp(err.message, true);
     } else toast(err.message);
@@ -2939,7 +2981,8 @@ await onPausedChanged((p) => handlers.paused(p));
 // 录屏遮罩的声音开关写回了设置（M24）：换掉手里的副本，之后保存设置或界面状态才不会把它改回去
 await onSettingsChanged((s) => void (S.settings = s));
 // 托盘“设置…”：后端已先唤起面板
-await onOpenSettings((tab) => (tab === 'translate' ? openTrSettings() : openSettings()));
+// 晾衣绳“试用已结束”提示条上的“输入授权码”：载荷 pro，切到“Pro”标签
+await onOpenSettings((tab) => (tab === 'translate' ? openTrSettings() : tab === 'pro' && S.line.available ? openSettingsAt('st-tab-pro') : openSettings()));
 // 设置对话框开着时提示条被它盖住，结果同样写进“历史记录”行内：先切到“记录”标签，
 // 如同点了行内的“清空历史…”（确认框关闭后焦点回到这个按钮）
 await onConfirmClear(() => {
@@ -2959,23 +3002,38 @@ await onShotNeedPermission(({ pane, mode }) =>
 // 设置对话框打开时按唤起快捷键：面板同样不隐藏；录制框有焦点就当作按下了当前快捷键（网页收不到被全局注册拦下的按键）
 // 截图、录屏、翻译快捷键同理：对话框开着且面板有焦点时后端先发到这里（role = shot / rec / translate），
 // 焦点不在录制框里时截图、录屏照常开始，翻译照常弹卡片（M15 交互规则 4、M26 规则 18；在录制框里时写入，不翻译）
+// 只认面板有焦点时的按键：失焦时后端不发到这里，这里再防一道
+const hkOn = (el: Element) => document.activeElement === el && document.hasFocus();
+const hkOpts = [[shotKey, '截图', 'shot'], [recKey, '录屏', 'rec'], [trKey, '翻译', 'translate'], [lineKey, '便签', 'line']] as const;
 await onHotkeyPressed((role) => {
-  // 只认面板有焦点时的按键：失焦时后端不发到这里，这里再防一道
-  const on = (el: Element) => document.activeElement === el && document.hasFocus();
-  const opts = [[shotKey, '截图', 'shot'], [recKey, '录屏', 'rec'], [trKey, '翻译', 'translate']] as const;
   if (role !== 'panel') {
-    const [self, name] = opts.find((o) => o[2] === role)!;
-    const other = opts.find(([f]) => f !== self && on(f.input));
+    const [self, name] = hkOpts.find((o) => o[2] === role)!;
+    const other = hkOpts.find(([f]) => f !== self && hkOn(f.input));
     const pressed = { shot: S.settings.shotHotkey, rec: S.settings.recHotkey, translate: S.settings.translateHotkey }[role];
-    if (on(self.input)) self.record(pressed);
-    else if (on(hotkeyIn)) setHotkeyHelp(`不能与${name}快捷键相同`, true);
+    if (hkOn(self.input)) self.record(pressed);
+    else if (hkOn(hotkeyIn)) setHotkeyHelp(`不能与${name}快捷键相同`, true);
     else if (other) other[0].setHelp(`${other[1]}快捷键不能与${name}快捷键相同`, true);
     else void (role === 'translate' ? trcardPress() : overlayBegin(role === 'rec')).catch((err: AppError) => toast(err.message));
     return;
   }
-  if (on(hotkeyIn)) return recordHotkey(S.settings.hotkey);
-  for (const [f, name] of opts) if (on(f.input)) return f.setHelp(`${name}快捷键不能与唤起快捷键相同`, true);
+  if (hkOn(hotkeyIn)) return recordHotkey(S.settings.hotkey);
+  for (const [f, name] of hkOpts) if (hkOn(f.input)) return f.setHelp(`${name}快捷键不能与唤起快捷键相同`, true);
   if (obStep === 'hotkey' && obDlg.open) obSucceed();
+});
+// 面板可见时按了便签快捷键（后端只发给面板）：焦点在便签录制框里就写入，在别的录制框里提示冲突，
+// 否则挂选中的那条（没有选中挂最新一条）
+await onLineHangSelected(() => {
+  if (hkOn(lineKey.input)) return lineKey.record(S.settings.lineHotkey);
+  if (hkOn(hotkeyIn)) return setHotkeyHelp('不能与便签快捷键相同', true);
+  const other = hkOpts.find(([f]) => f !== lineKey && hkOn(f.input));
+  if (other) return other[0].setHelp(`${other[1]}快捷键不能与便签快捷键相同`, true);
+  hangRecord(S.sel);
+});
+// 便签或 Pro 状态变了：重画已挂刻线，设置开着时“Pro”状态行跟着变
+await onLineChanged((v) => {
+  S.line = v;
+  paintRows();
+  proStatusEl.textContent = proLine(v.pro);
 });
 
 // 页面重载时对话框都已关闭：先复位后端标志（重载前若有对话框开着，它会停在 true；读取失败也照样复位）
@@ -2991,6 +3049,9 @@ savedAppearance = b.settings.appearance;
 paintSpCollapsed(b.settings.spectrumCollapsed);
 S.platform = b.platform;
 S.paused = b.paused;
+// 订阅后到达的 line-changed 比快照新，快照不覆盖它
+if (!S.line.available) S.line = b.line;
+$('#st-tab-pro').hidden = $('#st-pro').hidden = !S.line.available;
 paintPause();
 // 订阅后到达的事件比快照新，快照不覆盖已有条目
 // ponytail: 快照之后、返回之前被删除的记录会被快照带回，下次 records-removed 或重启时消失
@@ -3117,6 +3178,7 @@ list.addEventListener('click', (e) => {
   if (qa === 'copy') copyRecord(id);
   if (qa === 'pin') togglePin(id, true);
   if (qa === 'edit') void openSnippet('edit', id);
+  if (qa === 'hang') hangRecord(id);
 });
 // 吸顶栏在列表外，上面的列表委托收不到它的点击（空列表里的同名按钮仍走上面）
 $('#newSnipBtn').addEventListener('click', () => openSnippet('new'));
@@ -3136,6 +3198,42 @@ list.addEventListener('contextmenu', (e) => {
   if (!S.multi.size) select(id, { indDur: 180, pan: 'smooth' });
   openMenu(id, e.clientX, e.clientY, false);
 });
+
+// 挂到晾衣绳：绳子放下亮一下；没挂成（重复、挂满、试用结束）的提示在晾衣绳上
+function hangRecord(id: number | null) {
+  void lineHangFromPanel(id).catch((err: AppError) => toast(err.message));
+}
+// 把行往上拖出面板顶边：绳子放下，松手挂在落点（落点由晾衣绳页面按 x 算）。
+// 移动超过 4 px 才算拖动，此时才在列表上捕获指针（行会随重绘换掉）；不拖时点击、双击、右键照旧。
+// 指针在顶边之外时每帧最多报一次位置；松手时不在顶边之外就什么都不做
+let lineDrag: { id: number; x: number; y: number; on: boolean; sx: number; sy: number; raf: number } | null = null;
+list.addEventListener('pointerdown', (e) => {
+  const id = itemOf(e), t = e.target as Element;
+  lineDrag = S.line.available && e.button === 0 && id !== null && t.closest('.row') && !t.closest('[data-qa]')
+    ? { id, x: e.clientX, y: e.clientY, on: false, sx: 0, sy: 0, raf: 0 } : null;
+});
+list.addEventListener('pointermove', (e) => {
+  const d = lineDrag;
+  if (!d || !(e.buttons & 1)) return;
+  if (!d.on) {
+    if (Math.hypot(e.clientX - d.x, e.clientY - d.y) <= 4) return;
+    d.on = true;
+    list.setPointerCapture(e.pointerId);
+  }
+  if (e.clientY >= 0) return;
+  d.sx = e.screenX;
+  d.sy = e.screenY;
+  d.raf ||= requestAnimationFrame(() => {
+    d.raf = 0;
+    if (lineDrag === d) void lineDragHover(d.sx, d.sy).catch((err: AppError) => void info(`拖到晾衣绳失败 kind=${err.kind}`));
+  });
+});
+list.addEventListener('pointerup', (e) => {
+  const d = lineDrag;
+  lineDrag = null;
+  if (d?.on && e.clientY < 0) void lineDragDrop(d.id, e.screenX).catch((err: AppError) => toast(err.message));
+});
+list.addEventListener('pointercancel', () => (lineDrag = null));
 
 pinBtn.addEventListener('click', (e) => S.sel !== null && togglePin(S.sel, e.detail !== 0));
 copyBtn.addEventListener('click', () => (S.multi.size >= 2 ? pasteSelection() : S.sel !== null && copyRecord(S.sel)));

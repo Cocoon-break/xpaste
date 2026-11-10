@@ -20,7 +20,7 @@ pub struct PlatformInfo {
     pub macos_major: Option<u32>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Bootstrap {
     pub settings: Settings,
@@ -28,6 +28,8 @@ pub struct Bootstrap {
     pub records: Vec<RecordSummary>,
     pub first_run: bool,
     pub paused: bool,
+    /// 晾衣绳：面板据此显示挂钩按钮、已挂刻线与设置里的“Pro”标签
+    pub line: crate::commands::line::LineView,
 }
 
 pub fn bootstrap_inner(state: &AppState) -> Result<Bootstrap, AppError> {
@@ -51,6 +53,7 @@ pub fn bootstrap_inner(state: &AppState) -> Result<Bootstrap, AppError> {
         records,
         first_run,
         paused: state.paused.load(Ordering::SeqCst),
+        line: crate::commands::line::view(state),
     })
 }
 
@@ -433,6 +436,7 @@ mod tests {
         assert!(b.records.is_empty());
         assert!(b.first_run);
         assert!(!b.paused);
+        assert_eq!(b.line.available, xpaste_pro::AVAILABLE);
     }
 
     #[test]

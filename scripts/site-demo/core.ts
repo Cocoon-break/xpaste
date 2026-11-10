@@ -45,6 +45,7 @@ export const settings: Settings = {
   translateModel: '',
   translateLang: 'en',
   translateHotkey: 'Alt+Shift+T',
+  lineHotkey: '',
 };
 
 const byId = (id: number) => RECORDS.find((r) => r.id === id);
@@ -125,6 +126,8 @@ const handlers: Record<string, (a: any) => unknown> = {
     records: RECORDS.map(summary),
     firstRun: false,
     paused: false,
+    // 官网演示是不含晾衣绳的公开版
+    line: { available: false, pro: { state: 'unavailable' }, notes: [], hung: [] },
   }),
   // 真实应用里后端等这一声才把面板显示出来
   frontend_ready: () => void setTimeout(() => { void emit('panel-shown', { t0: null, trigger: 'hotkey' }); tell({ type: 'ready' }); }, 60),
@@ -213,7 +216,7 @@ const handlers: Record<string, (a: any) => unknown> = {
   screen_capture_granted: () => true,
   ocr_progress: () => ({ done: 3, total: 3, supported: true }),
   installed_apps: () => [],
-  hotkey_status: () => ({ panel: false, shot: false, rec: false, translate: false }),
+  hotkey_status: () => ({ panel: false, shot: false, rec: false, translate: false, line: false }),
   translate_engines: () => ({ system: true, openai: false, model: '', current: 'system' }),
   translate_status: () => ({ supported: true, pack: 'installed' }),
   translate_record: ({ id }) => translate(id),

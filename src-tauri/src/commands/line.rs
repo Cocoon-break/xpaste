@@ -15,7 +15,7 @@ use crate::assets::asset_url;
 use crate::clock::now_ms;
 use crate::commands::records::{precheck, write_marked, write_text_plain, write_then_paste};
 use crate::error::AppError;
-use crate::events::{LINE_CHANGED, emit};
+use crate::events::{LINE_CHANGED, LINE_DROP, emit, emit_to};
 use crate::state::AppState;
 
 /// 便签正文的上限，记录正文超出时截断
@@ -263,6 +263,29 @@ pub fn hang_record(
     );
     changed(app);
     Ok(note)
+}
+
+/// 面板的挂钩按钮、面板可见时的便签快捷键：挂上 `id`（None 为最新一条）后放下绳子亮一下，没挂成由晾衣绳页面提示
+#[tauri::command(async)]
+pub fn line_hang_from_panel(app: AppHandle, id: Option<i64>) {
+    crate::line::hang_and_flash(&app, id);
+}
+
+/// 面板里把行拖出顶边，每帧最多一次：`x`、`y` 为光标的屏幕逻辑坐标
+#[tauri::command]
+pub fn line_drag_hover(app: AppHandle, x: f64, y: f64) {
+    crate::line::drag_hover(&app, x, y);
+}
+
+/// 面板里拖着行在顶端松手：转给晾衣绳页面，页面按 `x` 算出位置后调 `line_hang_record`
+#[tauri::command]
+pub fn line_drag_drop(app: AppHandle, id: i64, x: f64) {
+    emit_to(
+        &app,
+        crate::line::LABEL,
+        LINE_DROP,
+        serde_json::json!({ "id": id, "x": x }),
+    );
 }
 
 /// 拖进来的文件，每个路径各成一张，从 `at` 起依次插入；碰到错误就停，已挂上的保留

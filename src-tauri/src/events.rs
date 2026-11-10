@@ -34,6 +34,10 @@ pub const LINE_TOAST: &str = "line-toast";
 pub const LINE_SHOW: &str = "line-show";
 /// 晾衣绳要收起，只发给 `line`：页面播完收起后调 `line_hidden`，窗口才真正隐藏。
 pub const LINE_HIDE: &str = "line-hide";
+/// 面板里把行拖出顶边，只发给 `line`：`{ x, y }`，光标的屏幕逻辑坐标，页面据 x 空出落点。
+pub const LINE_DRAG: &str = "line-drag";
+/// 面板里拖着行在顶端松手，只发给 `line`：`{ id, x }`，页面按 x 算出位置后调 `line_hang_record`。
+pub const LINE_DROP: &str = "line-drop";
 
 /// 冻结完成，发给每块屏的遮罩 `shot-<i>`（载荷见 `shot::BeginPayload`）。
 pub const SHOT_BEGIN: &str = "shot-begin";

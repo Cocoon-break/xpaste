@@ -1,4 +1,5 @@
 // 与 crates/xpaste-core/src/model.rs、src-tauri/src/commands/*.rs 对应，改字段时同步两边
+import type { LineView } from './line';
 
 export type Kind = 'text' | 'link' | 'code' | 'image' | 'video' | 'file';
 
@@ -66,6 +67,8 @@ export interface PlatformInfo {
 
 export interface Bootstrap {
   settings: Settings;
+  /** 晾衣绳：这个构建带不带、Pro 状态、已挂的记录 */
+  line: LineView;
   platform: PlatformInfo;
   records: RecordSummary[];
   firstRun: boolean;

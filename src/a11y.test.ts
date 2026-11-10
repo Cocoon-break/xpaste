@@ -50,3 +50,12 @@ test('snippet_color_meets_contrast_in_both_themes', () => {
     for (const bg of ['--ink', '--pop-solid'])
       assert.ok(contrast(tok(b, '--c-snip'), tok(b, bg)) >= 4.5, `${theme} --c-snip 对 ${bg} 低于 4.5`);
 });
+
+// 晾衣绳：行上的挂钩按钮与已挂刻线（main.ts 生成），设置里的 Pro 标签
+test('line_hang_button_and_hung_tick_are_named', () => {
+  const main = readFileSync(new URL('./main.ts', import.meta.url), 'utf8');
+  assert.ok(main.includes('data-qa="hang" title="挂到晾衣绳"'), '挂钩按钮缺少 title');
+  assert.ok(main.includes('<span class="hung" aria-label="已挂在晾衣绳上">'), '已挂刻线缺少 aria-label');
+  assert.match(html, /<button[^>]*role="tab"[^>]*id="st-tab-pro"[^>]*>Pro<\/button>/);
+  for (const id of ['proCode', 'lineHotkey']) assert.match(html, new RegExp(`<label for="${id}">`), `#${id} 缺少 <label for>`);
+});

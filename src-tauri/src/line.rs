@@ -11,7 +11,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use crate::error::AppError;
-use crate::events::{LINE_HANG_SELECTED, LINE_HIDE, LINE_SHOW, LINE_TOAST, emit_to};
+use crate::events::{LINE_DRAG, LINE_HANG_SELECTED, LINE_HIDE, LINE_SHOW, LINE_TOAST, emit_to};
 use crate::panel::{Rect, on_main};
 use crate::state::AppState;
 
@@ -224,28 +224,43 @@ pub fn hotkey_pressed(app: &AppHandle) {
     // 读库与写便签文件，不占着快捷键回调所在的主线程
     if let Err(e) = std::thread::Builder::new()
         .name("line-hotkey".into())
-        .spawn(move || {
-            let state = app.state::<AppState>();
-            let latest = state.store().latest_live_id();
-            let toast = match latest {
-                Ok(Some(id)) => match crate::commands::line::hang_record(&app, &state, id, None) {
-                    Ok(_) => None,
-                    Err(e) => Some(toast_for(Some(&e))),
-                },
-                Ok(None) => Some(toast_for(None)),
-                Err(e) => {
-                    log::warn!("读取最新记录失败：{e}");
-                    Some(toast_for(Some(&e.into())))
-                }
-            };
-            show(&app, How::Flash);
-            if let Some(t) = toast {
-                emit_to(&app, LABEL, LINE_TOAST, t);
-            }
-        })
+        .spawn(move || hang_and_flash(&app, None))
     {
         log::warn!("便签快捷键线程启动失败：{e}");
     }
+}
+
+/// 挂上记录 `id`（None 为最新一条）后放下绳子亮一下，挂没挂成都放下；没挂成给 `line` 窗口发提示。
+/// 便签快捷键与面板的挂钩按钮共用；要读库、写便签文件，不在主线程调用。
+pub fn hang_and_flash(app: &AppHandle, id: Option<i64>) {
+    let state = app.state::<AppState>();
+    let id = match id {
+        Some(id) => Ok(Some(id)),
+        None => state.store().latest_live_id(),
+    };
+    let toast = match id {
+        Ok(Some(id)) => crate::commands::line::hang_record(app, &state, id, None)
+            .err()
+            .map(|e| toast_for(Some(&e))),
+        Ok(None) => Some(toast_for(None)),
+        Err(e) => {
+            log::warn!("读取最新记录失败：{e}");
+            Some(toast_for(Some(&e.into())))
+        }
+    };
+    show(app, How::Flash);
+    if let Some(t) = toast {
+        emit_to(app, LABEL, LINE_TOAST, t);
+    }
+}
+
+/// 面板里拖着行到了顶端：绳子还没为拖动放下就放下，再把光标位置转给页面。
+/// `show` 在主线程里才记下 `how`，紧接着的几帧可能再放下一次，页面只多收到几次同样的 `line-show`。
+pub fn drag_hover(app: &AppHandle, x: f64, y: f64) {
+    if shown().how != Some(How::Drag) {
+        show(app, How::Drag);
+    }
+    emit_to(app, LABEL, LINE_DRAG, serde_json::json!({ "x": x, "y": y }));
 }
 
 /// 建好隐藏的窗口，免得碰到顶端时现建 webview。参数同划词卡片。
