@@ -154,6 +154,11 @@ struct Shown {
     previous: Option<isize>,
 }
 
+/// 这个构建带晾衣绳，且是官方签名的那份（被改过再重签的副本表现同开源版）：窗口、顶端检测、快捷键都看它
+pub fn enabled() -> bool {
+    xpaste_pro::AVAILABLE && xpaste_pro::genuine()
+}
+
 static SHOWN: Mutex<Shown> = Mutex::new(Shown {
     how: None,
     work: Rect {

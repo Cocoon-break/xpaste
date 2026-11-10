@@ -6,6 +6,11 @@ use crate::types::*;
 
 pub const AVAILABLE: bool = false;
 
+/// 空实现不含 Pro，签名是否官方无从谈起
+pub fn genuine() -> bool {
+    false
+}
+
 pub struct Line;
 
 impl Line {
