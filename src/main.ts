@@ -21,7 +21,7 @@ import {
   onShotNeedPermission,
   onTranslateDelta,
 } from './api/events';
-import { lineDragDrop, lineDragHover, lineHangFromPanel, onLineChanged, onLineHangSelected, proActivate, type LineView } from './api/line';
+import { lineDragDrop, lineDragHover, lineHangFromPanel, lineHide, onLineChanged, onLineHangSelected, proActivate, type LineView } from './api/line';
 import { proLine } from './pro-status';
 import type { AppError, Appearance, Engines, FileEntry, PanelStyle, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
 import { appCounts, bestApp, freshSug, fromApp, type Sug } from './source';
@@ -232,7 +232,7 @@ const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id ===
             <div class="meta">${metaLine(r)}</div>
           </div>
           <div class="tail">
-            ${hung ? '<span class="hung" aria-label="已挂在晾衣绳上"></span>' : ''}${r.pinned ? `<span class="pin-mark">${svg('pinFill')}</span>` : ''}${i < 9 ? `<kbd class="idx">${idxLabel(i)}</kbd>` : ''}
+            ${hung ? '<span class="hung" role="img" aria-label="已挂在晾衣绳上"></span>' : ''}${r.pinned ? `<span class="pin-mark">${svg('pinFill')}</span>` : ''}${i < 9 ? `<kbd class="idx">${idxLabel(i)}</kbd>` : ''}
             <span class="qa" aria-hidden="true">
               ${isSnip(r) ? `<button type="button" tabindex="-1" data-qa="edit" title="编辑片段">${svg('pencil')}</button>`
                 : `<button type="button" tabindex="-1" data-qa="pin" title="${r.pinned ? '取消置顶' : '置顶'}">${svg(r.pinned ? 'pinFill' : 'pin')}</button>`}
@@ -1907,6 +1907,11 @@ const lineKey = optHotkey('lineHotkey', '把最近复制的一条挂到晾衣绳
 
 // “Pro”标签（只在含晾衣绳的版本里显示）：状态行、授权码激活。激活失败写在输入框下方（提示条会被设置框盖住）
 const proStatusEl = $('#proStatus'), proCodeIn = $<HTMLInputElement>('#proCode'), proCodeErr = $('#proCodeErr'), proActBtn = $<HTMLButtonElement>('#proActBtn');
+// 状态行是 live region：文字没变就不重写，免得读屏重复播报
+function paintProStatus() {
+  const t = proLine(S.line.pro);
+  if (proStatusEl.textContent !== t) proStatusEl.textContent = t;
+}
 function paintProErr(msg = '') {
   proCodeErr.textContent = msg;
   proCodeErr.hidden = !msg;
@@ -1919,7 +1924,7 @@ function activatePro() {
   proActBtn.disabled = true;
   void proActivate(code).then((p) => {
     S.line.pro = p;
-    proStatusEl.textContent = proLine(p);
+    paintProStatus();
     proCodeIn.value = '';
     paintProErr();
   }, (err: AppError) => paintProErr(err.message)).finally(() => (proActBtn.disabled = false));
@@ -2331,7 +2336,7 @@ function openSettings() {
   recKey.reset(st.recHotkey);
   trKey.reset(st.translateHotkey);
   lineKey.reset(st.lineHotkey);
-  proStatusEl.textContent = proLine(S.line.pro);
+  paintProStatus();
   proCodeIn.value = '';
   paintProErr();
   // 启动时被其他应用占用、没注册上的快捷键：只发过系统通知（可能被关掉），这里在录制框下标红、标签上出红点
@@ -2982,7 +2987,13 @@ await onPausedChanged((p) => handlers.paused(p));
 await onSettingsChanged((s) => void (S.settings = s));
 // 托盘“设置…”：后端已先唤起面板
 // 晾衣绳“试用已结束”提示条上的“输入授权码”：载荷 pro，切到“Pro”标签
-await onOpenSettings((tab) => (tab === 'translate' ? openTrSettings() : tab === 'pro' && S.line.available ? openSettingsAt('st-tab-pro') : openSettings()));
+// 设置已开着也切过去，并聚焦授权码输入框
+await onOpenSettings((tab) => {
+  if (tab === 'translate') return openTrSettings();
+  if (tab !== 'pro' || !S.line.available) return openSettings();
+  openSettingsAt('st-tab-pro');
+  showStControl(proCodeIn);
+});
 // 设置对话框开着时提示条被它盖住，结果同样写进“历史记录”行内：先切到“记录”标签，
 // 如同点了行内的“清空历史…”（确认框关闭后焦点回到这个按钮）
 await onConfirmClear(() => {
@@ -3033,7 +3044,7 @@ await onLineHangSelected(() => {
 await onLineChanged((v) => {
   S.line = v;
   paintRows();
-  proStatusEl.textContent = proLine(v.pro);
+  paintProStatus();
 });
 
 // 页面重载时对话框都已关闭：先复位后端标志（重载前若有对话框开着，它会停在 true；读取失败也照样复位）
@@ -3205,12 +3216,16 @@ function hangRecord(id: number | null) {
 }
 // 把行往上拖出面板顶边：绳子放下，松手挂在落点（落点由晾衣绳页面按 x 算）。
 // 移动超过 4 px 才算拖动，此时才在列表上捕获指针（行会随重绘换掉）；不拖时点击、双击、右键照旧。
-// 指针在顶边之外时每帧最多报一次位置；松手时不在顶边之外就什么都不做
-let lineDrag: { id: number; x: number; y: number; on: boolean; sx: number; sy: number; raf: number } | null = null;
+// 指针在顶边之外时每帧最多报一次位置。松手时不在顶边之外不挂；绳子已为这次拖动放下过就让它收起
+let lineDrag: { id: number; x: number; y: number; on: boolean; sx: number; sy: number; raf: number; hovered: boolean } | null = null;
+const hoverLine = (d: { hovered: boolean }, x: number, y: number) => {
+  d.hovered = true;
+  return lineDragHover(x, y).catch((err: AppError) => void info(`拖到晾衣绳失败 kind=${err.kind}`));
+};
 list.addEventListener('pointerdown', (e) => {
   const id = itemOf(e), t = e.target as Element;
   lineDrag = S.line.available && e.button === 0 && id !== null && t.closest('.row') && !t.closest('[data-qa]')
-    ? { id, x: e.clientX, y: e.clientY, on: false, sx: 0, sy: 0, raf: 0 } : null;
+    ? { id, x: e.clientX, y: e.clientY, on: false, sx: 0, sy: 0, raf: 0, hovered: false } : null;
 });
 list.addEventListener('pointermove', (e) => {
   const d = lineDrag;
@@ -3225,15 +3240,23 @@ list.addEventListener('pointermove', (e) => {
   d.sy = e.screenY;
   d.raf ||= requestAnimationFrame(() => {
     d.raf = 0;
-    if (lineDrag === d) void lineDragHover(d.sx, d.sy).catch((err: AppError) => void info(`拖到晾衣绳失败 kind=${err.kind}`));
+    if (lineDrag === d) void hoverLine(d, d.sx, d.sy);
   });
 });
-list.addEventListener('pointerup', (e) => {
+// 在文档上收尾：指针在列表外松开（没捕获时）也要清掉。同一帧里刚出顶边就松手时先补一次位置，绳子才会放下
+function endLineDrag(e: PointerEvent) {
   const d = lineDrag;
   lineDrag = null;
-  if (d?.on && e.clientY < 0) void lineDragDrop(d.id, e.screenX).catch((err: AppError) => toast(err.message));
-});
-list.addEventListener('pointercancel', () => (lineDrag = null));
+  if (!d) return;
+  cancelAnimationFrame(d.raf);
+  if (e.type === 'pointerup' && d.on && e.clientY < 0) {
+    void (d.hovered ? Promise.resolve() : hoverLine(d, e.screenX, e.screenY))
+      .then(() => lineDragDrop(d.id, e.screenX))
+      .catch((err: AppError) => toast(err.message));
+  } else if (d.hovered) void lineHide().catch((err: AppError) => void info(`收起晾衣绳失败 kind=${err.kind}`));
+}
+document.addEventListener('pointerup', endLineDrag);
+document.addEventListener('pointercancel', endLineDrag);
 
 pinBtn.addEventListener('click', (e) => S.sel !== null && togglePin(S.sel, e.detail !== 0));
 copyBtn.addEventListener('click', () => (S.multi.size >= 2 ? pasteSelection() : S.sel !== null && copyRecord(S.sel)));
