@@ -31,6 +31,9 @@ dev-isolated: ## 启动开发版，数据目录隔离在 .xpaste-dev/（自动�
 
 fmt: ## 格式化 Rust 代码
 	cargo fmt --all
+ifneq ($(wildcard pro),)
+	$(MAKE) -C pro fmt
+endif
 
 lint: ## 格式检查 + clippy（含 Windows 交叉检查，若已安装 target）+ 版本号一致性
 	cargo fmt --all --check
@@ -40,12 +43,19 @@ ifneq ($(HAS_WIN_TARGET),0)
 	cargo clippy -p xpaste-platform --all-targets --target $(WIN_TARGET) -- -D warnings
 endif
 	pnpm check:version
+ifneq ($(wildcard pro),)
+	$(MAKE) -C pro fmt-check
+	$(MAKE) -C pro tool-check
+endif
 
 test-rust: ## Rust 单元测试（三个 crate）
 	cargo test --workspace
 
-test-web: ## 前端单元测试（自动发现 src/**/*.test.ts）
+test-web: ## 前端单元测试（自动发现 src/**/*.test.ts；带 pro/web 时再跑它的测试）
 	pnpm test
+ifneq ($(wildcard pro/web),)
+	node --test 'pro/web/**/*.test.ts'
+endif
 
 test: test-rust test-web ## 全部单元测试
 
