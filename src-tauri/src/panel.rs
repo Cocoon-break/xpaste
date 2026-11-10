@@ -496,6 +496,11 @@ pub fn blur_hides(app: &AppHandle) -> bool {
         && !crate::shot::active(app)
 }
 
+/// 面板可见。
+pub fn visible(app: &AppHandle) -> bool {
+    window(app).is_some_and(|w| w.is_visible().unwrap_or(false))
+}
+
 /// 可见但已失焦、且 `blur_hides` 时隐藏：补上期间被忽略的失焦（片段对话框关闭、选完文件夹、下载语言包结束、
 /// 划词卡片失焦关闭）。
 pub fn hide_if_unfocused(app: &AppHandle) {
