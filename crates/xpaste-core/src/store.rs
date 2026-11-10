@@ -698,6 +698,28 @@ impl Store {
             .unwrap_or(false))
     }
 
+    /// 文字类片段的名字与正文，按创建顺序（导出用，M25 规则 11）；图片、文件片段不在其中。
+    pub fn text_snippets(&self) -> Result<Vec<(String, String)>, CoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT title, text FROM records
+             WHERE snippet_body IS NOT NULL AND deleted_at IS NULL AND text IS NOT NULL AND kind IN ('text', 'code', 'link')
+             ORDER BY id",
+        )?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// 片段总数（含图片、文件片段）。
+    pub fn count_snippets(&self) -> Result<u32, CoreError> {
+        Ok(self.conn.query_row(
+            "SELECT count(*) FROM records WHERE snippet_body IS NOT NULL AND deleted_at IS NULL",
+            [],
+            |r| r.get(0),
+        )?)
+    }
+
     /// 新建文字片段（M25 规则 10）：不去重、不挂来源应用、不做容量裁剪，库里按置顶存。
     pub fn create_snippet(
         &mut self,

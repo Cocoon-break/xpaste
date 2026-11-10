@@ -60,6 +60,8 @@
               <div id="rows"></div>
             </div>
           </div>
+          <!-- 精简模式没有预览与状态栏：多选时列表底部一条操作栏（M09 规则 8、M27） -->
+          <div class="multi-bar" id="multiBar" hidden><span id="multiBarText"></span><button class="btn sm primary" type="button" data-bulk="merge">合并粘贴<kbd>Enter</kbd></button><button class="btn sm" type="button" data-bulk="clear">取消<kbd>Esc</kbd></button></div>
         </div>
         <section class="preview" aria-label="预览">
           <header class="phead">
@@ -91,7 +93,7 @@
         <span class="k"><kbd class="mod"></kbd><kbd>P</kbd> 置顶</span>
         <span class="k" id="trHint" hidden><kbd class="mod"></kbd><kbd>T</kbd> 翻译</span>
         <span class="k"><kbd class="mod"></kbd><kbd>←→</kbd> 切换分类</span>
-        <span class="k" id="multiHint" hidden><kbd class="mod"></kbd> 点击 多选</span>
+        <span class="k" id="multiHint"><kbd class="mod"></kbd> 点击 多选</span>
         <span class="k"><kbd class="delmod" hidden>⌘</kbd><kbd class="del">Del</kbd> 删除</span>
         <span class="k" id="undoHint" hidden><kbd class="mod"></kbd><kbd>Z</kbd> 撤销</span>
         <span class="k"><kbd>Esc</kbd> <span id="escHint">隐藏</span></span>
@@ -219,6 +221,10 @@
               <button class="btn sm" type="button" id="stNewSnip"><span data-icon="plus"></span>新建片段…</button>
             </div>
             <div class="line" style="--i:4">
+              <span><b>片段备份</b><small id="snipIoNote" aria-live="polite">导出成一个文件，换电脑或重装后导入</small></span>
+              <span class="btns"><button class="btn sm" type="button" id="snipImportBtn">导入…</button><button class="btn sm" type="button" id="snipExportBtn">导出…</button></span>
+            </div>
+            <div class="line" style="--i:5">
               <span><b>历史记录</b><small id="clearNote" aria-live="polite">置顶记录与片段会保留</small></span>
               <button class="btn sm" type="button" id="clearBtn">清空历史…</button>
             </div>

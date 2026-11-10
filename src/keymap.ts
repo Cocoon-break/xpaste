@@ -93,7 +93,8 @@ export const keyAction = (e: KeyEv, c: KeyCtx): Action => {
     if (lk === 'n') return { t: 'newSnippet' };
     if (lk === 'a' && c.inSnip && !c.searchHasText) return { t: 'selectAll' };
   }
-  if (vert && e.shift && c.inSnip && !e.mod) return { t: 'extend', d: vert };
+  // Shift + ↑↓ 连选在所有分类里都有效（合并粘贴，M09 规则 8）
+  if (vert && e.shift && !e.mod) return { t: 'extend', d: vert };
   if (vert) return { t: 'move', d: vert, instant: e.repeat };
   // 按住不连发：删除、复制（次数 +1）、置顶（来回翻转）都只认第一次按下
   if (k === 'Enter' && e.shift && c.selPlain && c.multi < 2 && !e.mod && !e.ctrl && !c.onControl && !e.repeat) return { t: 'copyPlain' };

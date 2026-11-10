@@ -1,7 +1,7 @@
 import './styles.css';
 import { attachConsole, info } from './api/log';
 import {
-  accessibilityGranted, bootstrap, clearHistory, exportLogs, updateAvailable, matchApps, copy, copyTextPlain, countUnpinned, createSnippet, deleteRecords, finishOnboarding, frontendReady, getRecord, hidePanel, hotkeyStatus, installedApps,
+  accessibilityGranted, bootstrap, clearHistory, exportLogs, exportSnippets, importSnippets, pickJsonFile, pickSavePath, updateAvailable, matchApps, copy, copyMerged, copyTextPlain, countUnpinned, createSnippet, deleteRecords, finishOnboarding, frontendReady, getRecord, hidePanel, hotkeyStatus, installedApps,
   ocrProgress, openUrl, overlayBegin, pickFolder, prunePreview, reocr, requestAccessibility, requestScreenCapture, revealFile, saveSettings, saveSnippet, screenCaptureGranted, search, trcardPress,
   setDialogOpen, setPaused, setPinned, translateEngines, translateDownload, translateRecord, translateStatus, translateTest, undoDelete, updateSnippet,
 } from './api/commands';
@@ -31,7 +31,7 @@ import {
 } from './format';
 import { hotkeyFromEvent, hotkeyLabel } from './hotkey';
 import { keyAction } from './keymap';
-import { copyVerb, escHint, fileTextHelp, openLabel } from './labels';
+import { copyVerb, escHint, exportNote, fileTextHelp, importNote, openLabel, snippetExportName } from './labels';
 import { ocrLabel, ocrProgressLabel, snippetHTML } from './ocr-label';
 import { searchGate } from './search-gate';
 import { otherEngine, staleDelta, translatable, trAfterDelta, trAfterEnd, trBlockHTML, type Engine, type Tr } from './translate';
@@ -45,7 +45,7 @@ import { addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFre
 import { composing, justComposed } from './ime';
 import { errorControl, revealsFocus, shownTabTarget } from './settings-tabs';
 import {
-  armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, nextSelection, pruneMulti, rangeIds, snippetTextChange, UNDO_MS, visible, type UndoState,
+  armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, mergeable, nextSelection, pruneMulti, rangeIds, snippetTextChange, UNDO_MS, visible, type UndoState,
 } from './view';
 import { layout, range, ROW_H, scrollTo, topOf, type Cell } from './virtual-list';
 
@@ -195,11 +195,13 @@ const titleHTML = (r: RecordSummary) => {
 const idxLabel = (i: number) => (!compact() ? String(i + 1) : S.platform.os === 'macos' ? `⌘${i + 1}` : `Ctrl+${i + 1}`);
 const newSnipHTML = () => `<button class="btn sm new-snip" type="button" data-act="new">${svg('plus')}新建片段<kbd>${modKey()} N</kbd></button>`;
 
+/** 多选里的顺序（1 起），就是合并粘贴的先后（M09 规则 8）；不在多选里为空 */
+const multiN = (r: RecordSummary) => (S.multi.has(r.id) ? String([...S.multi].indexOf(r.id) + 1) : '');
 const thumb = (r: RecordSummary) =>
   r.kind === 'image' && r.thumb
-    ? `<span class="thumb"><img src="${esc(r.thumb)}" alt="" width="36" height="36">${r.ocrState === 1 ? '<span class="ocr-badge" aria-hidden="true">T</span>' : ''}</span>`
-  : r.kind === 'video' && r.thumb ? `<span class="thumb"><img src="${esc(r.thumb)}" alt="" width="36" height="36"><span class="play">${svg('play')}</span></span>`
-  : `<span class="thumb">${svg(r.kind)}${r.kind === 'file' && r.ocrState === 1 ? '<span class="ocr-badge" aria-hidden="true">T</span>' : ''}</span>`;
+    ? `<span class="thumb" data-n="${multiN(r)}"><img src="${esc(r.thumb)}" alt="" width="36" height="36">${r.ocrState === 1 ? '<span class="ocr-badge" aria-hidden="true">T</span>' : ''}</span>`
+  : r.kind === 'video' && r.thumb ? `<span class="thumb" data-n="${multiN(r)}"><img src="${esc(r.thumb)}" alt="" width="36" height="36"><span class="play">${svg('play')}</span></span>`
+  : `<span class="thumb" data-n="${multiN(r)}">${svg(r.kind)}${r.kind === 'file' && r.ocrState === 1 ? '<span class="ocr-badge" aria-hidden="true">T</span>' : ''}</span>`;
 
 const metaLine = (r: RecordSummary) => {
   // 片段：内容摘要 + 用过 N 次，不显示来源与时间（M25 规则 2）
@@ -298,8 +300,19 @@ function paintBeam(row: HTMLElement | null) {
 /** `glide`：已渲染的元素位置变了就用这条 transition 过去（插入 / 删除时下方的行补位）；transitionend 后清掉。
  *  `glideBusy`：元素正在补位途中（连续删除）时改用它，不再空停一段延迟 */
 // 多选时行尾快捷按钮收起、Esc 提示改成取消选择（M25 规则 6）；多选的每次变化都会走 paintRows 或空列表
+const multiBar = $('#multiBar'), multiBarText = $('#multiBarText');
+/** 多选里的记录，按选中顺序 */
+const multiRecords = () => [...S.multi].map((id) => S.records.get(id)).filter((r): r is RecordSummary => !!r);
+const multiUnit = (rs: RecordSummary[]) => (rs.length && rs.every(isSnip) ? '个片段' : '条');
 function paintMultiUi() {
   list.classList.toggle('multi', S.multi.size >= 2);
+  const rs = multiRecords(), bulk = rs.length >= 2;
+  multiBar.hidden = !bulk;
+  if (bulk) {
+    const ok = mergeable(rs);
+    multiBarText.textContent = ok ? `已选 ${rs.length} ${multiUnit(rs)}` : `已选 ${rs.length} ${multiUnit(rs)}，含图片或文件`;
+    multiBar.querySelector<HTMLButtonElement>('[data-bulk="merge"]')!.disabled = !ok;
+  }
   escHintEl.textContent = escHint(!!S.q, S.multi.size >= 2, S.app !== null);
 }
 function paintRows({ stagger = false, glide = '', glideBusy = '' } = {}) {
@@ -385,7 +398,6 @@ function renderList({ scroll = false, stagger = false, base = 0, glide = '' } = 
   const snip = S.filter === 'snip';
   snipBar.hidden = !snip || !v.length;
   $('#snipCount').textContent = String(v.length);
-  $('#multiHint').hidden = !snip;
   rowsEl.style.setProperty('--base', base + 'ms');
   if (!v.length) {
     S.cells = [];
@@ -702,7 +714,8 @@ function renderPreview(fade = false) {
   const r = S.sel === null ? undefined : S.records.get(S.sel);
   // 头部按钮（M25 规则 4）：历史是置顶、存为片段、删除、复制；片段是编辑、删除、复制。多选时只剩删除（规则 6）
   const bulk = S.multi.size >= 2, snip = !!r && isSnip(r);
-  [pinBtn, copyBtn, delBtn, saveSnipBtn, editSnipBtn].forEach((b) => (b.disabled = !r || (bulk && b !== delBtn)));
+  const rs = bulk ? multiRecords() : [], canMerge = bulk && mergeable(rs);
+  [pinBtn, copyBtn, delBtn, saveSnipBtn, editSnipBtn].forEach((b) => (b.disabled = !r || (bulk && b !== delBtn && !(b === copyBtn && canMerge))));
   pinBtn.hidden = saveSnipBtn.hidden = snip;
   // 翻译入口只对可翻译的单条记录出现（M26 规则 1）
   trBtn.hidden = $('#trHint').hidden = !r || bulk || !translatable(r);
@@ -712,13 +725,15 @@ function renderPreview(fade = false) {
     ++detailSeq;
     bodyFor = null;
     S.detail = null;
-    const its = vis().filter((x) => S.multi.has(x.id)), n = its.length;
-    $('#selHint').textContent = `已选 ${n} 个片段`;
-    ptype.innerHTML = `<span class="tchip" data-type="snip">${svg('snip')}已选 ${n} 个片段</span>`;
+    // 按选中顺序列出，就是合并粘贴的先后（M09 规则 8）；图片、文件不能合并，列在里面但变淡
+    const n = rs.length, unit = multiUnit(rs), allSnip = rs.every(isSnip), bad = rs.filter((x) => !mergeable([x])).length;
+    $('#selHint').textContent = `已选 ${n} ${unit}`;
+    ptype.innerHTML = `<span class="tchip" data-type="${allSnip ? 'snip' : 'all'}">${svg(allSnip ? 'snip' : 'copy')}已选 ${n} ${unit}</span>`;
     pbody.style.opacity = pbody.style.filter = '';
-    pbody.innerHTML = `<div class="bulk"><ul>${its.map((x) => `<li>${esc(x.title)}</li>`).join('')}</ul>
-      <div class="row-act"><button class="btn danger" type="button" data-bulk="del">${svg('trash')}删除 ${n} 个片段</button><button class="btn" type="button" data-bulk="clear">取消选择</button></div>
-      <p class="help">删除后 5 秒内可以撤销。片段只能在这里删除，“清空历史”不会动它们。</p></div>`;
+    pbody.innerHTML = `<div class="bulk"><ol>${rs.map((x) => `<li class="${mergeable([x]) ? '' : 'no'}">${esc(x.title)}${mergeable([x]) ? '' : `（${LABEL[x.kind]}，不能合并）`}</li>`).join('')}</ol>
+      <p class="help">${bad ? `选中的 ${n} ${unit}里有 ${bad} 条图片、视频或文件，不能合并粘贴` : `按上面的顺序，每条之间一个换行，作为纯文本${copyVerb(S.canPaste)}一次`}</p>
+      <div class="row-act"><button class="btn primary" type="button" data-bulk="merge" ${canMerge ? '' : 'disabled'}>合并${copyVerb(S.canPaste)} ${n} ${unit}<kbd>Enter</kbd></button><button class="btn danger" type="button" data-bulk="del">${svg('trash')}删除 ${n} ${unit}</button><button class="btn" type="button" data-bulk="clear">取消选择</button></div>
+      <p class="help">删除后 5 秒内可以撤销。${allSnip ? '片段只能在这里删除，“清空历史”不会动它们。' : ''}</p></div>`;
     pmeta.innerHTML = '';
     return;
   }
@@ -1322,6 +1337,21 @@ let copyTimer = 0;
 /** 文本、代码、链接可以只粘贴纯文本那一份（M09 规则 7） */
 const plainable = (r: Pick<RecordSummary, 'kind'>) => r.kind === 'text' || r.kind === 'code' || r.kind === 'link';
 
+/** 合并粘贴多选（M09 规则 8）：都是文字类才能合；成功后退出多选 */
+function pasteSelection() {
+  const ids = [...S.multi];
+  if (ids.length < 2 || !mergeable(multiRecords())) return;
+  copyMerged(ids, true).then(
+    (res) => {
+      const msg = copyToast(res, S.platform.os, null);
+      if (msg) toast(msg, { icon: 'check', action: needsAccessibility(res) ? { label: '前往授权', run: () => void requestAccessibility().catch((e: AppError) => toast(e.message, { icon: 'copy' })) } : undefined });
+      S.multi.clear();
+      setMulti();
+    },
+    (err: AppError) => toast(err.message, { icon: 'copy' }),
+  );
+}
+
 function copyRecord(id: number, plain = false) {
   const before = S.records.get(id);
   // 多选时复制不可用（M25 规则 6）
@@ -1517,7 +1547,7 @@ function openMenu(id: number, x: number, y: number, viaKb: boolean, detail = det
   $('[data-m="saveSnippet"]').hidden = bulk || snip;
   $('[data-m="translate"]').hidden = bulk || !translatable(r);
   $('#menu .sep').hidden = bulk;
-  $('#mDel').textContent = bulk ? `删除 ${S.multi.size} 个片段` : '删除';
+  $('#mDel').textContent = bulk ? `删除 ${S.multi.size} ${multiUnit(multiRecords())}` : '删除';
   // stagger 序号按可见项重排，隐藏的项不留空拍
   menu.querySelectorAll<HTMLElement>('button:not([hidden])').forEach((b, i) => b.style.setProperty('--i', String(i)));
   menuReturn = document.activeElement as HTMLElement | null;
@@ -2238,6 +2268,9 @@ function openSettings() {
   clearNote.textContent = '置顶记录与片段会保留';
   logNote.textContent = LOG_NOTE;
   snipNote.textContent = SNIP_NOTE;
+  const hasSnip = counts(S.records, favMin()).snip > 0;
+  snipIoNote.textContent = hasSnip ? SNIP_IO_NOTE : '还没有片段可以导出';
+  snipExportBtn.disabled = !hasSnip;
   const st = S.settings;
   draftStyle = st.panelStyle;
   paintStyle();
@@ -2572,6 +2605,28 @@ async function submitSnippet() {
   else toast(mode === 'edit' ? '片段已更新' : mode === 'new' ? `已新建片段“${name}”，搜索这个名字就能找到` : `已存为片段“${name}”，搜索这个名字就能找到`, { icon: 'snip' });
 }
 $('#stNewSnip').addEventListener('click', () => void openSnippet('new'));
+// 片段备份（M25 规则 11）：系统的保存 / 打开窗口会抢走面板的焦点，期间失焦不隐藏（同选文件夹）；结果写在这一行里
+const snipIoNote = $('#snipIoNote'), snipExportBtn = $<HTMLButtonElement>('#snipExportBtn');
+const SNIP_IO_NOTE = snipIoNote.textContent!;
+function snipIo(run: () => Promise<string | null>) {
+  picking = true;
+  syncDialogOpen();
+  run().then((msg) => msg && (snipIoNote.textContent = msg), (err: AppError) => (snipIoNote.textContent = `${err.message ?? String(err)}`)).finally(() => {
+    picking = false;
+    syncDialogOpen();
+  });
+}
+snipExportBtn.addEventListener('click', () => snipIo(async () => {
+  const path = await pickSavePath(snippetExportName(new Date()));
+  if (!path) return null;
+  const r = await exportSnippets(path);
+  return exportNote(r, path.split(/[\\/]/).pop() ?? path);
+}));
+$('#snipImportBtn').addEventListener('click', () => snipIo(async () => {
+  const path = await pickJsonFile();
+  if (!path) return null;
+  return importNote(await importSnippets(path));
+}));
 
 // —— 首次启动引导（M18） ——
 // 与设置对话框同一套弹入 / 150ms 收起。每步一个 .dlg-body，切步时新显示的那个重放 rowIn。
@@ -2796,7 +2851,7 @@ document.addEventListener('keydown', (e) => {
     case 'menuClose': return closeMenu(true);
     case 'menuMove': return moveMenuFocus(a.d);
     case 'move': return move(a.d, a.instant);
-    case 'copy': return void (sel !== null && copyRecord(sel));
+    case 'copy': return S.multi.size >= 2 ? pasteSelection() : void (sel !== null && copyRecord(sel));
     case 'copyPlain': return void (sel !== null && copyRecord(sel, true));
     case 'copyIndex': {
       // 多选时复制不可用（M25 规则 6）
@@ -2984,6 +3039,16 @@ clearQ.addEventListener('click', () => {
   runSearch('');
   q.focus();
 });
+// 精简模式多选的底部操作栏（M09 规则 8）
+multiBar.addEventListener('click', (e) => {
+  const bk = (e.target as Element).closest<HTMLElement>('[data-bulk]')?.dataset.bulk;
+  if (bk === 'merge') pasteSelection();
+  else if (bk === 'clear') {
+    S.multi.clear();
+    setMulti();
+  }
+  q.focus({ preventScroll: true });
+});
 // 来源筛选（M29）：点建议变成胶囊；点胶囊上的 × 去掉胶囊、搜索词保留；点预览信息栏的“来源”只看这个应用
 qSug.addEventListener('click', () => S.sug && setApp(S.sug.app, true));
 $('#qAppX').addEventListener('click', () => setApp(null, false));
@@ -3027,7 +3092,7 @@ list.addEventListener('click', (e) => {
   if (id === null) return;
   const qa = t.closest<HTMLElement>('[data-qa]')?.dataset.qa;
   const mod = S.platform.os === 'macos' ? e.metaKey : e.ctrlKey;
-  if (!qa && S.filter === 'snip' && (mod || e.shiftKey)) return multiTo(id, e.shiftKey);
+  if (!qa && (mod || e.shiftKey)) return multiTo(id, e.shiftKey);
   // 不带修饰键的单击退出多选（M25 规则 6）
   if (S.multi.size) {
     S.multi.clear();
@@ -3058,7 +3123,7 @@ list.addEventListener('contextmenu', (e) => {
 });
 
 pinBtn.addEventListener('click', (e) => S.sel !== null && togglePin(S.sel, e.detail !== 0));
-copyBtn.addEventListener('click', () => S.sel !== null && copyRecord(S.sel));
+copyBtn.addEventListener('click', () => (S.multi.size >= 2 ? pasteSelection() : S.sel !== null && copyRecord(S.sel)));
 trBtn.addEventListener('click', () => S.sel !== null && doTranslate(S.sel));
 // 设置对话框留在确认框下面；列表与频谱由 records-removed 刷新
 $('#clearBtn').addEventListener('click', () => void confirmClear().then((m) => m && (clearNote.textContent = m)));
@@ -3121,6 +3186,7 @@ pbody.addEventListener('click', (e) => {
   const bk = t.closest<HTMLElement>('[data-bulk]');
   if (bk) {
     if (bk.dataset.bulk === 'del') remove([...S.multi]);
+    else if (bk.dataset.bulk === 'merge') pasteSelection();
     else {
       S.multi.clear();
       setMulti();

@@ -96,7 +96,6 @@ test('片段键位', () => {
   assert.deepEqual(k({ key: 'a', mod: true }, { inSnip: true }), { t: 'selectAll' });
   assert.equal(k({ key: 'a', mod: true }, { inSnip: true, searchHasText: true }), null);
   assert.deepEqual(k({ key: 'ArrowDown', shift: true }, { inSnip: true }), { t: 'extend', d: 1 });
-  assert.deepEqual(k({ key: 'ArrowDown', shift: true }), { t: 'move', d: 1, instant: false });
   assert.deepEqual(k({ key: 'Escape' }, { multi: 2, searchHasText: true }), { t: 'clearMulti' });
   for (const o of [{ key: 's', mod: true }, { key: 'n', mod: true }, { key: 'Escape' }])
     assert.equal(k(o, { dialogOpen: true, multi: 2 }), null);
@@ -191,4 +190,12 @@ test('按住 ⌫ 删搜索词：删空之后的连发不去掉来源胶囊和分
   assert.equal(k({ key: 'Backspace', repeat: true }, { app: true }), null);
   assert.equal(k({ key: 'Backspace', repeat: true }, { compact: true, filtered: true }), null);
   assert.deepEqual(k({ key: 'Backspace' }, { compact: true, filtered: true }), { t: 'clearFilter' });
+});
+
+test('多选不再只限“片段”分类：Shift + ↑↓ 在任何分类里都连选（M09 规则 8）', () => {
+  const k = (o: Partial<KeyEv>, c: Partial<KeyCtx> = {}) => keyAction(ev(o), ctx(c));
+  assert.deepEqual(k({ key: 'ArrowDown', shift: true }), { t: 'extend', d: 1 });
+  assert.deepEqual(k({ key: 'ArrowUp', shift: true }, { inSnip: false }), { t: 'extend', d: -1 });
+  // Mod + A 全选仍只在“片段”分类
+  assert.equal(k({ key: 'a', mod: true }), null);
 });

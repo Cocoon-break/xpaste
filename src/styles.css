@@ -287,7 +287,8 @@ kbd {
 .meta .snip-of { color: color-mix(in srgb, var(--c-snip) 80%, var(--faint)); }
 /* 多选（只在“片段”分类）：行底色与描边，缩略图盖上勾；勾直接出现，不加动画（M25 规则 6） */
 .item.is-multi .row { background: color-mix(in srgb, var(--c-snip) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c-snip) 40%, transparent); }
-.item.is-multi .thumb::after { content: "✓"; position: absolute; inset: 0; display: grid; place-items: center; font: 700 16px var(--font-ui); color: var(--on-pill); background: var(--c-snip); }
+/* 多选的行显示粘贴顺序的序号（M09 规则 8），不是勾 */
+.item.is-multi .thumb::after { content: attr(data-n); position: absolute; inset: 0; display: grid; place-items: center; font: 700 15px var(--font-ui); font-variant-numeric: tabular-nums; color: var(--on-pill); background: var(--c-snip); }
 /* 命中来自图中文字：片段放在元信息行首，同一行省略号截断，不改行高 */
 .meta .snip { color: var(--muted); }
 /* 已识别出文字：缩略图右下角 10px 角标，内缩 3px 避开圆角裁切 */
@@ -370,6 +371,15 @@ mark { background: var(--mark-bg); color: var(--mark-fg); border-radius: 3px; pa
 /* 片段：正文上方的名字大字；多选时的批量预览（M25 规则 4、6） */
 .p-snip-name { font: 600 18px var(--font-ui); margin: 0 0 14px; color: var(--fg); overflow-wrap: anywhere; }
 .bulk { display: grid; gap: 14px; }
+.bulk ol { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; counter-reset: n; }
+.bulk ol li { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 8px; padding: 8px 12px; border-radius: 8px; background: var(--glass-2); border: 1px solid var(--line); font-size: 13px; overflow-wrap: anywhere; }
+.bulk ol li::before { counter-increment: n; content: counter(n); color: var(--faint); font-variant-numeric: tabular-nums; }
+.bulk ol li.no { color: var(--faint); }
+/* 精简模式多选时的底部操作栏 */
+.multi-bar { display: none; }
+:root[data-style="compact"] .multi-bar:not([hidden]) { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--line); background: var(--glass); font-size: 12px; color: var(--muted); }
+.multi-bar span { margin-right: auto; }
+.line .btns { display: flex; gap: 6px; flex: none; }
 .bulk ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
 .bulk li { padding: 8px 12px; border-radius: 8px; background: var(--glass-2); border: 1px solid var(--line); font-size: 13px; overflow-wrap: anywhere; }
 .bulk .row-act { display: flex; gap: 8px; }
@@ -690,6 +700,7 @@ dialog > form { display: contents; }
 :root[data-style="compact"] .search input { font-size: 14px; }
 :root[data-style="compact"] .count { font: 12px var(--font-ui); color: var(--faint); }
 :root[data-style="compact"] .q-app:not([hidden]), :root[data-style="compact"] .q-sug:not([hidden]) { height: 22px; font-size: 12px; border-radius: 6px; }
+:root[data-style="compact"] .item.is-multi .thumb::after { font-size: 11px; border-radius: 5px; }
 :root[data-style="compact"] #moreBtn { display: inline-flex; flex: none; width: 28px; height: 28px; }
 :root[data-style="compact"] #moreBtn[aria-expanded="true"] { color: var(--fg); background: var(--glass-3); }
 :root[data-style="compact"] .q-chip:not([hidden]) {

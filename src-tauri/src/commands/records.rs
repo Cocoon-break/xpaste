@@ -268,13 +268,68 @@ pub async fn copy(
     } else {
         flavors
     };
+    write_then_paste(&app, &state, &flavors, &[id], paste).await
+}
+
+/// 合并粘贴（M09 规则 8）：把几条文字按给的顺序用换行连成一段，作为纯文本写回并粘贴一次；每条的使用次数各 +1。
+#[tauri::command(async)]
+pub async fn copy_merged(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    ids: Vec<i64>,
+    paste: bool,
+) -> Result<CopyResult, AppError> {
+    let text = merged_text(&state, &ids)?;
+    write_then_paste(&app, &state, &[text_flavor(&text)], &ids, paste).await
+}
+
+/// 几条文本、代码、链接记录的正文按顺序以换行连接；少于 2 条、有图片 / 文件 / 不存在的记录时报错。
+fn merged_text(state: &AppState, ids: &[i64]) -> Result<String, AppError> {
+    if ids.len() < 2 {
+        return Err(AppError::Invalid("至少选两条才能合并粘贴".into()));
+    }
+    let store = state.store();
+    let mut parts = Vec::with_capacity(ids.len());
+    for &id in ids {
+        let kind = store.summary(id)?.map(|s| s.kind);
+        let text = kind
+            .filter(|k| matches!(k, Kind::Text | Kind::Code | Kind::Link))
+            .and_then(|_| store.text(id).transpose())
+            .transpose()?;
+        match text {
+            Some(t) => parts.push(t),
+            None => {
+                return Err(AppError::Invalid(
+                    "选中的里有图片或文件，不能合并粘贴".into(),
+                ));
+            }
+        }
+    }
+    Ok(parts.join("\n"))
+}
+
+/// 写入剪切板、给 `ids` 各记一次使用，再按 `paste` 决定只复制还是隐藏面板去粘贴。
+async fn write_then_paste(
+    app: &AppHandle,
+    state: &AppState,
+    flavors: &[Flavor],
+    ids: &[i64],
+    paste: bool,
+) -> Result<CopyResult, AppError> {
     let bytes: usize = flavors.iter().map(|f| f.data.len()).sum();
-    write_marked(&state, || xpaste_platform::write(&flavors)).inspect_err(|_| {
-        log::warn!("写入剪切板失败 id={id} bytes={bytes}");
+    let label = if ids.len() == 1 {
+        format!("id={}", ids[0])
+    } else {
+        format!("n={}", ids.len())
+    };
+    write_marked(state, || xpaste_platform::write(flavors)).inspect_err(|_| {
+        log::warn!("写入剪切板失败 {label} bytes={bytes}");
     })?;
     let move_to_top = state.settings().move_to_top;
-    state.store().bump_use(id, move_to_top, now_ms())?;
-    emit_summary(&app, RECORD_UPDATED, id);
+    for &id in ids {
+        state.store().bump_use(id, move_to_top, now_ms())?;
+        emit_summary(app, RECORD_UPDATED, id);
+    }
     if !paste {
         return Ok(CopyResult::Copied);
     }
@@ -288,15 +343,15 @@ pub async fn copy(
             Ok(CopyResult::CopiedOnly { reason })
         }
         PastePlan::Paste => {
-            crate::panel::hide(&app);
-            match paste_on_main(&app, target).await {
+            crate::panel::hide(app);
+            match paste_on_main(app, target).await {
                 Ok(()) => {
-                    log::info!("已模拟粘贴 id={id} bytes={bytes}");
+                    log::info!("已模拟粘贴 {label} bytes={bytes}");
                     Ok(CopyResult::Pasted)
                 }
                 Err(e) => {
-                    log::warn!("模拟粘贴失败 id={id}：{e}");
-                    crate::panel::reshow(&app);
+                    log::warn!("模拟粘贴失败 {label}：{e}");
+                    crate::panel::reshow(app);
                     Ok(CopyResult::CopiedOnly {
                         reason: REASON_PASTE_FAILED,
                     })
@@ -439,6 +494,46 @@ mod tests {
                 ..Default::default()
             },
         )
+    }
+
+    #[test]
+    fn merged_text_joins_in_given_order_and_refuses_media() {
+        let state = AppState::for_test();
+        let a = insert(
+            &state,
+            Snapshot {
+                text: Some("收件人：王小明".into()),
+                flavors: vec![text_flavor("收件人：王小明")],
+                ..Default::default()
+            },
+        );
+        let b = insert(
+            &state,
+            Snapshot {
+                text: Some("电话 138".into()),
+                flavors: vec![text_flavor("电话 138")],
+                ..Default::default()
+            },
+        );
+        // 按给的顺序连，各条之间一个换行（M09 规则 8）
+        assert_eq!(
+            merged_text(&state, &[b, a]).unwrap(),
+            "电话 138\n收件人：王小明"
+        );
+        // 图片、文件不能合并；不存在的记录也不行
+        let f = insert_file_record(&state, "/nonexistent/a.png");
+        assert!(matches!(
+            merged_text(&state, &[a, f]),
+            Err(AppError::Invalid(_))
+        ));
+        assert!(matches!(
+            merged_text(&state, &[a, 999]),
+            Err(AppError::Invalid(_))
+        ));
+        assert!(matches!(
+            merged_text(&state, &[a]),
+            Err(AppError::Invalid(_))
+        ));
     }
 
     #[test]

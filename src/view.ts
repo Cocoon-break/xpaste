@@ -110,3 +110,6 @@ export const snippetTextChange = (current: string, baseline: string, readOnly: b
   const nl = (s: string) => s.replace(/\r\n?/g, '\n');
   return readOnly || nl(current) === nl(baseline) ? null : current;
 };
+
+/** 选中的这几条能不能合并粘贴（M09 规则 8）：都是文本、代码、链接（含这几类的片段），图片、视频、文件不行 */
+export const mergeable = (rs: RecordSummary[]): boolean => rs.length > 0 && rs.every((r) => r.kind === 'text' || r.kind === 'code' || r.kind === 'link');

@@ -144,6 +144,15 @@ const handlers: Record<string, (a: any) => unknown> = {
     }
     return { result: 'pasted' };
   },
+  // 合并粘贴（M09 规则 8）：演示里每条使用次数 +1，告诉父页面粘贴了几条
+  copy_merged: ({ ids }) => {
+    const rs = (ids as number[]).map(byId).filter((r): r is Demo => !!r);
+    rs.forEach((r) => { r.uses += 1; void emit('record-updated', summary(r)); });
+    tell({ type: 'pasted', title: `合并的 ${rs.length} 条` });
+    return { result: 'pasted' };
+  },
+  export_snippets: () => fail('internal', '演示页面不导出片段'),
+  import_snippets: () => fail('internal', '演示页面不导入片段'),
   set_pinned: ({ id, on }) => {
     const r = byId(id);
     if (r) { r.pinned = on; void emit('record-updated', summary(r)); }
