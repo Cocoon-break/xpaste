@@ -191,7 +191,7 @@ pub fn view(state: &AppState) -> LineView {
     };
     let line = state.line();
     LineView {
-        available: xpaste_pro::AVAILABLE,
+        available: crate::line::enabled(),
         pro: line.status(now()),
         notes: line.notes().iter().map(|n| dto(&line, n.clone())).collect(),
         hung: line.hung_records(),
@@ -771,8 +771,8 @@ mod tests {
     fn stub_commands_report_unavailable() {
         let state = AppState::for_test();
         let v = view(&state);
-        assert_eq!(v.available, xpaste_pro::AVAILABLE);
-        if !xpaste_pro::AVAILABLE {
+        assert_eq!(v.available, crate::line::enabled());
+        if !crate::line::enabled() {
             assert!(matches!(v.pro, Pro::Unavailable));
             assert!(v.notes.is_empty() && v.hung.is_empty());
             let e = AppError::from(state.line().add(blank_note(), None, 0).err().unwrap());

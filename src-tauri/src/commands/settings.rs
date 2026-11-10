@@ -248,7 +248,7 @@ pub fn commit_settings(
     // 先去空白再校验、比较：粘贴带空格的 Base URL 不该报错，也不该算作改动（M26 规则 6）
     settings.normalize();
     // 不含晾衣绳的版本里设置页没有便签快捷键：撞上了就让出，不能报一个用户看不到的错
-    if !xpaste_pro::AVAILABLE {
+    if !crate::line::enabled() {
         settings.yield_line_hotkey();
     }
     settings.validate()?;
@@ -443,7 +443,7 @@ mod tests {
         assert!(b.records.is_empty());
         assert!(b.first_run);
         assert!(!b.paused);
-        assert_eq!(b.line.available, xpaste_pro::AVAILABLE);
+        assert_eq!(b.line.available, crate::line::enabled());
     }
 
     #[test]
@@ -529,7 +529,7 @@ mod tests {
             ..Settings::default()
         };
         let r = commit_settings(&state, new, |_, _, _, _, _| Ok(()));
-        if xpaste_pro::AVAILABLE {
+        if crate::line::enabled() {
             assert!(matches!(
                 r,
                 Err(AppError::Core(CoreError::InvalidSettings(_)))

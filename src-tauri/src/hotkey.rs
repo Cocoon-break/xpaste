@@ -31,7 +31,7 @@ pub fn register(
     let rec_ok = !REC_SUPPORTED || rec.is_empty() || gs.register(rec).map_err(taken).is_ok();
     let tr_ok = translate.is_empty() || gs.register(translate).map_err(taken).is_ok();
     let line_ok =
-        !xpaste_pro::AVAILABLE || line.is_empty() || gs.register(line).map_err(taken).is_ok();
+        !crate::line::enabled() || line.is_empty() || gs.register(line).map_err(taken).is_ok();
     first_failure(panel_ok, shot_ok, rec_ok, tr_ok, line_ok)
 }
 
@@ -67,7 +67,7 @@ pub fn unregistered(
         missing(shot),
         REC_SUPPORTED && missing(rec),
         missing(translate),
-        xpaste_pro::AVAILABLE && missing(line),
+        crate::line::enabled() && missing(line),
     )
 }
 
@@ -99,7 +99,7 @@ pub fn role_of(
         Some(Role::Rec)
     } else if is(translate) {
         Some(Role::Translate)
-    } else if xpaste_pro::AVAILABLE && is(line) {
+    } else if crate::line::enabled() && is(line) {
         Some(Role::Line)
     } else {
         None
@@ -343,7 +343,7 @@ mod tests {
         // 不含晾衣绳的版本不注册便签，也就不认
         assert_eq!(
             role_of(&key, p, s, r, t, "alt+shift+n"),
-            xpaste_pro::AVAILABLE.then_some(Role::Line)
+            crate::line::enabled().then_some(Role::Line)
         );
         // 为空串表示不启用：不认
         assert_eq!(role_of(&key, p, s, r, t, ""), None);

@@ -162,7 +162,7 @@ pub fn run() {
             clipboard::start(app.handle().clone());
             shot::prewarm(app.handle());
             trcard::prewarm(app.handle());
-            if xpaste_pro::AVAILABLE {
+            if crate::line::enabled() {
                 line::start(app.handle());
             }
             // 首次启动直接显示面板与引导（AC-M18-01）

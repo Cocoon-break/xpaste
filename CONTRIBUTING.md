@@ -81,6 +81,7 @@ make release-win   # 在 macOS 上交叉打 Windows 安装程序（见下文）
 - **签发**：`make -C pro license EMAIL=…`，打印出一行授权码。首次使用先 `make -C pro keygen`。
 - **吊销**：`make -C pro revoke CODE=…`，把打印出来的一行加进 `REVOKED`，发版后生效（退款时做这件事，EULA 里写了退款后授权码会被停用）。
 - **私钥 `pro/license.local` 绝对不能进任何仓库**，要单独备份：丢了就签不出新授权码，泄露了任何人都能签发。
+- **签名团队校验**：macOS 正式构建（release）只有用团队 `GP6QC26B5F` 的 Developer ID 证书签名时才启用 Pro，没签名、ad-hoc 签名或别的证书重签的副本表现同开源版（没有晾衣绳和“Pro”标签）。开发构建（`make dev-isolated`）不查。本地打测试用的 Pro 安装包要带上签名身份：`APPLE_SIGNING_IDENTITY="Developer ID Application: …（GP6QC26B5F）" pnpm tauri build --bundles dmg`（不设 `APPLE_ID` 等就只签名不公证）。Windows 安装包没签名，不做这项校验。
 - 维护者须知：删掉数据目录里的 `pro.json` 会重新开始 14 天试用，测试试用与到期时可以用它。
 - **发版**：`release.yml` 用 Secret `PRO_DEPLOY_KEY`（`xpaste-pro` 仓库的只读 deploy key）拉取 `pro/`，所以官方安装包带 Pro；没配置时拉取失败，发版会直接停下。流程还会检查安装包的 Rust 一侧带上了 Pro：在二进制里查找标记字符串 `pro.json.tmp`（出自 `pro/rust/trial.rs`）。改了那个文件名要两处同步。
 
