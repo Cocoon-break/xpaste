@@ -81,6 +81,6 @@ Cargo workspace 有三个 crate，依赖方向是单向的：
   - 实施计划：放在 `docs/plans/`，文件名以日期开头。
   - 真机验收：记在 `docs/验收记录.md`。
   - README 是产品介绍页，只放主张、动图演示、下载和隐私要点，不写细节。演示动图在 `docs/screenshots/demo-{light,dark}.webp`，用 `website/demo/` 的真实面板录制。
-  - 使用说明（安装、全部功能、快捷键、权限、数据、卸载）：`docs/使用说明.md`。
+  - 使用说明（安装、全部功能、快捷键、权限、数据、卸载）：`docs/使用说明.md`。配图在 `docs/screenshots/guide/`（深浅两套），由 `scripts/guide-shots.py` 从 `website/demo/` 截取；界面改了之后重新生成。
   - 已知限制：`docs/已知限制.md`，使用说明只列要点。行为或限制有变化时同步更新。
   - 开发与发版说明：`CONTRIBUTING.md`。
