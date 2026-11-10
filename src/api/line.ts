@@ -74,9 +74,10 @@ export const lineEdit = (id: number, body: string | null, memo: string | null) =
 export const linePasteImage = (id: number, png: Uint8Array) =>
   invoke<NoteDto>('line_paste_image', png, { headers: { 'x-note-id': String(id) } });
 export const lineReorder = (ids: number[]) => invoke<void>('line_reorder', { ids });
-/** 返回摘下的便签与它原来的位置，撤销时交给 lineRestore */
+/** 返回摘下的便签与它原来的位置；撤销时把 id 交给 lineRestore */
 export const lineRemove = (id: number) => invoke<[NoteDto, number]>('line_remove', { id });
-export const lineRestore = (note: Note, at: number) => invoke<void>('line_restore', { note, at });
+/** 撤销摘下：后端放回它留的那份，`at` 不给放回原来的位置 */
+export const lineRestore = (id: number, at?: number) => invoke<void>('line_restore', { id, at: at ?? null });
 export const lineCopy = (id: number) => invoke<CopyNote>('line_copy', { id });
 /** 链接用浏览器打开，文件在访达 / 资源管理器里显示 */
 export const lineOpen = (id: number) => invoke<void>('line_open', { id });
