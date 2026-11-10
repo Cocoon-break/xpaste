@@ -1,6 +1,7 @@
 //! 晾衣绳便签的命令：记录、拖进来的文件转成便签，复制、打开，以及 Pro 状态与授权码。
 //! 日志只记便签 id、记录 id、类型和字节数，不记正文、标题、备注和路径。
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -336,6 +337,7 @@ pub async fn line_paste_image(
     let InvokeBody::Raw(png) = request.body() else {
         return Err(AppError::Invalid("请求体应为 PNG 字节".into()));
     };
+    check_png(png)?;
     let note = {
         let mut line = state.line();
         let n = line.set_image(id, png, now())?;
@@ -344,6 +346,15 @@ pub async fn line_paste_image(
     log::info!("便签 贴图 id={id} bytes={}", png.len());
     changed(&app);
     Ok(note)
+}
+
+/// 字节来自页面，先看 PNG 文件头
+fn check_png(b: &[u8]) -> Result<(), AppError> {
+    if b.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Ok(())
+    } else {
+        Err(AppError::Invalid("粘贴的不是图片".into()))
+    }
 }
 
 #[tauri::command(async)]
@@ -381,11 +392,22 @@ pub fn line_restore(
     note: Note,
     at: usize,
 ) -> Result<(), AppError> {
+    check_restore(&note)?;
     let id = note.id;
     state.line().restore(note, at)?;
     log::info!("便签 撤销摘下 id={id}");
     changed(&app);
     Ok(())
+}
+
+/// 便签由页面交回：图片只能是 `line/` 下的文件名，带目录或 `..` 就会读到别处的文件
+fn check_restore(note: &Note) -> Result<(), AppError> {
+    match note.image.as_deref() {
+        Some(f) if Path::new(f).file_name() != Some(OsStr::new(f)) => {
+            Err(AppError::Invalid("便签图片不对".into()))
+        }
+        _ => Ok(()),
+    }
 }
 
 /// 复制便签，见 `copy_plan`；都标记为自身写入，不进历史
@@ -686,6 +708,30 @@ mod tests {
             assert_eq!(e.to_string(), "这个版本不含晾衣绳");
             let e = AppError::from(state.line().activate("XP1-a.b", 0).err().unwrap());
             assert_eq!(e.to_string(), "这个版本不含晾衣绳");
+        }
+    }
+
+    #[test]
+    fn restore_rejects_image_outside_line_dir() {
+        let mut n = note(Kind::Image, "截图");
+        for bad in ["../x.png", "/etc/passwd", "a/b.png", "..", ""] {
+            n.image = Some(bad.into());
+            assert!(
+                matches!(check_restore(&n), Err(AppError::Invalid(_))),
+                "{bad}"
+            );
+        }
+        n.image = Some("3.png".into());
+        assert!(check_restore(&n).is_ok());
+        n.image = None;
+        assert!(check_restore(&n).is_ok());
+    }
+
+    #[test]
+    fn paste_image_needs_png_signature() {
+        assert!(check_png(b"\x89PNG\r\n\x1a\n\0\0").is_ok());
+        for bad in [&b""[..], b"\x89PNG", b"GIF89a\0\0\0\0"] {
+            assert_eq!(check_png(bad).unwrap_err().to_string(), "粘贴的不是图片");
         }
     }
 
