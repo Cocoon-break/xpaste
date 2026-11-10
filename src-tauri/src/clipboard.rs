@@ -91,7 +91,15 @@ fn ingest(app: &AppHandle, mut snap: Snapshot) {
     let source = snap.source.as_ref().map(|a| a.id.clone());
     let settings = state.settings().clone();
     let paused = state.paused.load(Ordering::SeqCst);
-    if settings.search_file_text && kind == Kind::File && !paused {
+    // 再次复制同一批文件会合并进已有记录、不更新搜索文本：这时不读，免得白白卡住采集线程
+    if settings.search_file_text
+        && kind == Kind::File
+        && !paused
+        && !matches!(
+            state.store().has_hash(&detect::content_hash(&snap, kind)),
+            Ok(true)
+        )
+    {
         snap.file_texts = pdf_texts(&snap.file_paths);
     }
     let outcome = capture::process(snap, &settings, paused, &mut state.store(), now_ms());

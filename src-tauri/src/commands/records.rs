@@ -258,15 +258,17 @@ pub async fn copy(
     paste: bool,
     plain: bool,
 ) -> Result<CopyResult, AppError> {
-    let flavors = precheck(&state, id)?;
-    let flavors = if plain {
-        let (kind, text) = {
-            let store = state.store();
-            (store.summary(id)?.map(|s| s.kind), store.text(id)?)
-        };
-        kind.and_then(|k| plain_flavors(k, text)).unwrap_or(flavors)
+    // 纯文本能由正文生成时不必读原有 flavor（长富文本的 RTF / HTML 可能有几 MB）
+    let plain = if plain {
+        let store = state.store();
+        let kind = store.live_summary(id)?.map(|s| s.kind);
+        kind.and_then(|k| plain_flavors(k, store.text(id).ok().flatten()))
     } else {
-        flavors
+        None
+    };
+    let flavors = match plain {
+        Some(f) => f,
+        None => precheck(&state, id)?,
     };
     write_then_paste(&app, &state, &flavors, &[id], paste).await
 }
@@ -290,20 +292,15 @@ fn merged_text(state: &AppState, ids: &[i64]) -> Result<String, AppError> {
     }
     let store = state.store();
     let mut parts = Vec::with_capacity(ids.len());
+    let gone = || AppError::Invalid("选中的记录有的已被删除，请重新选择".into());
     for &id in ids {
-        let kind = store.summary(id)?.map(|s| s.kind);
-        let text = kind
-            .filter(|k| matches!(k, Kind::Text | Kind::Code | Kind::Link))
-            .and_then(|_| store.text(id).transpose())
-            .transpose()?;
-        match text {
-            Some(t) => parts.push(t),
-            None => {
-                return Err(AppError::Invalid(
-                    "选中的里有图片或文件，不能合并粘贴".into(),
-                ));
-            }
+        let kind = store.live_summary(id)?.ok_or_else(gone)?.kind;
+        if !matches!(kind, Kind::Text | Kind::Code | Kind::Link) {
+            return Err(AppError::Invalid(
+                "选中的里有图片或文件，不能合并粘贴".into(),
+            ));
         }
+        parts.push(store.text(id)?.ok_or_else(gone)?);
     }
     Ok(parts.join("\n"))
 }
@@ -526,10 +523,11 @@ mod tests {
             merged_text(&state, &[a, f]),
             Err(AppError::Invalid(_))
         ));
-        assert!(matches!(
-            merged_text(&state, &[a, 999]),
-            Err(AppError::Invalid(_))
-        ));
+        // 已删除、不存在的记录不说成“有图片或文件”
+        let gone = |r: Result<String, AppError>| matches!(r, Err(AppError::Invalid(m)) if m.contains("已被删除"));
+        assert!(gone(merged_text(&state, &[a, 999])));
+        state.store().soft_delete(&[b], 1).unwrap();
+        assert!(gone(merged_text(&state, &[a, b])));
         assert!(matches!(
             merged_text(&state, &[a]),
             Err(AppError::Invalid(_))

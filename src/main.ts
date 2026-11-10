@@ -45,7 +45,7 @@ import { addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFre
 import { composing, justComposed } from './ime';
 import { errorControl, revealsFocus, shownTabTarget } from './settings-tabs';
 import {
-  armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, mergeable, nextSelection, pruneMulti, rangeIds, snippetTextChange, UNDO_MS, visible, type UndoState,
+  armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, isTextKind, extendRange, mergeable, nextSelection, pruneMulti, snippetTextChange, UNDO_MS, visible, type UndoState,
 } from './view';
 import { layout, range, ROW_H, scrollTo, topOf, type Cell } from './virtual-list';
 
@@ -138,7 +138,9 @@ const S = {
   /** 搜索框右侧的建议“只看 xx · n 条” */
   sug: null as Sug | null,
   sel: null as number | null,
-  /** 多选（只在“片段”分类，M25 规则 6）：空或至少 2 条 */
+  /** Shift 连选的锚点：从这一行连到当前行（M25 规则 6）；多选里没有它时以当前选中行为锚点 */
+  anchor: null as number | null,
+  /** 多选（M25 规则 6，所有分类）：空或至少 2 条，插入顺序就是合并粘贴的先后 */
   multi: new Set<number>(),
   detail: null as RecordDetail | null,
   undo: null as UndoState,
@@ -311,7 +313,9 @@ function paintMultiUi() {
   if (bulk) {
     const ok = mergeable(rs);
     multiBarText.textContent = ok ? `已选 ${rs.length} ${multiUnit(rs)}` : `已选 ${rs.length} ${multiUnit(rs)}，含图片或文件`;
-    multiBar.querySelector<HTMLButtonElement>('[data-bulk="merge"]')!.disabled = !ok;
+    const mb = multiBar.querySelector<HTMLButtonElement>('[data-bulk="merge"]')!;
+    mb.disabled = !ok;
+    mb.firstChild!.textContent = `合并${copyVerb(S.canPaste)}`;
   }
   escHintEl.textContent = escHint(!!S.q, S.multi.size >= 2, S.app !== null);
 }
@@ -472,12 +476,17 @@ function setMulti() {
   renderPreview();
 }
 // 鼠标多选（“片段”分类，M25 规则 6）：Mod 点击切换，Shift 点击从选中行连选到这一行；之后选中跟到这一行
+const anchorOf = () => (S.anchor !== null && S.multi.has(S.anchor) ? S.anchor : S.sel);
 function multiTo(id: number, range: boolean) {
   const v = vis().filter((r) => !S.removing.has(r.id));
-  if (range && S.sel !== null) rangeIds(v, S.sel, id).forEach((x) => S.multi.add(x));
-  else {
+  const anchor = anchorOf();
+  if (range && anchor !== null) {
+    S.anchor = anchor;
+    S.multi = new Set(extendRange(v, anchor, id));
+  } else {
     if (!S.multi.size && S.sel !== null) S.multi.add(S.sel);
     if (!S.multi.delete(id)) S.multi.add(id);
+    S.anchor = id;
   }
   if (S.multi.size < 2) S.multi.clear();
   paintRows();
@@ -491,8 +500,12 @@ function move(d: 1 | -1, instant: boolean, extend = false) {
   const n = Math.max(0, Math.min(v.length - 1, i + d));
   const had = S.multi.size;
   if (extend) {
-    if (S.sel !== null) S.multi.add(S.sel);
-    S.multi.add(v[n].id);
+    // 从锚点连到移到的这一行：往回按会把多出来的收回（M25 规则 6）
+    const anchor = anchorOf();
+    if (anchor !== null) {
+      S.anchor = anchor;
+      S.multi = new Set(extendRange(v, anchor, v[n].id));
+    }
     if (S.multi.size < 2) S.multi.clear();
   } else S.multi.clear();
   if (extend || had) paintRows();
@@ -1335,7 +1348,7 @@ function toast(msg: string, { undo = false, icon = 'check' as keyof typeof I, ac
 // 结果以后端事件为准：copy 之后 record-updated 带来新的 uses / copiedAt
 let copyTimer = 0;
 /** 文本、代码、链接可以只粘贴纯文本那一份（M09 规则 7） */
-const plainable = (r: Pick<RecordSummary, 'kind'>) => r.kind === 'text' || r.kind === 'code' || r.kind === 'link';
+const plainable = (r: Pick<RecordSummary, 'kind'>) => isTextKind(r.kind);
 
 /** 合并粘贴多选（M09 规则 8）：都是文字类才能合；成功后退出多选 */
 function pasteSelection() {
@@ -1477,7 +1490,7 @@ function remove(ids: number[]) {
         renderSpectrum();
       }, reduced.matches ? 0 : 360);
       const r = rs[0];
-      toast(ids.length > 1 ? `已删除 ${ids.length} 个片段` : `已删除${isSnip(r) ? '片段' : ''}“${truncate(r.title, 14)}”`, { undo: true, icon: 'trash' });
+      toast(ids.length > 1 ? `已删除 ${ids.length} ${multiUnit(rs)}` : `已删除${isSnip(r) ? '片段' : ''}“${truncate(r.title, 14)}”`, { undo: true, icon: 'trash' });
       S.undo = armUndo(S.undo, ids, r.title, Date.now());
       paintUndoHint();
       setTimeout(paintUndoHint, UNDO_MS);
@@ -2625,7 +2638,9 @@ snipExportBtn.addEventListener('click', () => snipIo(async () => {
 $('#snipImportBtn').addEventListener('click', () => snipIo(async () => {
   const path = await pickJsonFile();
   if (!path) return null;
-  return importNote(await importSnippets(path));
+  const res = await importSnippets(path);
+  if (res.imported) snipExportBtn.disabled = false;
+  return importNote(res);
 }));
 
 // —— 首次启动引导（M18） ——

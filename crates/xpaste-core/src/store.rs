@@ -626,6 +626,17 @@ impl Store {
         ids_in(&self.conn, &sql, &args)
     }
 
+    /// 库里是否已有这个内容哈希的记录（含软删除的：再次复制时会被合并回来）。
+    pub fn has_hash(&self, hash: &[u8; 32]) -> Result<bool, CoreError> {
+        Ok(self
+            .conn
+            .query_row("SELECT 1 FROM records WHERE hash = ?1", [&hash[..]], |_| {
+                Ok(())
+            })
+            .optional()?
+            .is_some())
+    }
+
     /// 未删除记录的正文全文（详情里的 `text` 超过 200 KB 会截断）；没有正文、已删除或不存在为 None。
     pub fn text(&self, id: i64) -> Result<Option<String>, CoreError> {
         Ok(self
@@ -2194,6 +2205,15 @@ pub(crate) mod tests {
         assert_eq!(ids(&s, "会议").len(), 1);
         assert_eq!(ids(&s, "").len(), 2);
     }
+    #[test]
+    fn has_hash_sees_existing_records() {
+        let mut s = mem();
+        let r = rec("x");
+        assert!(!s.has_hash(&r.hash).unwrap());
+        s.insert_or_merge(&r, 1, 500).unwrap();
+        assert!(s.has_hash(&r.hash).unwrap());
+    }
+
     #[test]
     fn text_returns_full_text() {
         let mut s = mem();

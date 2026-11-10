@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import type { RecordSummary } from './api/types.ts';
 import { rel, type Filter } from './format.ts';
 import {
-  armUndo, canUndo, counts, cycleFilter, ensureSelection, groupOf, groups, inFilter, isStale, mergeable, nextSelection, pruneMulti, rangeIds, snippetTextChange, visible,
+  armUndo, canUndo, counts, cycleFilter, ensureSelection, groupOf, groups, inFilter, isStale, isTextKind, extendRange, mergeable, nextSelection, pruneMulti, rangeIds, snippetTextChange, visible,
 } from './view.ts';
 
 const mk = (id: number, over: Partial<RecordSummary>): RecordSummary => ({
@@ -140,4 +140,17 @@ test('mergeable：都是文本、代码、链接（含这几类的片段）才�
   assert.equal(mergeable([mk(1, {}), mk(2, { kind: 'code' }), mk(3, { kind: 'link', snippetBody: '' })]), true);
   assert.equal(mergeable([mk(1, {}), mk(2, { kind: 'image' })]), false);
   assert.equal(mergeable([mk(1, { kind: 'file' })]), false);
+});
+
+test('extendRange：Shift 连选从锚点到当前行，往回按会收回（M25 规则 6）', () => {
+  const v = [1, 2, 3, 4, 5].map((id) => mk(id, {}));
+  assert.deepEqual(extendRange(v, 1, 4), [1, 2, 3, 4]);
+  assert.deepEqual(extendRange(v, 1, 3), [1, 2, 3]);
+  // 往上连选：顺序从锚点往上，就是合并粘贴的先后
+  assert.deepEqual(extendRange(v, 4, 2), [4, 3, 2]);
+  assert.deepEqual(extendRange(v, 9, 2), []);
+});
+
+test('isTextKind：文本、代码、链接', () => {
+  assert.deepEqual((['text', 'code', 'link', 'image', 'video', 'file'] as const).map(isTextKind), [true, true, true, false, false, false]);
 });

@@ -56,15 +56,23 @@ pub fn parse_file(bytes: &[u8]) -> Result<SnippetFile, AppError> {
 
 /// 挑出要新建的：名字和内容都与已有片段相同的跳过；文件里重复的只建一次。返回（要新建的, 跳过数）。
 pub fn plan_import(items: &[SnippetItem], existing: &[SnippetItem]) -> (Vec<SnippetItem>, u32) {
-    let mut have: Vec<&SnippetItem> = existing.iter().collect();
+    let mut have: Vec<SnippetItem> = existing.to_vec();
     let mut create = Vec::new();
     let mut skipped = 0;
-    for it in items {
+    // 名字按存入时的口径去掉首尾空白再比（create_snippet 经 snippet_name 会 trim）
+    let items: Vec<SnippetItem> = items
+        .iter()
+        .map(|it| SnippetItem {
+            name: it.name.trim().into(),
+            text: it.text.clone(),
+        })
+        .collect();
+    for it in &items {
         if have.iter().any(|e| e.name == it.name && e.text == it.text) {
             skipped += 1;
         } else {
             create.push(it.clone());
-            have.push(it);
+            have.push(it.clone());
         }
     }
     (create, skipped)
@@ -174,6 +182,13 @@ mod tests {
         );
         // 同名不同内容照常导入；文件里重复的只建一次
         assert_eq!(create, [it("地址", "北京"), it("新", "x")]);
+        assert_eq!(skipped, 2);
+        // 名字首尾空白按存入时的口径去掉再比（create_snippet 会 trim）
+        let (create, skipped) = plan_import(
+            &[it(" 地址 ", "上海"), it("新 ", "y"), it("新", "y")],
+            &existing,
+        );
+        assert_eq!(create, [it("新", "y")]);
         assert_eq!(skipped, 2);
     }
 

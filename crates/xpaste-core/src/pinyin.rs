@@ -23,7 +23,8 @@ pub fn name_matches(name: &str, q: &str) -> bool {
     let n = name.to_lowercase();
     n.contains(&q)
         || n.replace(' ', "").contains(&q)
-        || (is_pinyin_query(&q) && find(name, &q).is_some())
+        // 拼音只认从名字第一个字起：xin 命中“微信”里的“信”不算（M29 规则 1）
+        || (is_pinyin_query(&q) && find(name, &q).is_some_and(|h| name.starts_with(&h)))
 }
 
 /// 一个汉字：`reads[0]` 是默认读音，其后为去重后的其他读音。
@@ -278,6 +279,10 @@ mod tests {
         assert!(!name_matches("微信", ""));
         assert!(!name_matches("微信", "发票"));
         assert!(!name_matches("Chrome", "wx"));
+        // 拼音只认名字开头：xin 是“信”，在“微信”中间，不建议
+        assert!(!name_matches("微信", "xin"));
+        assert!(!name_matches("企业微信", "wx"));
+        assert!(name_matches("企业微信", "qywx"));
     }
 
     #[test]
