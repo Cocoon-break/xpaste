@@ -240,16 +240,41 @@ fn toast_for(err: Option<&AppError>) -> Toast {
     }
 }
 
-/// 便签快捷键按下（读库、写便签文件等重活都在单独的线程里做，不占主线程）：面板可见 → 让面板挂它选中的记录；否则挂最新一条。
-/// 无论挂没挂成都放下绳子亮一下；成功由 `hang_record` 通知面板，失败给 `line` 窗口发提示。
+/// 便签快捷键按下时做什么，见 `hotkey_action`。
+#[derive(PartialEq, Debug)]
+enum HotkeyAction {
+    /// 绳子已由鼠标或快捷键放下：改成键盘操作，不挂东西
+    Keyboard,
+    /// 面板可见：让面板挂它选中的记录
+    Panel,
+    /// 挂最新一条记录
+    HangLatest,
+}
+
+/// 绳子已经放下（鼠标或快捷键挂上后亮着）时再按快捷键，改成键盘操作；否则面板可见挂选中的，不可见挂最新一条。
+fn hotkey_action(shown: Option<How>, panel_visible: bool) -> HotkeyAction {
+    if matches!(shown, Some(How::Flash | How::Mouse)) {
+        HotkeyAction::Keyboard
+    } else if panel_visible {
+        HotkeyAction::Panel
+    } else {
+        HotkeyAction::HangLatest
+    }
+}
+
+/// 便签快捷键按下（读库、写便签文件等重活都在单独的线程里做，不占主线程）：见 `hotkey_action`。
+/// 挂的时候无论挂没挂成都放下绳子亮一下；成功由 `hang_record` 通知面板，失败给 `line` 窗口发提示。
 pub fn hotkey_pressed(app: &AppHandle) {
     let visible = app
         .get_webview_window("panel")
         .is_some_and(|w| w.is_visible().unwrap_or(false));
-    if visible {
+    // 先取出来再判断：持着 SHOWN 锁调 show 会锁第二次
+    let how = shown().how;
+    match hotkey_action(how, visible) {
+        HotkeyAction::Keyboard => return show(app, How::Kbd),
         // 只发给面板：隐藏的晾衣绳窗口可能也载入了面板前端
-        emit_to(app, "panel", LINE_HANG_SELECTED, ());
-        return;
+        HotkeyAction::Panel => return emit_to(app, "panel", LINE_HANG_SELECTED, ()),
+        HotkeyAction::HangLatest => {}
     }
     let app = app.clone();
     // 读库与写便签文件，不占着快捷键回调所在的主线程
@@ -600,6 +625,19 @@ pub fn keyboard(app: &AppHandle, on: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hotkey_on_dropped_line_switches_to_keyboard() {
+        use HotkeyAction::*;
+        for how in [How::Flash, How::Mouse] {
+            assert_eq!(hotkey_action(Some(how), false), Keyboard);
+            assert_eq!(hotkey_action(Some(how), true), Keyboard);
+        }
+        for how in [None, Some(How::Peek), Some(How::Kbd), Some(How::Drag)] {
+            assert_eq!(hotkey_action(how, true), Panel);
+            assert_eq!(hotkey_action(how, false), HangLatest);
+        }
+    }
 
     #[test]
     fn toast_texts_and_extras() {
