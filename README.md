@@ -45,7 +45,7 @@ brew trust --cask cocoon-break/tap/xpaste
 brew install --cask cocoon-break/tap/xpaste
 ```
 
-macOS 安装包已签名并经过 Apple 公证，第一次打开时系统会确认一次，点“打开”即可。Windows 安装包还没有签名，SmartScreen 提示时点“更多信息 → 仍要运行”。权限、系统要求和旧版本的放行办法见[使用说明](docs/使用说明.md#下载安装)。
+macOS 安装包已签名并经过 Apple 公证，第一次打开时系统会确认一次，点“打开”即可。Windows 安装包还没有签名，SmartScreen 提示时点“更多信息 → 仍要运行”。权限和系统要求见[使用说明](docs/使用说明.md#下载安装)。
 
 ## 数据只在你的电脑上
 

@@ -21,7 +21,10 @@
 {"@type":"Question","name":"翻译会把内容发到哪里？","acceptedAnswer":{"@type":"Answer","text":"只在你按翻译时发送要翻译的那一段文字。macOS 26 的系统翻译在本机完成；AI 翻译发到你自己在设置里填的 OpenAI 兼容接口，接本机的 Ollama 时不出本机。"}},
 {"@type":"Question","name":"按 Enter 为什么没有直接粘贴？","acceptedAnswer":{"@type":"Answer","text":"macOS 上自动粘贴需要“辅助功能”权限，在系统设置 → 隐私与安全性 → 辅助功能里打开 xPaste。没授权时 Enter 会复制好并提示，到目标应用里按 ⌘ V 就行。"}},
 {"@type":"Question","name":"支持哪些系统？","acceptedAnswer":{"@type":"Answer","text":"macOS 13 及以上（Apple 芯片与 Intel 各有安装包；13.0 个别样式不显示，建议 13.1 起），Windows 10 21H2 与 Windows 11（x64）。Windows 上没有录屏；翻译已在 Windows 实机上验收，截图、贴图、长截图还在验收中。Windows 11 on ARM 靠 x64 模拟运行、没测过；Windows 10 on ARM 不能运行，安装程序会说明原因。录屏带麦克风要 macOS 15，系统翻译要 macOS 26。"}},
-{"@type":"Question","name":"macOS 提示“xPaste 已损坏，无法打开”怎么办？","acceptedAnswer":{"@type":"Answer","text":"0.6.0 及更早的版本没有签名，从浏览器下载后带隔离属性。在终端运行 xattr -dr com.apple.quarantine /Applications/xPaste.app，再正常打开即可。之后的版本已签名并公证，不会再出现这个提示。"}}]}
+{"@type":"Question","name":"能只粘贴文字，不带网页上的字体和颜色吗？","acceptedAnswer":{"@type":"Answer","text":"能。选中一条文本、代码或链接，按 Shift + Enter（或右键“粘贴为纯文本”），粘贴出去的只有文字本身。直接按 Enter 则保留原来的格式。"}},
+{"@type":"Question","name":"能一次粘贴好几条吗？","acceptedAnswer":{"@type":"Answer","text":"能。按住 ⌘（Windows 上 Ctrl）点几条文字，行上出现 1、2、3 的序号，按 Enter 就按这个顺序连成一段、每条一行贴出去。常用的几段还可以存成片段，设置里能把片段导出成一个文件，换电脑后导入。"}},
+{"@type":"Question","name":"面板太大了，能只留搜索框和列表吗？","acceptedAnswer":{"@type":"Answer","text":"能。设置“通用”里把“面板样式”改成“精简”，面板就只剩搜索框和一行一条的列表，按空格预览选中的那一条。分类、置顶、片段、翻译这些功能都还在，用快捷键和右键菜单。"}}
+]}
 </script>
 <script>
 // 访客手动选过主题的话，赶在首次绘制前套上，避免闪一下
@@ -435,11 +438,6 @@ footer nav a:hover { color: var(--fg); }
     </div>
     <div class="help">
       <div>
-        <b>macOS 第一次打开提示“已损坏”？</b>
-        0.6.0 及更早的版本没有签名，文件没有坏；之后的版本已签名并公证，不会再提示。还在用旧版本时，在终端运行这一行再打开：
-        <div class="cmd"><code>xattr -dr com.apple.quarantine /Applications/xPaste.app</code><button class="btn sm" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M5 16H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h11a1 1 0 0 1 1 1v1"/></svg><span>复制</span></button></div>
-      </div>
-      <div>
         <b>Windows 提示“已保护你的电脑”？</b>
         Windows 安装包没有签名。点“更多信息”，再点“仍要运行”。
       </div>
@@ -461,7 +459,6 @@ footer nav a:hover { color: var(--fg); }
       <details><summary>能一次粘贴好几条吗？<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary><div class="a">能。按住 ⌘（Windows 上 Ctrl）点几条文字，行上出现 1、2、3 的序号，按 Enter 就按这个顺序连成一段、每条一行贴出去。常用的几段还可以存成片段，设置里能把片段导出成一个文件，换电脑后导入。</div></details>
       <details><summary>面板太大了，能只留搜索框和列表吗？<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary><div class="a">能。设置“通用”里把“面板样式”改成“精简”，面板就只剩搜索框和一行一条的列表，按空格预览选中的那一条。分类、置顶、片段、翻译这些功能都还在，用快捷键和右键菜单。</div></details>
       <details><summary>支持哪些系统？<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary><div class="a">macOS 13 及以上（Apple 芯片与 Intel 各有安装包；13.0 个别样式不显示，建议 13.1 起），Windows 10 21H2 与 Windows 11（x64）。Windows 上没有录屏；翻译已在 Windows 实机上验收，截图、贴图、长截图还在验收中，遇到问题欢迎在 GitHub 提 issue。Windows 11 on ARM 靠 x64 模拟运行、没测过；Windows 10 on ARM 不能运行，安装程序会说明原因。录屏带麦克风要 macOS 15，系统翻译要 macOS 26，不满足时对应选项不显示或不可用。完整的支持情况见 <a href="https://github.com/Cocoon-break/xpaste/blob/main/docs/%E8%AE%BE%E5%A4%87%E6%94%AF%E6%8C%81.md">设备支持</a>。</div></details>
-      <details><summary>macOS 提示“xPaste 已损坏，无法打开”怎么办？<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary><div class="a">0.6.0 及更早的版本没有签名，从浏览器下载后带有隔离属性。在终端运行 <code>xattr -dr com.apple.quarantine /Applications/xPaste.app</code>，再正常打开即可。之后的版本已签名并公证，不会再出现这个提示。</div></details>
     </div>
   </div>
 </section>
