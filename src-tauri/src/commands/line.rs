@@ -1,8 +1,8 @@
 //! 晾衣绳便签的命令：记录、拖进来的文件转成便签，复制、打开，以及 Pro 状态与授权码。
 //! 日志只记便签 id、记录 id、类型和字节数，不记正文、标题、备注和路径。
 
-use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
 use serde::Serialize;
 use tauri::ipc::{InvokeBody, Request};
@@ -409,7 +409,42 @@ pub fn line_reorder(
     Ok(())
 }
 
-/// 摘下，返回便签和它原来的位置，撤销时原样交回 `line_restore`
+/// 最近摘下的便签和它原来的位置，撤销时按 id 取回。只留在内存里，最多 20 张，多了丢最早的；
+/// 撤销不收页面交回的便签，页面改不了要恢复的内容（比如把路径换成别的文件）
+#[derive(Default)]
+struct Removed(Vec<(Note, usize)>);
+
+const REMOVED_MAX: usize = 20;
+
+impl Removed {
+    fn put(&mut self, note: Note, at: usize) {
+        self.0.retain(|(n, _)| n.id != note.id);
+        self.0.push((note, at));
+        if self.0.len() > REMOVED_MAX {
+            self.0.remove(0);
+        }
+    }
+
+    fn take(&mut self, id: u64) -> Option<(Note, usize)> {
+        let i = self.0.iter().position(|(n, _)| n.id == id)?;
+        Some(self.0.remove(i))
+    }
+}
+
+/// 与 AppState 的锁不同时持有
+static REMOVED: Mutex<Removed> = Mutex::new(Removed(Vec::new()));
+
+fn removed() -> std::sync::MutexGuard<'static, Removed> {
+    REMOVED.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn take_removed(id: u64) -> Result<(Note, usize), AppError> {
+    removed()
+        .take(id)
+        .ok_or_else(|| AppError::Invalid("没有可撤销的便签".into()))
+}
+
+/// 摘下，返回便签和它原来的位置；撤销时把 id 交给 `line_restore`
 #[tauri::command(async)]
 pub fn line_remove(
     app: AppHandle,
@@ -421,34 +456,31 @@ pub fn line_remove(
         let (n, at) = line.remove(id)?;
         (dto(&line, n), at)
     };
+    removed().put(note.note.clone(), at);
     log::info!("便签 摘下 id={id}");
     changed(&app);
     Ok((note, at))
 }
 
+/// 撤销摘下：放回后端留的那份，`at` 不给放回原来的位置
 #[tauri::command(async)]
 pub fn line_restore(
     app: AppHandle,
     state: State<'_, AppState>,
-    note: Note,
-    at: usize,
+    id: u64,
+    at: Option<usize>,
 ) -> Result<(), AppError> {
-    check_restore(&note)?;
-    let id = note.id;
-    state.line().restore(note, at)?;
+    let (note, saved_at) = take_removed(id)?;
+    // 没放回去（比如绳子挂满了）就留着，还能再撤销
+    let back = note.clone();
+    let r = state.line().restore(note, at.unwrap_or(saved_at));
+    if let Err(e) = r {
+        removed().put(back, saved_at);
+        return Err(e.into());
+    }
     log::info!("便签 撤销摘下 id={id}");
     changed(&app);
     Ok(())
-}
-
-/// 便签由页面交回：图片只能是 `line/` 下的文件名，带目录或 `..` 就会读到别处的文件
-fn check_restore(note: &Note) -> Result<(), AppError> {
-    match note.image.as_deref() {
-        Some(f) if Path::new(f).file_name() != Some(OsStr::new(f)) => {
-            Err(AppError::Invalid("便签图片不对".into()))
-        }
-        _ => Ok(()),
-    }
 }
 
 /// 复制便签，见 `copy_plan`；都标记为自身写入，不进历史
@@ -526,13 +558,13 @@ pub fn line_open(app: AppHandle, state: State<'_, AppState>, id: u64) -> Result<
     }
 }
 
-/// 大卡片里要播放的源视频：只有视频便签，且源文件还在
+/// 大卡片里要播放的源视频：只有视频便签，扩展名是视频，且源文件还在
 fn video_path(note: &Note) -> Option<&Path> {
     (note.kind == Kind::Video)
         .then(|| note.paths.first())
         .flatten()
         .map(Path::new)
-        .filter(|p| p.is_file())
+        .filter(|p| note_from_path(p, 0).kind == Kind::Video && p.is_file())
 }
 
 /// 大卡片里播放视频：只把这张便签的源视频授权给 asset 协议，返回它的 asset URL；源文件已移动或删除时为 None
@@ -674,6 +706,16 @@ mod tests {
         let mut v = note(Kind::Video, "录屏.mov");
         v.paths = vec![f.to_string_lossy().into()];
         assert_eq!(video_path(&v), Some(f.as_path()));
+        // 视频便签的路径不是视频文件，不授权
+        let txt =
+            std::env::temp_dir().join(format!("xpaste-line-preview-{}.txt", std::process::id()));
+        std::fs::write(&txt, b"x").unwrap();
+        let fake = Note {
+            paths: vec![txt.to_string_lossy().into()],
+            ..v.clone()
+        };
+        assert_eq!(video_path(&fake), None);
+        std::fs::remove_file(&txt).unwrap();
         // 文件便签不授权
         let file = Note {
             kind: Kind::File,
@@ -836,19 +878,30 @@ mod tests {
     }
 
     #[test]
-    fn restore_rejects_image_outside_line_dir() {
-        let mut n = note(Kind::Image, "截图");
-        for bad in ["../x.png", "/etc/passwd", "a/b.png", "..", ""] {
-            n.image = Some(bad.into());
-            assert!(
-                matches!(check_restore(&n), Err(AppError::Invalid(_))),
-                "{bad}"
-            );
+    fn removed_keeps_server_copy_for_undo() {
+        let mut r = Removed::default();
+        // 不认识的 id 撤销不了
+        assert!(r.take(9).is_none());
+        let mut n = note(Kind::Text, "a");
+        n.id = 9;
+        r.put(n, 3);
+        let (back, at) = r.take(9).unwrap();
+        assert_eq!((back.id, back.body.as_str(), at), (9, "a", 3));
+        // 取过一次就没了
+        assert!(r.take(9).is_none());
+        // 最多留 20 张，丢最早的
+        for id in 1..=21 {
+            let mut n = note(Kind::Text, "x");
+            n.id = id;
+            r.put(n, 0);
         }
-        n.image = Some("3.png".into());
-        assert!(check_restore(&n).is_ok());
-        n.image = None;
-        assert!(check_restore(&n).is_ok());
+        assert!(r.take(1).is_none());
+        assert!(r.take(2).is_some() && r.take(21).is_some());
+    }
+
+    #[test]
+    fn restore_unknown_id_fails() {
+        assert!(matches!(take_removed(u64::MAX), Err(AppError::Invalid(_))));
     }
 
     #[test]
