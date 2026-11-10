@@ -69,6 +69,21 @@ make release-win   # 在 macOS 上交叉打 Windows 安装程序（见下文）
 - 只在这次发布的就是最新版时更新；给旧标签补发不会把 tap 退回旧版本。
 - cask 里的其他内容（最低系统版本、卸载时删除的数据目录等）在 tap 仓库里手动改，`tap` 任务只动 `version` 和 `sha256` 三处。
 
+## Pro 代码
+
+官方安装包带一个收费功能“晾衣绳便签”（xPaste Pro）。它的代码在私有仓库 `Cocoon-break/xpaste-pro`，克隆到本仓库的 `pro/` 目录（已被 `.gitignore` 忽略，不要 `git add pro`，在 `pro/` 里用它自己的 git）。
+
+- **没有 `pro/` 目录时编译的是空实现**：功能不存在，设置里也没有“Pro”标签。`make check` 带不带 `pro/` 都要能过。
+- 刚克隆出 `pro/` 后如果编译结果仍是空实现（`cfg(pro)` 没有切过来），执行 `touch crates/xpaste-pro/build.rs` 再编译。
+- `crates/xpaste-pro/Cargo.toml` 的依赖要和私有实现 `pro/rust/` 用到的一致，私有实现多用了依赖时两边一起改。
+- **公开代码与公开提交信息不写私有规格的编号**，注释里直接写规则本身。
+- **按大版本收费**：授权码写明适用的大版本，应用的大版本 0.x 按 1 算，授权码的大版本要大于等于应用的。`make -C pro license EMAIL=…` 默认签 1.x，签别的版本加 `MAJOR=2`。发 2.0 之前，先定好升级价和给老用户的提示，再改签发默认值；不要为了“兼容”放宽判断，否则旧授权码会在 2.0 上继续有效。
+- **签发**：`make -C pro license EMAIL=…`，打印出一行授权码。首次使用先 `make -C pro keygen`。
+- **吊销**：`make -C pro revoke CODE=…`，把打印出来的一行加进 `REVOKED`，发版后生效（退款时做这件事，EULA 里写了退款后授权码会被停用）。
+- **私钥 `pro/license.local` 绝对不能进任何仓库**，要单独备份：丢了就签不出新授权码，泄露了任何人都能签发。
+- 维护者须知：删掉数据目录里的 `pro.json` 会重新开始 14 天试用，测试试用与到期时可以用它。
+- **发版**：`release.yml` 用 Secret `PRO_DEPLOY_KEY`（`xpaste-pro` 仓库的只读 deploy key）拉取 `pro/`，所以官方安装包带 Pro；没配置时拉取失败，发版会直接停下。流程还会检查安装包的 Rust 一侧带上了 Pro：在二进制里查找标记字符串 `pro.json.tmp`（出自 `pro/rust/trial.rs`）。改了那个文件名要两处同步。
+
 ## 官网
 
 `website/` 原样发布到 GitHub Pages，没有构建步骤。首页上那几块会动、能操作的界面不是仿制品，是 `src/` 的真实前端加演示数据：
