@@ -22,6 +22,7 @@ embed-resource = "3"
 tauri = { workspace = true, features = ["macos-private-api", "protocol-asset", "tray-icon"] }
 xpaste-core = { workspace = true, features = ["store"] }
 xpaste-platform.workspace = true
+xpaste-pro.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

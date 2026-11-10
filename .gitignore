@@ -17,3 +17,5 @@ dist
 skills-lock.json
 .claude
 .agents
+# 私有的 Pro 实现
+/pro/
