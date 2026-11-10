@@ -80,8 +80,10 @@ export const lineRestore = (note: Note, at: number) => invoke<void>('line_restor
 export const lineCopy = (id: number) => invoke<CopyNote>('line_copy', { id });
 /** 链接用浏览器打开，文件在访达 / 资源管理器里显示 */
 export const lineOpen = (id: number) => invoke<void>('line_open', { id });
-/** 面板里把行拖出顶边：坐标为屏幕逻辑像素。第一次放下绳子，之后把 x 转给晾衣绳页面 */
-export const lineDragHover = (x: number, y: number) => invoke<void>('line_drag_hover', { x, y });
+/** 面板里拖着的记录：晾衣绳页面画跟手的影子便签用。`thumbUrl` 为图片、视频缩略图的 asset URL */
+export type DragItem = { id: number; kind: Kind; title: string; thumbUrl: string | null };
+/** 面板里把行拖出顶边：坐标为屏幕逻辑像素。第一次放下绳子，之后把位置和记录转给晾衣绳页面 */
+export const lineDragHover = (x: number, y: number, item: DragItem) => invoke<void>('line_drag_hover', { x, y, item });
 /** 拖到顶端松手：晾衣绳页面按 x 算出位置后挂上 */
 export const lineDragDrop = (id: number, x: number) => invoke<void>('line_drag_drop', { id, x });
 export const proStatus = () => invoke<Pro>('pro_status');
@@ -124,9 +126,9 @@ export const onLineShow = (cb: (how: How, id: number | null) => void): Promise<U
 export const onLineHide = (cb: () => void): Promise<UnlistenFn> => listen('line-hide', () => cb(), target());
 export const onLineToast = (cb: (t: LineToast) => void): Promise<UnlistenFn> =>
   listen<LineToast>('line-toast', (e) => cb(e.payload), target());
-/** 面板里拖着行到了顶端：光标的屏幕坐标（逻辑像素） */
-export const onLineDrag = (cb: (x: number, y: number) => void): Promise<UnlistenFn> =>
-  listen<{ x: number; y: number }>('line-drag', (e) => cb(e.payload.x, e.payload.y), target());
+/** 面板里拖着行到了顶端：光标的屏幕坐标（逻辑像素）与拖着的记录 */
+export const onLineDrag = (cb: (x: number, y: number, item: DragItem) => void): Promise<UnlistenFn> =>
+  listen<{ x: number; y: number } & DragItem>('line-drag', ({ payload: { x, y, ...item } }) => cb(x, y, item), target());
 /** 绳子放下期间光标进出便签区域（晾衣绳窗口往上延到屏幕顶端），变了才发 */
 export const onLinePointer = (cb: (inside: boolean) => void): Promise<UnlistenFn> =>
   listen<{ inside: boolean }>('line-pointer', (e) => cb(e.payload.inside), target());

@@ -3218,9 +3218,12 @@ function hangRecord(id: number | null) {
 // 移动超过 4 px 才算拖动，此时才在列表上捕获指针（行会随重绘换掉）；不拖时点击、双击、右键照旧。
 // 指针在顶边之外时每帧最多报一次位置。松手时不在顶边之外不挂；绳子已为这次拖动放下过就让它收起
 let lineDrag: { id: number; x: number; y: number; on: boolean; sx: number; sy: number; raf: number; hovered: boolean } | null = null;
-const hoverLine = (d: { hovered: boolean }, x: number, y: number) => {
+const hoverLine = (d: { id: number; hovered: boolean }, x: number, y: number) => {
   d.hovered = true;
-  return lineDragHover(x, y).catch((err: AppError) => void info(`拖到晾衣绳失败 kind=${err.kind}`));
+  const r = S.records.get(d.id);
+  // 带上记录的样子，晾衣绳上画一张跟手的影子便签；标题只取开头，每帧都发
+  const item = { id: d.id, kind: r?.kind ?? 'text', title: (r?.title ?? '').slice(0, 200), thumbUrl: r?.thumb ?? null };
+  return lineDragHover(x, y, item).catch((err: AppError) => void info(`拖到晾衣绳失败 kind=${err.kind}`));
 };
 list.addEventListener('pointerdown', (e) => {
   const id = itemOf(e), t = e.target as Element;
