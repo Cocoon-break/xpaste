@@ -279,10 +279,10 @@ pub fn line_hang_from_panel(app: AppHandle, id: Option<i64>) {
     crate::line::hang_and_flash(&app, id, false);
 }
 
-/// 面板里把行拖出顶边，每帧最多一次：`x`、`y` 为光标的屏幕逻辑坐标
+/// 面板里把行拖出顶边，每帧最多一次：`x`、`y` 为光标的屏幕逻辑坐标，`item` 是拖着的记录（页面画影子便签）
 #[tauri::command]
-pub fn line_drag_hover(app: AppHandle, x: f64, y: f64) {
-    crate::line::drag_hover(&app, x, y);
+pub fn line_drag_hover(app: AppHandle, x: f64, y: f64, item: crate::line::DragItem) {
+    crate::line::drag_hover(&app, x, y, item);
 }
 
 /// 面板里拖着行在顶端松手：转给晾衣绳页面，页面按 `x` 算出位置后调 `line_hang_record`

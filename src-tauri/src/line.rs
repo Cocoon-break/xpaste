@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use crate::error::AppError;
@@ -303,13 +303,33 @@ pub fn hang_and_flash(app: &AppHandle, id: Option<i64>, select: bool) {
     }
 }
 
-/// 面板里拖着行到了顶端：绳子还没为拖动放下就放下，再把光标位置转给页面。
+/// 面板里拖着的那条记录（取自面板的列表数据），晾衣绳页面画跟手的影子便签用
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DragItem {
+    pub id: i64,
+    pub kind: xpaste_core::Kind,
+    pub title: String,
+    /// 图片、视频缩略图的 asset URL
+    pub thumb_url: Option<String>,
+}
+
+/// `line-drag` 的载荷：光标的屏幕坐标加拖着的记录
+#[derive(Clone, Serialize)]
+struct DragHover {
+    x: f64,
+    y: f64,
+    #[serde(flatten)]
+    item: DragItem,
+}
+
+/// 面板里拖着行到了顶端：绳子还没为拖动放下就放下，再把光标位置和记录转给页面。
 /// `show` 在主线程里才记下 `how`，紧接着的几帧可能再放下一次，页面只多收到几次同样的 `line-show`。
-pub fn drag_hover(app: &AppHandle, x: f64, y: f64) {
+pub fn drag_hover(app: &AppHandle, x: f64, y: f64, item: DragItem) {
     if shown().how != Some(How::Drag) {
         show(app, How::Drag);
     }
-    emit_to(app, LABEL, LINE_DRAG, serde_json::json!({ "x": x, "y": y }));
+    emit_to(app, LABEL, LINE_DRAG, DragHover { x, y, item });
 }
 
 /// 建好隐藏的窗口，免得碰到顶端时现建 webview。参数同划词卡片。
@@ -660,6 +680,26 @@ mod tests {
         assert_eq!(
             select_on_duplicate(Some(How::Mouse), Some(&AppError::LineExpired), true),
             None
+        );
+    }
+
+    #[test]
+    fn drag_payload_is_flat_camel_case() {
+        let item: DragItem = serde_json::from_value(serde_json::json!({
+            "id": 3, "kind": "image", "title": "截图", "thumbUrl": "asset://t.png"
+        }))
+        .unwrap();
+        let v = serde_json::to_value(DragHover {
+            x: 1.0,
+            y: 2.0,
+            item,
+        })
+        .unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "x": 1.0, "y": 2.0, "id": 3, "kind": "image", "title": "截图", "thumbUrl": "asset://t.png"
+            })
         );
     }
 
