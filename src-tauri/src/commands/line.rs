@@ -409,6 +409,25 @@ pub fn line_reorder(
     Ok(())
 }
 
+/// 设（`at` 为 Unix 秒）或取消（None）提醒，过去的时刻马上到期；试用结束后照常能改。成功后叫醒提醒线程重算
+#[tauri::command(async)]
+pub fn line_remind(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: u64,
+    at: Option<i64>,
+) -> Result<NoteDto, AppError> {
+    let note = {
+        let mut line = state.line();
+        let n = line.remind(id, at)?;
+        dto(&line, n)
+    };
+    log::info!("便签 提醒 id={id} 设上={}", at.is_some());
+    crate::remind::wake();
+    changed(&app);
+    Ok(note)
+}
+
 /// 最近摘下的便签和它原来的位置，撤销时按 id 取回。只留在内存里，最多 20 张，多了丢最早的；
 /// 撤销不收页面交回的便签，页面改不了要恢复的内容（比如把路径换成别的文件）
 #[derive(Default)]
@@ -479,6 +498,8 @@ pub fn line_restore(
         return Err(e.into());
     }
     log::info!("便签 撤销摘下 id={id}");
+    // 带回来的提醒可能已经过了
+    crate::remind::wake();
     changed(&app);
     Ok(())
 }
@@ -695,6 +716,7 @@ mod tests {
             record_id: Some(7),
             source: None,
             created_at: 0,
+            remind_at: None,
         }
     }
 

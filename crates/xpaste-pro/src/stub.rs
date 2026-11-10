@@ -47,6 +47,10 @@ impl Line {
         Err(LineError::Unavailable)
     }
 
+    pub fn remind(&mut self, _id: u64, _at: Option<i64>) -> Result<Note, LineError> {
+        Err(LineError::Unavailable)
+    }
+
     pub fn reorder(&mut self, _ids: &[u64]) -> Result<(), LineError> {
         Err(LineError::Unavailable)
     }
@@ -85,6 +89,7 @@ mod tests {
             Err(LicenseError::Unavailable)
         ));
         assert!(matches!(l.remove(1), Err(LineError::Unavailable)));
+        assert!(matches!(l.remind(1, Some(0)), Err(LineError::Unavailable)));
         assert!(!dir.join("line.json").exists());
     }
 }

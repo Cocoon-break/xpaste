@@ -34,6 +34,8 @@ pub enum How {
     Kbd,
     /// 拖着东西到顶端
     Drag,
+    /// 提醒到点：放下、不拿键盘，页面让到期的便签高亮；光标进来再离开、或一直没人碰 10 s 后收起
+    Remind,
 }
 
 #[derive(PartialEq, Debug)]
@@ -184,6 +186,13 @@ static READY: AtomicBool = AtomicBool::new(false);
 pub fn ready() {
     READY.store(true, Ordering::Relaxed);
     log::info!("晾衣绳页面就绪，开始检测顶端");
+    // 关着应用时错过的提醒现在补发
+    crate::remind::wake();
+}
+
+/// 页面已就绪：之前提醒线程不放下绳子
+pub fn is_ready() -> bool {
+    READY.load(Ordering::Relaxed)
 }
 
 /// 绳子已放下（只露绳子不算）时窗口的矩形，换到检测线程的坐标空间（除以 `k` 之后）；没放下为 None。
@@ -208,9 +217,10 @@ fn open_rect(k: f64) -> Option<Rect> {
 /// 每次放下、收起加一：收起兜底只在这期间没再放下、也没收完时生效
 static GEN: AtomicU64 = AtomicU64::new(0);
 
-/// 预建窗口并起检测线程。只在带 Pro 的构建里调用。
+/// 预建窗口，起检测线程和提醒线程。只在带 Pro 的构建里调用。
 pub fn start(app: &AppHandle) {
     prewarm(app);
+    crate::remind::start(app);
     let app = app.clone();
     if let Err(e) = std::thread::Builder::new()
         .name("line-edge".into())
