@@ -1561,6 +1561,11 @@ extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> L
     unsafe { CallNextHookEx(None, code, wparam, lparam) }
 }
 
+/// Windows 屏幕没有刘海。
+pub fn notch_inset(_x: f64, _w: f64) -> f64 {
+    0.0
+}
+
 /// 指针的屏幕坐标（物理像素，与 `capture_rect` 同一坐标系：进程是 Per-Monitor-v2）。
 pub fn pointer_position() -> Option<(f64, f64)> {
     let mut p = POINT::default();

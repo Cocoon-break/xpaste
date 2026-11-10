@@ -1035,6 +1035,21 @@ fn input_age(secs: impl IntoIterator<Item = f64>) -> Option<Duration> {
         .map(Duration::from_secs_f64)
 }
 
+/// 屏幕顶端被刘海挡住的高度（点）：菜单栏自动隐藏或全屏时工作区从屏幕最顶上开始，刘海会盖住那一条。
+/// `x`、`w` 是这块屏的全局横坐标与宽（点），按它们找对应的 NSScreen；没有刘海、找不到或不在主线程时为 0。
+pub fn notch_inset(x: f64, w: f64) -> f64 {
+    let Some(mtm) = objc2::MainThreadMarker::new() else {
+        return 0.0;
+    };
+    objc2_app_kit::NSScreen::screens(mtm)
+        .iter()
+        .find(|s| {
+            let f = s.frame();
+            (f.origin.x - x).abs() < 1.0 && (f.size.width - w).abs() < 1.0
+        })
+        .map_or(0.0, |s| s.safeAreaInsets().top)
+}
+
 /// 指针的全局坐标（点，主屏左上为原点）。
 pub fn pointer_position() -> Option<(f64, f64)> {
     let event = CGEvent::new(None)?;
