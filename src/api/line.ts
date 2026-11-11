@@ -116,13 +116,13 @@ export const lineKeyboard = (on: boolean) => invoke<void>('line_keyboard', { on 
 /** 试用结束的提示条上点“输入授权码”：唤起面板并打开设置的 Pro 标签 */
 export const openProSettings = () => invoke<void>('open_panel_settings', { tab: 'pro' });
 
-/** 从别的应用拖文件到晾衣绳窗口：`x` 为窗口内的逻辑坐标 */
-export type FileDrag = { type: 'over'; x: number } | { type: 'drop'; x: number; paths: string[] } | { type: 'leave' };
+/** 从别的应用拖文件到晾衣绳窗口：`x`、`y` 为窗口内的逻辑坐标 */
+export type FileDrag = { type: 'over'; x: number; y: number } | { type: 'drop'; x: number; y: number; paths: string[] } | { type: 'leave' };
 export const onLineFileDrag = (cb: (d: FileDrag) => void): Promise<UnlistenFn> =>
   getCurrentWebview().onDragDropEvent(({ payload: p }) => {
     if (p.type === 'leave') return cb({ type: 'leave' });
-    const x = p.position.x / devicePixelRatio;
-    cb(p.type === 'drop' ? { type: 'drop', x, paths: p.paths } : { type: 'over', x });
+    const x = p.position.x / devicePixelRatio, y = p.position.y / devicePixelRatio;
+    cb(p.type === 'drop' ? { type: 'drop', x, y, paths: p.paths } : { type: 'over', x, y });
   });
 
 const target = () => ({ target: getCurrentWindow().label });
