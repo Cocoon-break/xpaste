@@ -97,15 +97,17 @@ export const linePreviewSrc = (id: number) => invoke<string | null>('line_previe
 export type DragItem = { id: number; kind: Kind; title: string; thumbUrl: string | null };
 /** 面板里把行拖出顶边：坐标为屏幕逻辑像素。第一次放下绳子，之后把位置和记录转给晾衣绳页面 */
 export const lineDragHover = (x: number, y: number, item: DragItem) => invoke<void>('line_drag_hover', { x, y, item });
-/** 拖到顶端松手：晾衣绳页面按 x 算出位置后挂上 */
-export const lineDragDrop = (id: number, x: number) => invoke<void>('line_drag_drop', { id, x });
+/** 拖到绳子那一侧松手：坐标为屏幕逻辑像素，晾衣绳页面按 x（顶部）或 y（左右两侧）算出位置后挂上 */
+export const lineDragDrop = (id: number, x: number, y: number) => invoke<void>('line_drag_drop', { id, x, y });
+/** 设置里“位置”下面的程序坞提示；没有要提示的为空串 */
+export const lineSideHint = (side: LineSide) => invoke<string>('line_side_hint', { side });
 export const proStatus = () => invoke<Pro>('pro_status');
 export const proActivate = (code: string) => invoke<Pro>('pro_activate', { code });
 
 // 晾衣绳页面
 export const lineReady = () => invoke<void>('line_ready');
-/** 按内容报窗口高度（逻辑像素） */
-export const lineResize = (h: number) => invoke<void>('line_resize', { h });
+/** 按内容报窗口尺寸（逻辑像素）：顶部是高，左右两侧是宽 */
+export const lineResize = (extent: number) => invoke<void>('line_resize', { extent });
 /** 要收起：后端发 line-hide，页面播完再调 lineHidden */
 export const lineHide = () => invoke<void>('line_hide');
 export const lineHidden = () => invoke<void>('line_hidden');
@@ -148,6 +150,6 @@ export const onLinePointer = (cb: (inside: boolean) => void): Promise<UnlistenFn
 /** 便签的提醒到了：每张到期的发一次，页面让它高亮 */
 export const onLineRemind = (cb: (id: number) => void): Promise<UnlistenFn> =>
   listen<{ id: number }>('line-remind', (e) => cb(e.payload.id), target());
-/** 面板里拖着行在顶端松手：记录 id 与光标的屏幕 x */
-export const onLineDrop = (cb: (id: number, x: number) => void): Promise<UnlistenFn> =>
-  listen<{ id: number; x: number }>('line-drop', (e) => cb(e.payload.id, e.payload.x), target());
+/** 面板里拖着行在绳子那一侧松手：记录 id 与光标的屏幕坐标 */
+export const onLineDrop = (cb: (id: number, x: number, y: number) => void): Promise<UnlistenFn> =>
+  listen<{ id: number; x: number; y: number }>('line-drop', (e) => cb(e.payload.id, e.payload.x, e.payload.y), target());

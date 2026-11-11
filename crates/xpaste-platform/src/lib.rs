@@ -41,6 +41,25 @@ pub struct WinRect {
     pub h: f64,
 }
 
+/// 程序坞 / 任务栏停在屏幕哪一边。Windows 任务栏在顶部时不算（`dock()` 返回 None）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DockEdge {
+    Left,
+    Right,
+    Bottom,
+}
+
+/// 程序坞 / 任务栏露出来的矩形，坐标与 `pointer_position()` 同一空间。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DockFrame {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+    pub edge: DockEdge,
+    pub autohide: bool,
+}
+
 /// 本进程窗口里只有贴图（标题以此开头）参与窗口吸附；遮罩（`xpaste-shot…`）与面板都不算。
 const PIN_TITLE_PREFIX: &str = "xpaste-pin";
 

@@ -306,14 +306,14 @@ pub fn line_drag_hover(app: AppHandle, x: f64, y: f64, item: crate::line::DragIt
     crate::line::drag_hover(&app, x, y, item);
 }
 
-/// 面板里拖着行在顶端松手：转给晾衣绳页面，页面按 `x` 算出位置后调 `line_hang_record`
+/// 面板里拖着行到绳子那一侧松手：转给晾衣绳页面，页面按 `x`（顶部）或 `y`（左右两侧）算出位置后调 `line_hang_record`
 #[tauri::command]
-pub fn line_drag_drop(app: AppHandle, id: i64, x: f64) {
+pub fn line_drag_drop(app: AppHandle, id: i64, x: f64, y: f64) {
     emit_to(
         &app,
         crate::line::LABEL,
         LINE_DROP,
-        serde_json::json!({ "id": id, "x": x }),
+        serde_json::json!({ "id": id, "x": x, "y": y }),
     );
 }
 
@@ -630,10 +630,16 @@ pub fn line_ready() {
     crate::line::ready();
 }
 
-/// 晾衣绳页面按内容报高度
+/// 晾衣绳页面按内容报窗口尺寸：顶部是高，左右两侧是宽
 #[tauri::command]
-pub fn line_resize(app: AppHandle, h: f64) {
-    crate::line::resize(&app, h);
+pub fn line_resize(app: AppHandle, extent: f64) {
+    crate::line::resize(&app, extent);
+}
+
+/// 设置里“位置”下面的程序坞提示；程序坞不在这一侧、或碰边照常能放下时为空串
+#[tauri::command(async)]
+pub fn line_side_hint(app: AppHandle, side: xpaste_core::LineSide) -> String {
+    crate::line::side_hint(&app, side).to_owned()
 }
 
 /// 页面要收起（离开便签区域、Esc、快捷键挂上后停够时间）：发 `line-hide`，页面收完再调 `line_hidden`

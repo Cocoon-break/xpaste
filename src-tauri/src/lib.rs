@@ -369,6 +369,7 @@ pub fn run() {
             commands::line::line_preview_src,
             commands::line::line_ready,
             commands::line::line_resize,
+            commands::line::line_side_hint,
             commands::line::line_hide,
             commands::line::line_hidden,
             commands::line::line_keyboard,

@@ -3287,7 +3287,7 @@ function endLineDrag(e: PointerEvent) {
   cancelAnimationFrame(d.raf);
   if (e.type === 'pointerup' && d.on && e.clientY < 0) {
     void (d.hovered ? Promise.resolve() : hoverLine(d, e.screenX, e.screenY))
-      .then(() => lineDragDrop(d.id, e.screenX))
+      .then(() => lineDragDrop(d.id, e.screenX, e.screenY))
       .catch((err: AppError) => toast(err.message));
   } else if (d.hovered) void lineHide().catch((err: AppError) => void info(`收起晾衣绳失败 kind=${err.kind}`));
 }
