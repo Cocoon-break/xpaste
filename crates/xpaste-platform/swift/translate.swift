@@ -48,19 +48,54 @@ public func xp_tr_translate(
     let tgt = String(cString: target)
     let rec = NLLanguageRecognizer()
     rec.processString(src)
-    guard let lang = rec.dominantLanguage, lang != .undetermined else { return cb(ctx, 2, nil) }
+    guard let top = rec.dominantLanguage, top != .undetermined else { return cb(ctx, 2, nil) }
+    // 候选源语言：最可能的在前，再加概率不低于 0.1 的其他猜测，简繁互为候选。
+    // 终端输出、短文本、中英混排常被认成别的语言或繁体，只用最可能的那个会要用户下载用不上的语言包
+    let hyps = rec.languageHypotheses(withMaximum: 3)
+    let guesses = hyps.filter { $0.value >= 0.1 }.sorted { $0.value > $1.value }.map(\.key.rawValue)
+    // 没把握（最可能的也不到 0.5，多见于短词、缩写，如 ok 认成波兰语）时按文字再补一个，放在最后
+    let byScript = (hyps.values.max() ?? 0) < 0.5 ? [scriptLanguage(src)] : []
+    var cands: [String] = []
+    for g in [top.rawValue] + guesses + byScript {
+        let pair = g == "zh-Hant" ? ["zh-Hans"] : g == "zh-Hans" ? ["zh-Hant"] : []
+        for c in [g] + pair where !cands.contains(c) { cands.append(c) }
+    }
     // ctx 换成整数再跨进 Task：裸指针不是 Sendable
     let ctxBits = UInt(bitPattern: ctx)
     Task {
         let ctx = UnsafeMutableRawPointer(bitPattern: ctxBits)
+        let target = Locale.Language(identifier: tgt)
+        // 用第一个语言包已下载的候选；都没下载时按最可能的、系统支持的那个报缺语言包。与目标同一种语言的候选跳过
+        var pick: String?
+        var need: String?
+        for c in cands where Locale.Language(identifier: c).languageCode != target.languageCode {
+            let st = await LanguageAvailability().status(from: Locale.Language(identifier: c), to: target)
+            if st == .installed {
+                pick = c
+                break
+            }
+            if st == .supported && need == nil { need = c }
+        }
+        guard let lang = pick else {
+            if let n = need { return n.withCString { cb(ctx, 1, $0) } }
+            return cb(ctx, 2, nil)
+        }
+        let run = {
+            try await TranslationSession(installedSource: Locale.Language(identifier: lang), target: target)
+                .translate(src).targetText
+        }
         do {
-            let session = TranslationSession(
-                installedSource: Locale.Language(identifier: lang.rawValue),
-                target: Locale.Language(identifier: tgt))
-            let r = try await session.translate(src)
-            r.targetText.withCString { cb(ctx, 0, $0) }
+            let out: String
+            do {
+                out = try await run()
+            } catch TranslationError.notInstalled {
+                // 刚查过是已下载：系统翻译服务刚起来时偶尔仍报未下载（下载按钮一点即“已下载”），稍等再试一次
+                try await Task.sleep(for: .milliseconds(300))
+                out = try await run()
+            }
+            out.withCString { cb(ctx, 0, $0) }
         } catch TranslationError.notInstalled {
-            lang.rawValue.withCString { cb(ctx, 1, $0) }
+            lang.withCString { cb(ctx, 1, $0) }
         } catch TranslationError.unsupportedLanguagePairing, TranslationError.unsupportedSourceLanguage,
             TranslationError.unsupportedTargetLanguage
         {
@@ -69,6 +104,12 @@ public func xp_tr_translate(
             cb(ctx, 3, nil)
         }
     }
+}
+
+/// 按文字猜语言：有假名日语，有谚文韩语，有汉字中文，否则英语。
+private func scriptLanguage(_ s: String) -> String {
+    let has = { (r: ClosedRange<UInt32>) in s.unicodeScalars.contains { r.contains($0.value) } }
+    return has(0x3040...0x30FF) ? "ja" : has(0xAC00...0xD7AF) ? "ko" : has(0x4E00...0x9FFF) ? "zh-Hans" : "en"
 }
 
 /// 下载回调：code 0 已下载，1 用户取消（或仍未下载），2 失败（确认框弹不出来）。在主线程上调用，恰好一次。

@@ -149,7 +149,8 @@ impl Fail {
             Fail::Timeout => "timeout".into(),
             Fail::Connect => "connect".into(),
             Fail::Bad => "bad".into(),
-            Fail::Pack { .. } => "pack".into(),
+            // 语言代码不是剪切板内容，记下来便于排查“缺语言包 / 语言包不对”
+            Fail::Pack { source, target } => format!("pack {source}→{}", target.code()),
             Fail::Os => "os".into(),
             Fail::Unsupported => "unsupported".into(),
             Fail::System => "system".into(),
