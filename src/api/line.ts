@@ -37,12 +37,12 @@ export interface NoteDto extends Note {
   imageUrl: string | null;
 }
 
-/** Pro 状态：试用剩余天数（不足一天按一天）、授权邮箱与适用的大版本 */
+/** Pro 状态：试用剩余天数（不足一天按一天）、授权邮箱与适用的大版本；试用结束时 `reason` 是存着的授权码验不过的原因 */
 export type Pro =
   | { state: 'unavailable' }
   | { state: 'trial'; daysLeft: number }
   | { state: 'licensed'; email: string; major: number }
-  | { state: 'expired' };
+  | { state: 'expired'; reason: string | null };
 
 export interface LineView {
   /** 这个构建带不带晾衣绳 */
@@ -60,6 +60,8 @@ export interface LineView {
   side: LineSide;
   /** 一直显示：页面不自己收起，把能点的地方报给后端（lineHitRects） */
   pinned: boolean;
+  /** 这次启动时便签文件读不全，已留底：页面提示一次 */
+  recovered: boolean;
 }
 
 /** 晾衣绳放下的方式：`peek` 只露绳子，`mouse` 鼠标放下，`flash` 快捷键挂上后亮一下，`kbd` 键盘打开，`drag` 拖着东西到顶端，

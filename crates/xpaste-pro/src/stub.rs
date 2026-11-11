@@ -74,6 +74,10 @@ impl Line {
     pub fn image_path(&self, _note: &Note) -> Option<PathBuf> {
         None
     }
+
+    pub fn recovered(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]

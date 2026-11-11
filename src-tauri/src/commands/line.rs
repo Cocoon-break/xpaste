@@ -53,6 +53,8 @@ pub struct LineView {
     pub side: LineSide,
     /// 一直显示：页面不自己收起，报能点的地方
     pub pinned: bool,
+    /// 这次启动时便签文件读不全，已留底：页面提示一次
+    pub recovered: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -193,7 +195,7 @@ fn dto(line: &Line, note: Note) -> NoteDto {
 /// 试用结束后不再按所选样式画，回到默认样式；所选的仍留在设置里，激活后恢复
 pub fn effective_style(pro: &Pro, chosen: &LineStyle) -> LineStyle {
     match pro {
-        Pro::Expired => LineStyle::default(),
+        Pro::Expired { .. } => LineStyle::default(),
         _ => chosen.clone(),
     }
 }
@@ -226,6 +228,7 @@ pub fn view(state: &AppState) -> LineView {
         on,
         side,
         pinned,
+        recovered: line.recovered(),
     }
 }
 
@@ -963,7 +966,10 @@ mod tests {
             rope: "lights".into(),
             ..LineStyle::default()
         };
-        assert_eq!(effective_style(&Pro::Expired, &mine), LineStyle::default());
+        assert_eq!(
+            effective_style(&Pro::Expired { reason: None }, &mine),
+            LineStyle::default()
+        );
         assert_eq!(effective_style(&Pro::Trial { days_left: 3 }, &mine), mine);
     }
 
