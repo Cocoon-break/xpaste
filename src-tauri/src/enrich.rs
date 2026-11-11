@@ -87,9 +87,15 @@ fn handle(app: &AppHandle, job: Job) {
                 }
             };
             let thumb = state.data_dir.join("thumbs").join(format!("{id}.png"));
+            // 先写临时名再改名：挂便签时不会把写到一半的封面当成已生成的拿走
+            let tmp = thumb.with_extension("png.tmp");
             let poster = match xpaste_platform::video_poster(&path, THUMB_MAX) {
-                Some(png) => std::fs::write(&thumb, png)
-                    .inspect_err(|e| log::warn!("记录 {id} 写入缩略图失败：{e}"))
+                Some(png) => std::fs::write(&tmp, png)
+                    .and_then(|()| std::fs::rename(&tmp, &thumb))
+                    .inspect_err(|e| {
+                        let _ = std::fs::remove_file(&tmp);
+                        log::warn!("记录 {id} 写入缩略图失败：{e}");
+                    })
                     .is_ok(),
                 None => {
                     log::debug!("记录 {id} 视频封面生成失败");
