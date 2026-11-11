@@ -56,6 +56,8 @@ export interface LineView {
   /** 用户开关；与 available（构建带不带）是两回事 */
   on: boolean;
   side: LineSide;
+  /** 一直显示：页面不自己收起，把能点的地方报给后端（lineHitRects） */
+  pinned: boolean;
 }
 
 /** 晾衣绳放下的方式：`peek` 只露绳子，`mouse` 鼠标放下，`flash` 快捷键挂上后亮一下，`kbd` 键盘打开，`drag` 拖着东西到顶端，
@@ -111,6 +113,8 @@ export const lineResize = (extent: number) => invoke<void>('line_resize', { exte
 /** 要收起：后端发 line-hide，页面播完再调 lineHidden */
 export const lineHide = () => invoke<void>('line_hide');
 export const lineHidden = () => invoke<void>('line_hidden');
+/** 一直显示时能点的地方：`[x, y, w, h]`，窗口内逻辑像素，其余地方点击穿透；变了才报 */
+export const lineHitRects = (rects: number[][]) => invoke<void>('line_hit_rects', { rects });
 /** 拿键盘（true）或交还（false） */
 export const lineKeyboard = (on: boolean) => invoke<void>('line_keyboard', { on });
 /** 试用结束的提示条上点“输入授权码”：唤起面板并打开设置的 Pro 标签 */

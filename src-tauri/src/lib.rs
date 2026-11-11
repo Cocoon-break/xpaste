@@ -109,7 +109,11 @@ pub fn run() {
                 settings.effective_line_hotkey().to_owned(),
                 settings.appearance,
             );
-            line::configure(settings.line_enabled, settings.line_side);
+            line::configure(
+                settings.line_enabled,
+                settings.line_side,
+                settings.line_pinned,
+            );
             let enrich = enrich::start(app.handle().clone());
             let ocr = ocr::start(app.handle().clone());
             app.manage(AppState::new(
@@ -370,6 +374,7 @@ pub fn run() {
             commands::line::line_ready,
             commands::line::line_resize,
             commands::line::line_side_hint,
+            commands::line::line_hit_rects,
             commands::line::line_hide,
             commands::line::line_hidden,
             commands::line::line_keyboard,

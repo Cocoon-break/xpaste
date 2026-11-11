@@ -693,6 +693,19 @@ pub fn hide_window(hwnd: isize) {
     }
 }
 
+/// 前台是全屏应用（全屏的视频、游戏、演示，或开着演示设置）：按系统决定要不要弹通知时的判断，不分哪块屏。读不到算不是。
+pub fn fullscreen_app() -> bool {
+    use windows::Win32::UI::Shell::{
+        QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN,
+        SHQueryUserNotificationState,
+    };
+    // SAFETY: 只读查询
+    matches!(
+        unsafe { SHQueryUserNotificationState() },
+        Ok(s) if s == QUNS_BUSY || s == QUNS_RUNNING_D3D_FULL_SCREEN || s == QUNS_PRESENTATION_MODE
+    )
+}
+
 /// 把 `target` 切回前台（最多等 100 ms），再发 Ctrl+V。
 pub fn paste(target: Option<isize>) -> Result<(), PlatformError> {
     if let Some(h) = target {
