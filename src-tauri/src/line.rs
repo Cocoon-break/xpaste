@@ -520,7 +520,7 @@ pub fn hang_and_flash(app: &AppHandle, id: Option<i64>, select: bool) {
     // Err(None)：剪切板里还没有记录
     let res = match id {
         Ok(Some(id)) => crate::commands::line::hang_record(app, &state, id, hang_at(side()))
-            .map(|_| ())
+            .map(|n| n.truncated)
             .map_err(Some),
         Ok(None) => Err(None),
         Err(e) => {
@@ -528,6 +528,7 @@ pub fn hang_and_flash(app: &AppHandle, id: Option<i64>, select: bool) {
             Err(Some(e.into()))
         }
     };
+    let truncated = matches!(res, Ok(true));
     let err = res.err();
     let how = shown().how;
     if let Some(sel) = select_on_duplicate(how, err.as_ref().and_then(Option::as_ref), select) {
@@ -536,6 +537,18 @@ pub fn hang_and_flash(app: &AppHandle, id: Option<i64>, select: bool) {
     show(app, How::Flash);
     if let Some(e) = err {
         emit_to(app, LABEL, LINE_TOAST, toast_for(e.as_ref()));
+    } else if truncated {
+        let text = crate::commands::line::TRUNCATED_HINT.to_owned();
+        emit_to(
+            app,
+            LABEL,
+            LINE_TOAST,
+            Toast {
+                text,
+                action: None,
+                id: None,
+            },
+        );
     }
 }
 

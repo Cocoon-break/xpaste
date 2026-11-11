@@ -35,6 +35,8 @@ export interface Note {
 /** `Note` 加上图片的 asset URL，可直接用作 `<img src>`。 */
 export interface NoteDto extends Note {
   imageUrl: string | null;
+  /** 只在挂上的那次结果里出现：记录正文超过 64 KB，只挂了前面一段 */
+  truncated?: boolean;
 }
 
 /** Pro 状态：试用剩余天数（不足一天按一天）、授权邮箱与适用的大版本；试用结束时 `reason` 是存着的授权码验不过的原因 */
