@@ -1878,21 +1878,37 @@ function optHotkey(id: string, idle = OPT_IDLE) {
   };
   input.addEventListener('focus', () => f.setHelp('请按下组合键，至少包含一个修饰键；⌫ 清空…'));
   input.addEventListener('blur', () => f.setHelp(idle));
+  recordKeys(input, f.setHelp, f.record, () => {
+    f.pending = '';
+    input.value = '';
+    f.setHelp('已清空，保存后不启用');
+  });
+  return f;
+}
+// 所有快捷键录制框共用的按键处理；clear 给了就能按不带修饰键的 ⌫ / Delete 清空。
+// 从按下第一个修饰键到全部松开都没收到主键：这组多半已被系统或其他应用的全局快捷键先拿走，网页收不到（M15 交互规则 3）
+const MOD_KEYS = ['Control', 'Meta', 'Shift', 'Alt'];
+let hotkeyGot = false;
+function recordKeys(input: HTMLInputElement, help: (msg: string) => void, record: (h: string) => void, clear?: () => void) {
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Tab' || e.key === 'Escape') return;
     e.preventDefault();
-    if (e.repeat || ['Control', 'Meta', 'Shift', 'Alt'].includes(e.key)) return;
-    if ((e.key === 'Backspace' || e.key === 'Delete') && !(e.ctrlKey || e.metaKey || e.altKey || e.shiftKey)) {
-      f.pending = '';
-      input.value = '';
-      return f.setHelp('已清空，保存后不启用');
+    if (MOD_KEYS.includes(e.key)) {
+      if ([e.metaKey, e.ctrlKey, e.altKey, e.shiftKey].filter(Boolean).length === 1) hotkeyGot = false;
+      return;
     }
+    hotkeyGot = true;
+    // 按住不放的重复事件不重播弹跳与提示
+    if (e.repeat) return;
+    if (clear && (e.key === 'Backspace' || e.key === 'Delete') && !(e.ctrlKey || e.metaKey || e.altKey || e.shiftKey)) return clear();
     const ev = { key: e.key, code: e.code, ctrl: e.ctrlKey, meta: e.metaKey, alt: e.altKey, shift: e.shiftKey };
     const h = hotkeyFromEvent(ev, S.platform.os);
-    if (!h) return f.setHelp(hotkeyHint(ev, S.platform.os));
-    f.record(h);
+    if (!h) return help(hotkeyHint(ev, S.platform.os));
+    record(h);
   });
-  return f;
+  input.addEventListener('keyup', (e) => {
+    if (MOD_KEYS.includes(e.key) && !(e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) && !hotkeyGot) help('没收到组合键：可能已被系统或其他应用占用，请换一个');
+  });
 }
 const shotKey = optHotkey('shotHotkey'), recKey = optHotkey('recHotkey');
 const trKey = optHotkey('trHotkey', '在任何应用里选中文字后按下，译文显示在鼠标旁');
@@ -2396,16 +2412,7 @@ dlg.addEventListener('click', (e) => {
 });
 hotkeyIn.addEventListener('focus', () => setHotkeyHelp('请按下组合键，至少包含一个修饰键…'));
 hotkeyIn.addEventListener('blur', () => setHotkeyHelp(HOTKEY_IDLE));
-hotkeyIn.addEventListener('keydown', (e) => {
-  if (e.key === 'Tab' || e.key === 'Escape') return;
-  e.preventDefault();
-  // 按住不放的重复事件不重播弹跳与提示
-  if (e.repeat || ['Control', 'Meta', 'Shift', 'Alt'].includes(e.key)) return;
-  const ev = { key: e.key, code: e.code, ctrl: e.ctrlKey, meta: e.metaKey, alt: e.altKey, shift: e.shiftKey };
-  const h = hotkeyFromEvent(ev, S.platform.os);
-  if (!h) return setHotkeyHelp(hotkeyHint(ev, S.platform.os));
-  recordHotkey(h);
-});
+recordKeys(hotkeyIn, setHotkeyHelp, recordHotkey);
 function recordHotkey(h: string) {
   pendingHotkey = h;
   hotkeyIn.value = hotkeyLabel(h, S.platform.os);
@@ -2962,6 +2969,8 @@ await onShotNeedPermission(({ pane, mode }) =>
 // 截图、录屏、翻译快捷键同理：对话框开着且面板有焦点时后端先发到这里（role = shot / rec / translate），
 // 焦点不在录制框里时截图、录屏照常开始，翻译照常弹卡片（M15 交互规则 4、M26 规则 18；在录制框里时写入，不翻译）
 await onHotkeyPressed((role) => {
+  // 被自己的全局快捷键拦下的组合也算收到了主键，松开修饰键时不报“没收到组合键”
+  hotkeyGot = true;
   // 只认面板有焦点时的按键：失焦时后端不发到这里，这里再防一道
   const on = (el: Element) => document.activeElement === el && document.hasFocus();
   const opts = [[shotKey, '截图', 'shot'], [recKey, '录屏', 'rec'], [trKey, '翻译', 'translate']] as const;
