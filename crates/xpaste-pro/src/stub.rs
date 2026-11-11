@@ -55,6 +55,10 @@ impl Line {
         Err(LineError::Unavailable)
     }
 
+    pub fn place(&mut self, _places: &[(u64, Option<f64>)]) -> Result<(), LineError> {
+        Err(LineError::Unavailable)
+    }
+
     pub fn remove(&mut self, _id: u64) -> Result<(Note, usize), LineError> {
         Err(LineError::Unavailable)
     }
@@ -90,6 +94,7 @@ mod tests {
         ));
         assert!(matches!(l.remove(1), Err(LineError::Unavailable)));
         assert!(matches!(l.remind(1, Some(0)), Err(LineError::Unavailable)));
+        assert!(matches!(l.place(&[]), Err(LineError::Unavailable)));
         assert!(!dir.join("line.json").exists());
     }
 }
