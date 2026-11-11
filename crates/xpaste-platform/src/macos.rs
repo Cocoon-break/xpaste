@@ -1089,8 +1089,9 @@ pub fn pointer_position() -> Option<(f64, f64)> {
 }
 
 /// 程序坞停在哪一边、是否自动隐藏（读 `com.apple.dock` 的偏好），以及露出来的矩形（全局点，同 `pointer_position`）。
-/// 停在左右两侧且常驻时，有辅助功能权限就读程序坞那一排图标（`AXList`）的位置和大小；
-/// 没有权限、读不到，或停在底部、自动隐藏（这两种用不到矩形）时，按占满主屏那一整条边算。
+/// 停在左右两侧且常驻时，有辅助功能权限就读程序坞那一排图标（`AXList`）的位置和大小；没有权限或读不到为 None
+/// （当作没占那一侧：宁可碰到程序坞旁边的屏幕边时放下，也不把整条边都当成占满）。
+/// 停在底部、自动隐藏（这两种用不到矩形）时，按占满主屏那一整条边算。
 pub fn dock() -> Option<crate::DockFrame> {
     use crate::{DockEdge, DockFrame};
     let app = CFString::from_static_str("com.apple.dock");
@@ -1124,7 +1125,7 @@ pub fn dock() -> Option<crate::DockFrame> {
         h: main.size.height,
     };
     let r = if edge != DockEdge::Bottom && !autohide {
-        dock_list_frame().unwrap_or(full)
+        dock_list_frame()?
     } else {
         full
     };

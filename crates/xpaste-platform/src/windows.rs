@@ -693,6 +693,57 @@ pub fn hide_window(hwnd: isize) {
     }
 }
 
+/// 一次设好窗口的位置和尺寸（物理像素），不分两步：贴着屏幕右边的窗口改宽时右边缘不跳。不激活、不改层级。
+/// 只用于同一块屏里改尺寸（跨不同 DPI 的屏要先移过去再定尺寸）。hwnd 失效时什么也不做。
+pub fn set_window_rect(hwnd: isize, x: i32, y: i32, w: i32, h: i32) {
+    use windows::Win32::UI::WindowsAndMessaging::{SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos};
+    // SAFETY: hwnd 失效时调用失败而不会崩溃
+    unsafe {
+        let _ = SetWindowPos(
+            HWND(hwnd as *mut _),
+            None,
+            x,
+            y,
+            w,
+            h,
+            SWP_NOACTIVATE | SWP_NOZORDER,
+        );
+    }
+}
+
+/// 浮层窗口（晾衣绳）不进 Alt+Tab：扩展样式补上 WS_EX_TOOLWINDOW、去掉 WS_EX_APPWINDOW。tao 每次改窗口状态（显示、点穿）
+/// 都按自己的标记整个重写扩展样式，所以另挂一个窗口子类，在 WM_STYLECHANGING 里每次改回来。窗口还没显示时、在它所在的线程（主线程）调用。
+pub fn tool_window(hwnd: isize) {
+    use windows::Win32::UI::Shell::SetWindowSubclass;
+    use windows::Win32::UI::WindowsAndMessaging::{SetWindowLongW, WS_EX_APPWINDOW};
+    let h = HWND(hwnd as *mut _);
+    // SAFETY: hwnd 失效时调用失败而不会崩溃；子类回调是静态函数，随窗口销毁
+    unsafe {
+        let _ = SetWindowSubclass(h, Some(keep_tool_window), 1, 0);
+        let ex = (GetWindowLongW(h, GWL_EXSTYLE) as u32 | WS_EX_TOOLWINDOW.0) & !WS_EX_APPWINDOW.0;
+        SetWindowLongW(h, GWL_EXSTYLE, ex as i32);
+    }
+}
+
+unsafe extern "system" fn keep_tool_window(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id: usize,
+    _data: usize,
+) -> LRESULT {
+    use windows::Win32::UI::Shell::DefSubclassProc;
+    use windows::Win32::UI::WindowsAndMessaging::{STYLESTRUCT, WM_STYLECHANGING, WS_EX_APPWINDOW};
+    if msg == WM_STYLECHANGING && wparam.0 as i32 == GWL_EXSTYLE.0 {
+        // SAFETY: WM_STYLECHANGING 的 lparam 指向系统给的 STYLESTRUCT，回调返回前有效
+        let s = unsafe { &mut *(lparam.0 as *mut STYLESTRUCT) };
+        s.styleNew = (s.styleNew | WS_EX_TOOLWINDOW.0) & !WS_EX_APPWINDOW.0;
+    }
+    // SAFETY: 参数原样交给下一个处理者
+    unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+}
+
 /// 前台是全屏应用（全屏的视频、游戏、演示，或开着演示设置）：按系统决定要不要弹通知时的判断，不分哪块屏。读不到算不是。
 pub fn fullscreen_app() -> bool {
     use windows::Win32::UI::Shell::{
