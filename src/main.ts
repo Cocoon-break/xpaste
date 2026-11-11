@@ -29,7 +29,7 @@ import {
   canInlinePlay, esc, FILTERS, FL, fmtBytes, fmtDateTime, fmtDur, fmtInt, hl, hlCode, host, isFav, isHttpUrl, isSnip, LABEL, rel, truncate, videoChips,
   type Filter,
 } from './format';
-import { hotkeyFromEvent, hotkeyLabel } from './hotkey';
+import { hotkeyFromEvent, hotkeyHint, hotkeyLabel } from './hotkey';
 import { keyAction } from './keymap';
 import { copyVerb, escHint, exportNote, fileTextHelp, importNote, openLabel, snippetExportName } from './labels';
 import { ocrLabel, ocrProgressLabel, snippetHTML } from './ocr-label';
@@ -1887,8 +1887,9 @@ function optHotkey(id: string, idle = OPT_IDLE) {
       input.value = '';
       return f.setHelp('已清空，保存后不启用');
     }
-    const h = hotkeyFromEvent({ key: e.key, code: e.code, ctrl: e.ctrlKey, meta: e.metaKey, alt: e.altKey, shift: e.shiftKey }, S.platform.os);
-    if (!h) return f.setHelp(S.platform.os === 'macos' ? '至少需要包含 ⌘、⌃ 或 ⌥' : '至少需要包含 Ctrl 或 Alt');
+    const ev = { key: e.key, code: e.code, ctrl: e.ctrlKey, meta: e.metaKey, alt: e.altKey, shift: e.shiftKey };
+    const h = hotkeyFromEvent(ev, S.platform.os);
+    if (!h) return f.setHelp(hotkeyHint(ev, S.platform.os));
     f.record(h);
   });
   return f;
@@ -2400,8 +2401,9 @@ hotkeyIn.addEventListener('keydown', (e) => {
   e.preventDefault();
   // 按住不放的重复事件不重播弹跳与提示
   if (e.repeat || ['Control', 'Meta', 'Shift', 'Alt'].includes(e.key)) return;
-  const h = hotkeyFromEvent({ key: e.key, code: e.code, ctrl: e.ctrlKey, meta: e.metaKey, alt: e.altKey, shift: e.shiftKey }, S.platform.os);
-  if (!h) return setHotkeyHelp(S.platform.os === 'macos' ? '至少需要包含 ⌘、⌃ 或 ⌥' : '至少需要包含 Ctrl 或 Alt');
+  const ev = { key: e.key, code: e.code, ctrl: e.ctrlKey, meta: e.metaKey, alt: e.altKey, shift: e.shiftKey };
+  const h = hotkeyFromEvent(ev, S.platform.os);
+  if (!h) return setHotkeyHelp(hotkeyHint(ev, S.platform.os));
   recordHotkey(h);
 });
 function recordHotkey(h: string) {
@@ -3114,6 +3116,8 @@ list.addEventListener('click', (e) => {
     paintRows();
   }
   select(id, { indDur: 180, pan: 'smooth' });
+  // 精简模式没有预览，单击直接粘贴；双击的第二下不再粘贴一次（M27 规则 13）
+  if (compact() && e.detail < 2) copyRecord(id);
   if (qa === 'copy') copyRecord(id);
   if (qa === 'pin') togglePin(id, true);
   if (qa === 'edit') void openSnippet('edit', id);
@@ -3122,7 +3126,7 @@ list.addEventListener('click', (e) => {
 $('#newSnipBtn').addEventListener('click', () => openSnippet('new'));
 list.addEventListener('dblclick', (e) => {
   const id = itemOf(e);
-  if (id !== null && !(e.target as Element).closest('[data-qa]')) copyRecord(id);
+  if (id !== null && !compact() && !(e.target as Element).closest('[data-qa]')) copyRecord(id);
 });
 list.addEventListener('contextmenu', (e) => {
   const id = itemOf(e);
