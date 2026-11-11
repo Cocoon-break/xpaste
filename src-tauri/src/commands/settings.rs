@@ -363,7 +363,8 @@ pub fn save_settings(
         HotkeyAction::None => {}
     }
     // 开关、位置与一直显示先生效，再收起或唤醒；设置锁只在取值时短暂持有
-    let mut repin = false;
+    // 改位置、改一直显示后的放下或收起：等页面拿到新的位置和 pinned 之后再做
+    let mut then: Option<fn(&AppHandle)> = None;
     if ["lineEnabled", "lineSide", "linePinned"]
         .iter()
         .any(|k| changed.contains(k))
@@ -383,9 +384,9 @@ pub fn save_settings(
         }
         // 关掉时上面已经收起，不再到新位置放下；一直显示时到新位置常驻
         if on && changed.contains(&"lineSide") {
-            crate::line::relocate(&app);
-        } else {
-            repin = on && (changed.contains(&"linePinned") || changed.contains(&"lineEnabled"));
+            then = Some(crate::line::relocate);
+        } else if on && (changed.contains(&"linePinned") || changed.contains(&"lineEnabled")) {
+            then = Some(crate::line::repin);
         }
     }
     // 空绳子的提示里写着便签快捷键；样式、开关、位置、一直显示在面板与晾衣绳页面里都要跟着换
@@ -401,9 +402,9 @@ pub fn save_settings(
     {
         crate::commands::line::changed(&app);
     }
-    // 页面先拿到 pinned 再放下或收起
-    if repin {
-        crate::line::repin(&app);
+    // 页面先拿到新的位置和 pinned 再放下或收起：常驻时收着的绳子改了位置直接放下，页面要先换好位置
+    if let Some(f) = then {
+        f(&app);
     }
     if changed.contains(&"launchAtLogin") {
         set_autostart(&app, launch);

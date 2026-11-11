@@ -258,9 +258,20 @@ pub fn dock_hint(side: LineSide, dock: Option<&Dock>, screen: Rect) -> String {
     format!("{DOCK_NAME}占满了{at}，用快捷键放下晾衣绳")
 }
 
-/// 常驻时光标落在页面报的能点的矩形里（窗口内逻辑像素）
+/// 能点的矩形四周再放宽这么多：光标贴着卡片边时不在穿透与接收之间来回切
+const HIT_PAD: f64 = 4.0;
+
+/// 常驻时光标落在页面报的能点的矩形里（窗口内逻辑像素，四周放宽 4 px）
 pub fn hit_test(local: (f64, f64), hits: &[Rect]) -> bool {
-    hits.iter().any(|r| contains(r, local))
+    hits.iter().any(|r| {
+        let r = Rect {
+            x: r.x - HIT_PAD,
+            y: r.y - HIT_PAD,
+            w: r.w + 2.0 * HIT_PAD,
+            h: r.h + 2.0 * HIT_PAD,
+        };
+        contains(&r, local)
+    })
 }
 
 /// 常驻时窗口该不该穿透点击：`hit` 光标在能点的地方。按着键时保持按下那一刻的状态（拖便签拖出卡片不断，在空白处按下拖过卡片也不截走）；
@@ -620,11 +631,11 @@ fn pin_edge(app: &AppHandle, pin: &mut Pin, how: How, other: bool) {
         let Some(w) = app.get_webview_window(LABEL) else {
             return;
         };
-        if !other {
-            reveal(app, &w, Duration::ZERO);
-        } else if let Err(e) = place(app, &w, false) {
+        if other && let Err(e) = place(app, &w, false) {
             log::warn!("晾衣绳定位失败：{e}");
         }
+        // 挪过去的那块屏也可能正全屏着
+        reveal(app, &w, Duration::ZERO);
     });
 }
 
@@ -645,6 +656,15 @@ fn pin_step(app: &AppHandle, pin: &mut Pin, local: (f64, f64), inside: bool, but
     }
     let want = pass_through(hit, button, pin.drag, pin.pass);
     if pin.pass != Some(want) {
+        // 刚从接收换成穿透：页面收不到光标离开，告诉它把悬停的样子去掉
+        if want && pin.pass == Some(false) {
+            emit_to(
+                app,
+                LABEL,
+                LINE_POINTER,
+                serde_json::json!({ "inside": inside, "pass": true }),
+            );
+        }
         pin.pass = Some(want);
         on_main(app, move |app| {
             if let Some(w) = app.get_webview_window(LABEL)
@@ -836,7 +856,7 @@ fn show_selecting(app: &AppHandle, how: How, select: Option<u64>) {
     show_on(app, how, select, false);
 }
 
-/// 一直显示：放到主屏（有菜单栏的那块）上，已放下着就留在原处；不拿键盘
+/// 一直显示：放到主屏（有菜单栏的那块）上，已放下着也挪过去；不拿键盘
 pub fn show_pinned(app: &AppHandle) {
     show_on(app, How::Mouse, None, true);
 }
@@ -850,7 +870,7 @@ pub fn repin(app: &AppHandle) {
     }
 }
 
-/// `primary`：第一次放下时放到主屏，否则放到光标所在屏。
+/// `primary`：放到主屏（放下着也挪过去）；否则第一次放下时放到光标所在屏。
 fn show_on(app: &AppHandle, how: How, select: Option<u64>, primary: bool) {
     // 常驻时没有只露绳子这一步
     let how = if how == How::Peek && pinned() {
@@ -873,7 +893,10 @@ fn show_on(app: &AppHandle, how: How, select: Option<u64>, primary: bool) {
             GEN.fetch_add(1, Ordering::Relaxed);
             (first, s.temp.is_some())
         };
-        if first && let Err(e) = place(app, &w, primary) {
+        // 常驻（primary）时放下着也挪到主屏
+        if (first || primary)
+            && let Err(e) = place(app, &w, primary)
+        {
             log::warn!("晾衣绳定位失败：{e}");
         }
         let pin = pinned();
@@ -1129,6 +1152,10 @@ fn veil(app: &AppHandle, fullscreen: bool) {
         let Some(w) = app.get_webview_window(LABEL) else {
             return;
         };
+        // 其间收起了或不再常驻：不再动它（下次放下时按平时的规则摆）
+        if shown().how.is_none() || !pinned() {
+            return;
+        }
         if cfg!(target_os = "macos") {
             spaces(app, false);
             take_down(&w);
@@ -1150,7 +1177,7 @@ fn conceal(app: &AppHandle, fullscreen: bool) {
         };
         {
             let mut s = shown();
-            if s.how.is_none() || s.temp.is_some() || s.veiled == fullscreen {
+            if s.how.is_none() || !pinned() || s.temp.is_some() || s.veiled == fullscreen {
                 return;
             }
             s.veiled = fullscreen;
@@ -1716,7 +1743,11 @@ mod tests {
         let hits = [rect(100., 20., 152., 120.), rect(1380., 10., 28., 28.)];
         assert!(hit_test((100., 20.), &hits));
         assert!(hit_test((251.9, 139.9), &hits));
-        assert!(!hit_test((252., 60.), &hits)); // 右边界不算
+        // 四周放宽 4 px，再往外不算
+        assert!(hit_test((96., 16.), &hits));
+        assert!(hit_test((255.9, 60.), &hits));
+        assert!(!hit_test((256., 60.), &hits));
+        assert!(!hit_test((95.9, 60.), &hits));
         assert!(hit_test((1390., 30.), &hits));
         assert!(!hit_test((600., 60.), &hits)); // 绳子之间的空白
         assert!(!hit_test((100., 20.), &[]));

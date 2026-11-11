@@ -40,7 +40,7 @@ pub const LINE_DRAG: &str = "line-drag";
 /// 面板里拖着行在顶端松手，只发给 `line`：`{ id, x }`，页面按 x 算出位置后调 `line_hang_record`。
 pub const LINE_DROP: &str = "line-drop";
 /// 绳子放下期间光标进出便签区域，只发给 `line`：`{ inside }`，变了才发。区域是晾衣绳窗口往上延到屏幕顶端（含菜单栏那一条），
-/// 页面据此在离开 350 ms 后收起。
+/// 页面据此在离开 350 ms 后收起。一直显示时窗口刚从接收点击换成穿透，另带 `pass: true`，页面去掉悬停的样子。
 pub const LINE_POINTER: &str = "line-pointer";
 /// 便签的提醒到了，只发给 `line`：`{ id }`，每张到期的发一次，同时放下绳子（`line-show { how: "remind" }`，经主线程发出，通常比它晚到，先后不保证，页面不依赖顺序）；页面让那张高亮。
 pub const LINE_REMIND: &str = "line-remind";

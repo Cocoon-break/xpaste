@@ -149,8 +149,9 @@ export const onLineToast = (cb: (t: LineToast) => void): Promise<UnlistenFn> =>
 export const onLineDrag = (cb: (x: number, y: number, item: DragItem) => void): Promise<UnlistenFn> =>
   listen<{ x: number; y: number } & DragItem>('line-drag', ({ payload: { x, y, ...item } }) => cb(x, y, item), target());
 /** 绳子放下期间光标进出便签区域（晾衣绳窗口往上延到屏幕顶端），变了才发 */
-export const onLinePointer = (cb: (inside: boolean) => void): Promise<UnlistenFn> =>
-  listen<{ inside: boolean }>('line-pointer', (e) => cb(e.payload.inside), target());
+/** `pass`：一直显示时窗口刚换成点击穿透，页面去掉悬停的样子 */
+export const onLinePointer = (cb: (inside: boolean, pass: boolean) => void): Promise<UnlistenFn> =>
+  listen<{ inside: boolean; pass?: boolean }>('line-pointer', (e) => cb(e.payload.inside, !!e.payload.pass), target());
 /** 便签的提醒到了：每张到期的发一次，页面让它高亮 */
 export const onLineRemind = (cb: (id: number) => void): Promise<UnlistenFn> =>
   listen<{ id: number }>('line-remind', (e) => cb(e.payload.id), target());
