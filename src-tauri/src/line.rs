@@ -606,15 +606,32 @@ fn prewarm(app: &AppHandle) {
 /// 常驻时检测线程自己记的状态
 #[derive(Default)]
 struct Pin {
-    /// 上次设下的点击穿透；放下、收起后（GEN 变了）重新设
+    /// 上次设下的点击穿透；放下、收起后（GEN 变了）重新设，按着键时等松开再重新设
     pass: Option<bool>,
     generation: u64,
+    /// GEN 变了、还没按光标重新设过点击穿透（按着键）
+    stale: bool,
     /// 按着键碰到了边缘（拖文件过来）：整窗接收到松开
     drag: bool,
     /// 光标离开便签区域的时刻
     out: Option<Instant>,
     /// Windows：前台是全屏应用（每秒随屏幕矩形读一次）
     fullscreen: bool,
+}
+
+impl Pin {
+    /// 放下、收起后（GEN 变了）忘掉上次设下的点击穿透，按光标重新设；按着键时（拖便签、甩绳子中途来了提醒、快捷键）
+    /// 先保持，松开再重新设，免得拖到一半窗口变成点穿
+    fn regen(&mut self, generation: u64, button: bool) {
+        if generation != self.generation {
+            self.generation = generation;
+            self.stale = true;
+        }
+        if self.stale && !button {
+            self.stale = false;
+            self.pass = None;
+        }
+    }
 }
 
 /// 离开便签区域这么久，临时露出来的常驻绳子再让开（同页面离开后收起）
@@ -649,11 +666,7 @@ fn pin_step(app: &AppHandle, pin: &mut Pin, local: (f64, f64), inside: bool, but
         let s = shown();
         (hit_test(local, &s.hits), s.keyboard, s.temp, s.veiled)
     };
-    let g = GEN.load(Ordering::Relaxed);
-    if g != pin.generation {
-        pin.generation = g;
-        pin.pass = None;
-    }
+    pin.regen(GEN.load(Ordering::Relaxed), button);
     let want = pass_through(hit, button, pin.drag, pin.pass);
     if pin.pass != Some(want) {
         // 刚从接收换成穿透：页面收不到光标离开，告诉它把悬停的样子去掉
@@ -900,8 +913,11 @@ fn show_on(app: &AppHandle, how: How, select: Option<u64>, primary: bool) {
             log::warn!("晾衣绳定位失败：{e}");
         }
         let pin = pinned();
-        // 只露绳子时点击穿透到下面的应用；常驻时先穿透，检测线程按光标在不在能点的地方切换
-        if let Err(e) = w.set_ignore_cursor_events(how == How::Peek || pin) {
+        // 只露绳子时点击穿透到下面的应用；常驻时刚放下先穿透，检测线程按光标在不在能点的地方切换。
+        // 常驻且已放下着（提醒、快捷键、键盘又放下一次）不动它，交给检测线程，免得拖到一半变成点穿
+        if !(pin && !first)
+            && let Err(e) = w.set_ignore_cursor_events(how == How::Peek || pin)
+        {
             log::warn!("晾衣绳设置点击穿透失败：{e}");
         }
         // 常驻的不进别的应用的全屏空间；临时露出来的、平时放下的照旧
@@ -1765,6 +1781,29 @@ mod tests {
         assert!(!pass_through(true, true, false, None));
         // 按着键碰到边缘（拖文件过来）：整窗接收
         assert!(!pass_through(false, true, true, Some(true)));
+    }
+
+    #[test]
+    fn pinned_pass_through_survives_reshow_while_button_down() {
+        let mut pin = Pin {
+            pass: Some(false),
+            generation: 1,
+            ..Pin::default()
+        };
+        // 拖着便签时来了提醒（GEN 变了）：按着键先保持
+        pin.regen(2, true);
+        assert_eq!(pin.pass, Some(false));
+        pin.regen(2, true);
+        assert_eq!(pin.pass, Some(false));
+        // 松开后按光标重新设
+        pin.regen(2, false);
+        assert_eq!(pin.pass, None);
+        pin.pass = Some(true);
+        pin.regen(2, false);
+        assert_eq!(pin.pass, Some(true));
+        // 没按键时 GEN 一变就重新设
+        pin.regen(3, false);
+        assert_eq!(pin.pass, None);
     }
 
     #[test]
