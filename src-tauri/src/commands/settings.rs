@@ -180,6 +180,8 @@ pub fn changed_fields(old: &Settings, new: &Settings) -> Vec<&'static str> {
         ),
         ("lineHotkey", old.line_hotkey != new.line_hotkey),
         ("lineStyle", old.line_style != new.line_style),
+        ("lineEnabled", old.line_enabled != new.line_enabled),
+        ("lineSide", old.line_side != new.line_side),
     ]
     .into_iter()
     .filter_map(|(name, changed)| changed.then_some(name))
@@ -217,6 +219,7 @@ fn hotkeys_changed(changed: &[&str]) -> bool {
         "recHotkey",
         "translateHotkey",
         "lineHotkey",
+        "lineEnabled",
     ]
     .iter()
     .any(|k| changed.contains(k))
@@ -267,7 +270,7 @@ pub fn commit_settings(
             &old.shot_hotkey,
             &old.rec_hotkey,
             &old.translate_hotkey,
-            &old.line_hotkey,
+            old.effective_line_hotkey(),
         ) {
             Err(e @ AppError::HotkeyTaken) => log::warn!("恢复原快捷键失败：{e}"),
             Err(e) => log::debug!("恢复原截图、录屏或翻译快捷键失败：{e}"),
@@ -280,7 +283,7 @@ pub fn commit_settings(
             &settings.shot_hotkey,
             &settings.rec_hotkey,
             &settings.translate_hotkey,
-            &settings.line_hotkey,
+            settings.effective_line_hotkey(),
         )
     {
         restore(&mut register);
@@ -306,7 +309,7 @@ pub fn save_settings(
         settings.shot_hotkey.clone(),
         settings.rec_hotkey.clone(),
         settings.translate_hotkey.clone(),
-        settings.line_hotkey.clone(),
+        settings.effective_line_hotkey().to_owned(),
     );
     let (appearance, launch, ocr_on, upd_on) = (
         settings.appearance,
@@ -355,9 +358,27 @@ pub fn save_settings(
         }
         HotkeyAction::None => {}
     }
-    // 空绳子的提示里写着便签快捷键
-    // 样式在面板与晾衣绳页面里都要跟着换
-    if changed.contains(&"lineHotkey") || changed.contains(&"lineStyle") {
+    // 开关与位置先生效，再收起或唤醒；设置锁只在取值时短暂持有
+    if changed.contains(&"lineEnabled") || changed.contains(&"lineSide") {
+        let (on, side) = {
+            let s = state.settings();
+            (s.line_enabled, s.line_side)
+        };
+        crate::line::configure(on, side);
+        if changed.contains(&"lineEnabled") {
+            if on {
+                // 补发关着期间错过的提醒
+                crate::remind::wake();
+            } else {
+                crate::line::hide(&app);
+            }
+        }
+    }
+    // 空绳子的提示里写着便签快捷键；样式、开关、位置在面板与晾衣绳页面里都要跟着换
+    if ["lineHotkey", "lineStyle", "lineEnabled", "lineSide"]
+        .iter()
+        .any(|k| changed.contains(k))
+    {
         crate::commands::line::changed(&app);
     }
     if changed.contains(&"launchAtLogin") {
@@ -580,6 +601,12 @@ mod tests {
         let mut peg = old.clone();
         peg.line_style.peg = "tip".into();
         assert_eq!(changed_fields(&old, &peg), ["lineStyle"]);
+        let mut off = old.clone();
+        off.line_enabled = false;
+        assert_eq!(changed_fields(&old, &off), ["lineEnabled"]);
+        let mut side = old.clone();
+        side.line_side = xpaste_core::LineSide::Left;
+        assert_eq!(changed_fields(&old, &side), ["lineSide"]);
         let new = Settings {
             hotkey: "Alt+Space".into(),
             update_check: false,
@@ -634,6 +661,12 @@ mod tests {
                 "lineHotkey"
             ]
         );
+    }
+
+    #[test]
+    fn line_switch_counts_as_hotkey_change() {
+        assert!(hotkeys_changed(&["lineEnabled"]));
+        assert!(!hotkeys_changed(&["lineSide"]));
     }
 
     #[test]
@@ -838,7 +871,7 @@ pub fn hotkey_status(app: AppHandle, state: State<'_, AppState>) -> HotkeyStatus
             s.shot_hotkey.clone(),
             s.rec_hotkey.clone(),
             s.translate_hotkey.clone(),
-            s.line_hotkey.clone(),
+            s.effective_line_hotkey().to_owned(),
         )
     };
     let (shot, rec, translate, line) = crate::hotkey::unregistered(&app, &shot, &rec, &tr, &line);

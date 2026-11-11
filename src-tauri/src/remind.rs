@@ -94,7 +94,8 @@ fn run(app: &AppHandle) {
         if crate::line::is_ready() {
             let now = now_ms() / 1000;
             let (ids, next) = due(app.state::<AppState>().line().notes(), now, &stuck);
-            if !ids.is_empty() {
+            // 关着时不触发（提醒时间保留），只算下一次等多久；重新打开会 wake 补发
+            if !ids.is_empty() && crate::line::active() {
                 fire(app, &ids, &mut stuck);
                 continue;
             }

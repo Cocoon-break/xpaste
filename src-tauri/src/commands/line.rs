@@ -8,7 +8,7 @@ use serde::Serialize;
 use tauri::ipc::{InvokeBody, Request};
 use tauri::{AppHandle, Manager, State};
 use xpaste_core::detect::{VIDEO_EXTS, is_image_file};
-use xpaste_core::{Kind, LineStyle, RecordDetail};
+use xpaste_core::{Kind, LineSide, LineStyle, RecordDetail};
 use xpaste_pro::{Line, LineError, NewNote, Note, Pro};
 
 use crate::assets::asset_url;
@@ -48,6 +48,9 @@ pub struct LineView {
     pub hotkey: String,
     /// 生效的样式：试用结束后一律是默认样式
     pub style: LineStyle,
+    /// 用户开关；与 `available`（构建带不带）是两回事
+    pub on: bool,
+    pub side: LineSide,
 }
 
 #[derive(Debug, Serialize)]
@@ -195,13 +198,13 @@ pub fn effective_style(pro: &Pro, chosen: &LineStyle) -> LineStyle {
 
 pub fn view(state: &AppState) -> LineView {
     // 先取设置再锁 line，两把锁不同时持有
-    let (hotkey, chosen) = {
+    let (hotkey, chosen, on, side) = {
         let s = state.settings();
-        let hotkey = match s.line_hotkey.as_str() {
+        let hotkey = match s.effective_line_hotkey() {
             "" => String::new(),
             k => crate::hotkey::label(k),
         };
-        (hotkey, s.line_style.clone())
+        (hotkey, s.line_style.clone(), s.line_enabled, s.line_side)
     };
     let line = state.line();
     let pro = line.status(now());
@@ -212,6 +215,8 @@ pub fn view(state: &AppState) -> LineView {
         notes: line.notes().iter().map(|n| dto(&line, n.clone())).collect(),
         hung: line.hung_records(),
         hotkey,
+        on,
+        side,
     }
 }
 

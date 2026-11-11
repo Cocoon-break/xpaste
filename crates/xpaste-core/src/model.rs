@@ -168,6 +168,38 @@ pub struct Settings {
     /// 晾衣绳的样式（绳子、粗细、夹子、纸张、边缘）
     #[serde(deserialize_with = "tolerant_line_style")]
     pub line_style: LineStyle,
+    /// 晾衣绳总开关；关掉后不检测边缘、便签快捷键不注册、提醒不触发，挂着的便签与提醒都留着
+    pub line_enabled: bool,
+    /// 晾衣绳挂在屏幕哪一侧
+    #[serde(deserialize_with = "tolerant_line_side")]
+    pub line_side: LineSide,
+}
+
+/// 晾衣绳挂的位置
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LineSide {
+    #[default]
+    Top,
+    Left,
+    Right,
+}
+
+/// 未知值或类型不对（如 `lineSide: "bottom"`）只让这一项退回顶部，不连累其他设置
+fn tolerant_line_side<'de, D: serde::Deserializer<'de>>(d: D) -> Result<LineSide, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(v).unwrap_or_default())
+}
+
+impl Settings {
+    /// 实际该注册的便签快捷键：总开关关着时为空串（不注册）
+    pub fn effective_line_hotkey(&self) -> &str {
+        if self.line_enabled {
+            &self.line_hotkey
+        } else {
+            ""
+        }
+    }
 }
 
 /// 晾衣绳样式，各项存选项键；不认识的键由前端按默认处理
@@ -246,6 +278,8 @@ impl Default for Settings {
             translate_hotkey: "Alt+Shift+T".into(),
             line_hotkey: "Alt+Shift+N".into(),
             line_style: LineStyle::default(),
+            line_enabled: true,
+            line_side: LineSide::Top,
         }
     }
 }
@@ -780,6 +814,28 @@ pub fn snippet_name(raw: &str) -> Result<String, CoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn line_switch_and_side_defaults_and_tolerance() {
+        let s: Settings = serde_json::from_str(r#"{"hotkey":"Alt+V"}"#).unwrap();
+        assert!(s.line_enabled);
+        assert_eq!(s.line_side, LineSide::Top);
+        let s: Settings = serde_json::from_str(r#"{"hotkey":"Alt+V","lineSide":"left"}"#).unwrap();
+        assert_eq!(s.line_side, LineSide::Left);
+        let s: Settings =
+            serde_json::from_str(r#"{"hotkey":"Alt+V","lineSide":"bottom"}"#).unwrap();
+        assert_eq!((s.hotkey.as_str(), s.line_side), ("Alt+V", LineSide::Top));
+        let s: Settings = serde_json::from_str(r#"{"hotkey":"Alt+V","lineSide":7}"#).unwrap();
+        assert_eq!(s.line_side, LineSide::Top);
+    }
+
+    #[test]
+    fn line_hotkey_is_empty_when_switched_off() {
+        let mut s = Settings::default();
+        assert_eq!(s.effective_line_hotkey(), "Alt+Shift+N");
+        s.line_enabled = false;
+        assert_eq!(s.effective_line_hotkey(), "");
+    }
 
     #[test]
     fn line_style_defaults_and_tolerates_bad_values() {

@@ -58,7 +58,12 @@ export interface Settings {
   lineHotkey: string;
   /** 晾衣绳样式，各项是选项键 */
   lineStyle: LineStyle;
+  /** 晾衣绳总开关 */
+  lineEnabled: boolean;
+  lineSide: LineSide;
 }
+
+export type LineSide = 'top' | 'left' | 'right';
 
 export interface LineStyle { rope: string; thick: string; peg: string; paper: string; edge: string }
 
