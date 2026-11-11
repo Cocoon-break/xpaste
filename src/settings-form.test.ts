@@ -59,6 +59,7 @@ test('formToSettings 只改表单字段，其余（含外观：点选即保存�
     lineStyle: { rope: 'jute', thick: 'mid', peg: 'plastic', paper: 'parch', edge: 'auto' },
     lineEnabled: true,
     lineSide: 'top',
+    linePinned: false,
   };
   assert.deepEqual(
     formToSettings(base, {
@@ -81,6 +82,7 @@ test('formToSettings 只改表单字段，其余（含外观：点选即保存�
       lineStyle: { rope: 'jute', thick: 'mid', peg: 'plastic', paper: 'parch', edge: 'auto' },
       lineEnabled: true,
       lineSide: 'top',
+      linePinned: false,
     },
   );
 });

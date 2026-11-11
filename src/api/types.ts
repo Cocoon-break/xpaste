@@ -61,6 +61,8 @@ export interface Settings {
   /** 晾衣绳总开关 */
   lineEnabled: boolean;
   lineSide: LineSide;
+  /** 一直显示晾衣绳：空白处点击穿透 */
+  linePinned: boolean;
 }
 
 export type LineSide = 'top' | 'left' | 'right';

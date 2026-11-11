@@ -62,6 +62,7 @@ test('line_hang_button_and_hung_tick_are_named', () => {
 
 test('line_switch_and_side_picker_are_labelled', () => {
   assert.match(html, /<label class="switch"><span><b>晾衣绳便签<\/b><small id="lineOnHelp"><\/small><\/span><input type="checkbox" id="lineOn"><\/label>/);
+  assert.match(html, /<label class="switch"><span><b>一直显示晾衣绳<\/b><small>绳子和便签一直留在屏幕上，空白处可以点穿<\/small><\/span><input type="checkbox" id="linePin"><\/label>/);
   assert.match(html, /<div class="side-pick" id="lineSide" role="radiogroup" aria-labelledby="lineSideLabel" aria-describedby="lineSideHelp lineSideHint">/);
   for (const [v, n] of [['top', '顶部'], ['left', '左侧'], ['right', '右侧']])
     assert.match(html, new RegExp(`<label><input type="radio" name="lineSide" value="${v}">[\\s\\S]*?<span>${n}</span></label>`), `缺少“${n}”`);

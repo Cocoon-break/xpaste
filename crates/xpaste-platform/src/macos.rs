@@ -1235,6 +1235,11 @@ pub fn show_no_activate(_hwnd: isize) {}
 /// Windows 上收起经 `show_no_activate` 显示的窗口；macOS 无操作。
 pub fn hide_window(_hwnd: isize) {}
 
+/// Windows 上看前台是不是全屏应用；macOS 的全屏应用在自己的空间里，由窗口的空间规则让开，恒为 false。
+pub fn fullscreen_app() -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

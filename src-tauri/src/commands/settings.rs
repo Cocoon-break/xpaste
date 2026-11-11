@@ -182,6 +182,7 @@ pub fn changed_fields(old: &Settings, new: &Settings) -> Vec<&'static str> {
         ("lineStyle", old.line_style != new.line_style),
         ("lineEnabled", old.line_enabled != new.line_enabled),
         ("lineSide", old.line_side != new.line_side),
+        ("linePinned", old.line_pinned != new.line_pinned),
     ]
     .into_iter()
     .filter_map(|(name, changed)| changed.then_some(name))
@@ -361,13 +362,17 @@ pub fn save_settings(
         }
         HotkeyAction::None => {}
     }
-    // 开关与位置先生效，再收起或唤醒；设置锁只在取值时短暂持有
-    if changed.contains(&"lineEnabled") || changed.contains(&"lineSide") {
-        let (on, side) = {
+    // 开关、位置与一直显示先生效，再收起或唤醒；设置锁只在取值时短暂持有
+    let mut repin = false;
+    if ["lineEnabled", "lineSide", "linePinned"]
+        .iter()
+        .any(|k| changed.contains(k))
+    {
+        let (on, side, pinned) = {
             let s = state.settings();
-            (s.line_enabled, s.line_side)
+            (s.line_enabled, s.line_side, s.line_pinned)
         };
-        crate::line::configure(on, side);
+        crate::line::configure(on, side, pinned);
         if changed.contains(&"lineEnabled") {
             if on {
                 // 补发关着期间错过的提醒
@@ -376,17 +381,29 @@ pub fn save_settings(
                 crate::line::hide(&app);
             }
         }
-        // 关掉时上面已经收起，不再到新位置放下
+        // 关掉时上面已经收起，不再到新位置放下；一直显示时到新位置常驻
         if on && changed.contains(&"lineSide") {
             crate::line::relocate(&app);
+        } else {
+            repin = on && (changed.contains(&"linePinned") || changed.contains(&"lineEnabled"));
         }
     }
-    // 空绳子的提示里写着便签快捷键；样式、开关、位置在面板与晾衣绳页面里都要跟着换
-    if ["lineHotkey", "lineStyle", "lineEnabled", "lineSide"]
-        .iter()
-        .any(|k| changed.contains(k))
+    // 空绳子的提示里写着便签快捷键；样式、开关、位置、一直显示在面板与晾衣绳页面里都要跟着换
+    if [
+        "lineHotkey",
+        "lineStyle",
+        "lineEnabled",
+        "lineSide",
+        "linePinned",
+    ]
+    .iter()
+    .any(|k| changed.contains(k))
     {
         crate::commands::line::changed(&app);
+    }
+    // 页面先拿到 pinned 再放下或收起
+    if repin {
+        crate::line::repin(&app);
     }
     if changed.contains(&"launchAtLogin") {
         set_autostart(&app, launch);
@@ -614,6 +631,9 @@ mod tests {
         let mut side = old.clone();
         side.line_side = xpaste_core::LineSide::Left;
         assert_eq!(changed_fields(&old, &side), ["lineSide"]);
+        let mut pin = old.clone();
+        pin.line_pinned = true;
+        assert_eq!(changed_fields(&old, &pin), ["linePinned"]);
         let new = Settings {
             hotkey: "Alt+Space".into(),
             update_check: false,

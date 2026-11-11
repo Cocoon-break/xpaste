@@ -173,6 +173,8 @@ pub struct Settings {
     /// 晾衣绳挂在屏幕哪一侧
     #[serde(deserialize_with = "tolerant_line_side")]
     pub line_side: LineSide,
+    /// 一直显示晾衣绳：总开关开着时绳子和便签一直留在屏幕上，空白处点击穿透
+    pub line_pinned: bool,
 }
 
 /// 晾衣绳挂的位置
@@ -280,6 +282,7 @@ impl Default for Settings {
             line_style: LineStyle::default(),
             line_enabled: true,
             line_side: LineSide::Top,
+            line_pinned: false,
         }
     }
 }
@@ -820,6 +823,9 @@ mod tests {
         let s: Settings = serde_json::from_str(r#"{"hotkey":"Alt+V"}"#).unwrap();
         assert!(s.line_enabled);
         assert_eq!(s.line_side, LineSide::Top);
+        assert!(!s.line_pinned);
+        let s: Settings = serde_json::from_str(r#"{"hotkey":"Alt+V","linePinned":true}"#).unwrap();
+        assert!(s.line_pinned);
         let s: Settings = serde_json::from_str(r#"{"hotkey":"Alt+V","lineSide":"left"}"#).unwrap();
         assert_eq!(s.line_side, LineSide::Left);
         let s: Settings =

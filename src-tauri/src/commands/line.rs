@@ -51,6 +51,8 @@ pub struct LineView {
     /// 用户开关；与 `available`（构建带不带）是两回事
     pub on: bool,
     pub side: LineSide,
+    /// 一直显示：页面不自己收起，报能点的地方
+    pub pinned: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -198,13 +200,19 @@ pub fn effective_style(pro: &Pro, chosen: &LineStyle) -> LineStyle {
 
 pub fn view(state: &AppState) -> LineView {
     // 先取设置再锁 line，两把锁不同时持有
-    let (hotkey, chosen, on, side) = {
+    let (hotkey, chosen, on, side, pinned) = {
         let s = state.settings();
         let hotkey = match s.effective_line_hotkey() {
             "" => String::new(),
             k => crate::hotkey::label(k),
         };
-        (hotkey, s.line_style.clone(), s.line_enabled, s.line_side)
+        (
+            hotkey,
+            s.line_style.clone(),
+            s.line_enabled,
+            s.line_side,
+            s.line_pinned,
+        )
     };
     let line = state.line();
     let pro = line.status(now());
@@ -217,6 +225,7 @@ pub fn view(state: &AppState) -> LineView {
         hotkey,
         on,
         side,
+        pinned,
     }
 }
 
@@ -626,14 +635,20 @@ pub fn line_preview_src(
 
 /// 页面开始监听 line-show 后调用；之前不检测顶端
 #[tauri::command]
-pub fn line_ready() {
-    crate::line::ready();
+pub fn line_ready(app: AppHandle) {
+    crate::line::ready(&app);
 }
 
 /// 晾衣绳页面按内容报窗口尺寸：顶部是高，左右两侧是宽
 #[tauri::command]
 pub fn line_resize(app: AppHandle, extent: f64) {
     crate::line::resize(&app, extent);
+}
+
+/// 一直显示时页面报能点的地方：`[x, y, w, h]`，窗口内逻辑像素；变了才报
+#[tauri::command]
+pub fn line_hit_rects(rects: Vec<[f64; 4]>) {
+    crate::line::set_hits(rects);
 }
 
 /// 设置里“位置”下面的程序坞提示；程序坞不在这一侧、或碰边照常能放下时为空串

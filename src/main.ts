@@ -164,7 +164,7 @@ const S = {
   /** 当前可见条数，供 aria-setsize */
   count: 0,
   /** 晾衣绳：不含晾衣绳的版本 available 为 false，挂钩按钮、已挂刻线与“Pro”标签都不出现 */
-  line: { available: false, pro: { state: 'unavailable' }, notes: [], hung: [], hotkey: '', style: { rope: 'jute', thick: 'mid', peg: 'plastic', paper: 'parch', edge: 'auto' }, on: true, side: 'top' } as LineView,
+  line: { available: false, pro: { state: 'unavailable' }, notes: [], hung: [], hotkey: '', style: { rope: 'jute', thick: 'mid', peg: 'plastic', paper: 'parch', edge: 'auto' }, on: true, side: 'top', pinned: false } as LineView,
 };
 const menuOpen = () => menu.dataset.open === 'true' || moreMenu.dataset.open === 'true';
 
@@ -1954,15 +1954,15 @@ function paintLineStyle() {
   }, (e: Error) => void info(`载入晾衣绳样式选择器失败：${e.message}`));
 }
 // 晾衣绳总开关与位置：草稿只在保存时写回，取消丢弃；开关关着时位置和样式两项变淡，仍可改
-const lineOnIn = $<HTMLInputElement>('#lineOn'), lineSideEl = $('#lineSide'), lineSideHintEl = $('#lineSideHint');
+const lineOnIn = $<HTMLInputElement>('#lineOn'), linePinIn = $<HTMLInputElement>('#linePin'), lineSideEl = $('#lineSide'), lineSideHintEl = $('#lineSideHint');
 const lineSideIns = [...lineSideEl.querySelectorAll<HTMLInputElement>('input')];
 const LINE_SIDE_HELP: Record<LineSide, string> = { top: '鼠标碰到屏幕顶端放下', left: '鼠标碰到屏幕左侧边缘放下', right: '鼠标碰到屏幕右侧边缘放下' };
-let draftLineEnabled = true, draftLineSide: LineSide = 'top', lineHintSeq = 0;
+let draftLineEnabled = true, draftLineSide: LineSide = 'top', draftLinePinned = false, lineHintSeq = 0;
 function paintLineOn() {
   lineOnIn.checked = draftLineEnabled;
   $('#lineOnHelp').textContent = draftLineEnabled ? '鼠标碰到屏幕边缘、按快捷键时放下晾衣绳'
     : '已关闭：碰边缘不放下，快捷键和面板上的挂钩按钮都不起作用；挂着的便签和提醒都留着，打开后恢复';
-  for (const f of ['#lineSideField', '#lineStyleField']) $(f).classList.toggle('line-off', !draftLineEnabled);
+  for (const f of ['#lineSideField', '#linePinField', '#lineStyleField']) $(f).classList.toggle('line-off', !draftLineEnabled);
 }
 /** 位置说明下面是程序坞提示：后端按当前屏幕算，为空不显示；连点几下只认最后一次的结果 */
 function paintLineSide() {
@@ -1981,6 +1981,7 @@ lineOnIn.addEventListener('change', () => {
   draftLineEnabled = lineOnIn.checked;
   paintLineOn();
 });
+linePinIn.addEventListener('change', () => void (draftLinePinned = linePinIn.checked));
 lineSideEl.addEventListener('change', (e) => {
   draftLineSide = (e.target as HTMLInputElement).value as LineSide;
   paintLineSide();
@@ -2397,6 +2398,7 @@ function openSettings() {
   draftLineEnabled = st.lineEnabled;
   paintLineOn();
   draftLineSide = st.lineSide;
+  linePinIn.checked = draftLinePinned = st.linePinned;
   if (S.line.available) paintLineSide();
   // 试用可能在面板开着时到期（没有广播），打开设置时重新取一次
   if (S.line.available)
@@ -2556,7 +2558,7 @@ async function submitSettings() {
   // 翻译字段和晾衣绳的样式、开关、位置不经 SettingsForm；末尾的 / 由后端去掉。engine 没动过就原样写回（可能是空串）
   Object.assign(s, {
     translateEngine: trSave(), translateBaseUrl: trBaseIn.value.trim(), translateApiKey: trKeyIn.value, translateModel: trModelIn.value.trim(), translateLang: trLangIn.value,
-    translateHotkey: trKey.pending, lineStyle: draftLineStyle, lineEnabled: draftLineEnabled, lineSide: draftLineSide,
+    translateHotkey: trKey.pending, lineStyle: draftLineStyle, lineEnabled: draftLineEnabled, lineSide: draftLineSide, linePinned: draftLinePinned,
   });
   saving = true;
   try {
