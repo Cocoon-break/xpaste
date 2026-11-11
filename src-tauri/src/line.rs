@@ -311,7 +311,7 @@ pub fn dock_hint(
     } else if key.is_empty() {
         format!("{DOCK_NAME}占满了{at}，去设置里开快捷键")
     } else {
-        format!("{DOCK_NAME}占满了{at}，用快捷键 {key} 或＋放下")
+        format!("{DOCK_NAME}占满了{at}，用快捷键 {key} 放下")
     }
 }
 
@@ -867,6 +867,9 @@ fn pin_step(app: &AppHandle, pin: &mut Pin, local: (f64, f64), inside: bool, but
         let s = shown();
         (hit_test(local, &s.hits), s.keyboard, s.temp, s.veiled)
     };
+    if REPASS.swap(false, Ordering::Relaxed) {
+        pin.stale = true;
+    }
     pin.regen(GEN.load(Ordering::Relaxed), button);
     let want = pass_through(hit, button, pin.drag, pin.pass);
     if pin.pass != Some(want) {
@@ -923,7 +926,7 @@ fn muted(app: &AppHandle) -> bool {
 }
 
 /// 常驻时每秒看一次屏幕：放下时那块屏拔掉了、工作区或缩放变了，就重新摆（见 `replace_on`），点穿按新坐标重设
-fn follow_screens(app: &AppHandle) {
+fn follow_screens(app: &AppHandle, all: &[tauri::Monitor], primary: Option<&tauri::Monitor>) {
     let placed = {
         let s = shown();
         s.mon.filter(|_| s.how.is_some())
@@ -931,12 +934,9 @@ fn follow_screens(app: &AppHandle) {
     let Some(placed) = placed else {
         return;
     };
-    let (Ok(all), Ok(primary)) = (app.available_monitors(), app.primary_monitor()) else {
-        return;
-    };
     let mons: Vec<Mon> = all.iter().map(mon_of).collect();
     let primary = primary
-        .and_then(|p| mons.iter().position(|m| *m == mon_of(&p)))
+        .and_then(|p| mons.iter().position(|m| *m == mon_of(p)))
         .unwrap_or(0);
     let Some(m) = replace_on(placed, &mons, primary).and_then(|i| all.get(i).cloned()) else {
         return;
@@ -949,9 +949,13 @@ fn follow_screens(app: &AppHandle) {
         if let Err(e) = place_on(&w, &m) {
             log::warn!("晾衣绳定位失败：{e}");
         }
-        GEN.fetch_add(1, Ordering::Relaxed);
+        // 不加 GEN：收起兜底认 GEN，重摆不算放下、收起
+        REPASS.store(true, Ordering::Relaxed);
     });
 }
+
+/// 常驻重摆过了，检测线程按新坐标重设点击穿透（同 GEN 变了，见 `Pin::regen`）
+static REPASS: AtomicBool = AtomicBool::new(false);
 
 /// Windows：常驻的窗口被最小化了（Win+D 等），不激活地放回来
 #[cfg(windows)]
@@ -1032,8 +1036,9 @@ fn detect(app: &AppHandle) {
         }
         if read_at.is_none_or(|t| t.elapsed() >= SCREENS_TTL) {
             read_at = Some(Instant::now());
-            match read_screens(app) {
-                Ok(s) => screens = s,
+            let mons = read_monitors(app);
+            match &mons {
+                Ok((all, primary)) => screens = screen_rects(all, primary.as_ref()),
                 Err(e) => log::debug!("晾衣绳读取屏幕失败：{e}"),
             }
             // 顶部用不到程序坞：不读，免得每秒访问一次别的进程
@@ -1044,7 +1049,9 @@ fn detect(app: &AppHandle) {
             pin.fullscreen = pinned() && xpaste_platform::fullscreen_app();
             quiet = muted(app);
             if pinned() {
-                follow_screens(app);
+                if let Ok((all, primary)) = &mons {
+                    follow_screens(app, all, primary.as_ref());
+                }
                 #[cfg(windows)]
                 restore_minimized(app);
             }
@@ -1116,13 +1123,23 @@ fn detect(app: &AppHandle) {
 /// Windows 的指针与显示器都是物理像素（Per-Monitor-v2），统一除以主屏缩放：混合 DPI 下屏与屏相接的关系不变，
 /// 主屏上的单位就是逻辑像素（顶端 1 px、甩的速度都按它算）。
 fn read_screens(app: &AppHandle) -> tauri::Result<(Vec<Rect>, f64)> {
+    let (all, primary) = read_monitors(app)?;
+    Ok(screen_rects(&all, primary.as_ref()))
+}
+
+/// 全部屏幕与主屏（各要等一次主线程应答）
+fn read_monitors(app: &AppHandle) -> tauri::Result<(Vec<tauri::Monitor>, Option<tauri::Monitor>)> {
+    Ok((app.available_monitors()?, app.primary_monitor()?))
+}
+
+/// 同 `read_screens`，从读好的屏幕算
+fn screen_rects(all: &[tauri::Monitor], primary: Option<&tauri::Monitor>) -> (Vec<Rect>, f64) {
     let psf = if cfg!(target_os = "macos") {
         1.0
     } else {
-        app.primary_monitor()?.map_or(1.0, |m| m.scale_factor())
+        primary.map_or(1.0, |m| m.scale_factor())
     };
-    let rects = app
-        .available_monitors()?
+    let rects = all
         .iter()
         .map(|m| {
             let k = if cfg!(target_os = "macos") {
@@ -1139,15 +1156,16 @@ fn read_screens(app: &AppHandle) -> tauri::Result<(Vec<Rect>, f64)> {
             }
         })
         .collect();
-    Ok((rects, psf))
+    (rects, psf)
 }
 
-/// 窗口 `front` 盖满了某一块屏（容 1 px）：macOS 上最前面的普通窗口这样，就是全屏空间、全屏演示
-pub fn covers_screen(front: Option<Rect>, screens: &[Rect]) -> bool {
-    front.is_some_and(|f| {
-        screens.iter().any(|s| {
+/// 窗口 `fronts` 里有一个盖满了某一块屏（容 1 px）：macOS 上前台应用的窗口这样，就是全屏空间、全屏演示。
+/// `screens` 是各屏的矩形和刘海高度：刘海屏上全屏应用让在刘海下面，顶边多容这么多（菜单栏比刘海高，最大化的窗口仍不算）。
+pub fn covers_screen(fronts: &[Rect], screens: &[(Rect, f64)]) -> bool {
+    fronts.iter().any(|f| {
+        screens.iter().any(|&(s, notch)| {
             f.x <= s.x + 1.0
-                && f.y <= s.y + 1.0
+                && f.y <= s.y + notch + 1.0
                 && f.x + f.w >= s.x + s.w - 1.0
                 && f.y + f.h >= s.y + s.h - 1.0
         })
@@ -1155,18 +1173,44 @@ pub fn covers_screen(front: Option<Rect>, screens: &[Rect]) -> bool {
 }
 
 /// 前台是全屏应用（全屏空间、演示、全屏视频）：提醒到点时不放下绳子。
-/// macOS 看最前面的普通窗口是不是盖满了一块屏；Windows 按系统决定要不要弹通知时的判断。不在主线程调用（macOS 要读窗口列表）。
+/// macOS 看前台应用有没有窗口盖满了一块屏；Windows 按系统决定要不要弹通知时的判断。不在主线程调用（macOS 要等主线程读刘海）。
 pub fn fullscreen_front(app: &AppHandle) -> bool {
-    if !cfg!(target_os = "macos") {
-        return xpaste_platform::fullscreen_app();
+    #[cfg(target_os = "macos")]
+    {
+        let fronts: Vec<Rect> = xpaste_platform::front_app_windows()
+            .iter()
+            .map(|r| Rect {
+                x: r.x,
+                y: r.y,
+                w: r.w,
+                h: r.h,
+            })
+            .collect();
+        if fronts.is_empty() {
+            return false;
+        }
+        // 刘海只在主线程读得到；主线程 1 s 没应答就当不是全屏（照常放下）
+        let (tx, rx) = std::sync::mpsc::channel();
+        on_main(app, move |app| {
+            let screens: Vec<(Rect, f64)> = app
+                .available_monitors()
+                .unwrap_or_default()
+                .iter()
+                .map(|m| {
+                    let r = mon_of(m).screen;
+                    (r, xpaste_platform::notch_inset(r.x, r.w))
+                })
+                .collect();
+            let _ = tx.send(screens);
+        });
+        rx.recv_timeout(Duration::from_secs(1))
+            .is_ok_and(|screens| covers_screen(&fronts, &screens))
     }
-    let front = xpaste_platform::window_rects().first().map(|r| Rect {
-        x: r.x,
-        y: r.y,
-        w: r.w,
-        h: r.h,
-    });
-    read_screens(app).is_ok_and(|(rects, _)| covers_screen(front, &rects))
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        xpaste_platform::fullscreen_app()
+    }
 }
 
 /// 程序坞 / 任务栏，换到检测线程的坐标空间（除以 `k`，同指针）；读不到为 None
@@ -1407,7 +1451,12 @@ fn set_frame(w: &WebviewWindow, r: Rect, _sf: f64) -> tauri::Result<()> {
     let ns = w.ns_window()? as id;
     // SAFETY: 主线程上改自己的 NSWindow。Cocoa 的屏幕坐标原点在主屏左下角，y 朝上，从左上角为原点的点换过去
     unsafe {
-        let main = NSScreen::screens(nil).objectAtIndex(0);
+        let screens = NSScreen::screens(nil);
+        // 合盖切换外接屏的一瞬间可能一块屏都没有，取第 0 块会抛异常
+        if screens.count() == 0 {
+            return apply(w, r, 1.0);
+        }
+        let main = screens.objectAtIndex(0);
         let top = NSScreen::frame(main).size.height;
         let frame = NSRect::new(NSPoint::new(r.x, top - r.y - r.h), NSSize::new(r.w, r.h));
         ns.setFrame_display_(frame, YES);
@@ -1699,7 +1748,8 @@ pub fn blur() {
 }
 
 /// 页面要键盘（点到便签、进入编辑）或交还。交还在 Windows 上切回原来的窗口；
-/// macOS 上平时键盘留到用户点别处或绳子收起（orderOut 时系统交还），一直显示时撤下再上屏，键盘交还前台应用，绳子留着。
+/// macOS 上平时键盘留到用户点别处或绳子收起（orderOut 时系统交还）；一直显示时没有可切回的窗口（macOS 恒为没有，
+/// Windows 上拿键盘时前台是任务栏、或原来的窗口关了）就撤下再上屏，由系统把键盘交给下一个窗口，绳子留着。
 pub fn keyboard(app: &AppHandle, on: bool) {
     if !on {
         let back = {
@@ -1707,10 +1757,11 @@ pub fn keyboard(app: &AppHandle, on: bool) {
             s.keyboard = false;
             s.previous.take()
         };
+        let nowhere = back.is_none();
         if let Some(h) = back {
             on_main(app, move |_| xpaste_platform::activate_window(h));
         }
-        if cfg!(target_os = "macos") && pinned() {
+        if nowhere && pinned() {
             on_main(app, |app| {
                 if let Some(w) = app.get_webview_window(LABEL)
                     && w.is_focused().unwrap_or(false)
@@ -2280,7 +2331,7 @@ mod tests {
         let full = d(10., 880., false);
         assert_eq!(
             hint(LineSide::Left, &full, "⌥ + Shift + N", false),
-            format!("{DOCK_NAME}占满了左侧，用快捷键 ⌥ + Shift + N 或＋放下")
+            format!("{DOCK_NAME}占满了左侧，用快捷键 ⌥ + Shift + N 放下")
         );
         assert_eq!(
             hint(LineSide::Left, &full, "", false),
@@ -2453,11 +2504,24 @@ mod tests {
 
     #[test]
     fn fullscreen_means_front_window_covers_a_screen() {
-        let screens = [rect(0., 0., 1512., 982.), rect(1512., 0., 1920., 1080.)];
-        assert!(!covers_screen(None, &screens));
-        assert!(covers_screen(Some(rect(1512., 0., 1920., 1080.)), &screens));
-        // 最大化的窗口让着菜单栏，不算
-        assert!(!covers_screen(Some(rect(0., 37., 1512., 945.)), &screens));
-        assert!(!covers_screen(Some(rect(200., 100., 800., 600.)), &screens));
+        // 内建刘海屏（刘海 32 pt）+ 外接屏
+        let screens = [
+            (rect(0., 0., 1512., 982.), 32.),
+            (rect(1512., 0., 1920., 1080.), 0.),
+        ];
+        assert!(!covers_screen(&[], &screens));
+        assert!(covers_screen(&[rect(1512., 0., 1920., 1080.)], &screens));
+        // 刘海屏上的全屏应用让在刘海下面
+        assert!(covers_screen(&[rect(0., 32., 1512., 950.)], &screens));
+        // 最大化的窗口让着菜单栏（比刘海高），不算；外接屏上没有刘海，让着菜单栏的也不算
+        assert!(!covers_screen(&[rect(0., 37., 1512., 945.)], &screens));
+        assert!(!covers_screen(&[rect(1512., 25., 1920., 1055.)], &screens));
+        // 前台应用有好几个窗口（放映窗口在更高的层级，排在前面或后面都算）
+        let editor = rect(200., 100., 800., 600.);
+        assert!(!covers_screen(&[editor], &screens));
+        assert!(covers_screen(
+            &[editor, rect(1512., 0., 1920., 1080.)],
+            &screens
+        ));
     }
 }
