@@ -277,6 +277,8 @@ pub fn commit_settings(
             Ok(()) => {}
         }
     };
+    // 只打开了开关、便签快捷键没改：它被占用时前四个都已注册上（按顺序取第一个失败），照样保存，走“没注册上”的提示
+    let line_switch_only = changed.contains(&"lineEnabled") && !changed.contains(&"lineHotkey");
     if hotkey_changed
         && let Err(e) = register(
             &settings.hotkey,
@@ -285,6 +287,7 @@ pub fn commit_settings(
             &settings.translate_hotkey,
             settings.effective_line_hotkey(),
         )
+        && !(line_switch_only && matches!(e, AppError::LineHotkeyTaken))
     {
         restore(&mut register);
         return Err(e);
@@ -804,6 +807,43 @@ mod tests {
                 [p, s, r, old.translate_hotkey.clone()]
             ]
         );
+    }
+
+    #[test]
+    fn line_switch_turns_on_even_when_line_hotkey_taken() {
+        let state = AppState::for_test();
+        let off = Settings {
+            line_enabled: false,
+            ..Settings::default()
+        };
+        commit_settings(&state, off, |_, _, _, _, _| Ok(())).unwrap();
+        // 便签快捷键被别的应用占着：开关照样打开并保存，没注册上的提示由 hotkey_status 给
+        let on = Settings::default();
+        let changed = commit_settings(&state, on.clone(), |_, _, _, _, l| {
+            if l.is_empty() {
+                Ok(())
+            } else {
+                Err(AppError::LineHotkeyTaken)
+            }
+        })
+        .unwrap();
+        assert_eq!(changed, ["lineEnabled"]);
+        assert_eq!(*state.settings(), on);
+        assert_eq!(state.store().load_settings(), on);
+        // 改的是便签快捷键本身时仍报被占用，不保存
+        let new = Settings {
+            line_hotkey: "Alt+Shift+J".into(),
+            ..Settings::default()
+        };
+        let r = commit_settings(&state, new, |_, _, _, _, l| {
+            if l == "Alt+Shift+J" {
+                Err(AppError::LineHotkeyTaken)
+            } else {
+                Ok(())
+            }
+        });
+        assert!(matches!(r, Err(AppError::LineHotkeyTaken)));
+        assert_eq!(*state.settings(), on);
     }
 
     #[test]

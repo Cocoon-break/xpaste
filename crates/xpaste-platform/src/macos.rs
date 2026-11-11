@@ -1138,13 +1138,13 @@ fn dock_list_frame() -> Option<WinRect> {
         .processIdentifier();
         // SAFETY: 按 Create 规则返回的引用由 CFRetained 接管
         let dock = unsafe { CFRetained::from_raw(AXUIElementCreateApplication(pid)?) };
-        // 程序坞卡住时最多等 0.1 s，不拖住调用线程
-        // SAFETY: dock 是有效的 AX 元素
-        unsafe { AXUIElementSetMessagingTimeout(&dock, 0.1) };
+        ax_timeout(&dock);
         let kids = ax_attr(&dock, "AXChildren")?.downcast::<CFArray>().ok()?;
         let list = (0..kids.count()).find_map(|i| {
             // SAFETY: 下标在范围内；元素由数组持有，kids 存活期间有效
             let el = unsafe { &*kids.value_at_index(i).cast::<CFType>() };
+            // 后面读 list 的位置和大小也走这个元素（list 是它多持有的一份引用）
+            ax_timeout(el);
             let role = ax_attr(el, "AXRole")?.downcast::<CFString>().ok()?;
             (role.to_string() == "AXList").then(|| el.retain())
         })?;
@@ -1162,6 +1162,12 @@ fn dock_list_frame() -> Option<WinRect> {
             h: s.height,
         })
     })
+}
+
+/// 程序坞卡住时，对这个元素的每次查询最多等 0.1 s，不拖住调用线程（超时只对设过的那个元素生效，子元素要各设一次）。
+fn ax_timeout(el: &CFType) {
+    // SAFETY: el 是有效的 AX 元素
+    unsafe { AXUIElementSetMessagingTimeout(el, 0.1) };
 }
 
 /// 取 AX 元素的一个属性；失败为 None。

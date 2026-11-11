@@ -229,30 +229,33 @@ pub fn side_rect(work: Rect, side: LineSide, extent: f64) -> Rect {
     }
 }
 
+/// 提示里的叫法：Windows 上是任务栏
+const DOCK_NAME: &str = if cfg!(target_os = "windows") {
+    "任务栏"
+} else {
+    "程序坞"
+};
+
 /// 设置里“位置”下面的提示：程序坞在同一侧且自动隐藏，要停得久一点；常驻且上下露出的两段都不超过角落的 40 px，碰边放不下。
 /// `screen` 是程序坞所在屏的矩形，与 `dock` 同一坐标空间。
-pub fn dock_hint(side: LineSide, dock: Option<&Dock>, screen: Rect) -> &'static str {
+pub fn dock_hint(side: LineSide, dock: Option<&Dock>, screen: Rect) -> String {
     let Some(d) = dock.filter(|d| d.on(side)) else {
-        return "";
+        return String::new();
     };
-    let left = side == LineSide::Left;
+    let at = if side == LineSide::Left {
+        "左侧"
+    } else {
+        "右侧"
+    };
     if d.autohide {
-        return if left {
-            "程序坞也在左侧，鼠标停得久一点才会放下绳子"
-        } else {
-            "程序坞也在右侧，鼠标停得久一点才会放下绳子"
-        };
+        return format!("{DOCK_NAME}也在{at}，鼠标停得久一点才会放下绳子");
     }
     let above = d.rect.y - screen.y;
     let below = screen.y + screen.h - (d.rect.y + d.rect.h);
     if above > CORNER || below > CORNER {
-        return "";
+        return String::new();
     }
-    if left {
-        "程序坞占满了左侧，用快捷键放下晾衣绳"
-    } else {
-        "程序坞占满了右侧，用快捷键放下晾衣绳"
-    }
+    format!("{DOCK_NAME}占满了{at}，用快捷键放下晾衣绳")
 }
 
 /// 光标在便签区域里：晾衣绳窗口的矩形往绳子那一侧延到所在屏的边（顶部往上，菜单栏那一条也算；左右往屏幕边）。
@@ -570,7 +573,10 @@ fn detect(app: &AppHandle) {
                 Ok(s) => screens = s,
                 Err(e) => log::debug!("晾衣绳读取屏幕失败：{e}"),
             }
-            dock = read_dock(screens.1);
+            // 顶部用不到程序坞：不读，免得每秒访问一次别的进程
+            dock = (side() != LineSide::Top)
+                .then(|| read_dock(screens.1))
+                .flatten();
         }
         // 不用 app.cursor_position()：它要等主线程应答，每秒 60 次会一直唤醒主线程
         let Some((x, y)) = xpaste_platform::pointer_position() else {
@@ -665,22 +671,22 @@ fn read_dock(k: f64) -> Option<Dock> {
 }
 
 /// 设置里“位置”下面的程序坞提示，见 `dock_hint`；程序坞所在屏按它中心所在的那块屏算。读程序坞要访问别的进程，不在主线程调用。
-pub fn side_hint(app: &AppHandle, side: LineSide) -> &'static str {
+pub fn side_hint(app: &AppHandle, side: LineSide) -> String {
     let (rects, k) = match read_screens(app) {
         Ok(s) => s,
         Err(e) => {
             log::debug!("晾衣绳读取屏幕失败：{e}");
-            return "";
+            return String::new();
         }
     };
     let Some(d) = read_dock(k) else {
-        return "";
+        return String::new();
     };
     let mid = (d.rect.x + d.rect.w / 2.0, d.rect.y + d.rect.h / 2.0);
     rects
         .iter()
         .find(|r| contains(r, mid))
-        .map_or("", |&r| dock_hint(side, Some(&d), r))
+        .map_or_else(String::new, |&r| dock_hint(side, Some(&d), r))
 }
 
 /// 放到光标所在屏工作区顶端，宽为工作区宽，发 `line-show { how }`。
@@ -1337,13 +1343,39 @@ mod tests {
             dock_hint(LineSide::Right, Some(&d(250., 400., false)), s),
             ""
         );
+        // Windows 上叫任务栏
+        let say = |mac: &'static str, win: &'static str| {
+            if cfg!(target_os = "windows") {
+                win
+            } else {
+                mac
+            }
+        };
         assert_eq!(
             dock_hint(LineSide::Left, Some(&d(250., 400., true)), s),
-            "程序坞也在左侧，鼠标停得久一点才会放下绳子"
+            say(
+                "程序坞也在左侧，鼠标停得久一点才会放下绳子",
+                "任务栏也在左侧，鼠标停得久一点才会放下绳子"
+            )
         );
         assert_eq!(
             dock_hint(LineSide::Left, Some(&d(10., 880., false)), s),
-            "程序坞占满了左侧，用快捷键放下晾衣绳"
+            say(
+                "程序坞占满了左侧，用快捷键放下晾衣绳",
+                "任务栏占满了左侧，用快捷键放下晾衣绳"
+            )
+        );
+        let r = |y, h, autohide| Dock {
+            rect: rect(1370., y, 70., h),
+            side: DockSide::Right,
+            autohide,
+        };
+        assert_eq!(
+            dock_hint(LineSide::Right, Some(&r(10., 880., false)), s),
+            say(
+                "程序坞占满了右侧，用快捷键放下晾衣绳",
+                "任务栏占满了右侧，用快捷键放下晾衣绳"
+            )
         );
         assert_eq!(
             dock_hint(LineSide::Left, Some(&d(250., 400., false)), s),

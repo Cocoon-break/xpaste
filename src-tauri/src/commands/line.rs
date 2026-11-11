@@ -639,7 +639,7 @@ pub fn line_resize(app: AppHandle, extent: f64) {
 /// 设置里“位置”下面的程序坞提示；程序坞不在这一侧、或碰边照常能放下时为空串
 #[tauri::command(async)]
 pub fn line_side_hint(app: AppHandle, side: xpaste_core::LineSide) -> String {
-    crate::line::side_hint(&app, side).to_owned()
+    crate::line::side_hint(&app, side)
 }
 
 /// 页面要收起（离开便签区域、Esc、快捷键挂上后停够时间）：发 `line-hide`，页面收完再调 `line_hidden`

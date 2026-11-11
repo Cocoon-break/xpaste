@@ -1968,6 +1968,8 @@ function paintLineOn() {
 function paintLineSide() {
   for (const i of lineSideIns) i.checked = i.value === draftLineSide;
   $('#lineSideHelp').textContent = LINE_SIDE_HELP[draftLineSide];
+  // 先藏起上一个位置的提示，读到新的再显示；读不到就一直不显示
+  lineSideHintEl.hidden = true;
   const seq = ++lineHintSeq;
   void lineSideHint(draftLineSide).then((t) => {
     if (seq !== lineHintSeq) return;
