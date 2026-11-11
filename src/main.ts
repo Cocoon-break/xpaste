@@ -23,7 +23,7 @@ import {
 } from './api/events';
 import { lineDragDrop, lineDragHover, lineHangFromPanel, lineHide, onLineChanged, onLineHangSelected, proActivate, type LineView } from './api/line';
 import { proLine } from './pro-status';
-import type { AppError, Appearance, Engines, FileEntry, PanelStyle, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
+import type { AppError, Appearance, Engines, FileEntry, LineStyle, PanelStyle, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
 import { appCounts, bestApp, freshSug, fromApp, type Sug } from './source';
 import { COMPACT, compactGroups, compactHeadH, rowParts } from './compact';
 import { copyToast, needsAccessibility } from './copy-status';
@@ -1925,11 +1925,34 @@ function activatePro() {
   void proActivate(code).then((p) => {
     S.line.pro = p;
     paintProStatus();
+    stylePicker?.set(draftLineStyle, lineLocked());
     proCodeIn.value = '';
     paintProErr();
   }, (err: AppError) => paintProErr(err.message)).finally(() => (proActBtn.disabled = false));
 }
 proActBtn.addEventListener('click', activatePro);
+
+// 晾衣绳样式选择器只在带 pro/ 的构建里有；没有时 glob 为空，这一项一直隐藏。
+// 类型在这里写一份，不引用 pro/ 里的文件：公开源码里没有它，tsc 也得过
+type StylePicker = { set(value: LineStyle, locked: boolean): void };
+const stylePickerMods = import.meta.glob<{
+  mountStylePicker(el: HTMLElement, value: LineStyle, locked: boolean, onChange: (v: LineStyle) => void): StylePicker;
+}>('../pro/web/style/picker.ts');
+// 草稿只在保存时写回，取消丢弃；试用结束时选择器锁住
+let draftLineStyle: LineStyle, stylePicker: StylePicker | undefined, stylePickerLoading = false;
+const lineLocked = () => S.line.pro.state === 'expired';
+/** 打开设置时调：第一次载入选择器挂上去，之后把草稿和锁定状态交给它 */
+function paintLineStyle() {
+  if (stylePicker) return stylePicker.set(draftLineStyle, lineLocked());
+  const load = Object.values(stylePickerMods)[0];
+  if (!load || stylePickerLoading) return;
+  stylePickerLoading = true;
+  void load().then((m) => {
+    const el = $('#lineStyleField');
+    stylePicker = m.mountStylePicker(el, draftLineStyle, lineLocked(), (v) => void (draftLineStyle = v));
+    el.hidden = false;
+  }, (e: Error) => void info(`载入晾衣绳样式选择器失败：${e.message}`));
+}
 // 在输入框里按 Enter 是激活，不是保存设置
 proCodeIn.addEventListener('keydown', (e) => {
   if (e.key !== 'Enter' || e.isComposing) return;
@@ -2337,6 +2360,8 @@ function openSettings() {
   trKey.reset(st.translateHotkey);
   lineKey.reset(st.lineHotkey);
   paintProStatus();
+  draftLineStyle = st.lineStyle;
+  paintLineStyle();
   proCodeIn.value = '';
   paintProErr();
   // 启动时被其他应用占用、没注册上的快捷键：只发过系统通知（可能被关掉），这里在录制框下标红、标签上出红点
@@ -2485,10 +2510,10 @@ async function submitSettings() {
     recHotkey: recKey.pending, recDir: recDir.pending, recSystemAudio: recSystemAudioIn.checked, recMicrophone: recMicIn.checked, recCopy: recCopyIn.checked,
     recQuality: recQualityIn.value, recFps: recFpsIn.value, panelStyle: draftStyle, lineHotkey: lineKey.pending,
   });
-  // 翻译字段不经 SettingsForm；末尾的 / 由后端去掉。engine 没动过就原样写回（可能是空串）
+  // 翻译字段和晾衣绳样式不经 SettingsForm；末尾的 / 由后端去掉。engine 没动过就原样写回（可能是空串）
   Object.assign(s, {
     translateEngine: trSave(), translateBaseUrl: trBaseIn.value.trim(), translateApiKey: trKeyIn.value, translateModel: trModelIn.value.trim(), translateLang: trLangIn.value,
-    translateHotkey: trKey.pending,
+    translateHotkey: trKey.pending, lineStyle: draftLineStyle,
   });
   saving = true;
   try {
@@ -3045,6 +3070,7 @@ await onLineChanged((v) => {
   S.line = v;
   paintRows();
   paintProStatus();
+  stylePicker?.set(draftLineStyle, lineLocked());
 });
 
 // 页面重载时对话框都已关闭：先复位后端标志（重载前若有对话框开着，它会停在 true；读取失败也照样复位）
