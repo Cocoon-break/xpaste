@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import type { Kind, LineStyle } from './types';
+import type { Kind, LineSide, LineStyle } from './types';
 
 /** 挂在绳子上的一张便签（对应 `xpaste_pro::Note`）。 */
 export interface Note {
@@ -53,6 +53,9 @@ export interface LineView {
   hotkey: string;
   /** 生效的样式：试用结束后是默认样式 */
   style: LineStyle;
+  /** 用户开关；与 available（构建带不带）是两回事 */
+  on: boolean;
+  side: LineSide;
 }
 
 /** 晾衣绳放下的方式：`peek` 只露绳子，`mouse` 鼠标放下，`flash` 快捷键挂上后亮一下，`kbd` 键盘打开，`drag` 拖着东西到顶端，

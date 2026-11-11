@@ -57,6 +57,8 @@ test('formToSettings 只改表单字段，其余（含外观：点选即保存�
     translateEngine: '', translateBaseUrl: 'https://api.openai.com/v1', translateApiKey: '', translateModel: '', translateLang: 'zh-Hans',
     translateHotkey: 'Alt+Shift+T', lineHotkey: 'Alt+Shift+N',
     lineStyle: { rope: 'jute', thick: 'mid', peg: 'plastic', paper: 'parch', edge: 'auto' },
+    lineEnabled: true,
+    lineSide: 'top',
   };
   assert.deepEqual(
     formToSettings(base, {
@@ -77,6 +79,8 @@ test('formToSettings 只改表单字段，其余（含外观：点选即保存�
       translateEngine: '', translateBaseUrl: 'https://api.openai.com/v1', translateApiKey: '', translateModel: '', translateLang: 'zh-Hans',
       translateHotkey: 'Alt+Shift+T', lineHotkey: 'Alt+Shift+L',
       lineStyle: { rope: 'jute', thick: 'mid', peg: 'plastic', paper: 'parch', edge: 'auto' },
+      lineEnabled: true,
+      lineSide: 'top',
     },
   );
 });

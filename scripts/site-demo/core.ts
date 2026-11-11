@@ -47,6 +47,8 @@ export const settings: Settings = {
   translateHotkey: 'Alt+Shift+T',
   lineHotkey: '',
   lineStyle: { rope: 'jute', thick: 'mid', peg: 'plastic', paper: 'parch', edge: 'auto' },
+  lineEnabled: true,
+  lineSide: 'top',
 };
 
 const byId = (id: number) => RECORDS.find((r) => r.id === id);
@@ -128,7 +130,7 @@ const handlers: Record<string, (a: any) => unknown> = {
     firstRun: false,
     paused: false,
     // 官网演示是不含晾衣绳的公开版
-    line: { available: false, pro: { state: 'unavailable' }, notes: [], hung: [], hotkey: '', style: { rope: 'jute', thick: 'mid', peg: 'plastic', paper: 'parch', edge: 'auto' } },
+    line: { available: false, pro: { state: 'unavailable' }, notes: [], hung: [], hotkey: '', style: { rope: 'jute', thick: 'mid', peg: 'plastic', paper: 'parch', edge: 'auto' }, on: true, side: 'top' },
   }),
   // 真实应用里后端等这一声才把面板显示出来
   frontend_ready: () => void setTimeout(() => { void emit('panel-shown', { t0: null, trigger: 'hotkey' }); tell({ type: 'ready' }); }, 60),

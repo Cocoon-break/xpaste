@@ -3,12 +3,13 @@
 //! 检测线程每 16 ms 采样光标：碰到顶端先只露绳子（peek），停 200 ms 或甩上去才放下；
 //! 放下后线程接着采样，只把光标进出便签区域（`line-pointer`）告诉页面，收起由页面决定（离开、Esc、快捷键挂上后停够时间）。
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use xpaste_core::LineSide;
 
 use crate::error::AppError;
 use crate::events::{
@@ -159,6 +160,29 @@ struct Shown {
 /// 这个构建带晾衣绳，且是官方签名的那份（被改过再重签的副本表现同开源版）：窗口、顶端检测、快捷键都看它
 pub fn enabled() -> bool {
     xpaste_pro::AVAILABLE && xpaste_pro::genuine()
+}
+
+/// 用户开关与挂的位置：启动和保存设置时写，检测线程与提醒线程读，不用锁 settings
+static ON: AtomicBool = AtomicBool::new(true);
+static SIDE: AtomicU8 = AtomicU8::new(0);
+
+pub fn configure(on: bool, side: LineSide) {
+    ON.store(on, Ordering::Relaxed);
+    SIDE.store(side as u8, Ordering::Relaxed);
+}
+
+/// 构建带晾衣绳且用户没关掉：检测边缘、触发提醒、接住拖动都看它
+pub fn active() -> bool {
+    enabled() && ON.load(Ordering::Relaxed)
+}
+
+#[allow(dead_code)] // 侧边检测接上前暂无调用方
+pub fn side() -> LineSide {
+    match SIDE.load(Ordering::Relaxed) {
+        1 => LineSide::Left,
+        2 => LineSide::Right,
+        _ => LineSide::Top,
+    }
 }
 
 static SHOWN: Mutex<Shown> = Mutex::new(Shown {
@@ -341,6 +365,9 @@ struct DragHover {
 /// 面板里拖着行到了顶端：绳子还没为拖动放下就放下，再把光标位置和记录转给页面。
 /// `show` 在主线程里才记下 `how`，紧接着的几帧可能再放下一次，页面只多收到几次同样的 `line-show`。
 pub fn drag_hover(app: &AppHandle, x: f64, y: f64, item: DragItem) {
+    if !active() {
+        return;
+    }
     if shown().how != Some(How::Drag) {
         show(app, How::Drag);
     }
@@ -390,6 +417,12 @@ fn detect(app: &AppHandle) {
     loop {
         std::thread::sleep(TICK);
         if !READY.load(Ordering::Relaxed) {
+            continue;
+        }
+        // 用户关掉后不碰光标、不读屏幕
+        if !active() {
+            edge = Edge::default();
+            inside = None;
             continue;
         }
         if read_at.is_none_or(|t| t.elapsed() >= SCREENS_TTL) {

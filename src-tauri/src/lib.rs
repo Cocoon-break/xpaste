@@ -106,9 +106,10 @@ pub fn run() {
                 settings.shot_hotkey.clone(),
                 settings.rec_hotkey.clone(),
                 settings.translate_hotkey.clone(),
-                settings.line_hotkey.clone(),
+                settings.effective_line_hotkey().to_owned(),
                 settings.appearance,
             );
+            line::configure(settings.line_enabled, settings.line_side);
             let enrich = enrich::start(app.handle().clone());
             let ocr = ocr::start(app.handle().clone());
             app.manage(AppState::new(
@@ -201,7 +202,7 @@ pub fn run() {
                             s.shot_hotkey.clone(),
                             s.rec_hotkey.clone(),
                             s.translate_hotkey.clone(),
-                            s.line_hotkey.clone(),
+                            s.effective_line_hotkey().to_owned(),
                         )
                     };
                     match hotkey::role_of(shortcut, &p, &s, &r, &t, &l) {
