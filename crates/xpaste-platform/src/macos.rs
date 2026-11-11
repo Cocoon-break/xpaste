@@ -436,12 +436,49 @@ fn unpremultiply(rgba: &mut [u8]) {
 /// 屏上窗口外框，由前到后：别的应用只取 layer 0、不透明度大于 0 的普通窗口；本进程只取贴图窗口。
 /// 不读其他应用的窗口标题（需要屏幕录制权限，也用不到）。
 pub fn window_rects() -> Vec<WinRect> {
+    let me = i64::from(std::process::id());
+    on_screen_windows(|w| {
+        if num(w, "kCGWindowOwnerPID").map(|n| n.longLongValue()) == Some(me) {
+            w.objectForKey(ns_string!("kCGWindowName"))
+                .and_then(|v| v.downcast::<NSString>().ok())
+                .is_some_and(|t| t.to_string().starts_with(PIN_TITLE_PREFIX))
+        } else {
+            num(w, "kCGWindowLayer").is_some_and(|n| n.longLongValue() == 0)
+                && num(w, "kCGWindowAlpha").is_some_and(|n| n.doubleValue() > 0.0)
+        }
+    })
+}
+
+/// 最前面那个应用在屏上的窗口外框（含 layer 0 以上的，放映窗口常在更高的层级；不透明度大于 0），由前到后。
+/// 看它有没有盖满一块屏，就知道前台是不是全屏应用、全屏演示。读不到前台应用时为空。
+pub fn front_app_windows() -> Vec<WinRect> {
+    let Some(pid) = autoreleasepool(|_| {
+        NSWorkspace::sharedWorkspace()
+            .frontmostApplication()
+            .map(|a| i64::from(a.processIdentifier()))
+    }) else {
+        return Vec::new();
+    };
+    on_screen_windows(|w| {
+        num(w, "kCGWindowOwnerPID").map(|n| n.longLongValue()) == Some(pid)
+            && num(w, "kCGWindowLayer").is_some_and(|n| n.longLongValue() >= 0)
+            && num(w, "kCGWindowAlpha").is_some_and(|n| n.doubleValue() > 0.0)
+    })
+}
+
+/// 窗口信息字典里的一个数值项
+fn num(w: &NSDictionary<NSString, AnyObject>, k: &str) -> Option<Retained<NSNumber>> {
+    w.objectForKey(&NSString::from_str(k))
+        .and_then(|v| v.downcast::<NSNumber>().ok())
+}
+
+/// 屏上（不含桌面）满足 `keep` 的窗口外框，由前到后（全局点，同 `pointer_position`）
+fn on_screen_windows(keep: impl Fn(&NSDictionary<NSString, AnyObject>) -> bool) -> Vec<WinRect> {
     let option =
         CGWindowListOption::OptionOnScreenOnly | CGWindowListOption::ExcludeDesktopElements;
     let Some(list) = CGWindowListCopyWindowInfo(option, kCGNullWindowID) else {
         return Vec::new();
     };
-    let me = i64::from(std::process::id());
     autoreleasepool(|_| {
         // SAFETY: CFArray 与 NSArray 免费桥接，元素都是 CFDictionary；list 在闭包内存活
         let list: &NSArray<NSDictionary<NSString, AnyObject>> = unsafe {
@@ -450,30 +487,13 @@ pub fn window_rects() -> Vec<WinRect> {
                 .cast())
         };
         list.iter()
-            .filter(|w| {
-                let num = |k: &str| {
-                    w.objectForKey(&NSString::from_str(k))
-                        .and_then(|v| v.downcast::<NSNumber>().ok())
-                };
-                if num("kCGWindowOwnerPID").map(|n| n.longLongValue()) == Some(me) {
-                    w.objectForKey(ns_string!("kCGWindowName"))
-                        .and_then(|v| v.downcast::<NSString>().ok())
-                        .is_some_and(|t| t.to_string().starts_with(PIN_TITLE_PREFIX))
-                } else {
-                    num("kCGWindowLayer").is_some_and(|n| n.longLongValue() == 0)
-                        && num("kCGWindowAlpha").is_some_and(|n| n.doubleValue() > 0.0)
-                }
-            })
+            .filter(|w| keep(w))
             .filter_map(|w| {
                 let b = w.objectForKey(ns_string!("kCGWindowBounds"))?;
                 // SAFETY: kCGWindowBounds 的值是 CGRect 的字典表示（X、Y、Width、Height 为 NSNumber）
                 let b: Retained<NSDictionary<NSString, AnyObject>> =
                     unsafe { Retained::cast_unchecked(b) };
-                let f = |k: &str| {
-                    b.objectForKey(&NSString::from_str(k))
-                        .and_then(|v| v.downcast::<NSNumber>().ok())
-                        .map(|n| n.doubleValue())
-                };
+                let f = |k: &str| num(&b, k).map(|n| n.doubleValue());
                 let r = WinRect {
                     x: f("X")?,
                     y: f("Y")?,
