@@ -101,6 +101,8 @@ pub struct Edge {
     /// 上一次采样 (x, y, t)
     last: Option<(f64, f64, u64)>,
     phase: Phase,
+    /// 上一次采样的鼠标主键
+    prev: Press,
 }
 
 impl Default for Edge {
@@ -108,6 +110,7 @@ impl Default for Edge {
         Self {
             last: None,
             phase: Phase::Away,
+            prev: Press::Up,
         }
     }
 }
@@ -141,6 +144,10 @@ impl Edge {
                 t_ms > t && d / (t_ms - t) as f64 >= FLING
             });
         self.last = Some((c.0, c.1, t_ms));
+        // 已经停在边缘时才按下的，一定不是拖进来的（Windows 读不到拖拽剪切板，按着一律像在拖）
+        let pressed_here = matches!(self.phase, Phase::Peek(_)) && self.prev == Press::Up;
+        let held = press == Press::Held || (press != Press::Up && pressed_here);
+        self.prev = press;
         let how = if press == Press::Drag {
             How::Drag
         } else {
@@ -157,11 +164,11 @@ impl Edge {
                 self.phase = Phase::Away;
                 Some(EdgeEvent::Leave)
             }
-            (Phase::Away, true) if press == Press::Held => {
+            (Phase::Away, true) if held => {
                 self.phase = Phase::Open;
                 None
             }
-            (Phase::Peek(_), true) if press == Press::Held => {
+            (Phase::Peek(_), true) if held => {
                 self.phase = Phase::Open;
                 Some(EdgeEvent::Leave)
             }
@@ -774,23 +781,36 @@ fn muted(app: &AppHandle) -> bool {
         )
 }
 
-/// 按下鼠标那一刻拖拽剪切板的计数，松开时清掉，见 `press_of`
+/// 拖拽剪切板的基准计数：松着键时记（松开那一刻、线程刚起或醒来后第一次），下一次按下就一定在它之后，见 `press_of`
 #[derive(Default)]
-struct PressProbe(Option<Option<i64>>);
+struct PressProbe {
+    base: Option<i64>,
+    down: bool,
+}
 
 impl PressProbe {
-    fn sample(&mut self) -> Press {
-        if !xpaste_platform::mouse_button_down() {
-            self.0 = None;
+    /// `button` 主键按着，`at` 光标在边缘；`count`、`moving` 同平台的 `drag_count`、`moving_window`。
+    /// 按着却不在边缘时一律报 Held，不读（只有在边缘才分是不是在拖）。
+    // ponytail: 拖放结束后源应用要是松开后才往拖拽剪切板写，下一次普通按下会当成在拖；真机碰到再看
+    fn sample(
+        &mut self,
+        button: bool,
+        at: bool,
+        count: impl Fn() -> Option<i64>,
+        moving: impl Fn() -> bool,
+    ) -> Press {
+        if !button {
+            if self.down || self.base.is_none() {
+                self.base = count();
+            }
+            self.down = false;
             return Press::Up;
         }
-        // ponytail: 按下后 16 ms 内就开始拖的，计数已经变了，记成没在拖；真机常见再改成监听按下事件
-        let base = *self.0.get_or_insert_with(xpaste_platform::drag_count);
-        press_of(
-            base,
-            xpaste_platform::drag_count(),
-            xpaste_platform::moving_window(),
-        )
+        self.down = true;
+        if !at {
+            return Press::Held;
+        }
+        press_of(self.base, count(), moving())
     }
 }
 
@@ -814,6 +834,8 @@ fn detect(app: &AppHandle) {
             edge = Edge::default();
             inside = None;
             std::thread::park();
+            // 停着期间可能拖过东西，醒来重新记基准
+            probe = PressProbe::default();
             continue;
         }
         if read_at.is_none_or(|t| t.elapsed() >= SCREENS_TTL) {
@@ -837,8 +859,13 @@ fn detect(app: &AppHandle) {
         let (rects, k) = (&screens.0, screens.1);
         let cfg = EdgeCfg { side: side(), dock };
         let c = (x / k, y / k);
-        // 放下期间也跟着按下、松开，按下那一刻的计数才对
-        let press = probe.sample();
+        // 放下期间也跟着按下、松开，基准才是这次按下之前的
+        let press = probe.sample(
+            xpaste_platform::mouse_button_down(),
+            at_edge(c, rects, &cfg),
+            xpaste_platform::drag_count,
+            xpaste_platform::moving_window,
+        );
         if let Some(open) = open_rect(k) {
             let now_in = pointer_inside(c, open.0, rects, cfg.side);
             if inside != Some(now_in) {
@@ -862,14 +889,14 @@ fn detect(app: &AppHandle) {
             }
             // 收起后先离开边缘才会再放下：按 Esc 收起时光标还在顶端，不立刻又放下来
             edge = Edge {
-                last: None,
                 phase: Phase::Open,
+                ..Edge::default()
             };
             continue;
         }
         inside = None;
-        // 试用结束且绳上没便签：不再开始露绳子，已经露出来的照常走完
-        if quiet && matches!(edge.phase, Phase::Away) {
+        // 试用结束且绳上没便签：不再开始露绳子，已经露出来的照常走完；拖着东西过来的照常（同面板里拖记录，放下后看到到期提示）
+        if quiet && matches!(edge.phase, Phase::Away) && press != Press::Drag {
             continue;
         }
         let t = t0.elapsed().as_millis() as u64;
@@ -1631,6 +1658,56 @@ mod tests {
         assert_eq!(press_of(None, None, false), Press::Drag);
         assert_eq!(press_of(None, None, true), Press::Held);
         assert_eq!(press_of(Some(5), Some(6), true), Press::Held);
+    }
+
+    #[test]
+    fn press_while_peeking_cancels_even_without_drag_count() {
+        // Windows：没有拖拽剪切板计数，按着一律像在拖；已经停在边缘时才按下的，也一定不是拖进来的
+        let top = cfg(LineSide::Top);
+        let (none, still) = (|| None, || false);
+        let mut p = PressProbe::default();
+        let mut e = Edge::default();
+        let at = |e: &mut Edge, p: &mut PressProbe, button, t| {
+            let press = p.sample(button, true, none, still);
+            e.step((100.0, 0.0), &[MAIN], t, press, &top)
+        };
+        assert_eq!(at(&mut e, &mut p, false, 0), Some(EdgeEvent::Peek));
+        assert_eq!(at(&mut e, &mut p, true, 100), Some(EdgeEvent::Leave));
+        assert_eq!(at(&mut e, &mut p, true, 300), None);
+        assert_eq!(at(&mut e, &mut p, false, 400), None);
+        assert_eq!(at(&mut e, &mut p, false, 700), None);
+        // 拖着东西进来照常放下
+        let mut p = PressProbe::default();
+        let mut e = Edge::default();
+        assert_eq!(p.sample(true, false, none, still), Press::Held);
+        assert_eq!(at(&mut e, &mut p, true, 0), Some(EdgeEvent::Peek));
+        assert_eq!(
+            at(&mut e, &mut p, true, 200),
+            Some(EdgeEvent::Open(How::Drag))
+        );
+    }
+
+    #[test]
+    fn drag_baseline_is_taken_before_the_press() {
+        use std::cell::Cell;
+        let n = Cell::new(5);
+        let count = || Some(n.get());
+        let still = || false;
+        let mut p = PressProbe::default();
+        // 松着时记下 5
+        assert_eq!(p.sample(false, false, count, still), Press::Up);
+        // 按下就甩着拖：第一次采样前拖拽剪切板已经变了
+        n.set(6);
+        assert_eq!(p.sample(true, false, count, still), Press::Held); // 不在边缘不读
+        assert_eq!(p.sample(true, true, count, still), Press::Drag);
+        // 松开后按 6 重新记，下一次只是点一下
+        assert_eq!(p.sample(false, false, count, still), Press::Up);
+        assert_eq!(p.sample(true, true, count, still), Press::Held);
+        // 刚醒来还没记过就按着：当在拖（同以前）
+        let mut p = PressProbe::default();
+        assert_eq!(p.sample(true, true, count, still), Press::Drag);
+        // 系统在拖动窗口
+        assert_eq!(p.sample(true, true, count, || true), Press::Held);
     }
 
     #[test]
