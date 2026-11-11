@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::path::{Path, PathBuf};
+use std::ptr::NonNull;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -11,18 +12,21 @@ use objc2::{AllocAnyThread, ClassType, msg_send};
 use objc2_app_kit::{
     NSApplicationActivationPolicy, NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard,
     NSPasteboardItem, NSPasteboardTypeFileURL, NSPasteboardTypeHTML, NSPasteboardTypeString,
-    NSWorkspace,
+    NSRunningApplication, NSWorkspace,
 };
 use objc2_av_foundation::{AVAssetImageGenerator, AVAssetTrack, AVMediaTypeVideo, AVURLAsset};
-use objc2_core_foundation::{CFData, CGPoint};
+use objc2_core_foundation::{
+    CFArray, CFData, CFPreferencesCopyAppValue, CFPreferencesGetAppBooleanValue, CFRetained,
+    CFString, CFType, CGPoint, CGSize, Type,
+};
 use objc2_core_graphics::{
     CGBitmapContextCreate, CGBitmapInfo, CGBlendMode, CGColorRenderingIntent, CGColorSpace,
     CGContext, CGDataProvider, CGDirectDisplayID, CGDisplayBounds, CGDisplayMirrorsDisplay,
     CGError, CGEvent, CGEventField, CGEventFlags, CGEventSource, CGEventSourceStateID,
     CGEventTapLocation, CGEventType, CGGetActiveDisplayList, CGImage, CGImageAlphaInfo,
-    CGImageByteOrderInfo, CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess,
-    CGScrollEventUnit, CGWindowListCopyWindowInfo, CGWindowListOption, kCGColorSpaceSRGB,
-    kCGNullWindowID,
+    CGImageByteOrderInfo, CGMainDisplayID, CGPreflightScreenCaptureAccess,
+    CGRequestScreenCaptureAccess, CGScrollEventUnit, CGWindowListCopyWindowInfo,
+    CGWindowListOption, kCGColorSpaceSRGB, kCGNullWindowID,
 };
 use objc2_core_media::{CMFormatDescription, CMTime};
 use objc2_foundation::{
@@ -52,7 +56,20 @@ use crate::{
 unsafe extern "C" {
     fn AXIsProcessTrusted() -> u8;
     fn AXIsProcessTrustedWithOptions(options: *const NSDictionary<NSString, NSNumber>) -> u8;
+    // 读程序坞的位置和大小；objc2 没有这几个绑定。AXUIElementRef、AXValueRef 都是 CFType
+    fn AXUIElementCreateApplication(pid: i32) -> Option<NonNull<CFType>>;
+    fn AXUIElementSetMessagingTimeout(element: &CFType, timeout: f32) -> i32;
+    fn AXUIElementCopyAttributeValue(
+        element: &CFType,
+        attribute: &CFString,
+        value: *mut *const CFType,
+    ) -> i32;
+    fn AXValueGetValue(value: &CFType, the_type: u32, value_ptr: *mut c_void) -> u8;
 }
+
+/// `kAXValueCGPointType`、`kAXValueCGSizeType`
+const AX_POINT: u32 = 1;
+const AX_SIZE: u32 = 2;
 
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
@@ -1055,6 +1072,108 @@ pub fn pointer_position() -> Option<(f64, f64)> {
     let event = CGEvent::new(None)?;
     let p = CGEvent::location(Some(&event));
     Some((p.x, p.y))
+}
+
+/// 程序坞停在哪一边、是否自动隐藏（读 `com.apple.dock` 的偏好），以及露出来的矩形（全局点，同 `pointer_position`）。
+/// 停在左右两侧且常驻时，有辅助功能权限就读程序坞那一排图标（`AXList`）的位置和大小；
+/// 没有权限、读不到，或停在底部、自动隐藏（这两种用不到矩形）时，按占满主屏那一整条边算。
+pub fn dock() -> Option<crate::DockFrame> {
+    use crate::{DockEdge, DockFrame};
+    let app = CFString::from_static_str("com.apple.dock");
+    let edge = match CFPreferencesCopyAppValue(&CFString::from_static_str("orientation"), &app)
+        .and_then(|v| v.downcast::<CFString>().ok())
+        .map(|v| v.to_string())
+        .as_deref()
+    {
+        Some("left") => DockEdge::Left,
+        Some("right") => DockEdge::Right,
+        // 没写过这一项就是默认的底部
+        _ => DockEdge::Bottom,
+    };
+    // SAFETY: 第三个参数可以为空
+    let autohide = unsafe {
+        CFPreferencesGetAppBooleanValue(
+            &CFString::from_static_str("autohide"),
+            &app,
+            std::ptr::null_mut(),
+        )
+    };
+    let main = CGDisplayBounds(CGMainDisplayID());
+    let full = WinRect {
+        x: if edge == DockEdge::Right {
+            main.origin.x + main.size.width - 1.0
+        } else {
+            main.origin.x
+        },
+        y: main.origin.y,
+        w: 1.0,
+        h: main.size.height,
+    };
+    let r = if edge != DockEdge::Bottom && !autohide {
+        dock_list_frame().unwrap_or(full)
+    } else {
+        full
+    };
+    Some(DockFrame {
+        x: r.x,
+        y: r.y,
+        w: r.w,
+        h: r.h,
+        edge,
+        autohide,
+    })
+}
+
+/// 程序坞那一排图标的矩形；没有辅助功能权限、程序坞没在跑或读不到时为 None。
+fn dock_list_frame() -> Option<WinRect> {
+    // SAFETY: 无参数的只读查询
+    if unsafe { AXIsProcessTrusted() } == 0 {
+        return None;
+    }
+    autoreleasepool(|_| {
+        let pid = NSRunningApplication::runningApplicationsWithBundleIdentifier(ns_string!(
+            "com.apple.dock"
+        ))
+        .firstObject()?
+        .processIdentifier();
+        // SAFETY: 按 Create 规则返回的引用由 CFRetained 接管
+        let dock = unsafe { CFRetained::from_raw(AXUIElementCreateApplication(pid)?) };
+        // 程序坞卡住时最多等 0.1 s，不拖住调用线程
+        // SAFETY: dock 是有效的 AX 元素
+        unsafe { AXUIElementSetMessagingTimeout(&dock, 0.1) };
+        let kids = ax_attr(&dock, "AXChildren")?.downcast::<CFArray>().ok()?;
+        let list = (0..kids.count()).find_map(|i| {
+            // SAFETY: 下标在范围内；元素由数组持有，kids 存活期间有效
+            let el = unsafe { &*kids.value_at_index(i).cast::<CFType>() };
+            let role = ax_attr(el, "AXRole")?.downcast::<CFString>().ok()?;
+            (role.to_string() == "AXList").then(|| el.retain())
+        })?;
+        let (pos, size) = (ax_attr(&list, "AXPosition")?, ax_attr(&list, "AXSize")?);
+        let (mut p, mut s) = (CGPoint::ZERO, CGSize::ZERO);
+        // SAFETY: 两个属性的值是对应类型的 AXValue，p、s 是本地变量
+        let ok = unsafe {
+            AXValueGetValue(&pos, AX_POINT, (&raw mut p).cast()) != 0
+                && AXValueGetValue(&size, AX_SIZE, (&raw mut s).cast()) != 0
+        };
+        ok.then_some(WinRect {
+            x: p.x,
+            y: p.y,
+            w: s.width,
+            h: s.height,
+        })
+    })
+}
+
+/// 取 AX 元素的一个属性；失败为 None。
+fn ax_attr(el: &CFType, name: &'static str) -> Option<CFRetained<CFType>> {
+    let mut v: *const CFType = std::ptr::null();
+    // SAFETY: el 是有效的 AX 元素，v 是本地变量；按 Copy 规则，成功时返回的引用由 CFRetained 接管
+    unsafe {
+        if AXUIElementCopyAttributeValue(el, &CFString::from_static_str(name), &mut v) != 0 {
+            return None;
+        }
+        NonNull::new(v.cast_mut()).map(|v| CFRetained::from_raw(v))
+    }
 }
 
 /// 能否自动滚动：要辅助功能权限，同模拟粘贴（M23 规则 13）。

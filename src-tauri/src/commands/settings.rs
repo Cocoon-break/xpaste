@@ -373,6 +373,10 @@ pub fn save_settings(
                 crate::line::hide(&app);
             }
         }
+        // 关掉时上面已经收起，不再到新位置放下
+        if on && changed.contains(&"lineSide") {
+            crate::line::relocate(&app);
+        }
     }
     // 空绳子的提示里写着便签快捷键；样式、开关、位置在面板与晾衣绳页面里都要跟着换
     if ["lineHotkey", "lineStyle", "lineEnabled", "lineSide"]

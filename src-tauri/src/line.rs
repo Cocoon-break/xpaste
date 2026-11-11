@@ -57,8 +57,12 @@ const FLING: f64 = 0.85;
 const TICK: Duration = Duration::from_millis(16);
 /// 屏幕矩形缓存这么久
 const SCREENS_TTL: Duration = Duration::from_secs(1);
-/// 窗口初始高度（逻辑像素）；页面渲染后经 `line_resize` 改
+/// 顶部窗口的初始高度（逻辑像素）；页面渲染后经 `line_resize` 改
 const H0: f64 = 240.0;
+/// 左右两侧窗口的初始宽度（逻辑像素）
+pub const COL_W: f64 = 200.0;
+/// 改位置后等页面收完再放下，最多等这么久（比收起兜底长一点）
+const RELOCATE_WAIT: Duration = Duration::from_millis(1500);
 /// 发出 `line-hide` 后页面这么久还没调 `line_hidden`（页面卡住、崩了），后端自己收起
 const HIDDEN_FALLBACK: Duration = Duration::from_millis(1000);
 
@@ -98,7 +102,7 @@ impl Edge {
         button: bool,
         cfg: &EdgeCfg,
     ) -> Option<EdgeEvent> {
-        let top = at_edge(c, rects, cfg);
+        let at = at_edge(c, rects, cfg);
         let hidden_dock = cfg
             .dock
             .as_ref()
@@ -116,7 +120,7 @@ impl Edge {
             });
         self.last = Some((c.0, c.1, t_ms));
         let how = if button { How::Drag } else { How::Mouse };
-        match (self.phase, top) {
+        match (self.phase, at) {
             (Phase::Away, false) => None,
             (Phase::Open, true) => None,
             (Phase::Open, false) => {
@@ -144,7 +148,6 @@ fn contains(r: &Rect, (x, y): (f64, f64)) -> bool {
     x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h
 }
 
-#[allow(dead_code)] // 任务 3 接上真实程序坞后构造
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum DockSide {
     Left,
@@ -192,10 +195,64 @@ pub fn at_edge(c: (f64, f64), rects: &[Rect], cfg: &EdgeCfg) -> bool {
     if c.1 - r.y < CORNER || r.y + r.h - c.1 < CORNER || rects.iter().any(|o| contains(o, beyond)) {
         return false;
     }
-    // ponytail: 只比纵向范围，不核对程序坞在哪块屏；多屏同侧程序坞的精确归属等有需要再加
+    // 横向也要落在程序坞那一截里（容 1 px），免得一块屏上的程序坞挡住另一块屏露在外面的边
     !cfg.dock.as_ref().is_some_and(|d| {
-        d.on(cfg.side) && !d.autohide && c.1 >= d.rect.y && c.1 < d.rect.y + d.rect.h
+        d.on(cfg.side)
+            && !d.autohide
+            && c.1 >= d.rect.y
+            && c.1 < d.rect.y + d.rect.h
+            && c.0 >= d.rect.x - 1.0
+            && c.0 <= d.rect.x + d.rect.w + 1.0
     })
+}
+
+/// 窗口在工作区里的矩形：顶部占工作区全宽、高为 `extent`；左右两侧占工作区全高、宽为 `extent`，贴着那一侧。
+/// `extent` 不超过工作区的高（顶部）或宽（左右）。
+pub fn side_rect(work: Rect, side: LineSide, extent: f64) -> Rect {
+    match side {
+        LineSide::Top => Rect {
+            h: extent.min(work.h),
+            ..work
+        },
+        LineSide::Left => Rect {
+            w: extent.min(work.w),
+            ..work
+        },
+        LineSide::Right => {
+            let w = extent.min(work.w);
+            Rect {
+                x: work.x + work.w - w,
+                w,
+                ..work
+            }
+        }
+    }
+}
+
+/// 设置里“位置”下面的提示：程序坞在同一侧且自动隐藏，要停得久一点；常驻且上下露出的两段都不超过角落的 40 px，碰边放不下。
+/// `screen` 是程序坞所在屏的矩形，与 `dock` 同一坐标空间。
+pub fn dock_hint(side: LineSide, dock: Option<&Dock>, screen: Rect) -> &'static str {
+    let Some(d) = dock.filter(|d| d.on(side)) else {
+        return "";
+    };
+    let left = side == LineSide::Left;
+    if d.autohide {
+        return if left {
+            "程序坞也在左侧，鼠标停得久一点才会放下绳子"
+        } else {
+            "程序坞也在右侧，鼠标停得久一点才会放下绳子"
+        };
+    }
+    let above = d.rect.y - screen.y;
+    let below = screen.y + screen.h - (d.rect.y + d.rect.h);
+    if above > CORNER || below > CORNER {
+        return "";
+    }
+    if left {
+        "程序坞占满了左侧，用快捷键放下晾衣绳"
+    } else {
+        "程序坞占满了右侧，用快捷键放下晾衣绳"
+    }
 }
 
 /// 光标在便签区域里：晾衣绳窗口的矩形往绳子那一侧延到所在屏的边（顶部往上，菜单栏那一条也算；左右往屏幕边）。
@@ -214,10 +271,12 @@ pub fn pointer_inside(c: (f64, f64), win: Rect, rects: &[Rect], side: LineSide) 
 /// 窗口这一侧的状态。`how` 为 None：窗口已隐藏（页面调过 `line_hidden`）。
 struct Shown {
     how: Option<How>,
-    /// 所在屏的工作区（逻辑像素）与缩放，放下时记下
+    /// 所在屏的工作区（逻辑像素）、缩放与挂的位置，放下时记下
     work: Rect,
     sf: f64,
-    h: f64,
+    side: LineSide,
+    /// 页面报的横轴外的尺寸：顶部是高，左右两侧是宽
+    extent: f64,
     keyboard: bool,
     /// Windows：拿键盘前的前台窗口，交还键盘时切回去（macOS 恒为 None，orderOut 时系统自己交还）
     previous: Option<isize>,
@@ -232,9 +291,17 @@ pub fn enabled() -> bool {
 static ON: AtomicBool = AtomicBool::new(true);
 static SIDE: AtomicU8 = AtomicU8::new(0);
 
+/// 位置变了（含启动时读到的不是顶部）时，窗口尺寸换成新位置的初始值，等页面再报。不要在持有设置锁时调用。
 pub fn configure(on: bool, side: LineSide) {
     ON.store(on, Ordering::Relaxed);
-    SIDE.store(side as u8, Ordering::Relaxed);
+    if SIDE.swap(side as u8, Ordering::Relaxed) != side as u8 {
+        shown().extent = initial_extent(side);
+    }
+}
+
+/// 新位置的窗口初始尺寸：横挂是高，竖挂是宽
+fn initial_extent(side: LineSide) -> f64 {
+    if side == LineSide::Top { H0 } else { COL_W }
 }
 
 /// 构建带晾衣绳且用户没关掉：检测边缘、触发提醒、接住拖动都看它
@@ -259,7 +326,8 @@ static SHOWN: Mutex<Shown> = Mutex::new(Shown {
         h: 0.0,
     },
     sf: 1.0,
-    h: H0,
+    side: LineSide::Top,
+    extent: H0,
     keyboard: false,
     previous: None,
 });
@@ -294,12 +362,12 @@ fn open_rect(k: f64) -> Option<Rect> {
     } else {
         s.sf / k
     };
-    let w = s.work;
+    let r = side_rect(s.work, s.side, s.extent);
     Some(Rect {
-        x: w.x * f,
-        y: w.y * f,
-        w: w.w * f,
-        h: s.h.min(w.h) * f,
+        x: r.x * f,
+        y: r.y * f,
+        w: r.w * f,
+        h: r.h * f,
     })
 }
 
@@ -476,6 +544,7 @@ fn detect(app: &AppHandle) {
     let t0 = Instant::now();
     let mut edge = Edge::default();
     let mut screens = (Vec::new(), 1.0);
+    let mut dock = None;
     let mut read_at: Option<Instant> = None;
     // 上次报给页面的进出；每次放下后先报一次
     let mut inside: Option<bool> = None;
@@ -496,20 +565,17 @@ fn detect(app: &AppHandle) {
                 Ok(s) => screens = s,
                 Err(e) => log::debug!("晾衣绳读取屏幕失败：{e}"),
             }
+            dock = read_dock(screens.1);
         }
         // 不用 app.cursor_position()：它要等主线程应答，每秒 60 次会一直唤醒主线程
         let Some((x, y)) = xpaste_platform::pointer_position() else {
             continue;
         };
         let (rects, k) = (&screens.0, screens.1);
-        // 程序坞信息由后续任务接上
-        let cfg = EdgeCfg {
-            side: side(),
-            dock: None,
-        };
+        let cfg = EdgeCfg { side: side(), dock };
         let c = (x / k, y / k);
         if let Some(win) = open_rect(k) {
-            // 收起后先离开顶端才会再放下：按 Esc 收起时光标还在顶端，不立刻又放下来
+            // 收起后先离开边缘才会再放下：按 Esc 收起时光标还在顶端，不立刻又放下来
             edge = Edge {
                 last: None,
                 phase: Phase::Open,
@@ -568,6 +634,48 @@ fn read_screens(app: &AppHandle) -> tauri::Result<(Vec<Rect>, f64)> {
         })
         .collect();
     Ok((rects, psf))
+}
+
+/// 程序坞 / 任务栏，换到检测线程的坐标空间（除以 `k`，同指针）；读不到为 None
+fn read_dock(k: f64) -> Option<Dock> {
+    let Some(d) = xpaste_platform::dock() else {
+        log::debug!("晾衣绳读不到程序坞位置");
+        return None;
+    };
+    use xpaste_platform::DockEdge;
+    Some(Dock {
+        rect: Rect {
+            x: d.x / k,
+            y: d.y / k,
+            w: d.w / k,
+            h: d.h / k,
+        },
+        side: match d.edge {
+            DockEdge::Left => DockSide::Left,
+            DockEdge::Right => DockSide::Right,
+            DockEdge::Bottom => DockSide::Bottom,
+        },
+        autohide: d.autohide,
+    })
+}
+
+/// 设置里“位置”下面的程序坞提示，见 `dock_hint`；程序坞所在屏按它中心所在的那块屏算。读程序坞要访问别的进程，不在主线程调用。
+pub fn side_hint(app: &AppHandle, side: LineSide) -> &'static str {
+    let (rects, k) = match read_screens(app) {
+        Ok(s) => s,
+        Err(e) => {
+            log::debug!("晾衣绳读取屏幕失败：{e}");
+            return "";
+        }
+    };
+    let Some(d) = read_dock(k) else {
+        return "";
+    };
+    let mid = (d.rect.x + d.rect.w / 2.0, d.rect.y + d.rect.h / 2.0);
+    rects
+        .iter()
+        .find(|r| contains(r, mid))
+        .map_or("", |&r| dock_hint(side, Some(&d), r))
 }
 
 /// 放到光标所在屏工作区顶端，宽为工作区宽，发 `line-show { how }`。
@@ -639,32 +747,34 @@ fn take_keyboard(app: &AppHandle, w: &WebviewWindow) -> tauri::Result<()> {
     front(app, w, true)
 }
 
-/// 光标所在屏的工作区（避开菜单栏、程序坞、任务栏）顶端。主线程调用。
+/// 光标所在屏的工作区（避开菜单栏、程序坞、任务栏）里，按挂的位置贴着顶端或左右一侧。主线程调用。
 fn place(app: &AppHandle, w: &WebviewWindow) -> tauri::Result<()> {
     let Some(m) = crate::panel::cursor_monitor(app)? else {
         return Ok(());
     };
     let (sf, wa) = (m.scale_factor(), m.work_area());
-    let screen_top = m.position().y as f64 / sf;
-    let notch =
-        xpaste_platform::notch_inset(m.position().x as f64 / sf, m.size().width as f64 / sf);
-    let work = below_notch(
-        Rect {
-            x: wa.position.x as f64 / sf,
-            y: wa.position.y as f64 / sf,
-            w: wa.size.width as f64 / sf,
-            h: wa.size.height as f64 / sf,
-        },
-        screen_top,
-        notch,
-    );
-    let h = {
+    let side = side();
+    let mut work = Rect {
+        x: wa.position.x as f64 / sf,
+        y: wa.position.y as f64 / sf,
+        w: wa.size.width as f64 / sf,
+        h: wa.size.height as f64 / sf,
+    };
+    // 刘海在顶端正中，只挡顶部那一排
+    if side == LineSide::Top {
+        let screen_top = m.position().y as f64 / sf;
+        let notch =
+            xpaste_platform::notch_inset(m.position().x as f64 / sf, m.size().width as f64 / sf);
+        work = below_notch(work, screen_top, notch);
+    }
+    let extent = {
         let mut s = shown();
         s.work = work;
         s.sf = sf;
-        s.h
+        s.side = side;
+        s.extent
     };
-    apply(w, work, sf, h)
+    apply(w, side_rect(work, side, extent), sf)
 }
 
 /// 工作区顶端高于刘海下沿时（菜单栏自动隐藏、全屏应用），往下让到刘海下面，免得中间的便签被刘海盖住。
@@ -680,10 +790,10 @@ pub fn below_notch(work: Rect, screen_top: f64, notch: f64) -> Rect {
     }
 }
 
-/// 摆窗口：macOS 用逻辑坐标（点），Windows 按所在屏缩放换成物理像素（同划词卡片）。高度不超过工作区。
-fn apply(w: &WebviewWindow, work: Rect, sf: f64, h: f64) -> tauri::Result<()> {
+/// 摆窗口到 `r`（逻辑像素）：macOS 用逻辑坐标（点），Windows 按所在屏缩放换成物理像素（同划词卡片）。
+fn apply(w: &WebviewWindow, r: Rect, sf: f64) -> tauri::Result<()> {
     let k = if cfg!(target_os = "macos") { 1.0 } else { sf };
-    crate::shot::place(w, (work.x * k, work.y * k), (work.w * k, h.min(work.h) * k))
+    crate::shot::place(w, (r.x * k, r.y * k), (r.w * k, r.h * k))
 }
 
 /// 发 `line-hide`；页面收起后调 `line_hidden`，窗口才真正隐藏。
@@ -751,24 +861,48 @@ pub fn hidden(app: &AppHandle) {
     });
 }
 
-/// 页面按内容改高度；宽和位置不变。高度来自页面，不是正数就不理。
-pub fn resize(app: &AppHandle, h: f64) {
-    if !(h.is_finite() && h > 0.0) {
+/// 页面按内容改窗口尺寸：顶部改高，左右两侧改宽（贴着那一侧，往屏幕里侧长）。尺寸来自页面，不是正数就不理。
+pub fn resize(app: &AppHandle, extent: f64) {
+    if !(extent.is_finite() && extent > 0.0) {
         return;
     }
-    let (work, sf, visible) = {
+    let (r, sf, visible) = {
         let mut s = shown();
-        s.h = h;
-        (s.work, s.sf, s.how.is_some())
+        s.extent = extent;
+        (side_rect(s.work, s.side, extent), s.sf, s.how.is_some())
     };
     if visible {
         on_main(app, move |app| {
             if let Some(w) = app.get_webview_window(LABEL)
-                && let Err(e) = apply(&w, work, sf, h)
+                && let Err(e) = apply(&w, r, sf)
             {
-                log::warn!("晾衣绳改高度失败：{e}");
+                log::warn!("晾衣绳改尺寸失败：{e}");
             }
         });
+    }
+}
+
+/// 设置里改了位置（`configure` 之后调）：绳子放着时先收起，等页面收完，再在新位置放下亮一下；没放着什么都不做。
+pub fn relocate(app: &AppHandle) {
+    if shown().how.is_none() {
+        return;
+    }
+    hide(app);
+    let app = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("line-relocate".into())
+        .spawn(move || {
+            let t = Instant::now();
+            while t.elapsed() < RELOCATE_WAIT {
+                std::thread::sleep(TICK);
+                if shown().how.is_none() {
+                    return show(&app, How::Flash);
+                }
+            }
+            log::debug!("晾衣绳改位置后没等到收完，不再放下");
+        });
+    if let Err(e) = spawned {
+        log::warn!("晾衣绳改位置线程启动失败：{e}");
     }
 }
 
@@ -1139,6 +1273,69 @@ mod tests {
         assert_eq!(
             e.step((1439.5, 450.), &r, 16, false, &cfg(LineSide::Right)),
             Some(EdgeEvent::Open(How::Mouse))
+        );
+    }
+
+    #[test]
+    fn dock_blocks_only_its_own_screen() {
+        // B 在 A 左边、往下错开；程序坞在 A 的左边，占满 A 的整条边
+        let r = [rect(0., 0., 1440., 900.), rect(-1920., 400., 1920., 1080.)];
+        let c = EdgeCfg {
+            side: LineSide::Left,
+            dock: Some(Dock {
+                rect: rect(0., 0., 70., 900.),
+                side: DockSide::Left,
+                autohide: false,
+            }),
+        };
+        assert!(at_edge((-1920., 600.), &r, &c)); // B 的左边，和程序坞同高也算
+        assert!(!at_edge((0., 200.), &r, &c)); // A 左边露在外面的那段被程序坞占着
+    }
+
+    #[test]
+    fn side_rect_places_column() {
+        let w = rect(0., 25., 1440., 875.);
+        assert_eq!(
+            side_rect(w, LineSide::Top, 240.),
+            rect(0., 25., 1440., 240.)
+        );
+        assert_eq!(
+            side_rect(w, LineSide::Left, 200.),
+            rect(0., 25., 200., 875.)
+        );
+        assert_eq!(
+            side_rect(w, LineSide::Right, 200.),
+            rect(1240., 25., 200., 875.)
+        );
+        assert_eq!(
+            side_rect(w, LineSide::Right, 5000.),
+            rect(0., 25., 1440., 875.)
+        );
+    }
+
+    #[test]
+    fn dock_hints() {
+        let s = rect(0., 0., 1440., 900.);
+        let d = |y, h, autohide| Dock {
+            rect: rect(0., y, 70., h),
+            side: DockSide::Left,
+            autohide,
+        };
+        assert_eq!(
+            dock_hint(LineSide::Right, Some(&d(250., 400., false)), s),
+            ""
+        );
+        assert_eq!(
+            dock_hint(LineSide::Left, Some(&d(250., 400., true)), s),
+            "程序坞也在左侧，鼠标停得久一点才会放下绳子"
+        );
+        assert_eq!(
+            dock_hint(LineSide::Left, Some(&d(10., 880., false)), s),
+            "程序坞占满了左侧，用快捷键放下晾衣绳"
+        );
+        assert_eq!(
+            dock_hint(LineSide::Left, Some(&d(250., 400., false)), s),
+            ""
         );
     }
 

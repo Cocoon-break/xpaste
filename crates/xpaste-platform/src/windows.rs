@@ -71,8 +71,9 @@ use windows::Win32::UI::Shell::PropertiesSystem::{
     GPS_DEFAULT, IPropertyStore, SHGetPropertyStoreFromParsingName,
 };
 use windows::Win32::UI::Shell::{
-    IShellItemImageFactory, IShellLinkW, SHCreateItemFromParsingName, SHDefExtractIconW,
-    SIIGBF_THUMBNAILONLY, ShellLink,
+    ABE_BOTTOM, ABE_LEFT, ABE_RIGHT, ABM_GETSTATE, ABM_GETTASKBARPOS, ABS_AUTOHIDE, APPBARDATA,
+    IShellItemImageFactory, IShellLinkW, SHAppBarMessage, SHCreateItemFromParsingName,
+    SHDefExtractIconW, SIIGBF_THUMBNAILONLY, ShellLink,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyIcon, DispatchMessageW,
@@ -1572,6 +1573,37 @@ pub fn pointer_position() -> Option<(f64, f64)> {
     // SAFETY: p 是本地变量
     unsafe { GetCursorPos(&mut p) }.ok()?;
     Some((f64::from(p.x), f64::from(p.y)))
+}
+
+/// 任务栏停在哪一边、是否自动隐藏，以及它的矩形（物理像素，同 `pointer_position`）。任务栏总是占满那一整条边。
+/// 读不到或停在顶部时为 None。
+pub fn dock() -> Option<crate::DockFrame> {
+    use crate::{DockEdge, DockFrame};
+    let mut abd = APPBARDATA {
+        cbSize: size_of::<APPBARDATA>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: abd 是本地变量，cbSize 已填
+    if unsafe { SHAppBarMessage(ABM_GETTASKBARPOS, &mut abd) } == 0 {
+        return None;
+    }
+    let edge = match abd.uEdge {
+        ABE_LEFT => DockEdge::Left,
+        ABE_RIGHT => DockEdge::Right,
+        ABE_BOTTOM => DockEdge::Bottom,
+        _ => return None,
+    };
+    // SAFETY: 同上；ABM_GETSTATE 只读 cbSize
+    let state = unsafe { SHAppBarMessage(ABM_GETSTATE, &mut abd) } as u32;
+    let rc = abd.rc;
+    Some(DockFrame {
+        x: f64::from(rc.left),
+        y: f64::from(rc.top),
+        w: f64::from(rc.right - rc.left),
+        h: f64::from(rc.bottom - rc.top),
+        edge,
+        autohide: state & ABS_AUTOHIDE != 0,
+    })
 }
 
 /// Windows 发滚动不需要权限（M23 规则 13）
