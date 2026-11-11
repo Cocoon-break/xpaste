@@ -21,7 +21,7 @@ import {
   onShotNeedPermission,
   onTranslateDelta,
 } from './api/events';
-import { lineDragDrop, lineDragHover, lineHangFromPanel, lineHide, onLineChanged, onLineHangSelected, proActivate, type LineView } from './api/line';
+import { lineDragDrop, lineDragHover, lineHangFromPanel, lineHide, onLineChanged, onLineHangSelected, proActivate, proStatus, type LineView } from './api/line';
 import { proLine } from './pro-status';
 import type { AppError, Appearance, Engines, FileEntry, LineStyle, PanelStyle, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
 import { appCounts, bestApp, freshSug, fromApp, type Sug } from './source';
@@ -2362,6 +2362,13 @@ function openSettings() {
   paintProStatus();
   draftLineStyle = st.lineStyle;
   paintLineStyle();
+  // 试用可能在面板开着时到期（没有广播），打开设置时重新取一次
+  if (S.line.available)
+    void proStatus().then((p) => {
+      S.line.pro = p;
+      paintProStatus();
+      stylePicker?.set(draftLineStyle, lineLocked());
+    }, () => {});
   proCodeIn.value = '';
   paintProErr();
   // 启动时被其他应用占用、没注册上的快捷键：只发过系统通知（可能被关掉），这里在录制框下标红、标签上出红点
