@@ -444,6 +444,11 @@ fn select_on_duplicate(shown: Option<How>, err: Option<&AppError>, select: bool)
     }
 }
 
+/// 快捷键、挂钩按钮挂的插在哪：顶部挂在末尾，左右两侧挂在最上面
+fn hang_at(side: LineSide) -> Option<usize> {
+    (side != LineSide::Top).then_some(0)
+}
+
 /// 挂上记录 `id`（None 为最新一条）：挂上了就放下绳子亮一下（已放下时续亮）；
 /// 已经挂着时，`select`（快捷键）且绳子放下着就改成键盘操作并选中那张，否则亮一下、提示“已经挂着了”并让那张轻摆；
 /// 其余没挂成的亮一下并提示。便签快捷键与面板的挂钩按钮共用；要读库、写便签文件，不在主线程调用。
@@ -455,7 +460,7 @@ pub fn hang_and_flash(app: &AppHandle, id: Option<i64>, select: bool) {
     };
     // Err(None)：剪切板里还没有记录
     let res = match id {
-        Ok(Some(id)) => crate::commands::line::hang_record(app, &state, id, None)
+        Ok(Some(id)) => crate::commands::line::hang_record(app, &state, id, hang_at(side()))
             .map(|_| ())
             .map_err(Some),
         Ok(None) => Err(None),
@@ -969,6 +974,13 @@ mod tests {
             below_notch(r(-1080.0, 1080.0), -1080.0, 0.0),
             r(-1080.0, 1080.0)
         );
+    }
+
+    #[test]
+    fn hotkey_hangs_on_top_in_side_mode() {
+        assert_eq!(hang_at(LineSide::Top), None);
+        assert_eq!(hang_at(LineSide::Left), Some(0));
+        assert_eq!(hang_at(LineSide::Right), Some(0));
     }
 
     #[test]
