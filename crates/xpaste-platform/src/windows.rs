@@ -1405,6 +1405,24 @@ pub fn mouse_button_down() -> bool {
     }
 }
 
+/// 拖拽剪切板的计数：Windows 没有这一项，为 None（调用方只看 `moving_window`）
+pub fn drag_count() -> Option<i64> {
+    None
+}
+
+/// 前台线程正在拖动、缩放窗口（拖标题栏贴顶最大化也是）。读不到算不是。
+pub fn moving_window() -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GUI_INMOVESIZE, GUITHREADINFO, GetGUIThreadInfo,
+    };
+    let mut info = GUITHREADINFO {
+        cbSize: size_of::<GUITHREADINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: info 是本地变量，cbSize 已填；线程 0 表示前台线程
+    unsafe { GetGUIThreadInfo(0, &mut info) }.is_ok() && info.flags.contains(GUI_INMOVESIZE)
+}
+
 // 长截图自动滚动（M23 规则 13）
 
 /// Windows 的滚轮作用于指针下的窗口：`scroll_at` 的 (x, y) 只供调用方判断指针在不在选区里

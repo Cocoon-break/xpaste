@@ -11,8 +11,8 @@ use objc2::runtime::{AnyClass, AnyObject, ProtocolObject};
 use objc2::{AllocAnyThread, ClassType, msg_send};
 use objc2_app_kit::{
     NSApplicationActivationPolicy, NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard,
-    NSPasteboardItem, NSPasteboardTypeFileURL, NSPasteboardTypeHTML, NSPasteboardTypeString,
-    NSRunningApplication, NSWorkspace,
+    NSPasteboardItem, NSPasteboardNameDrag, NSPasteboardTypeFileURL, NSPasteboardTypeHTML,
+    NSPasteboardTypeString, NSRunningApplication, NSWorkspace,
 };
 use objc2_av_foundation::{AVAssetImageGenerator, AVAssetTrack, AVMediaTypeVideo, AVURLAsset};
 use objc2_core_foundation::{
@@ -514,6 +514,20 @@ pub fn mouse_button_down() -> bool {
     // kCGEventSourceStateCombinedSessionState = 0，kCGMouseButtonLeft = 0
     // SAFETY: 纯查询，无指针参数
     unsafe { CGEventSourceButtonState(0, 0) != 0 }
+}
+
+/// 拖拽剪切板的 `changeCount`：拖文件、拖文字开始时系统往这块剪切板写内容，按下鼠标后它变了才是真在拖东西。
+pub fn drag_count() -> Option<i64> {
+    autoreleasepool(|_| {
+        // SAFETY: 系统常量，进程内一直有效
+        let name = unsafe { NSPasteboardNameDrag };
+        Some(NSPasteboard::pasteboardWithName(name).changeCount() as i64)
+    })
+}
+
+/// 系统正在拖动、缩放窗口：macOS 读不到，算不是（按下后拖拽剪切板没变就已经不算在拖东西）
+pub fn moving_window() -> bool {
+    false
 }
 
 /// 应用图标转 PNG：取 64 pt 对应的那档图像（Retina 屏上为 128×128 px），不重新绘制。
