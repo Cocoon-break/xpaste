@@ -38,27 +38,31 @@ private final class PackResult: @unchecked Sendable {
     var code: Int32 = 2
 }
 
+/// `source` 为用户在划词卡片上指定的源语言（M26 规则 20），空串为自动识别。
 @_cdecl("xp_tr_translate")
 public func xp_tr_translate(
-    _ text: UnsafePointer<CChar>, _ target: UnsafePointer<CChar>,
+    _ text: UnsafePointer<CChar>, _ source: UnsafePointer<CChar>, _ target: UnsafePointer<CChar>,
     _ ctx: UnsafeMutableRawPointer?, _ cb: XpTrCallback
 ) {
     guard #available(macOS 26, *) else { return cb(ctx, 2, nil) }
     let src = String(cString: text)
     let tgt = String(cString: target)
-    let rec = NLLanguageRecognizer()
-    rec.processString(src)
-    guard let top = rec.dominantLanguage, top != .undetermined else { return cb(ctx, 2, nil) }
-    // 候选源语言：最可能的在前，再加概率不低于 0.1 的其他猜测，简繁互为候选。
-    // 终端输出、短文本、中英混排常被认成别的语言或繁体，只用最可能的那个会要用户下载用不上的语言包
-    let hyps = rec.languageHypotheses(withMaximum: 3)
-    let guesses = hyps.filter { $0.value >= 0.1 }.sorted { $0.value > $1.value }.map(\.key.rawValue)
-    // 没把握（最可能的也不到 0.5，多见于短词、缩写，如 ok 认成波兰语）时按文字再补一个，放在最后
-    let byScript = (hyps.values.max() ?? 0) < 0.5 ? [scriptLanguage(src)] : []
-    var cands: [String] = []
-    for g in [top.rawValue] + guesses + byScript {
-        let pair = g == "zh-Hant" ? ["zh-Hans"] : g == "zh-Hans" ? ["zh-Hant"] : []
-        for c in [g] + pair where !cands.contains(c) { cands.append(c) }
+    let given = String(cString: source)
+    var cands: [String] = given.isEmpty ? [] : [given]
+    if given.isEmpty {
+        let rec = NLLanguageRecognizer()
+        rec.processString(src)
+        guard let top = rec.dominantLanguage, top != .undetermined else { return cb(ctx, 2, nil) }
+        // 候选源语言：最可能的在前，再加概率不低于 0.1 的其他猜测，简繁互为候选。
+        // 终端输出、短文本、中英混排常被认成别的语言或繁体，只用最可能的那个会要用户下载用不上的语言包
+        let hyps = rec.languageHypotheses(withMaximum: 3)
+        let guesses = hyps.filter { $0.value >= 0.1 }.sorted { $0.value > $1.value }.map(\.key.rawValue)
+        // 没把握（最可能的也不到 0.5，多见于短词、缩写，如 ok 认成波兰语）时按文字再补一个，放在最后
+        let byScript = (hyps.values.max() ?? 0) < 0.5 ? [scriptLanguage(src)] : []
+        for g in [top.rawValue] + guesses + byScript {
+            let pair = g == "zh-Hant" ? ["zh-Hans"] : g == "zh-Hans" ? ["zh-Hant"] : []
+            for c in [g] + pair where !cands.contains(c) { cands.append(c) }
+        }
     }
     // ctx 换成整数再跨进 Task：裸指针不是 Sendable
     let ctxBits = UInt(bitPattern: ctx)

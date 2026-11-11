@@ -69,6 +69,7 @@ unsafe extern "C" {
     fn xp_tr_pack(target: *const c_char) -> i32;
     fn xp_tr_translate(
         text: *const c_char,
+        source: *const c_char,
         target: *const c_char,
         ctx: *mut c_void,
         cb: TrCallback,
@@ -788,19 +789,31 @@ extern "C" fn on_translated(ctx: *mut c_void, code: i32, out: *const c_char) {
     let _ = tx.send(r);
 }
 
-/// 用系统翻译把 `text` 译成 `target`（源语言由系统识别）。阻塞，最多 30 秒。
+/// 用系统翻译把 `text` 译成 `target`；`source` 为空串时源语言由系统识别。阻塞，最多 30 秒。
 /// 同 `translate_pack`，只在工作线程调用且主线程在跑事件循环，否则只会等到 `Timeout`。
-pub fn translate_text(text: &str, target: &str) -> Result<String, SysTranslateError> {
+pub fn translate_text(text: &str, source: &str, target: &str) -> Result<String, SysTranslateError> {
     if !translate_supported() {
         return Err(SysTranslateError::OsTooOld);
     }
-    let (Ok(text), Ok(target)) = (CString::new(text), CString::new(target)) else {
+    let (Ok(text), Ok(source), Ok(target)) = (
+        CString::new(text),
+        CString::new(source),
+        CString::new(target),
+    ) else {
         return Err(SysTranslateError::Failed);
     };
     let (tx, rx) = mpsc::channel();
     let ctx = Box::into_raw(Box::new(tx)).cast::<c_void>();
     // SAFETY: 字符串在调用期间有效（Swift 侧同步复制）；ctx 由 on_translated 收回
-    unsafe { xp_tr_translate(text.as_ptr(), target.as_ptr(), ctx, on_translated) };
+    unsafe {
+        xp_tr_translate(
+            text.as_ptr(),
+            source.as_ptr(),
+            target.as_ptr(),
+            ctx,
+            on_translated,
+        )
+    };
     rx.recv_timeout(TRANSLATE_TIMEOUT)
         .unwrap_or(Err(SysTranslateError::Timeout))
 }

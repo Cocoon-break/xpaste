@@ -1006,7 +1006,11 @@ pub fn translate_pack(_target: &str) -> PackStatus {
     PackStatus::Unsupported
 }
 
-pub fn translate_text(_text: &str, _target: &str) -> Result<String, SysTranslateError> {
+pub fn translate_text(
+    _text: &str,
+    _source: &str,
+    _target: &str,
+) -> Result<String, SysTranslateError> {
     Err(SysTranslateError::Unsupported)
 }
 

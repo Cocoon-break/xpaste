@@ -45,6 +45,8 @@ pub struct Cfg {
     pub api_key: Secret,
     pub model: String,
     pub lang: Lang,
+    /// 用户在划词卡片上指定的源语言，None 为系统识别；只有系统翻译用（M26 规则 20）
+    pub from: Option<Lang>,
 }
 
 /// 读设置；引擎还没选（`""`）时本机支持系统翻译就用系统翻译，否则用 OpenAI 兼容接口（M26 规则 6）。
@@ -61,6 +63,7 @@ pub fn cfg(s: &Settings) -> Cfg {
         api_key: s.translate_api_key.clone(),
         model: s.translate_model.clone(),
         lang: Lang::from_code(&s.translate_lang).unwrap_or(Lang::ZhHans),
+        from: None,
     }
 }
 
@@ -291,7 +294,7 @@ pub async fn exec(
     let target = resolve_target(text, cfg.lang);
     let out = match cfg.engine {
         Engine::System => {
-            let out = system(text, target).await?;
+            let out = system(text, cfg.from, target).await?;
             if !on_delta(target, &out) {
                 return Err(Fail::Aborted);
             }
@@ -308,11 +311,11 @@ pub async fn exec(
 
 /// 系统翻译（整段返回）。macOS Translation 靠主队列回调：不能在主线程上等（会卡死到超时），
 /// 也不占 tokio 工作线程，所以放到阻塞线程池（M26 规则 7）。
-async fn system(text: &str, target: Lang) -> Result<String, Fail> {
+async fn system(text: &str, from: Option<Lang>, target: Lang) -> Result<String, Fail> {
     use xpaste_platform::SysTranslateError as E;
     let src = text.to_string();
     let r = tauri::async_runtime::spawn_blocking(move || {
-        xpaste_platform::translate_text(&src, target.code())
+        xpaste_platform::translate_text(&src, from.map_or("", Lang::code), target.code())
     })
     .await
     .map_err(|e| Fail::Internal(e.into()))?;
@@ -498,6 +501,7 @@ pub(crate) mod tests {
             api_key: "k".into(),
             model: "m".into(),
             lang: Lang::ZhHans,
+            from: None,
         }
     }
 
