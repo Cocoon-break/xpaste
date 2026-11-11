@@ -165,6 +165,38 @@ pub struct Settings {
     pub translate_hotkey: String,
     /// 把最近复制或面板选中的记录挂上晾衣绳的全局快捷键；空字符串表示不启用
     pub line_hotkey: String,
+    /// 晾衣绳的样式（绳子、粗细、夹子、纸张、边缘）
+    #[serde(deserialize_with = "tolerant_line_style")]
+    pub line_style: LineStyle,
+}
+
+/// 晾衣绳样式，各项存选项键；不认识的键由前端按默认处理
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct LineStyle {
+    pub rope: String,
+    pub thick: String,
+    pub peg: String,
+    pub paper: String,
+    pub edge: String,
+}
+
+impl Default for LineStyle {
+    fn default() -> Self {
+        Self {
+            rope: "jute".into(),
+            thick: "mid".into(),
+            peg: "plastic".into(),
+            paper: "parch".into(),
+            edge: "auto".into(),
+        }
+    }
+}
+
+/// 类型坏了（如 `lineStyle: 42`）只让这一项退回默认，不连累其他设置
+fn tolerant_line_style<'de, D: serde::Deserializer<'de>>(d: D) -> Result<LineStyle, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(v).unwrap_or_default())
 }
 
 impl Default for Settings {
@@ -213,6 +245,7 @@ impl Default for Settings {
             translate_lang: "zh-Hans".into(),
             translate_hotkey: "Alt+Shift+T".into(),
             line_hotkey: "Alt+Shift+N".into(),
+            line_style: LineStyle::default(),
         }
     }
 }
@@ -747,6 +780,33 @@ pub fn snippet_name(raw: &str) -> Result<String, CoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn line_style_defaults_and_tolerates_bad_values() {
+        let s: Settings = serde_json::from_str(r#"{"hotkey":"Alt+V"}"#).unwrap();
+        assert_eq!(
+            s.line_style,
+            LineStyle {
+                rope: "jute".into(),
+                thick: "mid".into(),
+                peg: "plastic".into(),
+                paper: "parch".into(),
+                edge: "auto".into()
+            }
+        );
+        let s: Settings =
+            serde_json::from_str(r#"{"hotkey":"Alt+V","lineStyle":{"rope":"silk"}}"#).unwrap();
+        assert_eq!(
+            (s.line_style.rope.as_str(), s.line_style.paper.as_str()),
+            ("silk", "parch")
+        );
+        // 类型坏了：只有这一项退回默认，别的设置照留
+        let s: Settings = serde_json::from_str(r#"{"hotkey":"Alt+V","lineStyle":42}"#).unwrap();
+        assert_eq!(
+            (s.hotkey.as_str(), s.line_style.clone()),
+            ("Alt+V", LineStyle::default())
+        );
+    }
 
     #[test]
     fn crlf_normalizes_line_breaks_without_doubling() {

@@ -179,6 +179,7 @@ pub fn changed_fields(old: &Settings, new: &Settings) -> Vec<&'static str> {
             old.translate_hotkey != new.translate_hotkey,
         ),
         ("lineHotkey", old.line_hotkey != new.line_hotkey),
+        ("lineStyle", old.line_style != new.line_style),
     ]
     .into_iter()
     .filter_map(|(name, changed)| changed.then_some(name))
@@ -355,7 +356,8 @@ pub fn save_settings(
         HotkeyAction::None => {}
     }
     // 空绳子的提示里写着便签快捷键
-    if changed.contains(&"lineHotkey") {
+    // 样式在面板与晾衣绳页面里都要跟着换
+    if changed.contains(&"lineHotkey") || changed.contains(&"lineStyle") {
         crate::commands::line::changed(&app);
     }
     if changed.contains(&"launchAtLogin") {
@@ -575,6 +577,9 @@ mod tests {
     fn changed_fields_lists_only_differences() {
         let old = Settings::default();
         assert!(changed_fields(&old, &old).is_empty());
+        let mut peg = old.clone();
+        peg.line_style.peg = "tip".into();
+        assert_eq!(changed_fields(&old, &peg), ["lineStyle"]);
         let new = Settings {
             hotkey: "Alt+Space".into(),
             update_check: false,
