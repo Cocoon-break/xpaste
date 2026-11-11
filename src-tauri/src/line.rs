@@ -46,9 +46,13 @@ pub enum EdgeEvent {
     Leave,
 }
 
-/// 停在顶端这么久才放下
+/// 停在边缘这么久才放下
 const DWELL_MS: u64 = 200;
-/// 往上甩的速度（px/ms）达到它，到顶端就直接放下
+/// 程序坞在同一侧且自动隐藏：鼠标停得久一点，免得和唤出程序坞抢
+const DWELL_DOCK_MS: u64 = 400;
+/// 左右两侧：离屏幕上下两端这么近不算（角落留给系统的热角）
+const CORNER: f64 = 40.0;
+/// 朝边缘甩的速度（px/ms）达到它，到边缘就直接放下
 const FLING: f64 = 0.85;
 const TICK: Duration = Duration::from_millis(16);
 /// 屏幕矩形缓存这么久
@@ -61,16 +65,16 @@ const HIDDEN_FALLBACK: Duration = Duration::from_millis(1000);
 #[derive(Clone, Copy)]
 enum Phase {
     Away,
-    /// 到顶端的时刻
+    /// 到边缘的时刻
     Peek(u64),
-    /// 已放下：离开顶端前不再发事件
+    /// 已放下：离开边缘前不再发事件
     Open,
 }
 
-/// 顶端检测的状态机，见 `step`。
+/// 边缘检测的状态机，见 `step`。
 pub struct Edge {
-    /// 上一次采样 (y, t)
-    last: Option<(f64, u64)>,
+    /// 上一次采样 (x, y, t)
+    last: Option<(f64, f64, u64)>,
     phase: Phase,
 }
 
@@ -84,7 +88,7 @@ impl Default for Edge {
 }
 
 impl Edge {
-    /// 每 16 ms 采样一次：碰到顶端停 200 ms 或甩上去才放下，两屏相接的边不算顶端。
+    /// 每 16 ms 采样一次：碰到边缘停 200 ms 或朝边缘甩过去才放下，两屏相接的边不算。
     /// rects：全部屏幕的逻辑坐标矩形；button：鼠标键按着（拖文件时为 Drag）
     pub fn step(
         &mut self,
@@ -92,12 +96,25 @@ impl Edge {
         rects: &[Rect],
         t_ms: u64,
         button: bool,
+        cfg: &EdgeCfg,
     ) -> Option<EdgeEvent> {
-        let top = at_top_edge(c, rects);
-        let fling = self
-            .last
-            .is_some_and(|(y, t)| t_ms > t && (y - c.1) / (t_ms - t) as f64 >= FLING);
-        self.last = Some((c.1, t_ms));
+        let top = at_edge(c, rects, cfg);
+        let hidden_dock = cfg
+            .dock
+            .as_ref()
+            .is_some_and(|d| d.autohide && d.on(cfg.side));
+        let dwell = if hidden_dock { DWELL_DOCK_MS } else { DWELL_MS };
+        // 沿这一侧的法线方向算速度：顶部看 y 减小，左侧看 x 减小，右侧看 x 增大
+        let fling = !hidden_dock
+            && self.last.is_some_and(|(x, y, t)| {
+                let d = match cfg.side {
+                    LineSide::Top => y - c.1,
+                    LineSide::Left => x - c.0,
+                    LineSide::Right => c.0 - x,
+                };
+                t_ms > t && d / (t_ms - t) as f64 >= FLING
+            });
+        self.last = Some((c.0, c.1, t_ms));
         let how = if button { How::Drag } else { How::Mouse };
         match (self.phase, top) {
             (Phase::Away, false) => None,
@@ -114,7 +131,7 @@ impl Edge {
                 self.phase = Phase::Peek(t_ms);
                 Some(EdgeEvent::Peek)
             }
-            (Phase::Peek(since), true) if !fling && t_ms - since < DWELL_MS => None,
+            (Phase::Peek(since), true) if !fling && t_ms - since < dwell => None,
             (_, true) => {
                 self.phase = Phase::Open;
                 Some(EdgeEvent::Open(how))
@@ -127,22 +144,71 @@ fn contains(r: &Rect, (x, y): (f64, f64)) -> bool {
     x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h
 }
 
-/// 光标在某块屏最顶端那一像素，且上方没有别的屏（两屏上下相接的边不算顶端）。
-pub fn at_top_edge(c: (f64, f64), rects: &[Rect]) -> bool {
-    rects
-        .iter()
-        .find(|r| contains(r, c))
-        .is_some_and(|r| c.1 - r.y <= 1.0 && !rects.iter().any(|o| contains(o, (c.0, r.y - 1.0))))
+#[allow(dead_code)] // 任务 3 接上真实程序坞后构造
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum DockSide {
+    Left,
+    Right,
+    Bottom,
 }
 
-/// 光标在便签区域里：晾衣绳窗口的矩形往上延到所在屏的顶端（菜单栏那一条也算，光标停在顶端时就在那里）。
+/// 系统的程序坞 / 任务栏：rect 与屏幕矩形同一坐标空间
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Dock {
+    pub rect: Rect,
+    pub side: DockSide,
+    pub autohide: bool,
+}
+
+impl Dock {
+    /// 和绳子挂在同一侧
+    fn on(&self, side: LineSide) -> bool {
+        matches!(
+            (self.side, side),
+            (DockSide::Left, LineSide::Left) | (DockSide::Right, LineSide::Right)
+        )
+    }
+}
+
+pub struct EdgeCfg {
+    pub side: LineSide,
+    pub dock: Option<Dock>,
+}
+
+/// 光标在绳子那一侧最外面一像素，且再往外没有别的屏（两屏相接的边不算）。
+/// 左右两侧另外：离屏幕上下两端 40 px 内不算；同侧程序坞常驻时，只认它上下露出来的那段。
+pub fn at_edge(c: (f64, f64), rects: &[Rect], cfg: &EdgeCfg) -> bool {
+    let Some(r) = rects.iter().find(|r| contains(r, c)) else {
+        return false;
+    };
+    let beyond = match cfg.side {
+        LineSide::Top => {
+            return c.1 - r.y <= 1.0 && !rects.iter().any(|o| contains(o, (c.0, r.y - 1.0)));
+        }
+        LineSide::Left if c.0 - r.x <= 1.0 => (r.x - 1.0, c.1),
+        LineSide::Right if r.x + r.w - c.0 <= 1.0 => (r.x + r.w, c.1),
+        _ => return false,
+    };
+    if c.1 - r.y < CORNER || r.y + r.h - c.1 < CORNER || rects.iter().any(|o| contains(o, beyond)) {
+        return false;
+    }
+    // ponytail: 只比纵向范围，不核对程序坞在哪块屏；多屏同侧程序坞的精确归属等有需要再加
+    !cfg.dock.as_ref().is_some_and(|d| {
+        d.on(cfg.side) && !d.autohide && c.1 >= d.rect.y && c.1 < d.rect.y + d.rect.h
+    })
+}
+
+/// 光标在便签区域里：晾衣绳窗口的矩形往绳子那一侧延到所在屏的边（顶部往上，菜单栏那一条也算；左右往屏幕边）。
 /// `win` 与 `rects`、`c` 同一坐标空间。
-pub fn pointer_inside(c: (f64, f64), win: Rect, rects: &[Rect]) -> bool {
-    let top = rects
-        .iter()
-        .find(|r| contains(r, (win.x, win.y)))
-        .map_or(win.y, |r| r.y);
-    c.0 >= win.x && c.0 < win.x + win.w && c.1 >= top && c.1 < win.y + win.h
+pub fn pointer_inside(c: (f64, f64), win: Rect, rects: &[Rect], side: LineSide) -> bool {
+    let scr = rects.iter().find(|r| contains(r, (win.x, win.y)));
+    let (mut x0, mut x1, mut y0) = (win.x, win.x + win.w, win.y);
+    match side {
+        LineSide::Top => y0 = scr.map_or(win.y, |r| r.y),
+        LineSide::Left => x0 = scr.map_or(win.x, |r| r.x),
+        LineSide::Right => x1 = scr.map_or(x1, |r| r.x + r.w),
+    }
+    c.0 >= x0 && c.0 < x1 && c.1 >= y0 && c.1 < win.y + win.h
 }
 
 /// 窗口这一侧的状态。`how` 为 None：窗口已隐藏（页面调过 `line_hidden`）。
@@ -176,7 +242,6 @@ pub fn active() -> bool {
     enabled() && ON.load(Ordering::Relaxed)
 }
 
-#[allow(dead_code)] // 侧边检测接上前暂无调用方
 pub fn side() -> LineSide {
     match SIDE.load(Ordering::Relaxed) {
         1 => LineSide::Left,
@@ -437,6 +502,11 @@ fn detect(app: &AppHandle) {
             continue;
         };
         let (rects, k) = (&screens.0, screens.1);
+        // 程序坞信息由后续任务接上
+        let cfg = EdgeCfg {
+            side: side(),
+            dock: None,
+        };
         let c = (x / k, y / k);
         if let Some(win) = open_rect(k) {
             // 收起后先离开顶端才会再放下：按 Esc 收起时光标还在顶端，不立刻又放下来
@@ -444,7 +514,7 @@ fn detect(app: &AppHandle) {
                 last: None,
                 phase: Phase::Open,
             };
-            let now_in = pointer_inside(c, win, rects);
+            let now_in = pointer_inside(c, win, rects, cfg.side);
             if inside != Some(now_in) {
                 inside = Some(now_in);
                 emit_to(
@@ -460,7 +530,7 @@ fn detect(app: &AppHandle) {
         let t = t0.elapsed().as_millis() as u64;
         // 拖文件、拖记录到顶端时主键按着
         let button = xpaste_platform::mouse_button_down();
-        match edge.step(c, rects, t, button) {
+        match edge.step(c, rects, t, button, &cfg) {
             Some(EdgeEvent::Peek) => show(app, How::Peek),
             Some(EdgeEvent::Open(how)) => show(app, how),
             Some(EdgeEvent::Leave) => hide(app),
@@ -739,6 +809,13 @@ pub fn keyboard(app: &AppHandle, on: bool) {
 mod tests {
     use super::*;
 
+    fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect {
+        Rect { x, y, w, h }
+    }
+    fn cfg(side: LineSide) -> EdgeCfg {
+        EdgeCfg { side, dock: None }
+    }
+
     #[test]
     fn work_area_moves_below_notch_only_when_needed() {
         let r = |y, h| Rect {
@@ -826,24 +903,33 @@ mod tests {
     fn dwell_200ms_opens() {
         let mut e = Edge::default();
         assert_eq!(
-            e.step((100.0, 0.0), &[MAIN], 0, false),
+            e.step((100.0, 0.0), &[MAIN], 0, false, &cfg(LineSide::Top)),
             Some(EdgeEvent::Peek)
         );
-        assert_eq!(e.step((100.0, 0.0), &[MAIN], 190, false), None);
         assert_eq!(
-            e.step((100.0, 0.0), &[MAIN], 200, false),
+            e.step((100.0, 0.0), &[MAIN], 190, false, &cfg(LineSide::Top)),
+            None
+        );
+        assert_eq!(
+            e.step((100.0, 0.0), &[MAIN], 200, false, &cfg(LineSide::Top)),
             Some(EdgeEvent::Open(How::Mouse))
         );
         // 放下后停着不再发事件
-        assert_eq!(e.step((100.0, 0.0), &[MAIN], 400, false), None);
+        assert_eq!(
+            e.step((100.0, 0.0), &[MAIN], 400, false, &cfg(LineSide::Top)),
+            None
+        );
     }
 
     #[test]
     fn fling_opens_immediately() {
         let mut e = Edge::default();
-        assert_eq!(e.step((100.0, 300.0), &[MAIN], 0, false), None);
         assert_eq!(
-            e.step((100.0, 0.0), &[MAIN], 16, false),
+            e.step((100.0, 300.0), &[MAIN], 0, false, &cfg(LineSide::Top)),
+            None
+        );
+        assert_eq!(
+            e.step((100.0, 0.0), &[MAIN], 16, false, &cfg(LineSide::Top)),
             Some(EdgeEvent::Open(How::Mouse))
         );
     }
@@ -851,10 +937,13 @@ mod tests {
     #[test]
     fn slow_arrival_needs_dwell() {
         let mut e = Edge::default();
-        assert_eq!(e.step((100.0, 8.0), &[MAIN], 0, false), None);
+        assert_eq!(
+            e.step((100.0, 8.0), &[MAIN], 0, false, &cfg(LineSide::Top)),
+            None
+        );
         // 8 px / 16 ms = 0.5 px/ms
         assert_eq!(
-            e.step((100.0, 0.0), &[MAIN], 16, false),
+            e.step((100.0, 0.0), &[MAIN], 16, false, &cfg(LineSide::Top)),
             Some(EdgeEvent::Peek)
         );
     }
@@ -863,22 +952,28 @@ mod tests {
     fn leaving_peek_resets() {
         let mut e = Edge::default();
         assert_eq!(
-            e.step((100.0, 0.0), &[MAIN], 0, false),
+            e.step((100.0, 0.0), &[MAIN], 0, false, &cfg(LineSide::Top)),
             Some(EdgeEvent::Peek)
         );
         assert_eq!(
-            e.step((100.0, 5.0), &[MAIN], 50, false),
+            e.step((100.0, 5.0), &[MAIN], 50, false, &cfg(LineSide::Top)),
             Some(EdgeEvent::Leave)
         );
-        assert_eq!(e.step((100.0, 6.0), &[MAIN], 66, false), None);
         assert_eq!(
-            e.step((100.0, 0.0), &[MAIN], 100, false),
+            e.step((100.0, 6.0), &[MAIN], 66, false, &cfg(LineSide::Top)),
+            None
+        );
+        assert_eq!(
+            e.step((100.0, 0.0), &[MAIN], 100, false, &cfg(LineSide::Top)),
             Some(EdgeEvent::Peek)
         );
         // 从 100 重新计时
-        assert_eq!(e.step((100.0, 0.0), &[MAIN], 250, false), None);
         assert_eq!(
-            e.step((100.0, 0.0), &[MAIN], 300, false),
+            e.step((100.0, 0.0), &[MAIN], 250, false, &cfg(LineSide::Top)),
+            None
+        );
+        assert_eq!(
+            e.step((100.0, 0.0), &[MAIN], 300, false, &cfg(LineSide::Top)),
             Some(EdgeEvent::Open(How::Mouse))
         );
     }
@@ -887,11 +982,17 @@ mod tests {
     fn edge_ignores_shared_edge() {
         let below = Rect { y: 900.0, ..MAIN };
         let rects = [MAIN, below];
-        assert!(!at_top_edge((100.0, 900.0), &rects));
-        assert!(at_top_edge((100.0, 0.0), &rects));
+        assert!(!at_edge((100.0, 900.0), &rects, &cfg(LineSide::Top)));
+        assert!(at_edge((100.0, 0.0), &rects, &cfg(LineSide::Top)));
         let mut e = Edge::default();
-        assert_eq!(e.step((100.0, 900.0), &rects, 0, false), None);
-        assert_eq!(e.step((100.0, 900.0), &rects, 300, false), None);
+        assert_eq!(
+            e.step((100.0, 900.0), &rects, 0, false, &cfg(LineSide::Top)),
+            None
+        );
+        assert_eq!(
+            e.step((100.0, 900.0), &rects, 300, false, &cfg(LineSide::Top)),
+            None
+        );
     }
 
     #[test]
@@ -903,22 +1004,22 @@ mod tests {
             h: 1080.0,
         };
         let rects = [MAIN, right];
-        assert!(at_top_edge((100.0, 0.0), &rects));
-        assert!(at_top_edge((2000.0, 0.0), &rects));
+        assert!(at_edge((100.0, 0.0), &rects, &cfg(LineSide::Top)));
+        assert!(at_edge((2000.0, 0.0), &rects, &cfg(LineSide::Top)));
         // 只有最顶端那一像素算，菜单栏其他位置不算
-        assert!(at_top_edge((2000.0, 1.0), &rects));
-        assert!(!at_top_edge((2000.0, 2.0), &rects));
+        assert!(at_edge((2000.0, 1.0), &rects, &cfg(LineSide::Top)));
+        assert!(!at_edge((2000.0, 2.0), &rects, &cfg(LineSide::Top)));
     }
 
     #[test]
     fn button_down_opens_drag() {
         let mut e = Edge::default();
         assert_eq!(
-            e.step((100.0, 0.0), &[MAIN], 0, true),
+            e.step((100.0, 0.0), &[MAIN], 0, true, &cfg(LineSide::Top)),
             Some(EdgeEvent::Peek)
         );
         assert_eq!(
-            e.step((100.0, 0.0), &[MAIN], 200, true),
+            e.step((100.0, 0.0), &[MAIN], 200, true, &cfg(LineSide::Top)),
             Some(EdgeEvent::Open(How::Drag))
         );
     }
@@ -932,9 +1033,9 @@ mod tests {
             w: 1440.0,
             h: 300.0,
         };
-        assert!(pointer_inside((100.0, 0.0), win, &[MAIN]));
-        assert!(pointer_inside((100.0, 324.0), win, &[MAIN]));
-        assert!(!pointer_inside((100.0, 325.0), win, &[MAIN]));
+        assert!(pointer_inside((100.0, 0.0), win, &[MAIN], LineSide::Top));
+        assert!(pointer_inside((100.0, 324.0), win, &[MAIN], LineSide::Top));
+        assert!(!pointer_inside((100.0, 325.0), win, &[MAIN], LineSide::Top));
         // 副屏在右边：窗口横向之外不算
         let right = Rect {
             x: 1440.0,
@@ -942,15 +1043,110 @@ mod tests {
             w: 1920.0,
             h: 1080.0,
         };
-        assert!(!pointer_inside((1500.0, 0.0), win, &[MAIN, right]));
+        assert!(!pointer_inside(
+            (1500.0, 0.0),
+            win,
+            &[MAIN, right],
+            LineSide::Top
+        ));
         // 找不到所在屏时只算窗口本身
-        assert!(!pointer_inside((100.0, 10.0), win, &[]));
-        assert!(pointer_inside((100.0, 30.0), win, &[]));
+        assert!(!pointer_inside((100.0, 10.0), win, &[], LineSide::Top));
+        assert!(pointer_inside((100.0, 30.0), win, &[], LineSide::Top));
     }
 
     #[test]
     fn off_screen_cursor_is_not_top() {
-        assert!(!at_top_edge((100.0, 0.0), &[]));
-        assert!(!at_top_edge((-5.0, 0.0), &[MAIN]));
+        assert!(!at_edge((100.0, 0.0), &[], &cfg(LineSide::Top)));
+        assert!(!at_edge((-5.0, 0.0), &[MAIN], &cfg(LineSide::Top)));
+    }
+
+    #[test]
+    fn side_edges_only_on_outer_borders() {
+        let r = [rect(0., 0., 1440., 900.), rect(1440., 100., 1920., 1080.)];
+        assert!(at_edge((0., 450.), &r, &cfg(LineSide::Left)));
+        assert!(!at_edge((0., 20.), &r, &cfg(LineSide::Left))); // 上角 40 px 内
+        assert!(!at_edge((0., 880.), &r, &cfg(LineSide::Left))); // 下角 40 px 内
+        assert!(!at_edge((1439.5, 450.), &r, &cfg(LineSide::Right))); // A 的右边和 B 相接
+        assert!(at_edge((1439.5, 50.), &r, &cfg(LineSide::Right))); // A 右边露在 B 上方的那段
+        assert!(at_edge((3359.5, 600.), &r, &cfg(LineSide::Right)));
+        assert!(!at_edge((1440., 600.), &r, &cfg(LineSide::Left))); // B 的左边和 A 相接
+    }
+
+    #[test]
+    fn dock_on_same_side() {
+        let r = [rect(0., 0., 1440., 900.)];
+        let shown = EdgeCfg {
+            side: LineSide::Left,
+            dock: Some(Dock {
+                rect: rect(0., 250., 70., 400.),
+                side: DockSide::Left,
+                autohide: false,
+            }),
+        };
+        assert!(!at_edge((0., 450.), &r, &shown)); // 程序坞本身
+        assert!(at_edge((0., 120.), &r, &shown)); // 程序坞上方露出的屏幕边
+        let full = EdgeCfg {
+            dock: Some(Dock {
+                rect: rect(0., 0., 70., 900.),
+                side: DockSide::Left,
+                autohide: false,
+            }),
+            ..shown
+        };
+        assert!(!at_edge((0., 120.), &r, &full));
+    }
+
+    #[test]
+    fn dock_on_other_side_is_ignored() {
+        let r = [rect(0., 0., 1440., 900.)];
+        let c = EdgeCfg {
+            side: LineSide::Left,
+            dock: Some(Dock {
+                rect: rect(0., 250., 70., 400.),
+                side: DockSide::Bottom,
+                autohide: false,
+            }),
+        };
+        assert!(at_edge((0., 450.), &r, &c));
+    }
+
+    #[test]
+    fn dock_autohide_needs_longer_dwell_and_no_fling() {
+        let r = [rect(0., 0., 1440., 900.)];
+        let c = EdgeCfg {
+            side: LineSide::Left,
+            dock: Some(Dock {
+                rect: rect(0., 250., 70., 400.),
+                side: DockSide::Left,
+                autohide: true,
+            }),
+        };
+        let mut e = Edge::default();
+        assert_eq!(e.step((200., 450.), &r, 0, false, &c), None);
+        assert_eq!(e.step((0., 450.), &r, 16, false, &c), Some(EdgeEvent::Peek)); // 甩过去也只露绳子
+        assert_eq!(e.step((0., 450.), &r, 316, false, &c), None);
+        assert_eq!(
+            e.step((0., 450.), &r, 420, false, &c),
+            Some(EdgeEvent::Open(How::Mouse))
+        );
+    }
+
+    #[test]
+    fn fling_follows_side_axis() {
+        let r = [rect(0., 0., 1440., 900.)];
+        let mut e = Edge::default();
+        e.step((1300., 450.), &r, 0, false, &cfg(LineSide::Right));
+        assert_eq!(
+            e.step((1439.5, 450.), &r, 16, false, &cfg(LineSide::Right)),
+            Some(EdgeEvent::Open(How::Mouse))
+        );
+    }
+
+    #[test]
+    fn pointer_inside_extends_to_side_edge() {
+        let r = [rect(0., 0., 1440., 900.)];
+        let win = rect(20., 25., 200., 875.);
+        assert!(pointer_inside((5., 400.), win, &r, LineSide::Left));
+        assert!(!pointer_inside((5., 400.), win, &r, LineSide::Top));
     }
 }
