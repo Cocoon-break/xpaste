@@ -56,7 +56,11 @@ export interface Settings {
   translateHotkey: string;
   /** 把最近复制或面板选中的记录挂上晾衣绳的全局快捷键；'' 表示不启用 */
   lineHotkey: string;
+  /** 晾衣绳样式，各项是选项键 */
+  lineStyle: LineStyle;
 }
+
+export interface LineStyle { rope: string; thick: string; peg: string; paper: string; edge: string }
 
 export interface PlatformInfo {
   os: 'macos' | 'windows';

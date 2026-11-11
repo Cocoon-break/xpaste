@@ -8,7 +8,7 @@ use serde::Serialize;
 use tauri::ipc::{InvokeBody, Request};
 use tauri::{AppHandle, Manager, State};
 use xpaste_core::detect::{VIDEO_EXTS, is_image_file};
-use xpaste_core::{Kind, RecordDetail};
+use xpaste_core::{Kind, LineStyle, RecordDetail};
 use xpaste_pro::{Line, LineError, NewNote, Note, Pro};
 
 use crate::assets::asset_url;
@@ -46,6 +46,8 @@ pub struct LineView {
     pub hung: Vec<i64>,
     /// 便签快捷键的显示标签（如 `⌥ + Shift + N`），没启用为空串；空绳子的提示用它
     pub hotkey: String,
+    /// 生效的样式：试用结束后一律是默认样式
+    pub style: LineStyle,
 }
 
 #[derive(Debug, Serialize)]
@@ -183,16 +185,30 @@ fn dto(line: &Line, note: Note) -> NoteDto {
     NoteDto { note, image_url }
 }
 
+/// 试用结束后不再按所选样式画，回到默认样式；所选的仍留在设置里，激活后恢复
+pub fn effective_style(pro: &Pro, chosen: &LineStyle) -> LineStyle {
+    match pro {
+        Pro::Expired => LineStyle::default(),
+        _ => chosen.clone(),
+    }
+}
+
 pub fn view(state: &AppState) -> LineView {
     // 先取设置再锁 line，两把锁不同时持有
-    let hotkey = match state.settings().line_hotkey.as_str() {
-        "" => String::new(),
-        k => crate::hotkey::label(k),
+    let (hotkey, chosen) = {
+        let s = state.settings();
+        let hotkey = match s.line_hotkey.as_str() {
+            "" => String::new(),
+            k => crate::hotkey::label(k),
+        };
+        (hotkey, s.line_style.clone())
     };
     let line = state.line();
+    let pro = line.status(now());
     LineView {
         available: crate::line::enabled(),
-        pro: line.status(now()),
+        style: effective_style(&pro, &chosen),
+        pro,
         notes: line.notes().iter().map(|n| dto(&line, n.clone())).collect(),
         hung: line.hung_records(),
         hotkey,
@@ -888,6 +904,16 @@ mod tests {
             let e = AppError::from(state.line().activate("XP1-a.b", 0).err().unwrap());
             assert_eq!(e.to_string(), "这个版本不含晾衣绳");
         }
+    }
+
+    #[test]
+    fn expired_trial_uses_default_style() {
+        let mine = LineStyle {
+            rope: "lights".into(),
+            ..LineStyle::default()
+        };
+        assert_eq!(effective_style(&Pro::Expired, &mine), LineStyle::default());
+        assert_eq!(effective_style(&Pro::Trial { days_left: 3 }, &mine), mine);
     }
 
     #[test]
