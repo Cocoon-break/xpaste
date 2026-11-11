@@ -646,6 +646,22 @@ dialog > form { display: contents; }
 .tr-pick b { display: block; font-weight: 500; font-size: 13px; }
 .tr-pick small { display: block; font-size: 12px; color: var(--faint); }
 @media (hover: hover) and (pointer: fine) { .tr-pick label:not(:has(:checked)):hover { border-color: var(--muted); } }
+/* Pro 标签的晾衣绳位置：三个带小示意图的单选格子（原生单选框藏起来，方向键照常切换）；总开关关着时这一项和样式选择器变淡，仍可改 */
+.side-pick { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.side-pick label {
+  position: relative; display: grid; justify-items: center; gap: 5px; padding: 8px 4px 6px; border-radius: 8px; cursor: pointer;
+  background: var(--glass-2); color: var(--muted); font-size: 11.5px; box-shadow: inset 0 0 0 1px var(--line); transition: background-color .13s, color .13s, box-shadow .13s;
+}
+.side-pick label:has(:checked) { background: var(--sel); color: var(--fg); box-shadow: inset 0 0 0 1.5px var(--beam); }
+.side-pick label:has(:focus-visible) { outline: 2px solid var(--beam); outline-offset: 1px; }
+@media (hover: hover) and (pointer: fine) { .side-pick label:not(:has(:checked)):hover { background: var(--hover); color: var(--fg); } }
+.field .side-pick input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.side-pick svg { width: 64px; height: 40px; fill: none; stroke: currentColor; stroke-width: 2; }
+.side-pick svg .scr { stroke: var(--line-2); stroke-width: 1.5; }
+.side-pick svg rect:not(.scr) { fill: currentColor; stroke: none; opacity: .55; }
+.side-pick label:has(:checked) svg path { stroke: var(--beam); }
+.line-off { opacity: .4; }
+@media (prefers-reduced-motion: reduce) { .side-pick label { transition: none; } }
 /* 设置里带小标题的一组（“截图”标签的截图 / 长截图，“翻译”标签的两种方式）：上面一道分隔线；标签内第一组不画，免得和标签栏的分隔线叠成两道 */
 .st-group { display: grid; gap: 12px; padding-top: 16px; border-top: 1px solid var(--line); }
 .st-panes .dlg-body > .st-group:first-child { padding-top: 0; border-top: 0; }
