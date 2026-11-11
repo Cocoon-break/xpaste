@@ -47,6 +47,10 @@ impl Line {
         Err(LineError::Unavailable)
     }
 
+    pub fn set_cover(&mut self, _record_id: i64, _src: &Path) -> Result<usize, LineError> {
+        Err(LineError::Unavailable)
+    }
+
     pub fn remind(&mut self, _id: u64, _at: Option<i64>) -> Result<Note, LineError> {
         Err(LineError::Unavailable)
     }

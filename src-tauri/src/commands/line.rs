@@ -2,6 +2,7 @@
 //! 日志只记便签 id、记录 id、类型和字节数，不记正文、标题、备注和路径。
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 
 use serde::Serialize;
@@ -21,6 +22,12 @@ use crate::state::AppState;
 /// 便签正文的上限，记录正文超出时截断
 const MAX_BODY: usize = 64 * 1024;
 
+/// 原图复制进 `line/` 的上限，和剪切板采集位图的上限一样
+const MAX_IMAGE: u64 = 50 * 1024 * 1024;
+
+/// 记录正文超过 64 KB、只挂了前面一段时的提示
+pub const TRUNCATED_HINT: &str = "内容太长，只挂了前 64 KB";
+
 /// 便签与试用都按 Unix 秒计时
 fn now() -> i64 {
     now_ms() / 1000
@@ -33,6 +40,9 @@ pub struct NoteDto {
     #[serde(flatten)]
     pub note: Note,
     pub image_url: Option<String>,
+    /// 挂的时候记录正文超过 64 KB、只挂了前面一段：只出现在挂上的那次结果里，页面据此提示
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -116,6 +126,12 @@ pub fn note_from_detail(d: &RecordDetail, source: Option<String>) -> NewNote {
     n
 }
 
+/// 文字、代码、链接记录的正文挂不全：超过 64 KB，或者详情里的正文本身已截断
+fn clipped(d: &RecordDetail) -> bool {
+    matches!(d.summary.kind, Kind::Text | Kind::Code | Kind::Link)
+        && (d.truncated || d.text.as_deref().is_some_and(|t| t.len() > MAX_BODY))
+}
+
 /// 不超过 64 KB 的前缀，截在字符边界
 fn clip(t: &str) -> String {
     let mut end = MAX_BODY.min(t.len());
@@ -156,10 +172,19 @@ pub fn note_from_path(p: &Path, meta_len: u64) -> NewNote {
     }
 }
 
-/// 复制方案：文字类复制便签正文；图片、文件、视频原记录还在就按记录复制，否则图片复制图片，文件和视频复制路径
-pub fn copy_plan(note: &Note, record_alive: bool, image: Option<PathBuf>) -> CopyPlan {
+/// 复制方案：文字类复制便签正文，挂的时候被截断、之后没改过的复制原记录全文（`record_text` 是原记录还在时的正文）；
+/// 图片、文件、视频原记录还在就按记录复制，否则图片复制图片，文件和视频复制路径
+pub fn copy_plan(
+    note: &Note,
+    record_alive: bool,
+    image: Option<PathBuf>,
+    record_text: Option<String>,
+) -> CopyPlan {
     if matches!(note.kind, Kind::Text | Kind::Code | Kind::Link) {
-        return CopyPlan::Text(note.body.clone());
+        return match record_text {
+            Some(t) if t.len() > note.body.len() && clip(&t) == note.body => CopyPlan::Text(t),
+            _ => CopyPlan::Text(note.body.clone()),
+        };
     }
     if let (true, Some(id)) = (record_alive, note.record_id) {
         return CopyPlan::Record(id);
@@ -189,7 +214,11 @@ fn blank_note() -> NewNote {
 
 fn dto(line: &Line, note: Note) -> NoteDto {
     let image_url = line.image_path(&note).map(|p| asset_url(&p));
-    NoteDto { note, image_url }
+    NoteDto {
+        note,
+        image_url,
+        truncated: false,
+    }
 }
 
 /// 试用结束后不再按所选样式画，回到默认样式；所选的仍留在设置里，激活后恢复
@@ -245,22 +274,78 @@ fn find(line: &Line, id: u64) -> Result<Note, AppError> {
         .ok_or_else(|| LineError::NotFound.into())
 }
 
-/// 原图不在了就挂不了图片；视频封面还没生成时先不带封面
+/// 原图不在了就挂不了图片，超过 50 MB 不挂；视频封面还没生成时先不带封面，生成后由 `cover_ready` 补上
 fn check_source(n: &mut NewNote) -> Result<(), AppError> {
-    if n.image_from.as_ref().is_some_and(|p| !p.exists()) {
-        if n.kind == Kind::Image {
-            return Err(AppError::FileMissing);
+    let Some(src) = &n.image_from else {
+        return Ok(());
+    };
+    match std::fs::metadata(src) {
+        Ok(m) if m.len() > MAX_IMAGE => Err(LineError::TooLarge.into()),
+        Ok(_) => Ok(()),
+        Err(_) if n.kind == Kind::Image => Err(AppError::Line("原图片找不到了，没挂上")),
+        Err(_) => {
+            n.image_from = None;
+            Ok(())
         }
-        n.image_from = None;
     }
-    Ok(())
+}
+
+/// 原图先在锁外复制进 `line/` 的临时名，锁里只改名、写 line.json：大图不占着锁，别的便签命令和提醒线程不用等
+fn stage(data_dir: &Path, src: &Path) -> Result<PathBuf, AppError> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let io = |e: std::io::Error| AppError::from(LineError::Io(e.kind().to_string()));
+    let ext = src
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
+    let dir = data_dir.join("line");
+    std::fs::create_dir_all(&dir).map_err(io)?;
+    let to = dir.join(format!(
+        ".stage-{}{ext}",
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    if let Err(e) = std::fs::copy(src, &to) {
+        let _ = std::fs::remove_file(&to);
+        return Err(io(e));
+    }
+    Ok(to)
 }
 
 fn add(state: &AppState, mut n: NewNote, at: Option<usize>) -> Result<NoteDto, AppError> {
     check_source(&mut n)?;
-    let mut line = state.line();
-    let note = line.add(n, at, now())?;
-    Ok(dto(&line, note))
+    // 不带晾衣绳的构建不碰磁盘
+    let staged = match &n.image_from {
+        Some(src) if crate::line::enabled() => Some(stage(&state.data_dir, src)?),
+        _ => None,
+    };
+    if let Some(s) = &staged {
+        n.image_from = Some(s.clone());
+    }
+    let r = {
+        let mut line = state.line();
+        line.add(n, at, now()).map(|note| dto(&line, note))
+    };
+    // 挂上了临时文件已改名为正式的，这里只清没挂上时留下的
+    if let Some(s) = staged {
+        let _ = std::fs::remove_file(s);
+    }
+    Ok(r?)
+}
+
+/// 补全线程生成视频封面后调用：同一条记录挂着、还没有封面的视频便签补上，有补上的就广播视图
+pub fn cover_ready(app: &AppHandle, record_id: i64, thumb: &Path) {
+    if !crate::line::enabled() {
+        return;
+    }
+    let r = app.state::<AppState>().line().set_cover(record_id, thumb);
+    match r {
+        Ok(0) => {}
+        Ok(n) => {
+            log::info!("便签 补封面 记录={record_id} n={n}");
+            changed(app);
+        }
+        Err(e) => log::warn!("便签补封面失败 记录={record_id}：{e:?}"),
+    }
 }
 
 #[tauri::command]
@@ -296,11 +381,13 @@ pub fn hang_record(
     }
     .ok_or_else(|| AppError::Invalid("记录不存在".into()))?;
     let source = d.summary.app.as_ref().map(|a| a.name.clone());
-    let note = add(state, note_from_detail(&d, source), at)?;
+    let mut note = add(state, note_from_detail(&d, source), at)?;
+    note.truncated = clipped(&d);
     log::info!(
-        "便签 挂上 id={} 记录={id} kind={:?}",
+        "便签 挂上 id={} 记录={id} kind={:?} 截断={}",
         note.note.id,
-        note.note.kind
+        note.note.kind,
+        note.truncated
     );
     changed(app);
     Ok(note)
@@ -414,6 +501,14 @@ pub async fn line_paste_image(
     check_png(png)?;
     let note = {
         let mut line = state.line();
+        // 页面先拦着，这里兜底：来自记录的便签内容跟着记录走
+        if line
+            .notes()
+            .iter()
+            .any(|n| n.id == id && n.record_id.is_some())
+        {
+            return Err(AppError::Line("来自记录的便签不能换图片"));
+        }
         let n = line.set_image(id, png, now())?;
         dto(&line, n)
     };
@@ -574,15 +669,21 @@ pub async fn line_copy(
         let image = line.image_path(&n);
         (n, image)
     };
+    let texty = matches!(note.kind, Kind::Text | Kind::Code | Kind::Link);
     // 原记录还在、文件也都在才按记录复制
     let flavors = match note.record_id {
-        Some(rid) if !matches!(note.kind, Kind::Text | Kind::Code | Kind::Link) => {
+        Some(rid) if !texty => {
             let alive = state.store().live_summary(rid)?.is_some();
             alive.then(|| precheck(&state, rid).ok()).flatten()
         }
         _ => None,
     };
-    let plan = copy_plan(&note, flavors.is_some(), image);
+    // 截断过的正文离上限不到一个字符；短的不用读原记录
+    let record_text = match note.record_id {
+        Some(rid) if texty && note.body.len() + 4 > MAX_BODY => state.store().text(rid)?,
+        _ => None,
+    };
+    let plan = copy_plan(&note, flavors.is_some(), image, record_text);
     let how = match plan {
         CopyPlan::Text(t) => {
             write_text_plain(&state, &t)?;
@@ -593,14 +694,16 @@ pub async fn line_copy(
             write_then_paste(&app, &state, &flavors, &[rid], false).await?;
             CopyNote::Copied
         }
-        CopyPlan::Image(p) => {
-            let png = png_bytes(&p, id)?;
-            write_marked(&state, || {
-                xpaste_platform::write(&xpaste_platform::png_flavors(png))
-            })?;
-            CopyNote::Copied
-        }
-        CopyPlan::Paths(s) if s.is_empty() => return Err(AppError::FileMissing),
+        CopyPlan::Image(p) => match png_bytes(&p, id) {
+            Some(png) => {
+                write_marked(&state, || {
+                    xpaste_platform::write(&xpaste_platform::png_flavors(png))
+                })?;
+                CopyNote::Copied
+            }
+            None => copy_image_file(&state, &note, &p)?,
+        },
+        CopyPlan::Paths(s) if s.is_empty() => return Err(AppError::Line(GONE)),
         CopyPlan::Paths(s) => {
             write_text_plain(&state, &s)?;
             CopyNote::CopiedPath
@@ -610,17 +713,38 @@ pub async fn line_copy(
     Ok(how)
 }
 
-/// 便签里的图片转成 PNG 字节写剪切板（原图可能是 JPEG、GIF 等）
-fn png_bytes(p: &Path, id: u64) -> Result<Vec<u8>, AppError> {
-    let img = image::open(p).map_err(|e| {
-        log::warn!("便签图片读取失败 id={id}");
-        log::debug!("图片错误：{e}");
-        AppError::FileMissing
-    })?;
+const GONE: &str = "原文件已移动或删除";
+
+/// 便签里的图片转成 PNG 字节写剪切板（原图可能是 JPEG、GIF 等）；读不出、解不了（HEIC、SVG 等）为 None
+fn png_bytes(p: &Path, id: u64) -> Option<Vec<u8>> {
+    let img = image::open(p)
+        .map_err(|e| {
+            log::info!("便签图片解不了，改复制文件 id={id}");
+            log::debug!("图片错误：{e}");
+        })
+        .ok()?;
     let mut out = std::io::Cursor::new(Vec::new());
-    img.write_to(&mut out, image::ImageFormat::Png)
-        .map_err(|_| AppError::ClipboardWrite)?;
-    Ok(out.into_inner())
+    img.write_to(&mut out, image::ImageFormat::Png).ok()?;
+    Some(out.into_inner())
+}
+
+/// 图片解不了时复制文件本身，和面板复制文件一样写文件引用：先用源文件（名字是用户的），不在了用 `line/` 里那份；
+/// 这个平台生成不了文件引用时复制路径文字
+fn copy_image_file(state: &AppState, note: &Note, kept: &Path) -> Result<CopyNote, AppError> {
+    let file = note
+        .paths
+        .first()
+        .map(Path::new)
+        .filter(|p| p.is_file())
+        .or_else(|| Some(kept).filter(|p| p.is_file()))
+        .ok_or(AppError::Line(GONE))?;
+    let flavors = xpaste_platform::file_flavors(file);
+    if flavors.is_empty() {
+        write_text_plain(state, &file.to_string_lossy())?;
+        return Ok(CopyNote::CopiedPath);
+    }
+    write_marked(state, || xpaste_platform::write(&flavors))?;
+    Ok(CopyNote::Copied)
 }
 
 /// 链接用默认浏览器打开；文件、视频在访达 / 资源管理器中显示
@@ -841,6 +965,67 @@ mod tests {
         let n = note_from_detail(&d, None);
         assert!(n.body.len() <= 64 * 1024);
         assert!(n.body.chars().all(|c| c == '字'));
+        assert!(clipped(&d));
+        // 正好 64 KB 不算截断；详情里的正文本身截断过也算
+        d.text = Some("a".repeat(MAX_BODY));
+        assert!(!clipped(&d));
+        d.truncated = true;
+        assert!(clipped(&d));
+        // 图片、文件不看正文
+        let mut f = detail(Kind::File, "a.md");
+        f.text = Some("a".repeat(MAX_BODY + 1));
+        assert!(!clipped(&f));
+    }
+
+    #[test]
+    fn copy_plan_truncated_text_copies_record() {
+        let full = "字".repeat(30_000);
+        let n = note(Kind::Text, &clip(&full));
+        assert!(matches!(
+            copy_plan(&n, false, None, Some(full.clone())),
+            CopyPlan::Text(t) if t == full
+        ));
+        // 截断后改过：复制改过的正文
+        let mut edited = n.clone();
+        edited.body.push('改');
+        assert!(matches!(
+            copy_plan(&edited, false, None, Some(full.clone())),
+            CopyPlan::Text(t) if t == edited.body
+        ));
+        // 原记录没了
+        assert!(matches!(
+            copy_plan(&n, false, None, None),
+            CopyPlan::Text(t) if t == n.body
+        ));
+    }
+
+    #[test]
+    fn source_checks_size_and_existence() {
+        let dir = std::env::temp_dir().join(format!("xpaste-line-src-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let big = dir.join("big.tiff");
+        std::fs::File::create(&big)
+            .unwrap()
+            .set_len(MAX_IMAGE + 1)
+            .unwrap();
+        let e = check_source(&mut note_from_path(&big, 0)).unwrap_err();
+        assert_eq!(e.to_string(), "内容太大，便签里放不下");
+        let gone = dir.join("gone.png");
+        let e = check_source(&mut note_from_path(&gone, 0)).unwrap_err();
+        assert_eq!(e.to_string(), "原图片找不到了，没挂上");
+        // 视频封面还没生成：先不带封面
+        let mut v = note_from_path(&dir.join("a.mov"), 0);
+        v.image_from = Some(dir.join("thumb.png"));
+        check_source(&mut v).unwrap();
+        assert!(v.image_from.is_none());
+        // 暂存到 line/ 的临时名，扩展名保留，原文件不动
+        let ok = dir.join("ok.HEIC");
+        std::fs::write(&ok, b"x").unwrap();
+        let s = stage(&dir, &ok).unwrap();
+        assert_eq!(s.parent(), Some(dir.join("line").as_path()));
+        assert_eq!(s.extension().unwrap(), "HEIC");
+        assert!(s.is_file() && ok.is_file());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -916,12 +1101,12 @@ mod tests {
         // 改过的文字便签复制便签里的正文，不管原记录在不在
         for alive in [true, false] {
             assert!(matches!(
-                copy_plan(&note(Kind::Text, "改过的"), alive, None),
+                copy_plan(&note(Kind::Text, "改过的"), alive, None, None),
                 CopyPlan::Text(t) if t == "改过的"
             ));
         }
         assert!(matches!(
-            copy_plan(&note(Kind::Link, "https://a.b"), true, None),
+            copy_plan(&note(Kind::Link, "https://a.b"), true, None, None),
             CopyPlan::Text(t) if t == "https://a.b"
         ));
     }
@@ -931,18 +1116,21 @@ mod tests {
         let img = PathBuf::from("/data/line/1.png");
         let n = note(Kind::Image, "截图");
         assert!(matches!(
-            copy_plan(&n, true, Some(img.clone())),
+            copy_plan(&n, true, Some(img.clone()), None),
             CopyPlan::Record(7)
         ));
         assert!(matches!(
-            copy_plan(&n, false, Some(img.clone())),
+            copy_plan(&n, false, Some(img.clone()), None),
             CopyPlan::Image(p) if p == img
         ));
         let mut f = note(Kind::File, "a 等 2 个文件");
         f.paths = vec!["a".into(), "b".into()];
-        assert!(matches!(copy_plan(&f, false, None), CopyPlan::Paths(s) if s == "a\nb"));
+        assert!(matches!(copy_plan(&f, false, None, None), CopyPlan::Paths(s) if s == "a\nb"));
         f.kind = Kind::Video;
-        assert!(matches!(copy_plan(&f, true, None), CopyPlan::Record(7)));
+        assert!(matches!(
+            copy_plan(&f, true, None, None),
+            CopyPlan::Record(7)
+        ));
     }
 
     #[test]
@@ -1040,6 +1228,7 @@ mod tests {
             v(LineError::Full.into())["message"],
             "绳子挂满了（12 张），先摘下几张"
         );
+        assert_eq!(v(LineError::Stale.into())["message"], "便签有变动，已刷新");
         assert_eq!(
             v(LicenseError::OldMajor(1).into())["message"],
             "这个授权码只适用于 1.x"
