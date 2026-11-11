@@ -44,12 +44,12 @@ pub enum AppError {
     Tauri(#[from] tauri::Error),
     #[error(transparent)]
     Opener(#[from] tauri_plugin_opener::Error),
-    /// 晾衣绳与授权码的错误，消息见 `From<LineError>` / `From<LicenseError>`
+    /// 晾衣绳的错误，消息见 `From<LineError>`
     #[error("{0}")]
     Line(&'static str),
-    /// 授权码只适用于更早的大版本，带授权码的 major
-    #[error("这个授权码只适用于 {0}.x")]
-    LicenseOldMajor(u32),
+    /// 授权码的错误，文案见 `LicenseError::message`（存着的授权码失效时也用它说明原因）
+    #[error("{0}")]
+    License(String),
     /// 试用已结束：面板据 `kind` 在提示条上带“输入授权码”按钮
     #[error("试用已结束，挂新便签要 xPaste Pro")]
     LineExpired,
@@ -76,7 +76,7 @@ impl AppError {
             Self::TranslatePack { .. } => "translatePack",
             Self::TranslateOs => "translateOs",
             Self::Translate(_) => "translate",
-            Self::Line(_) | Self::LicenseOldMajor(_) => "line",
+            Self::Line(_) | Self::License(_) => "line",
             Self::LineExpired => "lineExpired",
             Self::LineDuplicate(_) => "duplicate",
             Self::Core(CoreError::InvalidSettings(_)) => "invalidSettings",
@@ -110,6 +110,7 @@ impl From<LineError> for AppError {
             LineError::Duplicate(id) => Self::LineDuplicate(id),
             LineError::TooLarge => Self::Line("内容太大，便签里放不下"),
             LineError::NotFound => Self::Line("这张便签已经摘下了"),
+            LineError::Stale => Self::Line("便签有变动，已刷新"),
             // 只带 io 错误类型，不含路径
             LineError::Io(kind) => {
                 log::warn!("便签保存失败：{kind}");
@@ -121,17 +122,10 @@ impl From<LineError> for AppError {
 
 impl From<LicenseError> for AppError {
     fn from(e: LicenseError) -> Self {
-        match e {
-            LicenseError::Unavailable => Self::Line("这个版本不含晾衣绳"),
-            LicenseError::Format => Self::Line("授权码格式不对"),
-            LicenseError::Invalid => Self::Line("授权码无效"),
-            LicenseError::Revoked => Self::Line("这个授权码已停用"),
-            LicenseError::OldMajor(major) => Self::LicenseOldMajor(major),
-            LicenseError::Io(kind) => {
-                log::warn!("授权码保存失败：{kind}");
-                Self::Line("授权码保存失败，请重试")
-            }
+        if let LicenseError::Io(kind) = &e {
+            log::warn!("授权码保存失败：{kind}");
         }
+        Self::License(e.message())
     }
 }
 

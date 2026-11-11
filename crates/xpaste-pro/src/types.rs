@@ -61,9 +61,17 @@ pub struct NewNote {
 )]
 pub enum Pro {
     Unavailable,
-    Trial { days_left: u32 },
-    Licensed { email: String, major: u32 },
-    Expired,
+    Trial {
+        days_left: u32,
+    },
+    Licensed {
+        email: String,
+        major: u32,
+    },
+    /// 试用已结束；存着的授权码验不过时 `reason` 是原因（文案同激活报错），没有授权码为 None
+    Expired {
+        reason: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,6 +83,8 @@ pub enum LineError {
     Duplicate(u64),
     TooLarge,
     NotFound,
+    /// 排序、摆放带来的 id 集合和现有便签对不上：页面拿的是旧状态
+    Stale,
     Io(String),
 }
 
@@ -88,4 +98,18 @@ pub enum LicenseError {
     OldMajor(u32),
     /// 授权码没能写进本机，只带 io 错误信息，不含授权码和邮箱
     Io(String),
+}
+
+impl LicenseError {
+    /// 给用户看的文案；激活报错和存着的授权码失效共用一套
+    pub fn message(&self) -> String {
+        match self {
+            Self::Unavailable => "这个版本不含晾衣绳".into(),
+            Self::Format => "授权码格式不对".into(),
+            Self::Invalid => "授权码无效".into(),
+            Self::Revoked => "这个授权码已停用".into(),
+            Self::OldMajor(major) => format!("这个授权码只适用于 {major}.x"),
+            Self::Io(_) => "授权码保存失败，请重试".into(),
+        }
+    }
 }
