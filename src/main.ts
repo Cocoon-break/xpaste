@@ -21,9 +21,9 @@ import {
   onShotNeedPermission,
   onTranslateDelta,
 } from './api/events';
-import { lineDragDrop, lineDragHover, lineHangFromPanel, lineHide, onLineChanged, onLineHangSelected, proActivate, proStatus, type LineView } from './api/line';
+import { lineDragDrop, lineDragHover, lineHangFromPanel, lineHide, lineSideHint, onLineChanged, onLineHangSelected, proActivate, proStatus, type LineView } from './api/line';
 import { proLine } from './pro-status';
-import type { AppError, Appearance, Engines, FileEntry, LineStyle, PanelStyle, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
+import type { AppError, Appearance, Engines, FileEntry, LineSide, LineStyle, PanelStyle, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
 import { appCounts, bestApp, freshSug, fromApp, type Sug } from './source';
 import { COMPACT, compactGroups, compactHeadH, rowParts } from './compact';
 import { copyToast, needsAccessibility } from './copy-status';
@@ -222,7 +222,7 @@ const metaLine = (r: RecordSummary) => {
   return parts.join(' · ');
 };
 
-const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id === S.newId, hung = S.line.hung.includes(r.id)) => `
+const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id === S.newId, hung = lineOn() && S.line.hung.includes(r.id)) => `
     <div class="item${isNew ? ' is-new' : ''}${S.removing.has(r.id) ? ' is-removing' : ''}${S.multi.has(r.id) ? ' is-multi' : ''}${stagger && i < 12 ? ' stg' : ''}" data-id="${r.id}" style="--i:${i}">
       <div class="row" role="option" id="opt-${r.id}" aria-selected="false" aria-posinset="${i + 1}" aria-label="${esc(r.title)}，${isSnip(r) ? '片段，' : ''}${LABEL[r.kind]}${S.snippets.has(r.id) ? `，识别文字中含“${esc(S.snippets.get(r.id))}”` : ''}${hung ? '，已挂在晾衣绳上' : ''}" data-type="${typeOf(r)}">
         <div class="row-in">
@@ -236,7 +236,7 @@ const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id ===
             <span class="qa" aria-hidden="true">
               ${isSnip(r) ? `<button type="button" tabindex="-1" data-qa="edit" title="编辑片段">${svg('pencil')}</button>`
                 : `<button type="button" tabindex="-1" data-qa="pin" title="${r.pinned ? '取消置顶' : '置顶'}">${svg(r.pinned ? 'pinFill' : 'pin')}</button>`}
-              ${S.line.available ? `<button type="button" tabindex="-1" data-qa="hang" title="挂到晾衣绳">${svg('hang')}</button>` : ''}
+              ${lineOn() ? `<button type="button" tabindex="-1" data-qa="hang" title="挂到晾衣绳">${svg('hang')}</button>` : ''}
               <button type="button" tabindex="-1" data-qa="copy" title="${copyVerb(S.canPaste)}">${svg('copy')}</button>
             </span>
           </div>
@@ -1953,6 +1953,36 @@ function paintLineStyle() {
     el.hidden = false;
   }, (e: Error) => void info(`载入晾衣绳样式选择器失败：${e.message}`));
 }
+// 晾衣绳总开关与位置：草稿只在保存时写回，取消丢弃；开关关着时位置和样式两项变淡，仍可改
+const lineOnIn = $<HTMLInputElement>('#lineOn'), lineSideEl = $('#lineSide'), lineSideHintEl = $('#lineSideHint');
+const lineSideIns = [...lineSideEl.querySelectorAll<HTMLInputElement>('input')];
+const LINE_SIDE_HELP: Record<LineSide, string> = { top: '鼠标碰到屏幕顶端放下', left: '鼠标碰到屏幕左侧边缘放下', right: '鼠标碰到屏幕右侧边缘放下' };
+let draftLineEnabled = true, draftLineSide: LineSide = 'top', lineHintSeq = 0;
+function paintLineOn() {
+  lineOnIn.checked = draftLineEnabled;
+  $('#lineOnHelp').textContent = draftLineEnabled ? '鼠标碰到屏幕边缘、按快捷键时放下晾衣绳'
+    : '已关闭：碰边缘不放下，快捷键和面板上的挂钩按钮都不起作用；挂着的便签和提醒都留着，打开后恢复';
+  for (const f of ['#lineSideField', '#lineStyleField']) $(f).classList.toggle('line-off', !draftLineEnabled);
+}
+/** 位置说明下面是程序坞提示：后端按当前屏幕算，为空不显示；连点几下只认最后一次的结果 */
+function paintLineSide() {
+  for (const i of lineSideIns) i.checked = i.value === draftLineSide;
+  $('#lineSideHelp').textContent = LINE_SIDE_HELP[draftLineSide];
+  const seq = ++lineHintSeq;
+  void lineSideHint(draftLineSide).then((t) => {
+    if (seq !== lineHintSeq) return;
+    lineSideHintEl.textContent = t;
+    lineSideHintEl.hidden = !t;
+  }, (e: AppError) => void info(`读取程序坞提示失败 kind=${e.kind}`));
+}
+lineOnIn.addEventListener('change', () => {
+  draftLineEnabled = lineOnIn.checked;
+  paintLineOn();
+});
+lineSideEl.addEventListener('change', (e) => {
+  draftLineSide = (e.target as HTMLInputElement).value as LineSide;
+  paintLineSide();
+});
 // 在输入框里按 Enter 是激活，不是保存设置
 proCodeIn.addEventListener('keydown', (e) => {
   if (e.key !== 'Enter' || e.isComposing) return;
@@ -2362,6 +2392,10 @@ function openSettings() {
   paintProStatus();
   draftLineStyle = st.lineStyle;
   paintLineStyle();
+  draftLineEnabled = st.lineEnabled;
+  paintLineOn();
+  draftLineSide = st.lineSide;
+  if (S.line.available) paintLineSide();
   // 试用可能在面板开着时到期（没有广播），打开设置时重新取一次
   if (S.line.available)
     void proStatus().then((p) => {
@@ -2517,10 +2551,10 @@ async function submitSettings() {
     recHotkey: recKey.pending, recDir: recDir.pending, recSystemAudio: recSystemAudioIn.checked, recMicrophone: recMicIn.checked, recCopy: recCopyIn.checked,
     recQuality: recQualityIn.value, recFps: recFpsIn.value, panelStyle: draftStyle, lineHotkey: lineKey.pending,
   });
-  // 翻译字段和晾衣绳样式不经 SettingsForm；末尾的 / 由后端去掉。engine 没动过就原样写回（可能是空串）
+  // 翻译字段和晾衣绳的样式、开关、位置不经 SettingsForm；末尾的 / 由后端去掉。engine 没动过就原样写回（可能是空串）
   Object.assign(s, {
     translateEngine: trSave(), translateBaseUrl: trBaseIn.value.trim(), translateApiKey: trKeyIn.value, translateModel: trModelIn.value.trim(), translateLang: trLangIn.value,
-    translateHotkey: trKey.pending, lineStyle: draftLineStyle,
+    translateHotkey: trKey.pending, lineStyle: draftLineStyle, lineEnabled: draftLineEnabled, lineSide: draftLineSide,
   });
   saving = true;
   try {
@@ -3243,14 +3277,20 @@ list.addEventListener('contextmenu', (e) => {
   openMenu(id, e.clientX, e.clientY, false);
 });
 
+// 晾衣绳带在这个构建里、且用户开着：行上才有挂钩按钮、已挂刻线，才能拖行去挂
+function lineOn() {
+  return S.line.available && S.line.on;
+}
 // 挂到晾衣绳：绳子放下亮一下；没挂成（重复、挂满、试用结束）的提示在晾衣绳上
 function hangRecord(id: number | null) {
   void lineHangFromPanel(id).catch((err: AppError) => toast(err.message));
 }
-// 把行往上拖出面板顶边：绳子放下，松手挂在落点（落点由晾衣绳页面按 x 算）。
+// 把行拖出面板朝绳子那一侧的边（顶部往上，左右两侧往左、往右）：绳子放下，松手挂在落点（落点由晾衣绳页面算）。
 // 移动超过 4 px 才算拖动，此时才在列表上捕获指针（行会随重绘换掉）；不拖时点击、双击、右键照旧。
-// 指针在顶边之外时每帧最多报一次位置。松手时不在顶边之外不挂；绳子已为这次拖动放下过就让它收起
+// 指针在那条边之外时每帧最多报一次位置。松手时不在边外不挂；绳子已为这次拖动放下过就让它收起
 let lineDrag: { id: number; x: number; y: number; on: boolean; sx: number; sy: number; raf: number; hovered: boolean } | null = null;
+const pastLineEdge = (e: PointerEvent) =>
+  S.line.side === 'left' ? e.clientX < 0 : S.line.side === 'right' ? e.clientX > innerWidth : e.clientY < 0;
 const hoverLine = (d: { id: number; hovered: boolean }, x: number, y: number) => {
   d.hovered = true;
   const r = S.records.get(d.id);
@@ -3260,7 +3300,7 @@ const hoverLine = (d: { id: number; hovered: boolean }, x: number, y: number) =>
 };
 list.addEventListener('pointerdown', (e) => {
   const id = itemOf(e), t = e.target as Element;
-  lineDrag = S.line.available && e.button === 0 && id !== null && t.closest('.row') && !t.closest('[data-qa]')
+  lineDrag = lineOn() && e.button === 0 && id !== null && t.closest('.row') && !t.closest('[data-qa]')
     ? { id, x: e.clientX, y: e.clientY, on: false, sx: 0, sy: 0, raf: 0, hovered: false } : null;
 });
 list.addEventListener('pointermove', (e) => {
@@ -3271,7 +3311,7 @@ list.addEventListener('pointermove', (e) => {
     d.on = true;
     list.setPointerCapture(e.pointerId);
   }
-  if (e.clientY >= 0) return;
+  if (!pastLineEdge(e)) return;
   d.sx = e.screenX;
   d.sy = e.screenY;
   d.raf ||= requestAnimationFrame(() => {
@@ -3279,13 +3319,13 @@ list.addEventListener('pointermove', (e) => {
     if (lineDrag === d) void hoverLine(d, d.sx, d.sy);
   });
 });
-// 在文档上收尾：指针在列表外松开（没捕获时）也要清掉。同一帧里刚出顶边就松手时先补一次位置，绳子才会放下
+// 在文档上收尾：指针在列表外松开（没捕获时）也要清掉。同一帧里刚出边就松手时先补一次位置，绳子才会放下
 function endLineDrag(e: PointerEvent) {
   const d = lineDrag;
   lineDrag = null;
   if (!d) return;
   cancelAnimationFrame(d.raf);
-  if (e.type === 'pointerup' && d.on && e.clientY < 0) {
+  if (e.type === 'pointerup' && d.on && pastLineEdge(e)) {
     void (d.hovered ? Promise.resolve() : hoverLine(d, e.screenX, e.screenY))
       .then(() => lineDragDrop(d.id, e.screenX, e.screenY))
       .catch((err: AppError) => toast(err.message));
