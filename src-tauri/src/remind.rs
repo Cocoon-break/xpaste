@@ -161,6 +161,7 @@ mod tests {
             source: None,
             created_at: 0,
             remind_at: at,
+            side_y: None,
         }
     }
 

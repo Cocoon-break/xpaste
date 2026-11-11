@@ -439,6 +439,30 @@ pub fn line_reorder(
     Ok(())
 }
 
+/// 高度来自页面：只收有限的非负数
+fn check_places(places: &[(u64, Option<f64>)]) -> Result<(), AppError> {
+    if places
+        .iter()
+        .any(|p| p.1.is_some_and(|y| !y.is_finite() || y < 0.0))
+    {
+        return Err(AppError::Invalid("便签高度不对".into()));
+    }
+    Ok(())
+}
+
+/// 左右两侧拖完：`places` 是新顺序，每张带它在绳子上的高度（None 按默认往下排），一次写入
+#[tauri::command(async)]
+pub fn line_place(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    places: Vec<(u64, Option<f64>)>,
+) -> Result<(), AppError> {
+    check_places(&places)?;
+    state.line().place(&places)?;
+    changed(&app);
+    Ok(())
+}
+
 /// 设（`at` 为 Unix 秒）或取消（None）提醒，过去的时刻马上到期；试用结束后照常能改。成功后叫醒提醒线程重算
 #[tauri::command(async)]
 pub fn line_remind(
@@ -759,6 +783,7 @@ mod tests {
             source: None,
             created_at: 0,
             remind_at: None,
+            side_y: None,
         }
     }
 
@@ -976,6 +1001,17 @@ mod tests {
     #[test]
     fn restore_unknown_id_fails() {
         assert!(matches!(take_removed(u64::MAX), Err(AppError::Invalid(_))));
+    }
+
+    #[test]
+    fn place_heights_must_be_finite_and_non_negative() {
+        assert!(check_places(&[(1, Some(0.0)), (2, Some(120.5)), (3, None)]).is_ok());
+        for bad in [-1.0, f64::NAN, f64::INFINITY] {
+            assert!(matches!(
+                check_places(&[(1, None), (2, Some(bad))]),
+                Err(AppError::Invalid(_))
+            ));
+        }
     }
 
     #[test]

@@ -28,6 +28,8 @@ export interface Note {
   createdAt: number;
   /** 提醒时刻（Unix 秒），没有提醒为 null */
   remindAt: number | null;
+  /** 左右两侧时挂在绳子上的高度：便签离第一张默认挂处往下多少逻辑像素；null 按默认依次往下排 */
+  sideY: number | null;
 }
 
 /** `Note` 加上图片的 asset URL，可直接用作 `<img src>`。 */
@@ -84,6 +86,8 @@ export const lineEdit = (id: number, body: string | null, memo: string | null) =
 export const linePasteImage = (id: number, png: Uint8Array) =>
   invoke<NoteDto>('line_paste_image', png, { headers: { 'x-note-id': String(id) } });
 export const lineReorder = (ids: number[]) => invoke<void>('line_reorder', { ids });
+/** 左右两侧拖完：新顺序连同每张的高度（Note.sideY）一次写入 */
+export const linePlace = (places: [number, number | null][]) => invoke<void>('line_place', { places });
 /** 设（`at` 为 Unix 秒）或取消（null）提醒；过去的时刻马上到期 */
 export const lineRemind = (id: number, at: number | null) => invoke<NoteDto>('line_remind', { id, at });
 /** 返回摘下的便签与它原来的位置；撤销时把 id 交给 lineRestore */

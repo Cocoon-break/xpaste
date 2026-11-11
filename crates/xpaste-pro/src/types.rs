@@ -29,6 +29,10 @@ pub struct Note {
     /// 提醒时刻（Unix 秒），没有提醒为 None；旧的 line.json 没有这个字段
     #[serde(default)]
     pub remind_at: Option<i64>,
+    /// 左右两侧时挂在绳子上的高度：便签离第一张默认挂处往下多少逻辑像素；None 按默认依次往下排。
+    /// 顶部时不用；旧的 line.json 没有这个字段
+    #[serde(default)]
+    pub side_y: Option<f64>,
 }
 
 /// 新挂的便签：`Note` 去掉 id、创建时间和图片文件名，加上要复制进 `line/` 的源文件。不派生 `Debug`：里面有正文。
