@@ -505,9 +505,11 @@ pub(crate) mod tests {
         }
     }
 
+    /// 读超时要明显长于用例里分段之间的间隔（最长 100 ms），又要短于 `idle_timeout_and_unreachable` 的 1.5 秒上限：
+    /// 300 ms 时 CI 的 macOS 机器偶尔卡顿就把 `stream_survives_split_lines` 判成超时
     pub(crate) const FAST: Timeouts = Timeouts {
         connect: Duration::from_secs(2),
-        read: Duration::from_millis(300),
+        read: Duration::from_millis(800),
     };
 
     /// 跑一次翻译，返回结果与 on_delta 收到的各段。
