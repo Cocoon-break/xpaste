@@ -22,7 +22,7 @@ use crate::state::AppState;
 /// 便签正文的上限，记录正文超出时截断
 const MAX_BODY: usize = 64 * 1024;
 
-/// 原图复制进 `line/` 的上限，和剪切板采集位图的上限一样
+/// 拖进来的原图复制进 `line/` 的上限，和剪切板采集位图的上限一样
 const MAX_IMAGE: u64 = 50 * 1024 * 1024;
 
 /// 记录正文超过 64 KB、只挂了前面一段时的提示
@@ -274,13 +274,13 @@ fn find(line: &Line, id: u64) -> Result<Note, AppError> {
         .ok_or_else(|| LineError::NotFound.into())
 }
 
-/// 原图不在了就挂不了图片，超过 50 MB 不挂；视频封面还没生成时先不带封面，生成后由 `cover_ready` 补上
+/// 原图不在了就挂不了图片，拖进来的（没有记录）超过 50 MB 不挂；视频封面还没生成时先不带封面，生成后由 `cover_ready` 补上
 fn check_source(n: &mut NewNote) -> Result<(), AppError> {
     let Some(src) = &n.image_from else {
         return Ok(());
     };
     match std::fs::metadata(src) {
-        Ok(m) if m.len() > MAX_IMAGE => Err(LineError::TooLarge.into()),
+        Ok(m) if n.record_id.is_none() && m.len() > MAX_IMAGE => Err(LineError::TooLarge.into()),
         Ok(_) => Ok(()),
         Err(_) if n.kind == Kind::Image => Err(AppError::Line("原图片找不到了，没挂上")),
         Err(_) => {
@@ -1010,6 +1010,10 @@ mod tests {
             .unwrap();
         let e = check_source(&mut note_from_path(&big, 0)).unwrap_err();
         assert_eq!(e.to_string(), "内容太大，便签里放不下");
+        // 来自记录的图片文件引用不限
+        let mut rec = note_from_path(&big, 0);
+        rec.record_id = Some(7);
+        assert!(check_source(&mut rec).is_ok());
         let gone = dir.join("gone.png");
         let e = check_source(&mut note_from_path(&gone, 0)).unwrap_err();
         assert_eq!(e.to_string(), "原图片找不到了，没挂上");
