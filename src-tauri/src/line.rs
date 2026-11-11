@@ -280,9 +280,16 @@ const DOCK_NAME: &str = if cfg!(target_os = "windows") {
     "程序坞"
 };
 
-/// 设置里“位置”下面的提示：程序坞在同一侧且自动隐藏，要停得久一点；常驻且上下露出的两段都不超过角落的 40 px，碰边放不下。
+/// 设置里“位置”下面的提示：程序坞在同一侧且自动隐藏，要停得久一点；常驻且上下露出的两段都不超过角落的 40 px，碰边放不下，
+/// 这时按能用的办法说：别的屏这一侧还能碰（`elsewhere`），或者用快捷键（`key` 是它的显示标签，没启用为空串）。
 /// `screen` 是程序坞所在屏的矩形，与 `dock` 同一坐标空间。
-pub fn dock_hint(side: LineSide, dock: Option<&Dock>, screen: Rect) -> String {
+pub fn dock_hint(
+    side: LineSide,
+    dock: Option<&Dock>,
+    screen: Rect,
+    key: &str,
+    elsewhere: bool,
+) -> String {
     let Some(d) = dock.filter(|d| d.on(side)) else {
         return String::new();
     };
@@ -299,7 +306,27 @@ pub fn dock_hint(side: LineSide, dock: Option<&Dock>, screen: Rect) -> String {
     if above > CORNER || below > CORNER {
         return String::new();
     }
-    format!("{DOCK_NAME}占满了{at}，用快捷键放下晾衣绳")
+    if elsewhere {
+        format!("{DOCK_NAME}占满了{at}，换到另一块屏的边上")
+    } else if key.is_empty() {
+        format!("{DOCK_NAME}占满了{at}，去设置里开快捷键")
+    } else {
+        format!("{DOCK_NAME}占满了{at}，用快捷键 {key} 或＋放下")
+    }
+}
+
+/// 除了 `screen` 以外，还有别的屏这一侧的外边能碰（不和别的屏相接；按那条边的中点看）
+pub fn free_elsewhere(side: LineSide, screen: Rect, rects: &[Rect]) -> bool {
+    let cfg = EdgeCfg { side, dock: None };
+    rects.iter().filter(|&&r| r != screen).any(|r| {
+        let y = r.y + r.h / 2.0;
+        let x = if side == LineSide::Left {
+            r.x
+        } else {
+            r.x + r.w - 0.5
+        };
+        at_edge((x, y), rects, &cfg)
+    })
 }
 
 /// 能点的矩形四周再放宽这么多：光标贴着卡片边时不在穿透与接收之间来回切
@@ -369,6 +396,53 @@ struct Shown {
     temp: Option<Instant>,
     /// Windows：前台是全屏应用，常驻的窗口先撤下了（macOS 由空间规则让开，恒为 false）
     veiled: bool,
+    /// 放下时所在的那块屏，常驻时检测线程拿它和每秒读到的屏幕比，见 `replace_on`
+    mon: Option<Mon>,
+}
+
+/// 一块屏的矩形、工作区与缩放，同一块屏每次读都一样：macOS 是点，Windows 是物理像素（两者各屏之间的相接关系都不变）
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Mon {
+    pub screen: Rect,
+    pub work: Rect,
+    pub sf: f64,
+}
+
+fn mon_of(m: &tauri::Monitor) -> Mon {
+    let k = if cfg!(target_os = "macos") {
+        m.scale_factor()
+    } else {
+        1.0
+    };
+    let (p, s, wa) = (m.position(), m.size(), m.work_area());
+    Mon {
+        screen: Rect {
+            x: p.x as f64 / k,
+            y: p.y as f64 / k,
+            w: s.width as f64 / k,
+            h: s.height as f64 / k,
+        },
+        work: Rect {
+            x: wa.position.x as f64 / k,
+            y: wa.position.y as f64 / k,
+            w: wa.size.width as f64 / k,
+            h: wa.size.height as f64 / k,
+        },
+        sf: m.scale_factor(),
+    }
+}
+
+/// 常驻时屏幕变了要不要重新摆，返回要摆到的那块屏在 `now` 里的下标：还有一块屏和放下时一模一样（位置、工作区、缩放）就不动（None）；
+/// 否则放下时那块屏的中心还落在某块屏上，就摆到那块（改了分辨率、缩放，程序坞、菜单栏变了），落不到（拔掉了）就回主屏。
+pub fn replace_on(placed: Mon, now: &[Mon], primary: usize) -> Option<usize> {
+    if now.is_empty() || now.contains(&placed) {
+        return None;
+    }
+    let r = placed.screen;
+    let c = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+    now.iter()
+        .position(|m| contains(&m.screen, c))
+        .or(Some(primary.min(now.len() - 1)))
 }
 
 /// 这个构建带晾衣绳，且是官方签名的那份（被改过再重签的副本表现同开源版）：窗口、顶端检测、快捷键都看它
@@ -439,6 +513,7 @@ static SHOWN: Mutex<Shown> = Mutex::new(Shown {
     hits: Vec::new(),
     temp: None,
     veiled: false,
+    mon: None,
 });
 
 fn shown() -> MutexGuard<'static, Shown> {
@@ -448,15 +523,46 @@ fn shown() -> MutexGuard<'static, Shown> {
 /// 页面已开始监听 `line-show`；之前检测线程只睡，不检测顶端（页面没加载好时放下的窗口会挡住顶端的点击）
 static READY: AtomicBool = AtomicBool::new(false);
 
-/// 页面开始监听 line-show 后调用；之前不检测顶端
+/// 页面就绪时后端要做的，见 `on_ready`
+#[derive(PartialEq, Debug)]
+pub enum Ready {
+    Nothing,
+    /// 常驻：放到主屏
+    Pin,
+    /// 常驻且已放下着（页面重新加载了）：原地再发一次放下，页面按常驻重新摆好
+    Reshow,
+    /// 平时放下着时页面重新加载了（右键“重新加载”、F5、页面进程崩溃后自动重载）：页面回到了收着，
+    /// 后端也直接收起（撤下、恢复点穿、交还键盘），免得透明的窗口一直挡着下面的应用
+    Reset,
+}
+
+/// `again`：页面不是第一次就绪（重新加载了）；`down`：后端认为绳子放下着（含只露绳子）
+pub fn on_ready(again: bool, pinned: bool, down: bool) -> Ready {
+    match (pinned, again && down) {
+        (true, true) => Ready::Reshow,
+        (true, false) => Ready::Pin,
+        (false, true) => Ready::Reset,
+        (false, false) => Ready::Nothing,
+    }
+}
+
+/// 页面开始监听 line-show 后调用；之前不检测顶端。页面重新加载后也会再调一次，这时和后端的状态对账
 pub fn ready(app: &AppHandle) {
-    READY.store(true, Ordering::Relaxed);
+    let again = READY.swap(true, Ordering::Relaxed);
     wake_detect();
     log::info!("晾衣绳页面就绪，开始检测顶端");
     // 关着应用时错过的提醒现在补发
     crate::remind::wake();
-    if pinned() {
-        show_pinned(app);
+    // 先取出来：match 的条件里的锁要到整个 match 结束才放，下面的 hidden 还要锁
+    let down = shown().how.is_some();
+    match on_ready(again, pinned(), down) {
+        Ready::Nothing => {}
+        Ready::Pin => show_pinned(app),
+        Ready::Reshow => show(app, How::Mouse),
+        Ready::Reset => {
+            log::info!("晾衣绳页面重新加载，收起");
+            hidden(app);
+        }
     }
 }
 
@@ -465,11 +571,11 @@ pub fn is_ready() -> bool {
     READY.load(Ordering::Relaxed)
 }
 
-/// 绳子已放下（只露绳子不算）时窗口的矩形，换到检测线程的坐标空间（除以 `k` 之后），以及从窗口逻辑像素换过去的倍数；没放下为 None。
+/// 绳子已放下（只露绳子不算）时窗口的矩形，换到检测线程的坐标空间（除以 `k` 之后）、从窗口逻辑像素换过去的倍数和放下的方式；没放下为 None。
 /// macOS 两边都是点；Windows 窗口按所在屏缩放记的逻辑像素，检测线程按主屏缩放，差一个 sf / k。
-fn open_rect(k: f64) -> Option<(Rect, f64)> {
+fn open_rect(k: f64) -> Option<(Rect, f64, How)> {
     let s = shown();
-    s.how.filter(|&h| h != How::Peek)?;
+    let how = s.how.filter(|&h| h != How::Peek)?;
     let f = if cfg!(target_os = "macos") {
         1.0
     } else {
@@ -482,7 +588,21 @@ fn open_rect(k: f64) -> Option<(Rect, f64)> {
         w: r.w * f,
         h: r.h * f,
     };
-    Some((win, f))
+    Some((win, f, how))
+}
+
+/// 绳子自己放下来的（快捷键亮一下、提醒到点），用户没去碰：同常驻，只有能点的地方接收点击，其余点穿
+fn passive(how: How) -> bool {
+    matches!(how, How::Flash | How::Remind)
+}
+
+/// 放下着时又来了一次放下，后端记下的方式（同页面）：快捷键亮一下、提醒到点不改原来的鼠标、键盘、拖动，
+/// 原来也是这两种或只露绳子才换
+pub fn merge_how(cur: Option<How>, new: How) -> How {
+    match cur {
+        Some(c) if passive(new) && !passive(c) && c != How::Peek => c,
+        _ => new,
+    }
 }
 
 /// 每次放下、收起加一：收起兜底只在这期间没再放下、也没收完时生效
@@ -650,6 +770,8 @@ fn prewarm(app: &AppHandle) {
         .decorations(false)
         .shadow(false)
         .resizable(false)
+        // Windows：Win+↓ 不能把常驻的绳子最小化（最小化后没有任务栏按钮可点回来）
+        .minimizable(false)
         .skip_taskbar(true)
         .always_on_top(true)
         .accept_first_mouse(true)
@@ -665,8 +787,12 @@ fn prewarm(app: &AppHandle) {
                 log::warn!("晾衣绳窗口转换 NSPanel 失败：{e}");
             }
         }),
-        #[cfg(not(target_os = "macos"))]
-        Ok(_) => {}
+        // 不进 Alt+Tab：选中它会抢到前台
+        #[cfg(windows)]
+        Ok(w) => on_main(app, move |_| match w.hwnd() {
+            Ok(h) => xpaste_platform::tool_window(h.0 as isize),
+            Err(e) => log::warn!("晾衣绳取不到窗口句柄：{e}"),
+        }),
         Err(e) => log::warn!("创建晾衣绳窗口失败：{e}"),
     }
 }
@@ -685,6 +811,8 @@ struct Pin {
     out: Option<Instant>,
     /// Windows：前台是全屏应用（每秒随屏幕矩形读一次）
     fullscreen: bool,
+    /// 挪到另一块屏后，到这个时刻再看要不要临时露出来（遮挡状态是系统异步更新的，刚挪过去读到的还是旧的）
+    recheck: Option<Instant>,
 }
 
 impl Pin {
@@ -704,6 +832,8 @@ impl Pin {
 
 /// 离开便签区域这么久，临时露出来的常驻绳子再让开（同页面离开后收起）
 const LEAVE: Duration = Duration::from_millis(350);
+// ponytail: 等系统更新遮挡状态的时间是估的，真机上挪过去露不出来再加长
+const RECHECK: Duration = Duration::from_millis(200);
 
 /// 常驻时碰到边缘放下（`how`）：碰到别的屏的边就挪过去留在那里，碰到本屏的边在全屏应用上临时露出来。
 /// 按着键碰到的（拖文件过来）整窗接收到松开。
@@ -711,20 +841,23 @@ fn pin_edge(app: &AppHandle, pin: &mut Pin, how: How, other: bool) {
     pin.drag = how == How::Drag;
     if other {
         log::info!("晾衣绳常驻挪到另一块屏");
+        // 挪过去的那块屏也可能正全屏着：等一会儿再看（`pin_step`）
+        pin.recheck = Some(Instant::now() + RECHECK);
     }
     on_main(app, move |app| {
         let Some(w) = app.get_webview_window(LABEL) else {
             return;
         };
-        if other && let Err(e) = place(app, &w, false) {
+        if !other {
+            reveal(app, &w, Duration::ZERO);
+        } else if let Err(e) = place(app, &w, false) {
             log::warn!("晾衣绳定位失败：{e}");
         }
-        // 挪过去的那块屏也可能正全屏着
-        reveal(app, &w, Duration::ZERO);
     });
 }
 
-/// 常驻时每次采样：按光标在不在能点的地方切换点击穿透；临时露出来的离开 350 ms 后再让开；Windows 进出全屏应用时撤下、放回。
+/// 常驻（以及亮一下、提醒到点放下的）时每次采样：按光标在不在能点的地方切换点击穿透；
+/// 常驻另外：临时露出来的离开 350 ms 后再让开，Windows 进出全屏应用时撤下、放回。
 /// `local` 是光标在窗口里的逻辑坐标，`inside` 光标在便签区域里。
 fn pin_step(app: &AppHandle, pin: &mut Pin, local: (f64, f64), inside: bool, button: bool) {
     if !button {
@@ -761,6 +894,14 @@ fn pin_step(app: &AppHandle, pin: &mut Pin, local: (f64, f64), inside: bool, but
         pin.out.or_else(|| Some(Instant::now()))
     };
     let left = pin.out.is_some_and(|o| o.elapsed() >= LEAVE);
+    if pin.recheck.is_some_and(|t| Instant::now() >= t) {
+        pin.recheck = None;
+        on_main(app, |app| {
+            if let Some(w) = app.get_webview_window(LABEL) {
+                reveal(app, &w, Duration::ZERO);
+            }
+        });
+    }
     if let Some(until) = temp {
         if left && !keyboard && !button && Instant::now() >= until {
             veil(app, pin.fullscreen);
@@ -779,6 +920,57 @@ fn muted(app: &AppHandle) -> bool {
             line.status(crate::clock::now_ms() / 1000),
             xpaste_pro::Pro::Expired { .. }
         )
+}
+
+/// 常驻时每秒看一次屏幕：放下时那块屏拔掉了、工作区或缩放变了，就重新摆（见 `replace_on`），点穿按新坐标重设
+fn follow_screens(app: &AppHandle) {
+    let placed = {
+        let s = shown();
+        s.mon.filter(|_| s.how.is_some())
+    };
+    let Some(placed) = placed else {
+        return;
+    };
+    let (Ok(all), Ok(primary)) = (app.available_monitors(), app.primary_monitor()) else {
+        return;
+    };
+    let mons: Vec<Mon> = all.iter().map(mon_of).collect();
+    let primary = primary
+        .and_then(|p| mons.iter().position(|m| *m == mon_of(&p)))
+        .unwrap_or(0);
+    let Some(m) = replace_on(placed, &mons, primary).and_then(|i| all.get(i).cloned()) else {
+        return;
+    };
+    log::info!("晾衣绳常驻所在的屏幕变了，重新摆放");
+    on_main(app, move |app| {
+        let Some(w) = app.get_webview_window(LABEL) else {
+            return;
+        };
+        if let Err(e) = place_on(&w, &m) {
+            log::warn!("晾衣绳定位失败：{e}");
+        }
+        GEN.fetch_add(1, Ordering::Relaxed);
+    });
+}
+
+/// Windows：常驻的窗口被最小化了（Win+D 等），不激活地放回来
+#[cfg(windows)]
+fn restore_minimized(app: &AppHandle) {
+    on_main(app, |app| {
+        let Some(w) = app.get_webview_window(LABEL) else {
+            return;
+        };
+        let up = {
+            let s = shown();
+            s.how.is_some() && !s.veiled
+        };
+        if up && w.is_minimized().unwrap_or(false) {
+            log::info!("晾衣绳常驻被最小化，放回来");
+            if let Err(e) = front(app, &w, false) {
+                log::warn!("显示晾衣绳失败：{e}");
+            }
+        }
+    });
 }
 
 /// 拖拽剪切板的基准计数：松着键时记（松开那一刻、线程刚起或醒来后第一次），下一次按下就一定在它之后，见 `press_of`
@@ -851,6 +1043,11 @@ fn detect(app: &AppHandle) {
             // ponytail: 跟着屏幕矩形每秒读一次，进全屏后最多晚 1 s 让开；嫌慢再单独加快
             pin.fullscreen = pinned() && xpaste_platform::fullscreen_app();
             quiet = muted(app);
+            if pinned() {
+                follow_screens(app);
+                #[cfg(windows)]
+                restore_minimized(app);
+            }
         }
         // 不用 app.cursor_position()：它要等主线程应答，每秒 60 次会一直唤醒主线程
         let Some((x, y)) = xpaste_platform::pointer_position() else {
@@ -866,8 +1063,8 @@ fn detect(app: &AppHandle) {
             xpaste_platform::drag_count,
             xpaste_platform::moving_window,
         );
-        if let Some(open) = open_rect(k) {
-            let now_in = pointer_inside(c, open.0, rects, cfg.side);
+        if let Some((win, f, how)) = open_rect(k) {
+            let now_in = pointer_inside(c, win, rects, cfg.side);
             if inside != Some(now_in) {
                 inside = Some(now_in);
                 emit_to(
@@ -877,14 +1074,19 @@ fn detect(app: &AppHandle) {
                     serde_json::json!({ "inside": now_in }),
                 );
             }
-            if pinned() {
+            let pin_on = pinned();
+            if pin_on {
                 let t = t0.elapsed().as_millis() as u64;
-                let (win, f) = open;
                 if let Some(EdgeEvent::Open(how)) = edge.step(c, rects, t, press, &cfg) {
                     pin_edge(app, &mut pin, how, other_screen(c, win, rects));
                 }
+            }
+            // 常驻、自己放下来的：按光标在不在能点的地方切换点穿
+            if pin_on || passive(how) {
                 let local = ((c.0 - win.x) / f, (c.1 - win.y) / f);
                 pin_step(app, &mut pin, local, now_in, press != Press::Up);
+            }
+            if pin_on {
                 continue;
             }
             // 收起后先离开边缘才会再放下：按 Esc 收起时光标还在顶端，不立刻又放下来
@@ -940,6 +1142,33 @@ fn read_screens(app: &AppHandle) -> tauri::Result<(Vec<Rect>, f64)> {
     Ok((rects, psf))
 }
 
+/// 窗口 `front` 盖满了某一块屏（容 1 px）：macOS 上最前面的普通窗口这样，就是全屏空间、全屏演示
+pub fn covers_screen(front: Option<Rect>, screens: &[Rect]) -> bool {
+    front.is_some_and(|f| {
+        screens.iter().any(|s| {
+            f.x <= s.x + 1.0
+                && f.y <= s.y + 1.0
+                && f.x + f.w >= s.x + s.w - 1.0
+                && f.y + f.h >= s.y + s.h - 1.0
+        })
+    })
+}
+
+/// 前台是全屏应用（全屏空间、演示、全屏视频）：提醒到点时不放下绳子。
+/// macOS 看最前面的普通窗口是不是盖满了一块屏；Windows 按系统决定要不要弹通知时的判断。不在主线程调用（macOS 要读窗口列表）。
+pub fn fullscreen_front(app: &AppHandle) -> bool {
+    if !cfg!(target_os = "macos") {
+        return xpaste_platform::fullscreen_app();
+    }
+    let front = xpaste_platform::window_rects().first().map(|r| Rect {
+        x: r.x,
+        y: r.y,
+        w: r.w,
+        h: r.h,
+    });
+    read_screens(app).is_ok_and(|(rects, _)| covers_screen(front, &rects))
+}
+
 /// 程序坞 / 任务栏，换到检测线程的坐标空间（除以 `k`，同指针）；读不到为 None
 fn read_dock(k: f64) -> Option<Dock> {
     let Some(d) = xpaste_platform::dock() else {
@@ -976,10 +1205,21 @@ pub fn side_hint(app: &AppHandle, side: LineSide) -> String {
         return String::new();
     };
     let mid = (d.rect.x + d.rect.w / 2.0, d.rect.y + d.rect.h / 2.0);
-    rects
-        .iter()
-        .find(|r| contains(r, mid))
-        .map_or_else(String::new, |&r| dock_hint(side, Some(&d), r))
+    let Some(&screen) = rects.iter().find(|r| contains(r, mid)) else {
+        return String::new();
+    };
+    let key = {
+        let state = app.state::<AppState>();
+        let s = state.settings();
+        let k = s.effective_line_hotkey();
+        if k.is_empty() {
+            String::new()
+        } else {
+            crate::hotkey::label(k)
+        }
+    };
+    let elsewhere = free_elsewhere(side, screen, &rects);
+    dock_hint(side, Some(&d), screen, &key, elsewhere)
 }
 
 /// 放到光标所在屏工作区顶端，宽为工作区宽，发 `line-show { how }`。
@@ -1020,15 +1260,16 @@ fn show_on(app: &AppHandle, how: How, select: Option<u64>, primary: bool) {
         let Some(w) = app.get_webview_window(LABEL) else {
             return log::warn!("找不到晾衣绳窗口");
         };
-        let (first, temp) = {
+        let (first, temp, kept) = {
             let mut s = shown();
             if how == How::Peek && s.how.is_some_and(|h| h != How::Peek) {
                 return;
             }
             let first = s.how.is_none();
-            s.how = Some(how);
+            let kept = merge_how(s.how, how);
+            s.how = Some(kept);
             GEN.fetch_add(1, Ordering::Relaxed);
-            (first, s.temp.is_some())
+            (first, s.temp.is_some(), kept)
         };
         // 常驻（primary）时放下着也挪到主屏
         if (first || primary)
@@ -1037,10 +1278,11 @@ fn show_on(app: &AppHandle, how: How, select: Option<u64>, primary: bool) {
             log::warn!("晾衣绳定位失败：{e}");
         }
         let pin = pinned();
-        // 只露绳子时点击穿透到下面的应用；常驻时刚放下先穿透，检测线程按光标在不在能点的地方切换。
-        // 常驻且已放下着（提醒、快捷键、键盘又放下一次）不动它，交给检测线程，免得拖到一半变成点穿
-        if !(pin && !first)
-            && let Err(e) = w.set_ignore_cursor_events(how == How::Peek || pin)
+        // 只露绳子时点击穿透到下面的应用；常驻、自己放下来的（亮一下、提醒）刚放下先穿透，检测线程按光标在不在能点的地方切换。
+        // 这两种已放下着（又来了提醒、快捷键）不动它，交给检测线程，免得拖到一半变成点穿
+        let hits = pin || passive(kept);
+        if (first || !hits)
+            && let Err(e) = w.set_ignore_cursor_events(kept == How::Peek || hits)
         {
             log::warn!("晾衣绳设置点击穿透失败：{e}");
         }
@@ -1101,9 +1343,14 @@ fn place(app: &AppHandle, w: &WebviewWindow, primary: bool) -> tauri::Result<()>
     } else {
         crate::panel::cursor_monitor(app)?
     };
-    let Some(m) = m else {
-        return Ok(());
-    };
+    match m {
+        Some(m) => place_on(w, &m),
+        None => Ok(()),
+    }
+}
+
+/// 摆到屏 `m` 的工作区里，见 `place`。主线程调用。
+fn place_on(w: &WebviewWindow, m: &tauri::Monitor) -> tauri::Result<()> {
     let (sf, wa) = (m.scale_factor(), m.work_area());
     let side = side();
     let mut work = Rect {
@@ -1124,6 +1371,7 @@ fn place(app: &AppHandle, w: &WebviewWindow, primary: bool) -> tauri::Result<()>
         s.work = work;
         s.sf = sf;
         s.side = side;
+        s.mon = Some(mon_of(m));
         s.extent
     };
     apply(w, side_rect(work, side, extent), sf)
@@ -1146,6 +1394,32 @@ pub fn below_notch(work: Rect, screen_top: f64, notch: f64) -> Rect {
 fn apply(w: &WebviewWindow, r: Rect, sf: f64) -> tauri::Result<()> {
     let k = if cfg!(target_os = "macos") { 1.0 } else { sf };
     crate::shot::place(w, (r.x * k, r.y * k), (r.w * k, r.h * k))
+}
+
+/// 同 `apply`，但位置和尺寸一次设好，不分两步：贴着右边的窗口改宽时右边缘不跳。只用于同一块屏里改尺寸（`resize`）。主线程调用。
+#[cfg(target_os = "macos")]
+// 同 panel::animate_alpha：cocoa 已弃用；objc 0.2 的 sel! 展开里有 cfg(feature = "cargo-clippy")
+#[allow(deprecated, unexpected_cfgs)]
+fn set_frame(w: &WebviewWindow, r: Rect, _sf: f64) -> tauri::Result<()> {
+    use tauri_nspanel::cocoa::appkit::{NSScreen, NSWindow};
+    use tauri_nspanel::cocoa::base::{YES, id, nil};
+    use tauri_nspanel::cocoa::foundation::{NSArray, NSPoint, NSRect, NSSize};
+    let ns = w.ns_window()? as id;
+    // SAFETY: 主线程上改自己的 NSWindow。Cocoa 的屏幕坐标原点在主屏左下角，y 朝上，从左上角为原点的点换过去
+    unsafe {
+        let main = NSScreen::screens(nil).objectAtIndex(0);
+        let top = NSScreen::frame(main).size.height;
+        let frame = NSRect::new(NSPoint::new(r.x, top - r.y - r.h), NSSize::new(r.w, r.h));
+        ns.setFrame_display_(frame, YES);
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn set_frame(w: &WebviewWindow, r: Rect, sf: f64) -> tauri::Result<()> {
+    let k = |v: f64| (v * sf) as i32;
+    xpaste_platform::set_window_rect(w.hwnd()?.0 as isize, k(r.x), k(r.y), k(r.w), k(r.h));
+    Ok(())
 }
 
 /// 发 `line-hide`；页面收起后调 `line_hidden`，窗口才真正隐藏。一直显示时不收（关掉一直显示或总开关后才收）。
@@ -1279,6 +1553,10 @@ fn reveal(app: &AppHandle, w: &WebviewWindow, hold: Duration) {
     log::info!("晾衣绳常驻在全屏应用上临时露出来");
     shown().temp = Some(Instant::now() + hold);
     spaces(app, true);
+    // macOS 改了空间规则要撤下再上屏才生效（同 `veil`）
+    if cfg!(target_os = "macos") {
+        take_down(w);
+    }
     if let Err(e) = front(app, w, false) {
         log::warn!("显示晾衣绳失败：{e}");
     }
@@ -1360,7 +1638,7 @@ pub fn resize(app: &AppHandle, extent: f64) {
     if visible {
         on_main(app, move |app| {
             if let Some(w) = app.get_webview_window(LABEL)
-                && let Err(e) = apply(&w, r, sf)
+                && let Err(e) = set_frame(&w, r, sf)
             {
                 log::warn!("晾衣绳改尺寸失败：{e}");
             }
@@ -1397,6 +1675,19 @@ pub fn relocate(app: &AppHandle) {
         });
     if let Err(e) = spawned {
         log::warn!("晾衣绳改位置线程启动失败：{e}");
+    }
+}
+
+/// 晾衣绳窗口拿到键盘：页面没申请也会（点“复制”、拖木珠、Alt+Tab 切过来）。记下这一点，Windows 上再记下之前的前台窗口
+/// （此刻前台是自己，取最后一个外部前台窗口），交还时切回去
+pub fn focused() {
+    let mut s = shown();
+    if s.how.is_none() {
+        return;
+    }
+    s.keyboard = true;
+    if s.previous.is_none() {
+        s.previous = xpaste_platform::foreground_window();
     }
 }
 
@@ -1977,31 +2268,27 @@ mod tests {
             side: DockSide::Left,
             autohide,
         };
-        assert_eq!(
-            dock_hint(LineSide::Right, Some(&d(250., 400., false)), s),
-            ""
-        );
+        let hint =
+            |side, dock: &Dock, key, elsewhere| dock_hint(side, Some(dock), s, key, elsewhere);
+        assert_eq!(hint(LineSide::Right, &d(250., 400., false), "", false), "");
         // Windows 上叫任务栏
-        let say = |mac: &'static str, win: &'static str| {
-            if cfg!(target_os = "windows") {
-                win
-            } else {
-                mac
-            }
-        };
         assert_eq!(
-            dock_hint(LineSide::Left, Some(&d(250., 400., true)), s),
-            say(
-                "程序坞也在左侧，鼠标停得久一点才会放下绳子",
-                "任务栏也在左侧，鼠标停得久一点才会放下绳子"
-            )
+            hint(LineSide::Left, &d(250., 400., true), "", false),
+            format!("{DOCK_NAME}也在左侧，鼠标停得久一点才会放下绳子")
+        );
+        // 占满时按能用的办法说：快捷键开着、没开、别的屏还能碰
+        let full = d(10., 880., false);
+        assert_eq!(
+            hint(LineSide::Left, &full, "⌥ + Shift + N", false),
+            format!("{DOCK_NAME}占满了左侧，用快捷键 ⌥ + Shift + N 或＋放下")
         );
         assert_eq!(
-            dock_hint(LineSide::Left, Some(&d(10., 880., false)), s),
-            say(
-                "程序坞占满了左侧，用快捷键放下晾衣绳",
-                "任务栏占满了左侧，用快捷键放下晾衣绳"
-            )
+            hint(LineSide::Left, &full, "", false),
+            format!("{DOCK_NAME}占满了左侧，去设置里开快捷键")
+        );
+        assert_eq!(
+            hint(LineSide::Left, &full, "⌥ + Shift + N", true),
+            format!("{DOCK_NAME}占满了左侧，换到另一块屏的边上")
         );
         let r = |y, h, autohide| Dock {
             rect: rect(1370., y, 70., h),
@@ -2009,16 +2296,24 @@ mod tests {
             autohide,
         };
         assert_eq!(
-            dock_hint(LineSide::Right, Some(&r(10., 880., false)), s),
-            say(
-                "程序坞占满了右侧，用快捷键放下晾衣绳",
-                "任务栏占满了右侧，用快捷键放下晾衣绳"
-            )
+            hint(LineSide::Right, &r(10., 880., false), "", false),
+            format!("{DOCK_NAME}占满了右侧，去设置里开快捷键")
         );
-        assert_eq!(
-            dock_hint(LineSide::Left, Some(&d(250., 400., false)), s),
-            ""
-        );
+        assert_eq!(hint(LineSide::Left, &d(250., 400., false), "", false), "");
+    }
+
+    #[test]
+    fn free_elsewhere_needs_an_outer_edge_on_another_screen() {
+        let main = rect(0., 0., 1440., 900.);
+        // 只有一块屏
+        assert!(!free_elsewhere(LineSide::Left, main, &[main]));
+        // 副屏接在左边：它的左边是外边，能碰
+        let left = rect(-1920., 0., 1920., 1080.);
+        assert!(free_elsewhere(LineSide::Left, main, &[main, left]));
+        // 副屏接在右边：它的左边和主屏相接，不算；右侧时它的右边能碰
+        let right = rect(1440., 0., 1920., 1080.);
+        assert!(!free_elsewhere(LineSide::Left, main, &[main, right]));
+        assert!(free_elsewhere(LineSide::Right, main, &[main, right]));
     }
 
     #[test]
@@ -2093,5 +2388,76 @@ mod tests {
         let win = rect(20., 25., 200., 875.);
         assert!(pointer_inside((5., 400.), win, &r, LineSide::Left));
         assert!(!pointer_inside((5., 400.), win, &r, LineSide::Top));
+    }
+
+    fn mon(x: f64, w: f64, work_y: f64, sf: f64) -> Mon {
+        Mon {
+            screen: rect(x, 0., w, 900.),
+            work: rect(x, work_y, w, 900. - work_y),
+            sf,
+        }
+    }
+
+    #[test]
+    fn pinned_replaces_only_when_its_screen_changed() {
+        let main = mon(0., 1440., 25., 2.);
+        let ext = mon(1440., 1920., 0., 1.);
+        // 两块屏都没变：不动
+        assert_eq!(replace_on(ext, &[main, ext], 0), None);
+        assert_eq!(replace_on(main, &[main, ext], 0), None);
+        // 外接屏拔掉：回主屏
+        assert_eq!(replace_on(ext, &[main], 0), Some(0));
+        // 外接屏改了分辨率（宽变了）、改了缩放：还在那块屏上重摆
+        assert_eq!(
+            replace_on(ext, &[main, mon(1440., 2560., 0., 1.)], 0),
+            Some(1)
+        );
+        assert_eq!(
+            replace_on(ext, &[main, mon(1440., 1920., 0., 1.5)], 0),
+            Some(1)
+        );
+        // 菜单栏、程序坞变了（工作区变了）
+        assert_eq!(replace_on(main, &[mon(0., 1440., 0., 2.), ext], 0), Some(0));
+        // 读不到屏幕：不动
+        assert_eq!(replace_on(main, &[], 0), None);
+    }
+
+    #[test]
+    fn ready_reconciles_after_reload() {
+        // 第一次就绪：常驻就放下，否则什么都不做（启动时快捷键刚放下的不收）
+        assert_eq!(on_ready(false, true, false), Ready::Pin);
+        assert_eq!(on_ready(false, false, true), Ready::Nothing);
+        assert_eq!(on_ready(false, false, false), Ready::Nothing);
+        // 重新加载：平时放下着的收起，常驻的原地再放下一次
+        assert_eq!(on_ready(true, false, true), Ready::Reset);
+        assert_eq!(on_ready(true, true, true), Ready::Reshow);
+        assert_eq!(on_ready(true, false, false), Ready::Nothing);
+        assert_eq!(on_ready(true, true, false), Ready::Pin);
+    }
+
+    #[test]
+    fn passive_drop_keeps_the_current_way() {
+        // 收着、只露绳子时：照来的
+        assert_eq!(merge_how(None, How::Flash), How::Flash);
+        assert_eq!(merge_how(Some(How::Peek), How::Remind), How::Remind);
+        // 鼠标、键盘、拖动着：亮一下、提醒不改
+        for c in [How::Mouse, How::Kbd, How::Drag] {
+            assert_eq!(merge_how(Some(c), How::Flash), c);
+            assert_eq!(merge_how(Some(c), How::Remind), c);
+        }
+        // 亮一下、提醒之间互换；别的方式照来的
+        assert_eq!(merge_how(Some(How::Flash), How::Remind), How::Remind);
+        assert_eq!(merge_how(Some(How::Remind), How::Kbd), How::Kbd);
+        assert_eq!(merge_how(Some(How::Flash), How::Drag), How::Drag);
+    }
+
+    #[test]
+    fn fullscreen_means_front_window_covers_a_screen() {
+        let screens = [rect(0., 0., 1512., 982.), rect(1512., 0., 1920., 1080.)];
+        assert!(!covers_screen(None, &screens));
+        assert!(covers_screen(Some(rect(1512., 0., 1920., 1080.)), &screens));
+        // 最大化的窗口让着菜单栏，不算
+        assert!(!covers_screen(Some(rect(0., 37., 1512., 945.)), &screens));
+        assert!(!covers_screen(Some(rect(200., 100., 800., 600.)), &screens));
     }
 }

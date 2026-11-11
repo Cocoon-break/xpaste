@@ -262,6 +262,8 @@ pub fn run() {
             // 面板开着时点到晾衣绳：macOS 有时不给面板发失焦（两块 NSPanel 之间切换键盘时），面板就一直挂着、
             // 键盘也不在它身上，点外面、按 Esc 都收不掉。晾衣绳拿到键盘时按面板失焦的规则替它收起
             if window.label() == line::LABEL && matches!(event, WindowEvent::Focused(true)) {
+                // 页面没申请键盘时（点按钮、拖木珠）也记下，交还时切回原来的窗口
+                line::focused();
                 let app = window.app_handle();
                 if panel::visible(app) && panel::blur_hides(app) {
                     log::info!("晾衣绳拿到键盘，面板没收到失焦，替它隐藏");

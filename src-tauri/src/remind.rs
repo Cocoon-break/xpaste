@@ -111,7 +111,7 @@ fn run(app: &AppHandle) {
     }
 }
 
-/// 到期的一起处理：先清掉提醒（持久化），再放下绳子、让这几张高亮、发一条通知
+/// 到期的一起处理：先清掉提醒（持久化），再放下绳子（前台全屏时不放下）、让这几张高亮、发一条通知
 fn fire(app: &AppHandle, ids: &[u64], stuck: &mut Vec<(u64, i64)>) {
     let state = app.state::<AppState>();
     let mut hit = Vec::new();
@@ -134,7 +134,12 @@ fn fire(app: &AppHandle, ids: &[u64], stuck: &mut Vec<(u64, i64)>) {
     }
     log::info!("提醒到了 {} 条", hit.len());
     crate::commands::line::changed(app);
-    crate::line::show(app, How::Remind);
+    // 前台是全屏应用（演示、全屏视频、会议共享）：不放下绳子盖在上面，只高亮、发通知，下次放下时看得到高亮
+    if crate::line::fullscreen_front(app) {
+        log::info!("前台是全屏应用，提醒不放下绳子");
+    } else {
+        crate::line::show(app, How::Remind);
+    }
     for n in &hit {
         emit_to(app, LABEL, LINE_REMIND, serde_json::json!({ "id": n.id }));
     }
