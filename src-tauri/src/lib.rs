@@ -238,12 +238,16 @@ pub fn run() {
                 let app = window.app_handle();
                 trcard::close(app, trcard::current(app));
             }
-            // 晾衣绳同理，Alt+F4 当作 Esc：收起
+            // 晾衣绳同理，Alt+F4 当作 Esc：收起；一直显示时不收，只交还键盘
             if window.label() == line::LABEL
                 && let WindowEvent::CloseRequested { api, .. } = event
             {
                 api.prevent_close();
-                line::hide(window.app_handle());
+                if line::pinned() {
+                    line::keyboard(window.app_handle(), false);
+                } else {
+                    line::hide(window.app_handle());
+                }
             }
             // 排查“面板挂完便签后点外面、按 Esc 都不收起”：记下面板与晾衣绳的焦点变化（只有窗口名）
             if (window.label() == "panel" || window.label() == line::LABEL)
