@@ -49,7 +49,8 @@ jobs:
         run: |
           pnpm check:version
           ver=$(node -p "require('./package.json').version")
-          test "v$ver" = "$TAG" || { echo "标签 $TAG 与 package.json 版本 $ver 不一致" >&2; exit 1; }
+          # 内测标签带后缀（v0.8.0-beta.1）：去掉后缀再和版本号比
+          test "v$ver" = "${TAG%%-*}" || { echo "标签 $TAG 与 package.json 版本 $ver 不一致" >&2; exit 1; }
       # APPLE_* 来自仓库 Secrets：Tauri 把 .p12 导入临时钥匙串，签名并公证 macOS 包（Windows 上不起作用）
       - run: make release
         env:
@@ -109,8 +110,9 @@ jobs:
       # 再存一份不带版本号的文件名，官网用 releases/latest/download/<文件名> 固定链接到最新版
       - name: 不带版本号的副本
         run: |
+          ver=$(node -p "require('./package.json').version")
           cd target/installers
-          for f in xPaste_*; do cp "$f" "${f/_${TAG#v}_/_}"; done
+          for f in xPaste_*; do cp "$f" "${f/_${ver}_/_}"; done
           ls -l
       - uses: actions/upload-artifact@v4
         with:
@@ -134,6 +136,10 @@ jobs:
         with:
           tag_name: ${{ env.TAG }}
           name: xPaste ${{ env.TAG }}
+          # 内测标签（带 -）只建草稿预发布：只有仓库成员看得到，不算最新版，官网下载、检查更新和 Homebrew 都不受影响
+          draft: ${{ contains(env.TAG, '-') }}
+          prerelease: ${{ contains(env.TAG, '-') }}
+          make_latest: ${{ contains(env.TAG, '-') && 'false' || 'true' }}
           files: dist/*
           generate_release_notes: true
           body: |
@@ -158,6 +164,8 @@ jobs:
   # 给旧标签补发时不动 tap，免得把它退回旧版本；这一步失败不影响已经发布的安装包。
   tap:
     needs: release
+    # 内测不动 tap（job 级 if 用不了 env，这里照 TAG 的写法重算）
+    if: ${{ !contains(inputs.tag || github.ref_name, '-') }}
     runs-on: ubuntu-latest
     env:
       TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}

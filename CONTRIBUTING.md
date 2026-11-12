@@ -64,6 +64,12 @@ make release-win   # 在 macOS 上交叉打 Windows 安装程序（见下文）
 3. 在 `main` 上打标签并推送：`git tag v0.2.1 && git push origin v0.2.1`。标签必须等于 `v` + 版本号，不一致时流程直接失败。
 4. 给已有标签补发或重发：Actions → Release → Run workflow，填标签名。用的仍是两边同名标签上的代码。
 
+**内测版**：标签在 `v` + 版本号后面带后缀（如 `v0.8.0-beta.1`），可以打在还没合并的分支上，私有组件仓库同样先打同名标签。
+
+- 流程照样打三个安装包，只建草稿预发布：只有仓库成员看得到，不算最新版。
+- 官网下载链接、应用里的检查更新、Homebrew tap 都不受影响。
+- 安装包从草稿页下载，再自己发给内测的人。
+
 发布之后，流程里的 `tap` 任务会更新 [Cocoon-break/homebrew-tap](https://github.com/Cocoon-break/homebrew-tap) 里 `Casks/xpaste.rb` 的版本号和两个 dmg 的 sha256，用户 `brew upgrade --cask xpaste` 就能升到新版。
 
 - 它用的是 tap 仓库上一把有写权限的 deploy key，私钥存在本仓库的 Secret `TAP_DEPLOY_KEY`。没配置时只发警告，不影响发布。
