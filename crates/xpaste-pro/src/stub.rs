@@ -30,6 +30,10 @@ impl Line {
         &[]
     }
 
+    pub fn check_add(&self, _n: &NewNote, _now: i64) -> Result<(), LineError> {
+        Err(LineError::Unavailable)
+    }
+
     pub fn add(&mut self, _n: NewNote, _at: Option<usize>, _now: i64) -> Result<Note, LineError> {
         Err(LineError::Unavailable)
     }
