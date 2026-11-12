@@ -315,7 +315,11 @@ fn add(state: &AppState, mut n: NewNote, at: Option<usize>) -> Result<NoteDto, A
     check_source(&mut n)?;
     // 不带晾衣绳的构建不碰磁盘
     let staged = match &n.image_from {
-        Some(src) if crate::line::enabled() => Some(stage(&state.data_dir, src)?),
+        Some(src) if crate::line::enabled() => {
+            // 到期、挂满、重复的先在这里报，不白复制一份大图；复制期间别处挂满了，锁里的 `add` 再判一次
+            state.line().check_add(&n, now())?;
+            Some(stage(&state.data_dir, src)?)
+        }
         _ => None,
     };
     if let Some(s) = &staged {

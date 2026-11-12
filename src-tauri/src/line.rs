@@ -596,6 +596,11 @@ fn passive(how: How) -> bool {
     matches!(how, How::Flash | How::Remind)
 }
 
+/// 不常驻、自己放下来的绳子上按着键碰到了边缘（拖文件过来）：同常驻碰边，整窗接收到松开（`Pin.drag`）
+pub fn passive_drag(pinned: bool, how: How, press: Press) -> bool {
+    !pinned && passive(how) && press == Press::Drag
+}
+
 /// 放下着时又来了一次放下，后端记下的方式（同页面）：快捷键亮一下、提醒到点不改原来的鼠标、键盘、拖动，
 /// 原来也是这两种或只露绳子才换
 pub fn merge_how(cur: Option<How>, new: How) -> How {
@@ -1087,6 +1092,9 @@ fn detect(app: &AppHandle) {
                 if let Some(EdgeEvent::Open(how)) = edge.step(c, rects, t, press, &cfg) {
                     pin_edge(app, &mut pin, how, other_screen(c, win, rects));
                 }
+            }
+            if passive_drag(pin_on, how, press) {
+                pin.drag = true;
             }
             // 常驻、自己放下来的：按光标在不在能点的地方切换点穿
             if pin_on || passive(how) {
@@ -2393,6 +2401,23 @@ mod tests {
         // 刚放下、还没定过：按光标算
         assert!(!pass_through(true, true, false, None));
         // 按着键碰到边缘（拖文件过来）：整窗接收
+        assert!(!pass_through(false, true, true, Some(true)));
+    }
+
+    #[test]
+    fn passive_drop_takes_a_file_dragged_to_the_edge() {
+        // 亮一下、提醒到点放下的，按着键碰到边缘在拖东西：整窗接收
+        for how in [How::Flash, How::Remind] {
+            assert!(passive_drag(false, how, Press::Drag));
+            assert!(!passive_drag(false, how, Press::Held));
+            assert!(!passive_drag(false, how, Press::Up));
+        }
+        // 常驻的走碰边放下（`pin_edge`）；用户自己放下的本来就整窗接收
+        assert!(!passive_drag(true, How::Flash, Press::Drag));
+        for how in [How::Mouse, How::Kbd, How::Drag, How::Peek] {
+            assert!(!passive_drag(false, how, Press::Drag));
+        }
+        // 碰过边以后拖回便签上（不在能点的地方、按着键）仍然接收
         assert!(!pass_through(false, true, true, Some(true)));
     }
 
