@@ -654,9 +654,12 @@ fn toast_for(err: Option<&AppError>) -> Toast {
 /// 便签快捷键按下（读库、写便签文件等重活都在单独的线程里做，不占主线程）：面板可见 → 让面板挂它选中的记录；否则挂最新一条。
 /// 结果怎么显示见 `hang_and_flash`。
 pub fn hotkey_pressed(app: &AppHandle) {
-    let visible = app
-        .get_webview_window("panel")
-        .is_some_and(|w| w.is_visible().unwrap_or(false));
+    // 截图、录屏遮罩或长截图进行中：遮罩拿着键盘，这时放下绳子、拿键盘会让遮罩里的 Esc 失效
+    if crate::shot::active(app) || crate::longshot::active() {
+        return;
+    }
+    // 面板在屏上而且拿着键盘才交给它（淡出途中、用户已切到别的应用时照面板隐藏处理，挂最新一条）
+    let visible = crate::panel::visible(app) && crate::panel::holds_key(app);
     if visible {
         // 只发给面板：隐藏的晾衣绳窗口可能也载入了面板前端
         emit_to(app, "panel", LINE_HANG_SELECTED, ());
@@ -787,8 +790,9 @@ fn prewarm(app: &AppHandle) {
     match built {
         #[cfg(target_os = "macos")]
         Ok(w) => on_main(app, move |_| {
-            // 层级同划词卡片（NSFloatingWindowLevel）
-            if let Err(e) = crate::shot::to_overlay_panel(&w, 3) {
+            // 比面板、划词卡片、贴图（NSFloatingWindowLevel = 3）低一层：绳子放下时盖不住面板顶部，
+            // 点面板的搜索框不会落到绳子上（那会让绳子拿走键盘、面板失焦收起）
+            if let Err(e) = crate::shot::to_overlay_panel(&w, 2) {
                 log::warn!("晾衣绳窗口转换 NSPanel 失败：{e}");
             }
         }),
@@ -1548,8 +1552,17 @@ pub fn hidden(app: &AppHandle) {
 
 /// 撤下窗口。NSPanel 上 hide 即 orderOut，键盘交还仍处于激活状态的前台应用。主线程调用。
 fn take_down(w: &WebviewWindow) {
+    // 面板开着、键盘在面板上：macOS 撤下晾衣绳时可能把面板的键盘连带收走（面板唤起前键盘在晾衣绳上），撤下后还给它。
+    // 晾衣绳是因为用户点了别处才收的（BLURRED）就不还，面板按失焦收起
+    let app = w.app_handle();
+    let panel_key = !BLURRED.load(Ordering::SeqCst)
+        && crate::panel::visible(app)
+        && crate::panel::holds_key(app);
     if let Err(e) = w.hide() {
         log::warn!("隐藏晾衣绳失败：{e}");
+    }
+    if panel_key {
+        crate::panel::regain_key(app);
     }
     // Windows：经 show_no_activate 上屏时 tao 的标记仍是隐藏，上面的 hide() 不会真的隐藏
     #[cfg(windows)]
@@ -1739,6 +1752,7 @@ pub fn relocate(app: &AppHandle) {
 /// 晾衣绳窗口拿到键盘：页面没申请也会（点“复制”、拖木珠、Alt+Tab 切过来）。记下这一点，Windows 上再记下之前的前台窗口
 /// （此刻前台是自己，取最后一个外部前台窗口），交还时切回去
 pub fn focused() {
+    BLURRED.store(false, Ordering::SeqCst);
     let mut s = shown();
     if s.how.is_none() {
         return;
@@ -1751,9 +1765,28 @@ pub fn focused() {
 
 /// 晾衣绳窗口失去键盘（用户点了别的应用）：键盘已在用户点的地方，收起时不再切回原来的窗口。
 pub fn blur() {
+    BLURRED.store(true, Ordering::SeqCst);
     let mut s = shown();
     s.keyboard = false;
     s.previous = None;
+}
+
+/// 晾衣绳拿着键盘时用户点了别的应用（失焦），到下次拿到键盘为止
+static BLURRED: AtomicBool = AtomicBool::new(false);
+
+/// 面板要唤起：键盘在晾衣绳上就交出来，收起时也不再切回拿键盘前的窗口（那会从面板手里抢走前台）。主线程调用。
+pub fn yield_keyboard(app: &AppHandle) {
+    let kbd = {
+        let mut s = shown();
+        s.keyboard = false;
+        s.previous = None;
+        s.how == Some(How::Kbd)
+    };
+    // 键盘打开的绳子只在页面收到失焦时才退出键盘操作；这里是后端让它交出键盘，页面不一定收到失焦，
+    // 留着就一直整窗接收点击、挡在那里。键盘已经去了面板，直接收起（一直显示时不收）
+    if kbd {
+        hide(app);
+    }
 }
 
 /// 页面要键盘（点到便签、进入编辑）或交还。交还在 Windows 上切回原来的窗口；

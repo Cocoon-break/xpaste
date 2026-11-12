@@ -841,6 +841,15 @@ pub fn end(app: &AppHandle) {
 #[cfg(target_os = "macos")]
 pub fn overlay_crashed(w: &tauri::Webview) {
     let Some(i) = overlay_index(w.label()) else {
+        // 注册了这个回调后 tauri 不再替别的窗口重新加载：面板、划词卡片、晾衣绳、贴图也在这里重载。
+        // 晾衣绳只有页面会要求收起，页面没了就先收起，免得透明窗口一直挡在屏幕边上
+        log::warn!("{} 页面进程退出，重新加载", w.label());
+        if w.label() == crate::line::LABEL {
+            crate::line::hidden(w.app_handle());
+        }
+        if let Err(e) = w.reload() {
+            log::warn!("重新加载 {} 失败：{e}", w.label());
+        }
         return;
     };
     log::warn!("遮罩 {i} 页面进程退出，结束截图并重新加载");

@@ -3149,6 +3149,8 @@ const b = await bootstrap().catch((e: AppError) => {
   // 之后的每次 renderList 都显示这条，不被空列表文案覆盖
   bootError = e?.message || String(e);
   renderList();
+  // 错误页已经画好：照样放行面板显示，否则快捷键、托盘都唤不出面板，看上去是应用没反应
+  void frontendReady().catch(() => {});
   throw e;
 });
 S.settings = b.settings;
@@ -3364,6 +3366,14 @@ function endLineDrag(e: PointerEvent) {
 }
 document.addEventListener('pointerup', endLineDrag);
 document.addEventListener('pointercancel', endLineDrag);
+// 拖到一半面板被收起（Esc、快捷键、失焦）：松手事件不会再送到这里，绳子带着影子便签一直不收。这里按取消收尾
+void onPanelHidden(() => {
+  const d = lineDrag;
+  lineDrag = null;
+  if (!d) return;
+  cancelAnimationFrame(d.raf);
+  if (d.hovered) void lineHide().catch((err: AppError) => void info(`收起晾衣绳失败 kind=${err.kind}`));
+});
 
 pinBtn.addEventListener('click', (e) => S.sel !== null && togglePin(S.sel, e.detail !== 0));
 copyBtn.addEventListener('click', () => (S.multi.size >= 2 ? pasteSelection() : S.sel !== null && copyRecord(S.sel)));

@@ -138,6 +138,8 @@ pub fn translate_pressed(app: &AppHandle) {
         ShotRoute::Recorder => {
             crate::events::emit_to(app, "panel", crate::events::HOTKEY_PRESSED, "translate")
         }
+        // 截图、录屏遮罩或长截图进行中不弹卡片：卡片在遮罩下面看不见，却会拿走键盘
+        ShotRoute::Begin if crate::shot::active(app) || crate::longshot::active() => {}
         ShotRoute::Begin => crate::trcard::pressed(app),
     }
 }

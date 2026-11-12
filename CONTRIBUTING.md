@@ -25,6 +25,18 @@ make release-x64   # 在 Apple 芯片 Mac 上打 Intel 版 .dmg（需 rustup tar
 make release-win   # 在 macOS 上交叉打 Windows 安装程序（见下文）
 ```
 
+## 窗口键盘自检
+
+面板、晾衣绳、划词卡片、贴图在 macOS 上都是不激活应用的浮动窗口，它们之间换键盘时系统常常不发失焦。这类问题（面板留在屏上却没有键盘，Esc、点外面都收不掉）只在真实的窗口系统里出现，单元测试测不到。改了这些窗口的显示、隐藏、拿键盘的代码后，跑一遍自检：
+
+```sh
+XPASTE_FOCUS_CHECK=/tmp/focus-go make dev-isolated   # 需要带私有组件（没有晾衣绳时不启动自检）
+touch /tmp/focus-go                                  # 应用就绪后执行；约 25 秒，期间不要碰键盘鼠标
+grep FOCUS .xpaste-dev/logs/xPaste.log | tail -12    # 最后一行：FOCUS 完成：N 项，失败 M 项
+```
+
+场景在 `src-tauri/src/focus_check.rs`，只编进开发构建。它从后端入口驱动，和真实鼠标点击不完全一样，通过后仍要手动点一遍。
+
 ## 排查长截图
 
 开发构建里设 `XPASTE_LONG_DUMP=<目录> make dev-isolated`，长截图时每一帧按序号存成 PNG（正式构建不存）；用 `cargo run -p xpaste-core --example stitch_replay -- <目录> [--scale 2] [--out x.png]` 离线重放拼接，输出没接上的帧数、长图高度和最慢一帧的耗时，`--out` 把长图存成文件。存下的帧含屏幕内容，别提交进仓库。

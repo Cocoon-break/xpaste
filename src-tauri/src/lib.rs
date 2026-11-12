@@ -6,6 +6,8 @@ mod diag;
 mod enrich;
 pub mod error;
 mod events;
+#[cfg(debug_assertions)]
+mod focus_check;
 mod hotkey;
 mod housekeeping;
 mod line;
@@ -170,6 +172,8 @@ pub fn run() {
             trcard::prewarm(app.handle());
             if crate::line::enabled() {
                 line::start(app.handle());
+                #[cfg(debug_assertions)]
+                focus_check::start(app.handle());
             }
             // 首次启动直接显示面板与引导（AC-M18-01）
             if first_run {
@@ -210,6 +214,8 @@ pub fn run() {
                         )
                     };
                     match hotkey::role_of(shortcut, &p, &s, &r, &t, &l) {
+                        // 截图、录屏遮罩或长截图进行中不唤起：面板在遮罩下面看不见，却会拿走键盘，遮罩里按 Esc 就失效了
+                        Some(hotkey::Role::Panel) if shot::active(app) || longshot::active() => {}
                         Some(hotkey::Role::Panel) => {
                             panel::toggle(app, timing.then(now_unix_ms), panel::Trigger::Hotkey)
                         }
@@ -264,11 +270,13 @@ pub fn run() {
             if window.label() == line::LABEL && matches!(event, WindowEvent::Focused(true)) {
                 // 页面没申请键盘时（点按钮、拖木珠）也记下，交还时切回原来的窗口
                 line::focused();
-                let app = window.app_handle();
-                if panel::visible(app) && panel::blur_hides(app) {
-                    log::info!("晾衣绳拿到键盘，面板没收到失焦，替它隐藏");
-                    panel::hide(app);
-                }
+            }
+            // 划词卡片、贴图同理（遮罩除外：遮罩期间面板按规则留着，结束后把键盘还给它）
+            if window.label() != "panel"
+                && shot::overlay_index(window.label()).is_none()
+                && matches!(event, WindowEvent::Focused(true))
+            {
+                panel::other_took_key(window.app_handle());
             }
             // 晾衣绳失焦（点了别的应用）：收起时不再把键盘切回拿键盘前的窗口
             if window.label() == line::LABEL && matches!(event, WindowEvent::Focused(false)) {
