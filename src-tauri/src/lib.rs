@@ -214,8 +214,6 @@ pub fn run() {
                         )
                     };
                     match hotkey::role_of(shortcut, &p, &s, &r, &t, &l) {
-                        // 截图、录屏遮罩或长截图进行中不唤起：面板在遮罩下面看不见，却会拿走键盘，遮罩里按 Esc 就失效了
-                        Some(hotkey::Role::Panel) if shot::active(app) || longshot::active() => {}
                         Some(hotkey::Role::Panel) => {
                             panel::toggle(app, timing.then(now_unix_ms), panel::Trigger::Hotkey)
                         }
