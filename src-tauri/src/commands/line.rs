@@ -808,10 +808,20 @@ pub fn line_side_hint(app: AppHandle, side: xpaste_core::LineSide) -> String {
     crate::line::side_hint(&app, side)
 }
 
-/// 页面要收起（离开便签区域、Esc、快捷键挂上后停够时间）：发 `line-hide`，页面收完再调 `line_hidden`
+/// 页面要收起（离开便签区域、Esc、快捷键挂上后停够时间）：发 `line-hide`，页面收完再调 `line_hidden`。
+/// 面板里拖着行又拖回去松手也调它：一直显示时不收，改发 `line-drag-cancel` 让页面拿掉影子便签
 #[tauri::command]
 pub fn line_hide(app: AppHandle) {
-    crate::line::hide(&app);
+    if crate::line::pinned() {
+        crate::events::emit_to(
+            &app,
+            crate::line::LABEL,
+            crate::events::LINE_DRAG_CANCEL,
+            (),
+        );
+    } else {
+        crate::line::hide(&app);
+    }
 }
 
 /// 页面播完收起，窗口真正隐藏

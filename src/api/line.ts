@@ -163,6 +163,8 @@ export const onLinePointer = (cb: (inside: boolean, pass: boolean) => void): Pro
 /** 便签的提醒到了：每张到期的发一次，页面让它高亮 */
 export const onLineRemind = (cb: (id: number) => void): Promise<UnlistenFn> =>
   listen<{ id: number }>('line-remind', (e) => cb(e.payload.id), target());
+/** 面板里拖着行又拖回面板松手，绳子一直显示着不收：拿掉影子便签 */
+export const onLineDragCancel = (cb: () => void): Promise<UnlistenFn> => listen('line-drag-cancel', () => cb(), target());
 /** 面板里拖着行在绳子那一侧松手：记录 id 与光标的屏幕坐标 */
 export const onLineDrop = (cb: (id: number, x: number, y: number) => void): Promise<UnlistenFn> =>
   listen<{ id: number; x: number; y: number }>('line-drop', (e) => cb(e.payload.id, e.payload.x, e.payload.y), target());
