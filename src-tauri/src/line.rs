@@ -309,7 +309,7 @@ pub fn dock_hint(
     if elsewhere {
         format!("{DOCK_NAME}占满了{at}，换到另一块屏的边上")
     } else if key.is_empty() {
-        format!("{DOCK_NAME}占满了{at}，去设置里开快捷键")
+        format!("{DOCK_NAME}占满了{at}，先开启晾衣绳快捷键")
     } else {
         format!("{DOCK_NAME}占满了{at}，用快捷键 {key} 放下")
     }
@@ -2335,7 +2335,7 @@ mod tests {
         );
         assert_eq!(
             hint(LineSide::Left, &full, "", false),
-            format!("{DOCK_NAME}占满了左侧，去设置里开快捷键")
+            format!("{DOCK_NAME}占满了左侧，先开启晾衣绳快捷键")
         );
         assert_eq!(
             hint(LineSide::Left, &full, "⌥ + Shift + N", true),
@@ -2348,7 +2348,7 @@ mod tests {
         };
         assert_eq!(
             hint(LineSide::Right, &r(10., 880., false), "", false),
-            format!("{DOCK_NAME}占满了右侧，去设置里开快捷键")
+            format!("{DOCK_NAME}占满了右侧，先开启晾衣绳快捷键")
         );
         assert_eq!(hint(LineSide::Left, &d(250., 400., false), "", false), "");
     }
