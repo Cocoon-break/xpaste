@@ -297,6 +297,14 @@ addEventListener('focusin', (e) => {
 }, true);
 addEventListener('pointerdown', () => (fresh = false), true);
 addEventListener('keydown', () => (fresh = false), true);
+// 不弹 WebView 原生菜单（含“重新加载”：重载后卡片认不出自己的序号，Esc、失焦都关不掉）；输入框保留系统的编辑菜单
+addEventListener('contextmenu', (e) => {
+  if (!(e.target as Element).closest('input, textarea')) e.preventDefault();
+});
+// Windows 的 WebView2 默认开着浏览器快捷键，F5、Ctrl+R 会重新加载页面
+if (!MAC) addEventListener('keydown', (e) => {
+  if (e.key === 'F5' || (e.ctrlKey && e.key.toLowerCase() === 'r')) e.preventDefault();
+}, true);
 addEventListener('focus', () => {
   if (st.kind === 'idle' && document.activeElement === document.body) src()?.focus();
 });

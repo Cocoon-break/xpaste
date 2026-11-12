@@ -409,6 +409,14 @@ pub fn begin(app: &AppHandle, mode: Mode) {
         .is_some_and(|w| w.is_visible().unwrap_or(false));
     // 设置或确认框开着：面板不隐藏，跟屏上其他内容一样截进去，截完回到对话框（M15 交互规则 4）
     let hide_panel = panel_shown && !keeps_panel(app);
+    // 截完只在开始时键盘就在面板上才还给面板：对话框开着、用户已切到别的应用时不把键盘抢回来
+    PANEL_HAD_KEY.store(
+        panel_shown
+            && app
+                .get_webview_window("panel")
+                .is_some_and(|w| w.is_focused().unwrap_or(false)),
+        Ordering::SeqCst,
+    );
     // 已全部上屏的遮罩被关掉或隐藏了（Windows 上 Alt+F4 已拦下，这里兜底）：会话不会再结束，重新开始
     let shown = session(app).shown_overlays();
     let lost = (0..shown).any(|i| {
@@ -859,6 +867,9 @@ pub fn overlay_crashed(w: &tauri::Webview) {
     }
 }
 
+/// 这次截图开始时键盘在面板上
+static PANEL_HAD_KEY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// `generation`：刚结束的那一次截图，在结束它的同一次加锁里取，不会误报给之后开始的新一次。
 fn after_end(app: &AppHandle, generation: u64, previous: Option<isize>) {
     hide_overlays(app);
@@ -866,7 +877,7 @@ fn after_end(app: &AppHandle, generation: u64, previous: Option<isize>) {
         && app
             .get_webview_window("panel")
             .is_some_and(|w| w.is_visible().unwrap_or(false));
-    if panel_kept {
+    if panel_kept && PANEL_HAD_KEY.load(Ordering::SeqCst) {
         // 截图时没隐藏的面板（开着对话框）：键盘回到对话框，不还给原来的应用
         crate::panel::refocus(app);
     } else if let Some(h) = previous {

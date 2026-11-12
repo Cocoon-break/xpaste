@@ -39,6 +39,8 @@ pub struct AppState {
     pub translating: Mutex<HashMap<i64, u64>>,
     /// 正在下载语言包：系统确认框可能抢走焦点，期间面板失焦不隐藏；同一时刻只下载一个（M26 规则 17）
     pub tr_downloading: AtomicBool,
+    /// 上面这次下载是面板发起的：只有这时面板失焦才不隐藏（划词卡片、截图里下载时不牵连面板）
+    pub tr_download_panel: AtomicBool,
     /// 划词翻译卡片的会话（M26 规则 19）
     pub trcard: Mutex<trcard::Session>,
     /// 晾衣绳便签与 Pro 状态；没有私有代码的构建里是空实现
@@ -73,6 +75,7 @@ impl AppState {
             rec: Mutex::default(),
             translating: Mutex::default(),
             tr_downloading: AtomicBool::new(false),
+            tr_download_panel: AtomicBool::new(false),
             trcard: Mutex::default(),
             line: Mutex::new(line),
         }

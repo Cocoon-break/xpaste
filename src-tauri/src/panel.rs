@@ -361,6 +361,9 @@ pub fn frontend_ready(app: &AppHandle) {
 /// `trigger` 随 `panel-shown` 发给前端，决定进入动效的时长（托盘单击用鼠标时长）。
 /// 网页未就绪时只记下来源，`frontend_ready` 时再显示（见 `READY`）。
 pub fn show(app: &AppHandle, t0: Option<u64>, trigger: Trigger) {
+    if under_overlay(app) {
+        return;
+    }
     let ready = READY.load(Ordering::SeqCst);
     let now = PENDING_SHOW
         .lock()
@@ -386,6 +389,12 @@ pub fn paste_target(trigger: Trigger, foreground: Option<isize>) -> isize {
     } else {
         foreground.unwrap_or(0)
     }
+}
+
+/// 截图、录屏遮罩或长截图进行中：这时唤起面板，它在遮罩下面看不见，却会拿走键盘，遮罩里按 Esc 就失效了；
+/// 长截图还全局占着回车、Esc、空格，面板里这三个键不起作用。快捷键、托盘、再次启动都不唤起也不切换
+fn under_overlay(app: &AppHandle) -> bool {
+    crate::shot::active(app) || crate::longshot::active()
 }
 
 /// 粘贴失败后重新显示面板给出降级提示；不覆盖 `previous_window`（此时前台可能已是别的窗口）。
@@ -657,7 +666,7 @@ fn watch(_: &AppHandle) {}
 pub fn blur_hides(app: &AppHandle) -> bool {
     let state = app.state::<AppState>();
     !state.blur_keeps.load(Ordering::SeqCst)
-        && !state.tr_downloading.load(Ordering::SeqCst)
+        && !state.tr_download_panel.load(Ordering::SeqCst)
         && !crate::trcard::has_keyboard(app)
         && !crate::shot::active(app)
 }
@@ -745,6 +754,9 @@ fn hide_pending(req: u64, fading: u64) -> bool {
 /// 以窗口实际可见性为准切换。可见时不直接隐藏，请前端先播淡出再调 `hide_panel`；
 /// 前端失效时由兜底线程隐藏。
 pub fn toggle(app: &AppHandle, t0: Option<u64>, trigger: Trigger) {
+    if under_overlay(app) {
+        return;
+    }
     let Some(w) = window(app) else { return };
     let visible = match w.is_visible() {
         Ok(v) => v,
