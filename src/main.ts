@@ -3336,6 +3336,10 @@ setInterval(() => {
 renderTabs(true);
 renderSpectrum();
 renderList();
+// 面板窗口从没上过屏时 WebKit 不推进动画时钟：启动时设主题、材质、data-native-fade（开发版还有样式表晚到）
+// 引起的过渡都停在第 0 帧，第一次唤起才开始播——内容先透明、菜单露出来，看上去是一块白闪一下。
+// 这些过渡本来就不该播，就绪前直接走完，首次唤起与之后一致（AC-M04-09）；之后每次唤起的进入过渡在 shown() 里另起，不受影响
+for (const a of document.getAnimations()) if (a instanceof CSSTransition) a.finish();
 // 列表已渲染好，后端这时才允许面板上屏：启动后网页就绪前按的快捷键 / 托盘 / 首次启动在这里补显示，
 // 用户看到的第一帧就是完整列表，不会先空白再出现
 void frontendReady().catch((e: AppError) => info(`frontend_ready 失败：${e?.message || e}`));
