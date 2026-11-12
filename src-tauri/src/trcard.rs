@@ -56,6 +56,8 @@ pub struct Session {
     keyboard: bool,
     /// 这张卡片上选的目标语言；None 为“自动”（按设置的目标语言，规则 9）
     lang: Option<Lang>,
+    /// 这张卡片上选的原文语言；None 为“自动”（系统识别，规则 7）
+    from: Option<Lang>,
     /// 卡片上发起的语言包下载进行中：系统确认框挂在卡片上，期间失焦不关闭
     downloading: bool,
 }
@@ -277,6 +279,7 @@ fn reset(app: &AppHandle) -> u64 {
         }
         s.keyboard = false;
         s.lang = None;
+        s.from = None;
         (s.bump(), back)
     };
     // 卡片开着时先撤下：拿着键盘的话先交还（同关闭），模拟复制才发得到原来的应用。前端随后的 blur 带着旧序号，被忽略
@@ -522,17 +525,18 @@ fn panel_shown(app: &AppHandle) -> bool {
 
 /// 翻译会话原文，增量只发给卡片；被新的一次取代时中止请求、不再发事件。
 async fn run(app: AppHandle, seq: u64, engine: Option<Engine>) {
-    let (text, lang) = {
+    let (text, lang, from) = {
         let s = session(&app);
         if !s.is_current(seq) {
             return;
         }
-        (s.text.clone(), s.lang)
+        (s.text.clone(), s.lang, s.from)
     };
     let mut cfg = translate::cfg_for(&app.state::<AppState>().settings(), engine);
     if let Some(l) = lang {
         cfg.lang = l;
     }
+    cfg.from = from;
     let tag = cfg.tag();
     let current = || session(&app).is_current(seq);
     let emit = |p: Delta| events::emit_to(&app, LABEL, TRANSLATE_DELTA, p);
@@ -582,6 +586,7 @@ pub fn translate(
     seq: u64,
     text: String,
     lang: Option<Lang>,
+    from: Option<Lang>,
     engine: Option<Engine>,
 ) -> Result<Again, AppError> {
     if text.trim().is_empty() {
@@ -594,6 +599,7 @@ pub fn translate(
         }
         s.text = text;
         s.lang = lang;
+        s.from = from;
         s.bump()
     };
     let engine_tag = translate::cfg_for(&app.state::<AppState>().settings(), engine).tag();

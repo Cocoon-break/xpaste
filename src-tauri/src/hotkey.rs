@@ -221,12 +221,20 @@ pub fn label(shortcut: &str) -> String {
             _ => key = t.to_ascii_uppercase(),
         }
     }
+    let key = match key.as_str() {
+        "SPACE" => "Space",
+        "UP" => "↑",
+        "DOWN" => "↓",
+        "LEFT" => "←",
+        "RIGHT" => "→",
+        k => k,
+    };
     let parts = [
         (m, if mac { "⌘" } else { "Ctrl" }),
         (c && (mac || !m), if mac { "⌃" } else { "Ctrl" }),
         (a, if mac { "⌥" } else { "Alt" }),
         (s, "Shift"),
-        (!key.is_empty(), key.as_str()),
+        (!key.is_empty(), key),
     ];
     parts
         .iter()
@@ -385,5 +393,28 @@ mod tests {
             label("CommandOrControl+Control+Z"),
             if mac { "⌘ + ⌃ + Z" } else { "Ctrl + Z" }
         );
+        assert_eq!(
+            label("Alt+Space"),
+            if mac { "⌥ + Space" } else { "Alt + Space" }
+        );
+        assert_eq!(label("Alt+`"), if mac { "⌥ + `" } else { "Alt + `" });
+        assert_eq!(label("Alt+Up"), if mac { "⌥ + ↑" } else { "Alt + ↑" });
+    }
+
+    #[test]
+    fn symbol_and_space_keys_parse() {
+        for k in [
+            "CommandOrControl+`",
+            "CommandOrControl+Shift+Space",
+            "Alt+;",
+            "Alt+\\",
+            "Alt+Left",
+            "Alt+F20",
+        ] {
+            assert!(
+                k.parse::<tauri_plugin_global_shortcut::Shortcut>().is_ok(),
+                "{k}"
+            );
+        }
     }
 }
