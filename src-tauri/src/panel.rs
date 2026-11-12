@@ -600,6 +600,7 @@ fn resign_key(app: &AppHandle) {
 fn resign_key(_: &AppHandle) {}
 
 /// 看门收起过几次（开发版自检用：靠它兜住的场景不算通过）
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))] // 看门只在 macOS 上，Windows 的发布构建里没人读
 pub static WATCH_HITS: AtomicU64 = AtomicU64::new(0);
 /// 面板已唤起、还没隐藏
 static UP: AtomicBool = AtomicBool::new(false);
