@@ -60,8 +60,9 @@ make release-win   # 在 macOS 上交叉打 Windows 安装程序（见下文）
 `.github/workflows/release.yml` 在推送 `v*` 标签时打 Apple 芯片、Intel、Windows 三个安装包，并发布 GitHub Release。每个安装包另存一份不带版本号的文件名（`xPaste_aarch64.dmg`、`xPaste_x64.dmg`、`xPaste_x64-setup.exe`），官网和 README 用 `releases/latest/download/<文件名>` 固定链接到最新版。
 
 1. 同步改 `package.json` 与根 `Cargo.toml` 中 `[workspace.package]` 的版本号（`pnpm check:version` 检查两者一致），走 PR 合并到 `main`。
-2. 在 `main` 上打标签并推送：`git tag v0.2.1 && git push origin v0.2.1`。标签必须等于 `v` + 版本号，不一致时流程直接失败。
-3. 给已有标签补发或重发：Actions → Release → Run workflow，填标签名。
+2. 先给私有组件仓库打同名标签并推送（`v0.2.1`），指向这次要带的那份私有代码。发版流程按标签拉私有代码，找不到同名标签就失败。
+3. 在 `main` 上打标签并推送：`git tag v0.2.1 && git push origin v0.2.1`。标签必须等于 `v` + 版本号，不一致时流程直接失败。
+4. 给已有标签补发或重发：Actions → Release → Run workflow，填标签名。用的仍是两边同名标签上的代码。
 
 发布之后，流程里的 `tap` 任务会更新 [Cocoon-break/homebrew-tap](https://github.com/Cocoon-break/homebrew-tap) 里 `Casks/xpaste.rb` 的版本号和两个 dmg 的 sha256，用户 `brew upgrade --cask xpaste` 就能升到新版。
 
@@ -77,8 +78,8 @@ make release-win   # 在 macOS 上交叉打 Windows 安装程序（见下文）
 - 刚克隆出 `pro/` 后如果编译结果仍是空实现（`cfg(pro)` 没有切过来），执行 `touch crates/xpaste-pro/build.rs` 再编译。
 - `crates/xpaste-pro/Cargo.toml` 的依赖要和私有实现 `pro/rust/` 用到的一致，私有实现多用了依赖时两边一起改。
 - **公开代码与公开提交信息不写私有规格的编号**，注释里直接写规则本身。
-- **按大版本收费**：授权码写明适用的大版本，应用的大版本 0.x 按 1 算，授权码的大版本要大于等于应用的。`make -C pro license EMAIL=…` 默认签 1.x，签别的版本加 `MAJOR=2`。发 2.0 之前，先定好升级价和给老用户的提示，再改签发默认值；不要为了“兼容”放宽判断，否则旧授权码会在 2.0 上继续有效。
-- **签发**：`make -C pro license EMAIL=…`，打印出一行授权码。首次使用先 `make -C pro keygen`。
+- **按大版本收费**：授权码写明适用的大版本，应用的大版本 0.x 按 1 算，授权码的大版本要大于等于应用的。签发时必须写明大版本，比如 `MAJOR=1`，不写就报错。发 2.0 之前，先定好升级价和给老用户的提示；不要为了“兼容”放宽判断，否则旧授权码会在 2.0 上继续有效。
+- **签发**：`make -C pro license EMAIL=… MAJOR=1`，打印出一行授权码。首次使用先 `make -C pro keygen`。
 - **吊销**：`make -C pro revoke CODE=…`，把打印出来的一行加进 `REVOKED`，发版后生效（退款时做这件事，EULA 里写了退款后授权码会被停用）。
 - **私钥 `pro/license.local` 绝对不能进任何仓库**，要单独备份：丢了就签不出新授权码，泄露了任何人都能签发。
 - **签名团队校验**：macOS 正式构建（release）只有用团队 `GP6QC26B5F` 的 Developer ID 证书签名时才启用 Pro，没签名、ad-hoc 签名或别的证书重签的副本表现同开源版（没有晾衣绳和“Pro”标签）。开发构建（`make dev-isolated`）不查。本地打测试用的 Pro 安装包要带上签名身份：`APPLE_SIGNING_IDENTITY="Developer ID Application: …（GP6QC26B5F）" pnpm tauri build --bundles dmg`（不设 `APPLE_ID` 等就只签名不公证）。Windows 安装包没签名，不做这项校验。
@@ -109,7 +110,7 @@ cargo install cargo-xwin        # MSVC 运行库与 Windows SDK（首次运行�
 ## 签名与公证
 
 - **macOS**：安装包用 Developer ID Application 证书签名并公证。
-  - CI：`release.yml` 把仓库 Secrets 里的六个值传给 `make release`，Tauri 签名并公证 `.app`；之后再把 dmg 本身提交公证、附上票据（Tauri 只公证 `.app`）。最后检查 dmg 和里面的 `.app` 都带公证票据、系统放行，否则失败，不发布。
+  - CI：`release.yml` 把仓库 Secrets 里的六个值传给 `make release`，Tauri 签名并公证 `.app`；之后再把 dmg 本身提交公证、附上票据（Tauri 只公证 `.app`）。最后检查 dmg 和里面的 `.app` 都带公证票据、系统放行，`.app` 的签名团队和 `pro/rust/genuine.rs` 里的团队号一致，否则失败，不发布。
     - `APPLE_CERTIFICATE`：证书连同私钥导出的 `.p12`，base64 编码
     - `APPLE_CERTIFICATE_PASSWORD`：`.p12` 的导出密码
     - `APPLE_SIGNING_IDENTITY`：证书名称，如 `Developer ID Application: <名字> (<TEAM ID>)`
