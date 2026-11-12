@@ -37,6 +37,8 @@ pub const LINE_SHOW: &str = "line-show";
 pub const LINE_HIDE: &str = "line-hide";
 /// 面板里把行拖出顶边，只发给 `line`：`{ x, y }`，光标的屏幕逻辑坐标，页面据 x 空出落点。
 pub const LINE_DRAG: &str = "line-drag";
+/// 面板里拖着行又拖回面板松手、绳子一直显示着（不收起），只发给 `line`：无载荷，页面拿掉跟手的影子便签和让出的空位。
+pub const LINE_DRAG_CANCEL: &str = "line-drag-cancel";
 /// 面板里拖着行在顶端松手，只发给 `line`：`{ id, x }`，页面按 x 算出位置后调 `line_hang_record`。
 pub const LINE_DROP: &str = "line-drop";
 /// 绳子放下期间光标进出便签区域，只发给 `line`：`{ inside }`，变了才发。区域是晾衣绳窗口往上延到屏幕顶端（含菜单栏那一条），
