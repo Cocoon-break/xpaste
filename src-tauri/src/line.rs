@@ -1169,6 +1169,7 @@ fn screen_rects(all: &[tauri::Monitor], primary: Option<&tauri::Monitor>) -> (Ve
 
 /// 窗口 `fronts` 里有一个盖满了某一块屏（容 1 px）：macOS 上前台应用的窗口这样，就是全屏空间、全屏演示。
 /// `screens` 是各屏的矩形和刘海高度：刘海屏上全屏应用让在刘海下面，顶边多容这么多（菜单栏比刘海高，最大化的窗口仍不算）。
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn covers_screen(fronts: &[Rect], screens: &[(Rect, f64)]) -> bool {
     fronts.iter().any(|f| {
         screens.iter().any(|&(s, notch)| {
