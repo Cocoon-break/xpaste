@@ -7,7 +7,7 @@ import {
 } from '../api/card';
 import { error as logError } from '../api/log';
 import type { AppError, Engines } from '../api/types';
-import { otherEngine, staleDelta, type Engine } from '../translate';
+import { LANG_LABEL, otherEngine, staleDelta, type Engine } from '../translate';
 import { composing } from '../ime';
 import { cardHTML, type CardState } from './view';
 
@@ -47,9 +47,15 @@ let want: Engine | undefined;
 /** 这张卡片选的目标语言，空串为自动（M26 规则 20）；sent：上一次按什么原文和语言翻的，改过就是 dirty */
 let pick = '';
 let sent: { text: string; pick: string } | null = null;
+/** 缺语言包后用户改选的原文语言，空串为系统识别（M26 规则 19）；只有系统翻译带上 */
+let from = '';
 
 const tr = (): Tr | null => (st.kind === 'blocked' ? null : st);
 const dirty = (s: Tr) => !sent || s.source !== sent.text || pick !== sent.pick;
+/** 缺语言包时可改选的原文语言：五种里去掉系统认出的那种和与目标同一种语言的（简繁算同一种） */
+const base = (c: string) => c.split('-')[0];
+const altOf = (p: { source: string; target: string }) =>
+  Object.keys(LANG_LABEL).filter((c) => c !== p.source && base(c) !== base(p.target));
 const kindOf = (tag: string): Engine | undefined => (tag === 'system' ? 'system' : tag.startsWith('openai:') ? 'openai' : undefined);
 const src = () => root.querySelector<HTMLTextAreaElement>('textarea.c-orig');
 /** 译文正文（展开对照时左栏原文也是 .c-body） */
@@ -59,7 +65,9 @@ const bodies = () => [...root.querySelectorAll<HTMLElement>('.c-body')];
 function render(pop = false) {
   const s = tr();
   // 另一种能用时就有换用按钮，翻译中也有（M26 规则 16）
-  const view: CardState = s ? { ...s, other: engines ? otherEngine(s.engine, engines) : null, pick, dirty: dirty(s) } : st;
+  const view: CardState = s
+    ? { ...s, other: engines ? otherEngine(s.engine, engines) : null, pick, dirty: dirty(s), alt: pack ? altOf(pack) : undefined }
+    : st;
   // 新卡片（pop）不沿用上一张卡片的焦点：隐藏前点过的下拉框会被重新聚焦、画出焦点环
   const focused = pop ? undefined : (document.activeElement as HTMLElement | null)?.dataset.act;
   const tops = new Map(bodies().map((b) => [b.classList.contains('c-orig'), b.scrollTop]));
@@ -110,7 +118,7 @@ void onCardShow((p) => {
   fresh = true;
   pack = null;
   want = undefined;
-  pick = '';
+  pick = from = '';
   sent = null;
   if (p.kind === 'blocked') {
     st = { kind: 'blocked' };
@@ -164,9 +172,9 @@ void onCardDone((p) => {
 async function go(engine?: Engine) {
   const s = tr();
   if (!s || !s.source.trim()) return;
-  const from = seq;
+  const at = seq;
   const e = engine ?? kindOf(s.engine);
-  seq = from + 1;
+  seq = at + 1;
   pack = null;
   want = e;
   sent = { text: s.source, pick };
@@ -176,7 +184,8 @@ async function go(engine?: Engine) {
   });
   render();
   try {
-    const r = await cardTranslate(from, s.source, pick || null, e);
+    // 换用 AI 翻译时不带原文语言：AI 自己判断
+    const r = await cardTranslate(at, s.source, pick || null, (e === 'system' && from) || null, e);
     if (r.seq === seq && st === s && s.kind === 'busy') { s.engine = r.engine; render(); }
   } catch {
     // 卡片已关闭或已被取代：窗口已撤下
@@ -232,6 +241,7 @@ root.addEventListener('click', (e) => {
     case 'close': return void cardClose(at);
     case 'wide': wide = !wide; return render();
     case 'switch': return void go(b.dataset.engine as Engine);
+    case 'from': from = b.dataset.lang ?? ''; return void go('system');
     case 'pack': return void downloadPack();
     // 先关卡片交还键盘，再唤起面板
     case 'settings': return void cardClose(at).finally(() => openPanelSettings('translate'));

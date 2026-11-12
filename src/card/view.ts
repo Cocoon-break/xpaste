@@ -4,7 +4,8 @@ import { engineLabel, LANG_LABEL, type Engine } from '../translate.ts';
 
 /** blocked：2 秒后消失的提示；其余为翻译卡片。idle：输入卡片还没翻译过（规则 20）。engine：翻译方式标签；
  *  other：能换用的另一种（otherEngine）；errorKind：失败时的 AppError.kind；copied：复制成功，900 ms 后关闭。
- *  只有划词卡片用：lang 实际翻成的语言代码；pick 这张卡片选的目标语言（空串为自动）；dirty 原文或目标语言改过、还没按它翻译 */
+ *  只有划词卡片用：lang 实际翻成的语言代码；pick 这张卡片选的目标语言（空串为自动）；dirty 原文或目标语言改过、还没按它翻译；
+ *  alt 缺语言包时可以改选的原文语言代码（M26 规则 19：系统多半认错了原文语言） */
 export type CardState =
   | { kind: 'blocked' }
   | {
@@ -20,6 +21,7 @@ export type CardState =
     lang?: string;
     pick?: string;
     dirty?: boolean;
+    alt?: string[];
   };
 
 const SOURCE_CHARS = 40;
@@ -61,6 +63,9 @@ export function cardInner(s: Exclude<CardState, { kind: 'blocked' }>, wide?: boo
     body = `<div class="c-cols"><textarea class="c-body c-orig" data-act="src" aria-label="原文" placeholder="输入要翻译的文字" spellcheck="false">${esc(s.source)}</textarea>${right}</div>`;
   }
   const err = s.kind !== 'busy' && s.error ? `<div class="c-err">${esc(s.error)}</div>` : '';
+  // 缺语言包时多半是认错了原文语言：给几种语言，点了按它重翻
+  const alt = s.kind === 'fail' && s.errorKind === 'translatePack' && s.alt?.length
+    ? `<div class="c-alt">认错了语言？原文是${s.alt.map((c) => btn('from', LANG_LABEL[c] ?? c, ` data-lang="${c}"`)).join('')}</div>` : '';
   const note = s.noAccess ? `<div class="c-note"><span>没有辅助功能权限，翻译的是剪切板里的文字</span>${btn('access', '前往授权')}</div>` : '';
   let foot: string;
   if (s.copied) foot = '<div class="c-foot"><span class="c-ok" role="status">已复制译文</span></div>';
@@ -81,5 +86,5 @@ export function cardInner(s: Exclude<CardState, { kind: 'blocked' }>, wide?: boo
   const line = `<div class="c-title" title="${esc(title)}"${drag}>${esc(title)}</div>`;
   const toggle = s.kind === 'idle' ? '' : `<button type="button" data-act="wide" aria-pressed="${wide}">${wide ? '收起' : '对照原文'}</button>`;
   const top = wide === undefined || s.copied ? line : `<div class="c-head"${drag}>${line}${wide ? langSelect(s.pick ?? '') : ''}${toggle}</div>`;
-  return (s.source && !wide ? `<div class="c-src"${drag}>${esc(clipSource(s.source))}</div>` : '') + top + body + err + note + foot;
+  return (s.source && !wide ? `<div class="c-src"${drag}>${esc(clipSource(s.source))}</div>` : '') + top + body + err + alt + note + foot;
 }

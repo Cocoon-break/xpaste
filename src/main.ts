@@ -31,7 +31,7 @@ import {
   canInlinePlay, esc, FILTERS, FL, fmtBytes, fmtDateTime, fmtDur, fmtInt, hl, hlCode, host, isFav, isHttpUrl, isSnip, LABEL, rel, truncate, videoChips,
   type Filter,
 } from './format';
-import { hotkeyFromEvent, hotkeyLabel } from './hotkey';
+import { hotkeyFromEvent, hotkeyHint, hotkeyLabel } from './hotkey';
 import { keyAction } from './keymap';
 import { copyVerb, escHint, exportNote, fileTextHelp, importNote, openLabel, snippetExportName } from './labels';
 import { ocrLabel, ocrProgressLabel, snippetHTML } from './ocr-label';
@@ -1886,20 +1886,37 @@ function optHotkey(id: string, idle = OPT_IDLE) {
   };
   input.addEventListener('focus', () => f.setHelp('请按下组合键，至少包含一个修饰键；⌫ 清空…'));
   input.addEventListener('blur', () => f.setHelp(idle));
+  recordKeys(input, f.setHelp, f.record, () => {
+    f.pending = '';
+    input.value = '';
+    f.setHelp('已清空，保存后不启用');
+  });
+  return f;
+}
+// 所有快捷键录制框共用的按键处理；clear 给了就能按不带修饰键的 ⌫ / Delete 清空。
+// 从按下第一个修饰键到全部松开都没收到主键：这组多半已被系统或其他应用的全局快捷键先拿走，网页收不到（M15 交互规则 3）
+const MOD_KEYS = ['Control', 'Meta', 'Shift', 'Alt'];
+let hotkeyGot = false;
+function recordKeys(input: HTMLInputElement, help: (msg: string) => void, record: (h: string) => void, clear?: () => void) {
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Tab' || e.key === 'Escape') return;
     e.preventDefault();
-    if (e.repeat || ['Control', 'Meta', 'Shift', 'Alt'].includes(e.key)) return;
-    if ((e.key === 'Backspace' || e.key === 'Delete') && !(e.ctrlKey || e.metaKey || e.altKey || e.shiftKey)) {
-      f.pending = '';
-      input.value = '';
-      return f.setHelp('已清空，保存后不启用');
+    if (MOD_KEYS.includes(e.key)) {
+      if ([e.metaKey, e.ctrlKey, e.altKey, e.shiftKey].filter(Boolean).length === 1) hotkeyGot = false;
+      return;
     }
-    const h = hotkeyFromEvent({ key: e.key, code: e.code, ctrl: e.ctrlKey, meta: e.metaKey, alt: e.altKey, shift: e.shiftKey }, S.platform.os);
-    if (!h) return f.setHelp(S.platform.os === 'macos' ? '至少需要包含 ⌘、⌃ 或 ⌥' : '至少需要包含 Ctrl 或 Alt');
-    f.record(h);
+    hotkeyGot = true;
+    // 按住不放的重复事件不重播弹跳与提示
+    if (e.repeat) return;
+    if (clear && (e.key === 'Backspace' || e.key === 'Delete') && !(e.ctrlKey || e.metaKey || e.altKey || e.shiftKey)) return clear();
+    const ev = { key: e.key, code: e.code, ctrl: e.ctrlKey, meta: e.metaKey, alt: e.altKey, shift: e.shiftKey };
+    const h = hotkeyFromEvent(ev, S.platform.os);
+    if (!h) return help(hotkeyHint(ev, S.platform.os));
+    record(h);
   });
-  return f;
+  input.addEventListener('keyup', (e) => {
+    if (MOD_KEYS.includes(e.key) && !(e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) && !hotkeyGot) help('没收到组合键：可能已被系统或其他应用占用，请换一个');
+  });
 }
 const shotKey = optHotkey('shotHotkey'), recKey = optHotkey('recHotkey');
 const trKey = optHotkey('trHotkey', '在任何应用里选中文字后按下，译文显示在鼠标旁');
@@ -2512,15 +2529,7 @@ dlg.addEventListener('click', (e) => {
 });
 hotkeyIn.addEventListener('focus', () => setHotkeyHelp('请按下组合键，至少包含一个修饰键…'));
 hotkeyIn.addEventListener('blur', () => setHotkeyHelp(HOTKEY_IDLE));
-hotkeyIn.addEventListener('keydown', (e) => {
-  if (e.key === 'Tab' || e.key === 'Escape') return;
-  e.preventDefault();
-  // 按住不放的重复事件不重播弹跳与提示
-  if (e.repeat || ['Control', 'Meta', 'Shift', 'Alt'].includes(e.key)) return;
-  const h = hotkeyFromEvent({ key: e.key, code: e.code, ctrl: e.ctrlKey, meta: e.metaKey, alt: e.altKey, shift: e.shiftKey }, S.platform.os);
-  if (!h) return setHotkeyHelp(S.platform.os === 'macos' ? '至少需要包含 ⌘、⌃ 或 ⌥' : '至少需要包含 Ctrl 或 Alt');
-  recordHotkey(h);
-});
+recordKeys(hotkeyIn, setHotkeyHelp, recordHotkey);
 function recordHotkey(h: string) {
   pendingHotkey = h;
   hotkeyIn.value = hotkeyLabel(h, S.platform.os);
@@ -3099,6 +3108,8 @@ await onShotNeedPermission(({ pane, mode }) =>
 const hkOn = (el: Element) => document.activeElement === el && document.hasFocus();
 const hkOpts = [[shotKey, '截图', 'shot'], [recKey, '录屏', 'rec'], [trKey, '翻译', 'translate'], [lineKey, '便签', 'line']] as const;
 await onHotkeyPressed((role) => {
+  // 被自己的全局快捷键拦下的组合也算收到了主键，松开修饰键时不报“没收到组合键”
+  hotkeyGot = true;
   if (role !== 'panel') {
     const [self, name] = hkOpts.find((o) => o[2] === role)!;
     const other = hkOpts.find(([f]) => f !== self && hkOn(f.input));
@@ -3116,6 +3127,8 @@ await onHotkeyPressed((role) => {
 // 面板可见时按了便签快捷键（后端只发给面板）：焦点在便签录制框里就写入，在别的录制框里提示冲突，
 // 否则挂选中的那条（没有选中挂最新一条）
 await onLineHangSelected(() => {
+  // 同 onHotkeyPressed：便签快捷键被自己的全局注册拦下，也算收到了主键
+  hotkeyGot = true;
   if (hkOn(lineKey.input)) return lineKey.record(S.settings.lineHotkey);
   if (hkOn(hotkeyIn)) return setHotkeyHelp('不能与便签快捷键相同', true);
   const other = hkOpts.find(([f]) => f !== lineKey && hkOn(f.input));
@@ -3269,6 +3282,8 @@ list.addEventListener('click', (e) => {
     paintRows();
   }
   select(id, { indDur: 180, pan: 'smooth' });
+  // 精简模式没有预览，单击直接粘贴；双击的第二下不再粘贴一次（M27 规则 13）
+  if (compact() && e.detail < 2) copyRecord(id);
   if (qa === 'copy') copyRecord(id);
   if (qa === 'pin') togglePin(id, true);
   if (qa === 'edit') void openSnippet('edit', id);
@@ -3278,7 +3293,7 @@ list.addEventListener('click', (e) => {
 $('#newSnipBtn').addEventListener('click', () => openSnippet('new'));
 list.addEventListener('dblclick', (e) => {
   const id = itemOf(e);
-  if (id !== null && !(e.target as Element).closest('[data-qa]')) copyRecord(id);
+  if (id !== null && !compact() && !(e.target as Element).closest('[data-qa]')) copyRecord(id);
 });
 list.addEventListener('contextmenu', (e) => {
   const id = itemOf(e);
@@ -3536,6 +3551,10 @@ setInterval(() => {
 renderTabs(true);
 renderSpectrum();
 renderList();
+// 面板窗口从没上过屏时 WebKit 不推进动画时钟：启动时设主题、材质、data-native-fade（开发版还有样式表晚到）
+// 引起的过渡都停在第 0 帧，第一次唤起才开始播——内容先透明、菜单露出来，看上去是一块白闪一下。
+// 这些过渡本来就不该播，就绪前直接走完，首次唤起与之后一致（AC-M04-09）；之后每次唤起的进入过渡在 shown() 里另起，不受影响
+for (const a of document.getAnimations()) if (a instanceof CSSTransition) a.finish();
 // 列表已渲染好，后端这时才允许面板上屏：启动后网页就绪前按的快捷键 / 托盘 / 首次启动在这里补显示，
 // 用户看到的第一帧就是完整列表，不会先空白再出现
 void frontendReady().catch((e: AppError) => info(`frontend_ready 失败：${e?.message || e}`));

@@ -555,7 +555,7 @@ pub fn trcard_press(app: AppHandle) {
 }
 
 /// 划词卡片翻译卡片上的原文（输入卡片 ⌘↵、改了原文重翻、换用、下载语言包后重试，M26 规则 16、19、20）。
-/// `lang` 为这张卡片选的目标语言代码，null 为自动。`seq` 取自 `trcard-show` 或上一次的返回值；
+/// `lang` 为这张卡片选的目标语言代码，`from` 为选的原文语言代码（只有系统翻译用），null 都为自动。`seq` 取自 `trcard-show` 或上一次的返回值；
 /// 成功时新序号恒为 `seq + 1`，结果经 `trcard-done` 送达（可能先于本命令返回）。
 #[tauri::command]
 pub async fn trcard_translate(
@@ -563,15 +563,24 @@ pub async fn trcard_translate(
     seq: u64,
     text: String,
     lang: Option<String>,
+    from: Option<String>,
     engine: Option<String>,
 ) -> Result<crate::trcard::Again, AppError> {
-    let lang = match lang.as_deref() {
-        None => None,
-        Some(c) => {
-            Some(Lang::from_code(c).ok_or_else(|| AppError::Invalid("目标语言不对".into()))?)
-        }
+    let code = |c: Option<String>, what: &str| match c.as_deref() {
+        None => Ok(None),
+        Some(c) => Lang::from_code(c)
+            .map(Some)
+            .ok_or_else(|| AppError::Invalid(format!("{what}不对"))),
     };
-    crate::trcard::translate(&app, seq, text, lang, parse_engine(engine.as_deref())?)
+    let (lang, from) = (code(lang, "目标语言")?, code(from, "原文语言")?);
+    crate::trcard::translate(
+        &app,
+        seq,
+        text,
+        lang,
+        from,
+        parse_engine(engine.as_deref())?,
+    )
 }
 
 /// 划词卡片“复制译文”：普通写入剪切板，进历史。

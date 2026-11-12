@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { hotkeyFromEvent, hotkeyLabel, hotkeyString, parseHotkey, type ModEv } from './hotkey.ts';
+import { hotkeyFromEvent, hotkeyHint, hotkeyLabel, hotkeyString, parseHotkey, type ModEv } from './hotkey.ts';
 
 test('默认快捷键的标签', () => {
   assert.equal(hotkeyLabel('CommandOrControl+Shift+V', 'macos'), '⌘ + Shift + V');
@@ -23,7 +23,7 @@ test('hotkeyFromEvent_rejects_without_mod_or_alt_and_special_keys', () => {
   const ev = (o: Partial<ModEv>): ModEv => ({ key: '', code: '', ctrl: false, meta: false, alt: false, shift: false, ...o });
   assert.equal(hotkeyFromEvent(ev({ key: 'C', code: 'KeyC', shift: true }), 'macos'), null);           // 只有 Shift
   assert.equal(hotkeyFromEvent(ev({ key: 'Meta', code: 'MetaLeft', meta: true }), 'macos'), null);     // 只有修饰键
-  assert.equal(hotkeyFromEvent(ev({ key: ' ', code: 'Space', meta: true }), 'macos'), null);           // 特殊键
+  assert.equal(hotkeyFromEvent(ev({ key: 'Enter', code: 'Enter', meta: true }), 'macos'), null);       // 特殊键
   assert.equal(hotkeyFromEvent(ev({ key: 'ç', code: 'KeyC', meta: true, alt: true }), 'macos'), 'CommandOrControl+Alt+C'); // 用 code 不用 key
   assert.equal(hotkeyFromEvent(ev({ key: 'F3', code: 'F3', alt: true }), 'macos'), 'Alt+F3');
 });
@@ -36,4 +36,21 @@ test('录制时按平台区分 Control 与 Command', () => {
   // Windows：Ctrl 就是 Mod；Win 键不参与
   assert.equal(hotkeyFromEvent(ev({ key: 'z', code: 'KeyZ', ctrl: true }), 'windows'), 'CommandOrControl+Z');
   assert.equal(hotkeyFromEvent(ev({ key: 'z', code: 'KeyZ', meta: true }), 'windows'), null);
+});
+test('⌘ 加符号、空格、方向键与 F13–F20 也能录', () => {
+  const ev = (o: Partial<ModEv>): ModEv => ({ key: '', code: '', ctrl: false, meta: false, alt: false, shift: false, ...o });
+  assert.equal(hotkeyFromEvent(ev({ key: '`', code: 'Backquote', meta: true }), 'macos'), 'CommandOrControl+`');
+  assert.equal(hotkeyFromEvent(ev({ key: ' ', code: 'Space', meta: true, shift: true }), 'macos'), 'CommandOrControl+Shift+Space');
+  assert.equal(hotkeyFromEvent(ev({ key: '\\', code: 'Backslash', alt: true }), 'windows'), 'Alt+\\');
+  assert.equal(hotkeyFromEvent(ev({ key: 'ArrowUp', code: 'ArrowUp', meta: true, alt: true }), 'macos'), 'CommandOrControl+Alt+Up');
+  assert.equal(hotkeyFromEvent(ev({ key: 'F20', code: 'F20', meta: true }), 'macos'), 'CommandOrControl+F20');
+  assert.equal(hotkeyLabel('CommandOrControl+Shift+Space', 'macos'), '⌘ + Shift + Space');
+  assert.equal(hotkeyLabel('CommandOrControl+Alt+Up', 'windows'), 'Ctrl + Alt + ↑');
+  assert.equal(hotkeyLabel('CommandOrControl+`', 'macos'), '⌘ + `');
+});
+test('录不进时的提示：缺修饰键与主键不能用分开说', () => {
+  const ev = (o: Partial<ModEv>): ModEv => ({ key: '', code: '', ctrl: false, meta: false, alt: false, shift: false, ...o });
+  assert.equal(hotkeyHint(ev({ code: 'KeyC', shift: true }), 'macos'), '至少需要包含 ⌘、⌃ 或 ⌥');
+  assert.equal(hotkeyHint(ev({ code: 'KeyC', meta: true }), 'windows'), '至少需要包含 Ctrl 或 Alt');
+  assert.match(hotkeyHint(ev({ code: 'Enter', meta: true }), 'macos'), /不能用作快捷键/);
 });

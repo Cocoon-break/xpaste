@@ -133,3 +133,10 @@ test('截图卡片缺语言包：不给下载语言包，原因与换用照常�
   assert.match(h, /data-act="switch" data-engine="openai">换用 AI 翻译</);
   assert.doesNotMatch(h, /下载语言包<|data-act="(pack|settings)"/);
 });
+
+test('缺语言包时给几种原文语言，点了按它重翻（M26 规则 19）；别的失败不给', () => {
+  const h = cardHTML(st({ kind: 'fail', error: '系统翻译还没有法语和简体中文的语言包', errorKind: 'translatePack', alt: ['en', 'ja'] }));
+  assert.match(h, /class="c-alt">认错了语言？原文是<button type="button" data-act="from" data-lang="en">English<\/button><button type="button" data-act="from" data-lang="ja">日本語</);
+  assert.doesNotMatch(cardHTML(st({ kind: 'fail', error: 'x', errorKind: 'translate', alt: ['en'] })), /c-alt/);
+  assert.doesNotMatch(cardHTML(st({ kind: 'done', text: 'Hi' }), true), /data-act="from"/);
+});

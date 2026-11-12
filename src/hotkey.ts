@@ -32,22 +32,36 @@ export function hotkeyString(h: Hotkey): string {
 export function hotkeyLabel(s: string, os: PlatformInfo['os']): string {
   const h = parseHotkey(s), mac = os === 'macos';
   // Windows 上 Control 与 CommandOrControl 是同一个键，只显示一次
-  return [h.mod && (mac ? '⌘' : 'Ctrl'), h.ctrl && (mac ? '⌃' : !h.mod && 'Ctrl'), h.alt && (mac ? '⌥' : 'Alt'), h.shift && 'Shift', h.key]
+  return [h.mod && (mac ? '⌘' : 'Ctrl'), h.ctrl && (mac ? '⌃' : !h.mod && 'Ctrl'), h.alt && (mac ? '⌥' : 'Alt'), h.shift && 'Shift', KEY_LABEL[h.key] ?? h.key]
     .filter(Boolean)
     .join(' + ');
 }
 
+const KEY_LABEL: Record<string, string> = { SPACE: 'Space', UP: '↑', DOWN: '↓', LEFT: '←', RIGHT: '→' };
+// 符号键存字符本身（全局快捷键插件认得 `、-、= 等），空格与方向键存键名
+const CODE_KEY: Record<string, string> = {
+  Backquote: '`', Minus: '-', Equal: '=', BracketLeft: '[', BracketRight: ']', Backslash: '\\', Semicolon: ';', Quote: "'",
+  Comma: ',', Period: '.', Slash: '/', Space: 'Space', ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
+};
+
 /** 用物理键位 code 而不是 key：Option 组合的死键 / 输入法字符（如 ç）不会混进来。 */
 export function keyFromEvent(e: { key: string; code: string }): string | null {
-  const m = /^(?:Key([A-Z])|Digit([0-9])|(F(?:[1-9]|1[0-2])))$/.exec(e.code);
-  return m ? (m[1] ?? m[2] ?? m[3]) : null;
+  const m = /^(?:Key([A-Z])|Digit([0-9])|(F(?:[1-9]|1[0-9]|20)))$/.exec(e.code);
+  return m ? (m[1] ?? m[2] ?? m[3]) : CODE_KEY[e.code] ?? null;
 }
 
-/** 必须带 ⌘ / Ctrl、⌃ 或 Alt，且主键是字母 / 数字 / F1–F12，否则不算一个可用的全局快捷键。
+/** 必须带 ⌘ / Ctrl、⌃ 或 Alt，且主键是字母、数字、符号、空格、方向键或 F1–F20，否则不算一个可用的全局快捷键。
  *  macOS：⌘ → CommandOrControl，⌃ → Control（两个键，不能混）；Windows：Ctrl → CommandOrControl，Win 键不参与。 */
 export function hotkeyFromEvent(e: ModEv, os: PlatformInfo['os']): string | null {
   const key = keyFromEvent(e);
   const mac = os === 'macos';
   const mod = mac ? e.meta : e.ctrl, ctrl = mac && e.ctrl;
   return (mod || ctrl || e.alt) && key ? hotkeyString({ mod, ctrl, alt: e.alt, shift: e.shift, key }) : null;
+}
+
+/** hotkeyFromEvent 不接受时的提示：缺修饰键，或带了修饰键但主键不能用（如 Enter、Esc）。 */
+export function hotkeyHint(e: ModEv, os: PlatformInfo['os']): string {
+  const mac = os === 'macos';
+  if (mac ? e.meta || e.ctrl || e.alt : e.ctrl || e.alt) return '这个键不能用作快捷键，请换成字母、数字、符号或功能键';
+  return mac ? '至少需要包含 ⌘、⌃ 或 ⌥' : '至少需要包含 Ctrl 或 Alt';
 }
