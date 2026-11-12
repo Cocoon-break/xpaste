@@ -18,9 +18,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { ref: "${{ env.TAG }}" }
-      # 官方安装包带上私有的 Pro 代码：PRO_DEPLOY_KEY 是 xpaste-pro 仓库的只读 deploy key
+      # 官方安装包带上私有的 Pro 代码：PRO_DEPLOY_KEY 是 xpaste-pro 仓库的只读 deploy key。
+      # 私有仓库要先打同名标签：同一个标签每次构建都用同一份私有代码，没有这个标签就在这里失败
       - uses: actions/checkout@v4
-        with: { repository: Cocoon-break/xpaste-pro, path: pro, ssh-key: "${{ secrets.PRO_DEPLOY_KEY }}" }
+        with: { repository: Cocoon-break/xpaste-pro, path: pro, ref: "refs/tags/${{ env.TAG }}", ssh-key: "${{ secrets.PRO_DEPLOY_KEY }}" }
       - name: 确认已带上 Pro
         run: test -f pro/rust/mod.rs && test -f pro/web/line.html
       - uses: pnpm/action-setup@v4
@@ -88,10 +89,12 @@ jobs:
             xcrun stapler staple "$f"
           done
       # Secrets 缺失或公证没做成时在这里失败，不让未公证的包发出去：dmg 和里面的 .app 都要带公证票据，
-      # 且按“浏览器下载的文件”检查时系统放行
+      # 且按“浏览器下载的文件”检查时系统放行。
+      # 签名团队还要和 pro/rust/genuine.rs 的 TEAM_ID 一致：对不上时 Pro 在所有 Mac 上都悄悄不可用
       - if: runner.os == 'macOS'
         name: dmg 与里面的应用都已公证
         run: |
+          want=$(sed -nE 's/^const TEAM_ID: &str = "([A-Z0-9]+)";.*/\1/p' pro/rust/genuine.rs)
           for f in target/installers/xPaste_*.dmg; do
             xcrun stapler validate "$f"
             spctl -a -t open --context context:primary-signature -vv "$f"
@@ -99,6 +102,8 @@ jobs:
             hdiutil attach -nobrowse -readonly -mountpoint "$m" "$f"
             xcrun stapler validate "$m/xPaste.app"
             spctl -a -vv "$m/xPaste.app"
+            got=$(codesign -dv "$m/xPaste.app" 2>&1 | sed -n 's/^TeamIdentifier=//p')
+            [ -n "$want" ] && [ "$got" = "$want" ] || { echo "$f 的签名团队是 ${got:-（读不到）}，genuine.rs 里的 TEAM_ID 是 ${want:-（读不到）}" >&2; exit 1; }
             hdiutil detach "$m"
           done
       # 再存一份不带版本号的文件名，官网用 releases/latest/download/<文件名> 固定链接到最新版

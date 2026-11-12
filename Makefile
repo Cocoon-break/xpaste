@@ -104,6 +104,8 @@ release-report: ## 把各目标的安装包收拢到 target/installers/ 并列�
 site-demo: ## 重新生成官网上可操作的演示面板（website/demo/）：改了 src/ 的界面或 scripts/site-demo/ 之后跑，产物一起提交
 	rm -rf website/demo
 	for e in index card shot; do SITE_DEMO_ENTRY=$$e pnpm exec vite build --config scripts/site-demo/vite.config.mjs || exit 1; done
+	@# 私有组件不能进官网：产物里出现样式选择器的类名或文案就失败（公开代码里也有 mountStylePicker 这个名字，不能拿它判断）
+	@! grep -lE 'lsp-|激活 Pro 后可换样式' website/demo/*.html || { echo "website/demo 里混进了私有组件"; exit 1; }
 
 measure: ## macOS 性能与可靠性测量（先 make release-app；离开电脑时运行，约 15 分钟；终端要有辅助功能权限）
 	bash scripts/measure.sh all

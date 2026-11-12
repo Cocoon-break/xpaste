@@ -2562,6 +2562,18 @@ async function submitSettings() {
   });
   saving = true;
   try {
+    // 设置开着时试用可能到期：保存前再取一次 Pro 状态，到期了锁住选择器，样式不改，其余照常保存
+    let styleKept = false;
+    if (S.line.available) {
+      S.line.pro = await proStatus().catch(() => S.line.pro);
+      paintProStatus();
+      const old = S.settings.lineStyle;
+      if (lineLocked() && (Object.keys(old) as (keyof LineStyle)[]).some((k) => s.lineStyle[k] !== old[k])) {
+        s.lineStyle = draftLineStyle = S.settings.lineStyle;
+        styleKept = true;
+      }
+      stylePicker?.set(draftLineStyle, lineLocked());
+    }
     // 新的保留时长 / 条数上限会立即清理记录：先告诉用户删几条（设计 §5.5）
     if (s.retentionDays !== S.settings.retentionDays || s.maxRecords !== S.settings.maxRecords) {
       const n = await prunePreview(s.retentionDays, s.maxRecords);
@@ -2581,7 +2593,7 @@ async function submitSettings() {
     }
     closeSettings();
     if (styleChanged) applyStyle(s.panelStyle);
-    toast('设置已保存');
+    toast(styleKept ? '设置已保存；试用已结束，晾衣绳样式没有改' : '设置已保存');
   } catch (e) {
     const err = e as AppError;
     // 快捷键被占用或校验不过（与唤起相同等）写在对应录制框下方；先聚焦再写错误：focus 处理器会改帮助文字
