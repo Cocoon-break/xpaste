@@ -51,6 +51,9 @@ use windows::Win32::System::Memory::{
     GMEM_MOVEABLE, GMEM_ZEROINIT, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock,
 };
 use windows::Win32::System::Ole::CF_UNICODETEXT;
+use windows::Win32::System::Registry::{
+    HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RRF_SUBKEY_WOW6464KEY, RegGetValueW,
+};
 use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
 use windows::Win32::System::Threading::{
     GetCurrentProcess, GetCurrentProcessId, GetCurrentThread, GetThreadId, OpenProcess,
@@ -1690,6 +1693,39 @@ pub fn dock() -> Option<crate::DockFrame> {
         edge,
         autohide: state & ABS_AUTOHIDE != 0,
     })
+}
+
+/// 这台电脑的硬件标识（注册表 `MachineGuid`），授权绑定设备用；读不到为 None。
+/// 重装应用不变，重装系统会变。调用方只拿它算哈希，原值不上传、不落盘、不进日志。
+pub fn hardware_id() -> Option<String> {
+    // GUID 是 36 个字符，留足余量；RRF_RT_REG_SZ 保证读回的是以 NUL 结尾的字符串
+    let mut buf = [0u16; 128];
+    let mut bytes = size_of_val(&buf) as u32;
+    // SAFETY: buf 和 bytes 是本地变量，bytes 是 buf 的字节数；64 位视图，32 位进程读到的也是同一个值
+    let r = unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            w!(r"SOFTWARE\Microsoft\Cryptography"),
+            w!("MachineGuid"),
+            RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY,
+            None,
+            Some(buf.as_mut_ptr().cast()),
+            Some(&mut bytes),
+        )
+    };
+    if r.is_err() {
+        return None;
+    }
+    let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    let id = String::from_utf16(&buf[..len]).ok()?;
+    (!id.trim().is_empty()).then_some(id)
+}
+
+/// 电脑名，用户在已绑定设备的列表里靠它认设备；读不到为 None。
+pub fn device_name() -> Option<String> {
+    std::env::var("COMPUTERNAME")
+        .ok()
+        .filter(|n| !n.trim().is_empty())
 }
 
 /// Windows 发滚动不需要权限（M23 规则 13）

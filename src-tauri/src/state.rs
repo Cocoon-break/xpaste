@@ -57,7 +57,12 @@ impl AppState {
     ) -> Self {
         // 暂停跨重启：kv `paused` 为 "1" 即暂停；托盘与 bootstrap 都从这个原子读初值
         let paused = matches!(store.kv_get("paused"), Ok(Some(v)) if v == "1");
-        let line = xpaste_pro::Line::open(&data_dir, crate::clock::now_ms() / 1000, app_major());
+        let line = xpaste_pro::Line::open(
+            &data_dir,
+            crate::clock::now_ms() / 1000,
+            app_major(),
+            xpaste_platform::hardware_id,
+        );
         Self {
             settings: Mutex::new(settings),
             store: Mutex::new(store),
@@ -108,7 +113,7 @@ impl AppState {
     }
 }
 
-/// 应用的大版本号，授权码按它判断适用范围（0.x 由授权码校验按 1 算）
+/// 应用的大版本号，买断授权按它判断适用范围（0.x 由授权校验按 1 算）
 fn app_major() -> u32 {
     env!("CARGO_PKG_VERSION")
         .split('.')

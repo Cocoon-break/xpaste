@@ -57,7 +57,7 @@ grep FOCUS .xpaste-dev/logs/xPaste.log | tail -12    # 最后一行：FOCUS 完�
 两条硬约束：
 
 - **日志里不能出现剪切板内容、标题、文件路径和搜索词。**
-- **数据只存在本机。** 不加联网、同步或统计功能。唯一的例外是用户手动触发的翻译（M26），只发送要翻译的那段文字。
+- **数据只存在本机。** 不加联网、同步或统计功能。例外只有三处：用户手动触发的翻译（M26），只发送要翻译的那段文字；检查更新（M28），不发送任何数据；xPaste Pro 的授权请求（`src-tauri/src/license.rs`），只发送授权码、设备哈希、电脑名和应用版本，没有授权码的用户不发任何请求。三处都不带剪切板内容。
 
 ## 分支与协作
 
@@ -96,12 +96,28 @@ grep FOCUS .xpaste-dev/logs/xPaste.log | tail -12    # 最后一行：FOCUS 完�
 - 刚克隆出 `pro/` 后如果编译结果仍是空实现（`cfg(pro)` 没有切过来），执行 `touch crates/xpaste-pro/build.rs` 再编译。
 - `crates/xpaste-pro/Cargo.toml` 的依赖要和私有实现 `pro/rust/` 用到的一致，私有实现多用了依赖时两边一起改。
 - **公开代码与公开提交信息不写私有规格的编号**，注释里直接写规则本身。
-- **按大版本收费**：授权码写明适用的大版本，应用的大版本 0.x 按 1 算，授权码的大版本要大于等于应用的。签发时必须写明大版本，比如 `MAJOR=1`，不写就报错。发 2.0 之前，先定好升级价和给老用户的提示；不要为了“兼容”放宽判断，否则旧授权码会在 2.0 上继续有效。
-- **签发**：`make -C pro license EMAIL=… MAJOR=1`，打印出一行授权码。首次使用先 `make -C pro keygen`。
-- **吊销**：`make -C pro revoke CODE=…`，把打印出来的一行加进 `REVOKED`，发版后生效（退款时做这件事，EULA 里写了退款后授权码会被停用）。
-- **私钥 `pro/license.local` 绝对不能进任何仓库**，要单独备份：丢了就签不出新授权码，泄露了任何人都能签发。
+- **授权由在线授权服务签发和管理**，本仓库里没有签发工具。应用端分两层：
+  - `crates/xpaste-pro`（私有实现在 `pro/rust/`）不做网络，只规整授权码、算本机设备哈希、离线验证并保存授权服务发来的设备凭证、判断该不该续期。
+  - `src-tauri/src/license.rs` 做网络：激活、每天静默续期、解绑设备、在本机停用，以及 `xpaste://activate?code=…` 链接。
+- **按大版本收费**：买断授权的凭证里写明适用的大版本，应用的大版本 0.x 按 1 算，凭证的大版本要大于等于应用的；订阅不看大版本。发 2.0 之前，先定好升级价和给老用户的提示；不要为了“兼容”放宽判断，否则旧授权会在 2.0 上继续有效。
+- **吊销、退款、解绑设备**都在授权服务的管理后台做。应用最晚第二天续期时得知；一直不联网的设备最长用到凭证过期。
+- **站点地址 `XPASTE_SITE`**（如 `https://xpaste.example.com`，不带末尾斜杠）在编译时写进程序：授权接口是 `$XPASTE_SITE/v1/…`，购买页是 `$XPASTE_SITE/buy.html`。没设时不显示购买入口，激活报“授权服务还没开通”。开发构建（debug）里运行时的同名环境变量优先于编译时的。
+- **验凭证的公钥**是 `pro/rust/license.rs` 里的常量 `PUBLIC_KEY`（授权服务管理后台“应用”页里 xpaste 的公钥）。开发构建里环境变量 `XPASTE_LICENSE_PUBKEY`（标准 base64）可以临时换一把；发布构建只认常量。
+- **对着本机的授权服务联调**：
+  - 运行应用：`XPASTE_SITE=http://localhost:18080 XPASTE_LICENSE_PUBKEY=<联调环境的公钥> make dev-isolated`。本机地址不走系统代理。开发版在 macOS 上注册不了 `xpaste://` 协议，激活链接要用安装包验。
+  - 端到端检查（默认不跑，CI 不依赖它）：下单、模拟付款、激活、设备满员、解绑、续期、停用、吊销后续期被拒，用的是应用里的同一套代码。要授权服务开着 mock 收款渠道、有一个在售的买断商品 `pro-1x`（2 台设备）：
+
+    ```sh
+    XPASTE_SITE=http://localhost:18080 \
+    XPASTE_LICENSE_PUBKEY=<联调环境的公钥> \
+    XPASTE_E2E_INTERNAL=http://localhost:18081 \
+    XPASTE_E2E_SITE_SECRET=<站点密钥> \
+    XPASTE_E2E_ADMIN=<管理员用户名>:<密码> \
+    cargo test -p xpaste --lib e2e_against_local_issuance -- --ignored --nocapture
+    ```
 - **签名团队校验**：macOS 正式构建（release）只有用团队 `GP6QC26B5F` 的 Developer ID 证书签名时才启用 Pro，没签名、ad-hoc 签名或别的证书重签的副本表现同开源版（没有晾衣绳和“Pro”标签）。开发构建（`make dev-isolated`）不查。本地打测试用的 Pro 安装包要带上签名身份：`APPLE_SIGNING_IDENTITY="Developer ID Application: …（GP6QC26B5F）" pnpm tauri build --bundles dmg`（不设 `APPLE_ID` 等就只签名不公证）。Windows 安装包没签名，不做这项校验。
 - 维护者须知：删掉数据目录里的 `pro.json` 会重新开始 14 天试用，测试试用与到期时可以用它。
+- **发版前**：在公开仓库的 Settings → Secrets and variables → Actions → Variables 里设好 `XPASTE_SITE`；把 `pro/rust/license.rs` 的 `PUBLIC_KEY` 换成正式授权服务的公钥，并删掉它上面的 `LOCAL-E2E-KEY` 标记。正式版标签（不带 `-`）缺任何一项，`release.yml` 都会停下并说明原因；内测标签不拦。
 - **发版**：`release.yml` 用 Secret `PRO_DEPLOY_KEY`（`xpaste-pro` 仓库的只读 deploy key）拉取 `pro/`，所以官方安装包带 Pro；没配置时拉取失败，发版会直接停下。流程还会检查安装包的 Rust 一侧带上了 Pro：在二进制里查找标记字符串 `pro.json.tmp`（出自 `pro/rust/trial.rs`）。改了那个文件名要两处同步。
 
 ## 官网

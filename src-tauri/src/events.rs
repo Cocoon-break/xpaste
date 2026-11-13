@@ -20,6 +20,9 @@ pub const PAUSED_CHANGED: &str = "paused-changed";
 pub const SETTINGS_CHANGED: &str = "settings-changed";
 /// 托盘“设置…”、划词卡片“去设置”：面板显示后打开设置弹窗。载荷为要切到的标签（`translate`），null 时停在上次的标签。
 pub const OPEN_SETTINGS: &str = "open-settings";
+/// 收到 `xpaste://activate?code=…`：面板显示后用 `pro_take_link` 取走授权码，打开设置的“Pro”标签并激活。
+/// 载荷为空：授权码不走事件，面板还没订阅时（冷启动）也不会丢。
+pub const PRO_LINK: &str = "pro-link";
 /// 托盘“清空历史…”：面板显示后打开清空确认。
 pub const CONFIRM_CLEAR: &str = "confirm-clear";
 

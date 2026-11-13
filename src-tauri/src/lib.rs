@@ -10,6 +10,7 @@ mod events;
 mod focus_check;
 mod hotkey;
 mod housekeeping;
+mod license;
 mod line;
 mod longshot;
 mod ocr;
@@ -42,7 +43,11 @@ pub fn run() {
     let builder = if override_.is_some() {
         builder
     } else {
-        builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+        builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            // 第二个进程是被 xpaste:// 链接拉起的（Windows）：链接已转给 deep-link 插件处理，这里不再切换面板
+            if argv.iter().any(|a| a.starts_with("xpaste://")) {
+                return;
+            }
             panel::toggle(app, None, panel::Trigger::Relaunch)
         }))
     };
@@ -128,6 +133,7 @@ pub fn run() {
             ocr.schedule_backfill(app.handle(), ocr::BACKFILL_DELAY);
             housekeeping::start(app.handle().clone());
             update::start(app.handle().clone());
+            license::start(app.handle().clone());
             #[cfg(target_os = "macos")]
             panel::setup_macos(app).inspect_err(|e| log::error!("面板初始化失败：{e}"))?;
             #[cfg(windows)]
@@ -175,6 +181,18 @@ pub fn run() {
                 #[cfg(debug_assertions)]
                 focus_check::start(app.handle());
             }
+            // xpaste://activate?code=…（官网付款成功页拉起）。应用已在运行时：macOS 由系统把链接交过来，
+            // Windows 靠单实例插件把第二个进程的参数转过来。Windows 上被链接冷启动时链接在命令行参数里，
+            // 插件初始化时已经读过，这里补取一次。开发版没有安装，系统里注册不上这个协议
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let handle = app.handle().clone();
+                app.deep_link()
+                    .on_open_url(move |event| license::opened(&handle, &event.urls()));
+                if let Ok(Some(urls)) = app.deep_link().get_current() {
+                    license::opened(app.handle(), &urls);
+                }
+            }
             // 首次启动直接显示面板与引导（AC-M18-01）
             if first_run {
                 app.state::<AppState>()
@@ -185,6 +203,7 @@ pub fn run() {
             Ok(())
         })
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_notification::init())
         // 设置里选截图文件夹
         .plugin(tauri_plugin_dialog::init())
@@ -392,7 +411,11 @@ pub fn run() {
             commands::line::line_hidden,
             commands::line::line_keyboard,
             commands::line::pro_status,
-            commands::line::pro_activate
+            commands::line::pro_activate,
+            commands::line::pro_unbind,
+            commands::line::pro_deactivate,
+            commands::line::pro_buy,
+            commands::line::pro_take_link
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

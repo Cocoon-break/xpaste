@@ -184,6 +184,7 @@ export interface AppError {
     | 'translateOs'
     | 'translate'
     | 'line'
+    | 'deviceLimit'
     | 'lineExpired'
     | 'duplicate';
   message: string;
@@ -192,6 +193,17 @@ export interface AppError {
   target?: string;
   /** 只有 duplicate：已经挂着的那张便签的 id */
   id?: number;
+  /** 只有 deviceLimit：授权码当前绑定着的设备，解绑一台后才能激活这台 */
+  devices?: BoundDevice[];
+}
+
+/** 授权码绑定着的一台设备（对应 `license::Device`） */
+export interface BoundDevice {
+  id: number;
+  /** 激活时上报的电脑名 */
+  name: string;
+  /** 激活时间，RFC 3339 */
+  activatedAt: string;
 }
 
 /** `translate_record` 的结果：去掉首尾空白的译文与实际翻成的语言代码（M26 规则 8、9）。 */

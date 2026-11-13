@@ -24,6 +24,15 @@ jobs:
         with: { repository: Cocoon-break/xpaste-pro, path: pro, ref: "refs/tags/${{ env.TAG }}", ssh-key: "${{ secrets.PRO_DEPLOY_KEY }}" }
       - name: 确认已带上 Pro
         run: test -f pro/rust/mod.rs && test -f pro/web/line.html
+      # 站点地址（仓库变量 XPASTE_SITE，如 https://xpaste.example.com，不带末尾斜杠）编进安装包：购买页和授权服务都在它下面。
+      # 正式版没设、或 Pro 里验凭证的公钥还是本机联调的那把，就在这里停下：发出去的版本买不了、激活不了。内测标签（带 -）不拦
+      - name: 正式版要有站点地址和正式公钥
+        if: ${{ !contains(env.TAG, '-') }}
+        env:
+          XPASTE_SITE: ${{ vars.XPASTE_SITE }}
+        run: |
+          [ -n "$XPASTE_SITE" ] || { echo "仓库变量 XPASTE_SITE 没设：Settings → Secrets and variables → Actions → Variables 里加上站点地址再发正式版" >&2; exit 1; }
+          ! grep -q 'LOCAL-E2E-KEY' pro/rust/license.rs || { echo "pro/rust/license.rs 里还是本机联调的公钥：换成管理后台“应用”页里 xpaste 的公钥，并去掉 LOCAL-E2E-KEY 标记" >&2; exit 1; }
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with: { node-version: 25, cache: pnpm }
@@ -54,6 +63,7 @@ jobs:
       # APPLE_* 来自仓库 Secrets：Tauri 把 .p12 导入临时钥匙串，签名并公证 macOS 包（Windows 上不起作用）
       - run: make release
         env:
+          XPASTE_SITE: ${{ vars.XPASTE_SITE }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
