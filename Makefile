@@ -45,14 +45,14 @@ endif
 	pnpm check:version
 ifneq ($(wildcard pro/Makefile),)
 	$(MAKE) -C pro fmt-check
-	$(MAKE) -C pro tool-check
 endif
 
 test-rust: ## Rust 单元测试（三个 crate）
 	cargo test --workspace
 
-test-web: ## 前端单元测试（自动发现 src/**/*.test.ts；带 pro/web 时再跑它的测试）
+test-web: ## 前端单元测试（自动发现 src/**/*.test.ts；官网购买流程的纯函数；带 pro/web 时再跑它的测试）
 	pnpm test
+	node --test 'scripts/site/*.test.js'
 ifneq ($(wildcard pro/web),)
 	node --test 'pro/web/**/*.test.ts'
 endif

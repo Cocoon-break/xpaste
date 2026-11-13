@@ -1,0 +1,18 @@
+# http 级别的公共部分：上游、限流区、缓存头。由 http.conf / tls.conf 引入。
+# 这些文件是模板：nginx 官方镜像启动时把 ${大写变量} 换成环境变量的值，$小写 的 nginx 变量原样保留。
+
+# 授权服务（Issuance）的两个端口。内网端口上有站点接口和管理后台，只有下面 /api/ 那几条会转过去。
+upstream issuance_internal { server ${ISSUANCE_INTERNAL}; keepalive 8; }
+upstream issuance_public   { server ${ISSUANCE_PUBLIC};   keepalive 8; }
+
+# 按 IP 限流：查询宽一些（购买页每 3 秒查一次订单），下单和找回授权码严一些
+limit_req_zone $binary_remote_addr zone=xp_query:10m rate=5r/s;
+limit_req_zone $binary_remote_addr zone=xp_order:10m rate=6r/m;
+limit_req_status 429;
+
+# website/ 里的文件名都不带哈希，所以不能长缓存：
+# 页面、脚本每次都向服务器确认（有 ETag，没变就是 304）；图片缓存一天。
+map $uri $xp_cache {
+  default                                  "no-cache";
+  "~*\.(?:webp|png|jpe?g|gif|svg|ico)$"    "public, max-age=86400";
+}

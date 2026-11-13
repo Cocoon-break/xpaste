@@ -19,3 +19,5 @@ skills-lock.json
 .agents
 # 私有的 Pro 实现
 /pro/
+# 官网部署用的环境变量，里面有站点密钥
+/deploy/site/.env

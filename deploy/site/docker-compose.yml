@@ -1,0 +1,36 @@
+# xPaste 官网：静态文件 + 到授权服务（Issuance）的反向代理。步骤见同目录 README.md。
+name: xpaste-site
+
+services:
+  nginx:
+    image: nginx:stable-alpine
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    environment:
+      SERVER_NAME: ${SERVER_NAME:-_}
+      ISSUANCE_INTERNAL: ${ISSUANCE_INTERNAL:?在 .env 里填授权服务内网端口的地址}
+      ISSUANCE_PUBLIC: ${ISSUANCE_PUBLIC:?在 .env 里填授权服务公网端口的地址}
+      SITE_SECRET: ${SITE_SECRET:?在 .env 里填站点密钥}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ../../website:/usr/share/nginx/html:ro
+      - ./nginx/xpaste-http.inc.template:/etc/nginx/templates/xpaste-http.inc.template:ro
+      - ./nginx/xpaste-site.inc.template:/etc/nginx/templates/xpaste-site.inc.template:ro
+      - ./nginx/${NGINX_MODE:-http}.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - certs:/etc/letsencrypt:ro
+      - acme:/var/www/certbot:ro
+
+  # 只在签发、续期证书时临时跑：docker compose run --rm certbot …
+  certbot:
+    image: certbot/certbot
+    profiles: ["certbot"]
+    volumes:
+      - certs:/etc/letsencrypt
+      - acme:/var/www/certbot
+
+volumes:
+  certs:
+  acme:

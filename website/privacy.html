@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>隐私说明 · xPaste</title>
-<meta name="description" content="xPaste 的隐私说明：数据只存在本机，没有账号、云同步和使用统计；只在你手动翻译时发送那一段文字。">
+<meta name="description" content="xPaste 的隐私说明：剪切板历史只存在本机，没有账号、云同步和使用统计；只在你手动翻译时发送那一段文字。激活 Pro 授权和在官网购买时会用到哪些信息，也写在这里。">
 <link rel="icon" type="image/svg+xml" href="assets/logo.svg">
 <meta name="color-scheme" content="light dark">
 <style>
@@ -35,9 +35,9 @@ code { font: 13px/20px ui-monospace, "SF Mono", Menlo, "Cascadia Mono", Consolas
 <main>
 <a class="back" href="index.html"><img src="assets/logo.svg" alt="" width="24" height="24">返回 xPaste 首页</a>
 <h1>隐私说明</h1>
-<p>更新于 2026 年 11 月 9 日。xPaste 的隐私原则只有一条：你的剪切板历史只存在你的电脑上。</p>
+<p>更新于 2026 年 11 月 13 日。xPaste 的隐私原则只有一条：你的剪切板历史只存在你的电脑上。</p>
 <h2>应用收集什么</h2>
-<p>什么都不收集。xPaste 没有账号、没有云同步、没有使用统计。唯一会把内容发到网络上的是你手动发起的翻译，见下一节。</p>
+<p>不收集你的剪切板内容。xPaste 没有账号、没有云同步、没有使用统计。唯一会把内容发到网络上的是你手动发起的翻译；用授权码激活了 Pro 的话，应用还会向授权服务发送核对授权所需的几项信息，不含任何内容。两者都在下面单独说明。</p>
 <p>另外，应用每天向 GitHub 查一次有没有新版本，请求里只有版本号，不带任何内容和标识；可以在设置“通用”里关掉“自动检查更新”。</p>
 <ul>
 <li>历史记录存在本机：macOS 在 <code>~/Library/Application Support/xPaste/</code>，Windows 在 <code>%APPDATA%\xPaste\</code>。</li>
@@ -54,12 +54,19 @@ code { font: 13px/20px ui-monospace, "SF Mono", Menlo, "Cascadia Mono", Consolas
 <li>发出去的只有那段文字，不带别的记录、来源应用名和文件路径。来自密码管理器或被标记为敏感的内容不翻译。</li>
 <li>API Key 只保存在本机的设置里；日志里不写原文、译文、API Key 和接口地址。</li>
 </ul>
+<h2>Pro 授权</h2>
+<ul>
+<li>没有授权码的用户，应用不向授权服务发任何请求。</li>
+<li>用授权码激活时，以及之后每天续期一次授权时，应用把这几项发到授权服务：授权码、设备哈希（由硬件标识算出，不可逆，换不回硬件标识）、电脑名和应用版本。电脑名用来在设备列表里让你认出是哪一台。</li>
+<li>这些请求里不带任何剪切板内容、便签内容、文件路径和搜索词。</li>
+</ul>
 <h2>这个网站收集什么</h2>
 <p>这个网站不使用 Cookie，没有统计脚本，也不加载第三方的字体和脚本。首页上能操作的面板装的是演示数据；你在首页上复制文字时，页面会把你选中的那段文字显示在演示面板里，这只发生在你的浏览器里，不读取剪切板，也不发送到任何地方。主题选择记在浏览器的本地存储里。下载链接指向 GitHub，GitHub 会按它的政策记录访问。</p>
+<p>在<a href="buy.html">购买页</a>下单时，网站会收下你填的邮箱（用来发授权码，以后找回授权码也靠它）和订单信息（买了什么、金额、币种、付款方式、订单状态）。付款由支付渠道处理，银行卡、支付账号这些信息不经过这个网站。没付完的订单，订单号和付款方式会记在你浏览器的本地存储里，方便刷新后接着付，付完或放弃后清掉。网站服务器会像一般网站一样记录访问日志（IP 地址、访问时间、请求路径）。</p>
 <h2>删除你的数据</h2>
 <p>在 xPaste 设置里选“清空历史…”（置顶记录会保留），或者卸载后删除上面的数据目录。数据库没有加密，靠系统账户权限保护。</p>
 <h2>联系</h2>
-<p>有疑问请到 <a href="https://github.com/Cocoon-break/xpaste/issues">GitHub issues</a> 提出。代码全部公开，你可以自己核对上面每一条。</p>
+<p>有疑问请到 <a href="https://github.com/Cocoon-break/xpaste/issues">GitHub issues</a> 提出。剪切板历史、搜索、截图、录屏和翻译的代码全部公开，你可以自己核对上面相应的每一条；Pro 的晾衣绳便签不开源。</p>
 </main>
 </body>
 </html>
