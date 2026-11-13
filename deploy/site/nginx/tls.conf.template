@@ -1,0 +1,29 @@
+# HTTPS 模式（NGINX_MODE=tls）：80 只做证书验证和跳转，443 提供站点。
+# 证书由 certbot 放在 certs 卷里（/etc/letsencrypt/live/<域名>/），签发步骤见 README。
+# 这个模式下 SERVER_NAME 只填一个域名。
+include /etc/nginx/conf.d/xpaste-http.inc;
+
+server {
+  listen 80;
+  server_name ${SERVER_NAME};
+  location ^~ /.well-known/acme-challenge/ { root /var/www/certbot; }
+  location / { return 301 https://${SERVER_NAME}$request_uri; }
+}
+
+server {
+  listen 443 ssl;
+  http2 on;
+  server_name ${SERVER_NAME};
+
+  ssl_certificate     /etc/letsencrypt/live/${SERVER_NAME}/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/${SERVER_NAME}/privkey.pem;
+  ssl_protocols TLSv1.2 TLSv1.3;
+  ssl_session_cache shared:xp_tls:10m;
+  ssl_session_timeout 1d;
+
+  # 确认 HTTPS 稳定之后再打开（打开后浏览器会在这段时间内拒绝用 HTTP 访问这个域名）。
+  # /api/、/v1/ 的 location 里另有 add_header，它们的响应不会带这个头，不影响效果。
+  # add_header Strict-Transport-Security "max-age=15552000" always;
+
+  include /etc/nginx/conf.d/xpaste-site.inc;
+}
