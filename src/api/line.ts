@@ -39,11 +39,12 @@ export interface NoteDto extends Note {
   truncated?: boolean;
 }
 
-/** Pro 状态：试用剩余天数（不足一天按一天）、授权邮箱与适用的大版本；试用结束时 `reason` 是存着的授权码验不过的原因 */
+/** Pro 状态：试用剩余天数（不足一天按一天）、授权邮箱与适用的大版本（订阅没有，为 null）；
+ *  试用结束时 `reason` 是存着的授权用不了的原因（要联网续期、被授权服务拒绝、只适用于旧的大版本），没激活过为 null */
 export type Pro =
   | { state: 'unavailable' }
   | { state: 'trial'; daysLeft: number }
-  | { state: 'licensed'; email: string; major: number }
+  | { state: 'licensed'; email: string; major: number | null }
   | { state: 'expired'; reason: string | null };
 
 export interface LineView {
@@ -64,6 +65,8 @@ export interface LineView {
   pinned: boolean;
   /** 这次启动时便签文件读不全，已留底：页面提示一次 */
   recovered: boolean;
+  /** 有购买页可去：设置里显示“购买 xPaste Pro” */
+  canBuy: boolean;
 }
 
 /** 晾衣绳放下的方式：`peek` 只露绳子，`mouse` 鼠标放下，`flash` 快捷键挂上后亮一下，`kbd` 键盘打开，`drag` 拖着东西到顶端，
@@ -112,7 +115,16 @@ export const lineDragDrop = (id: number, x: number, y: number) => invoke<void>('
 /** 设置里“位置”下面的程序坞提示；没有要提示的为空串 */
 export const lineSideHint = (side: LineSide) => invoke<string>('line_side_hint', { side });
 export const proStatus = () => invoke<Pro>('pro_status');
+/** 联网激活；设备满员时错误的 `kind` 为 `deviceLimit`，带已绑定的设备 */
 export const proActivate = (code: string) => invoke<Pro>('pro_activate', { code });
+/** 设备满员时解绑列表里的一台，随后重新激活 */
+export const proUnbind = (code: string, deviceId: number) => invoke<void>('pro_unbind', { code, deviceId });
+/** 在这台设备上停用：授权服务解绑本机后清掉本机的授权；连不上时报错，本机的不动 */
+export const proDeactivate = () => invoke<Pro>('pro_deactivate');
+/** 用浏览器打开购买页 */
+export const proBuy = () => invoke<void>('pro_buy');
+/** 取走 `xpaste://activate?code=…` 带来的授权码（只给一次），没有为 null */
+export const proTakeLink = () => invoke<string | null>('pro_take_link');
 
 // 晾衣绳页面
 export const lineReady = () => invoke<void>('line_ready');
@@ -142,6 +154,8 @@ const target = () => ({ target: getCurrentWindow().label });
 /** 便签或 Pro 状态变了，载荷是完整视图（广播） */
 export const onLineChanged = (cb: (v: LineView) => void): Promise<UnlistenFn> =>
   listen<LineView>('line-changed', (e) => cb(e.payload));
+/** 收到 `xpaste://activate?code=…`：面板已唤起，用 proTakeLink 取授权码 */
+export const onProLink = (cb: () => void): Promise<UnlistenFn> => listen('pro-link', () => cb());
 /** 面板可见时按了便签快捷键：只发给面板，挂选中的记录 */
 export const onLineHangSelected = (cb: () => void): Promise<UnlistenFn> =>
   listen('line-hang-selected', () => cb(), target());

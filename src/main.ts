@@ -21,9 +21,9 @@ import {
   onShotNeedPermission,
   onTranslateDelta,
 } from './api/events';
-import { lineDragDrop, lineDragHover, lineHangFromPanel, lineHide, lineSideHint, onLineChanged, onLineHangSelected, proActivate, proStatus, type LineView } from './api/line';
-import { proLine } from './pro-status';
-import type { AppError, Appearance, Engines, FileEntry, LineSide, LineStyle, PanelStyle, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
+import { lineDragDrop, lineDragHover, lineHangFromPanel, lineHide, lineSideHint, onLineChanged, onLineHangSelected, onProLink, proActivate, proBuy, proDeactivate, proStatus, proTakeLink, proUnbind, type LineView } from './api/line';
+import { deviceLine, proControls, proLine } from './pro-status';
+import type { AppError, Appearance, BoundDevice, Engines, FileEntry, LineSide, LineStyle, PanelStyle, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
 import { appCounts, bestApp, freshSug, fromApp, type Sug } from './source';
 import { COMPACT, compactGroups, compactHeadH, rowParts } from './compact';
 import { copyToast, needsAccessibility } from './copy-status';
@@ -164,7 +164,7 @@ const S = {
   /** 当前可见条数，供 aria-setsize */
   count: 0,
   /** 晾衣绳：不含晾衣绳的版本 available 为 false，挂钩按钮、已挂刻线与“Pro”标签都不出现 */
-  line: { available: false, pro: { state: 'unavailable' }, notes: [], hung: [], hotkey: '', style: { rope: 'jute', thick: 'mid', peg: 'plastic', paper: 'parch', edge: 'auto' }, on: true, side: 'top', pinned: false, recovered: false } as LineView,
+  line: { available: false, pro: { state: 'unavailable' }, notes: [], hung: [], hotkey: '', style: { rope: 'jute', thick: 'mid', peg: 'plastic', paper: 'parch', edge: 'auto' }, on: true, side: 'top', pinned: false, recovered: false, canBuy: false } as LineView,
 };
 const menuOpen = () => menu.dataset.open === 'true' || moreMenu.dataset.open === 'true';
 
@@ -1922,32 +1922,134 @@ const shotKey = optHotkey('shotHotkey'), recKey = optHotkey('recHotkey');
 const trKey = optHotkey('trHotkey', '在任何应用里选中文字后按下，译文显示在鼠标旁');
 const lineKey = optHotkey('lineHotkey', '把最近复制的一条挂到晾衣绳上；面板开着时挂选中的那条');
 
-// “Pro”标签（只在含晾衣绳的版本里显示）：状态行、授权码激活。激活失败写在输入框下方（提示条会被设置框盖住）
+// “Pro”标签（只在含晾衣绳的版本里显示）：状态行、联网激活、设备满员时解绑、购买入口、在本机停用。
+// 出错写在输入框下方（提示条会被设置框盖住）
 const proStatusEl = $('#proStatus'), proCodeIn = $<HTMLInputElement>('#proCode'), proCodeErr = $('#proCodeErr'), proActBtn = $<HTMLButtonElement>('#proActBtn');
-// 状态行是 live region：文字没变就不重写，免得读屏重复播报
+const proActField = $('#proActField'), proDevicesEl = $('#proDevices'), proBuyBtn = $<HTMLButtonElement>('#proBuyBtn');
+const proOffBtn = $<HTMLButtonElement>('#proOffBtn'), proOffErr = $('#proOffErr');
+// 激活、解绑、停用进行中：状态行写着在做什么，按钮都不可点
+let proBusy = '';
+// 状态行是 live region：文字没变就不重写，免得读屏重复播报。没授权时显示输入框和购买入口，已授权时只显示停用
 function paintProStatus() {
-  const t = proLine(S.line.pro);
+  const t = proBusy || proLine(S.line.pro);
   if (proStatusEl.textContent !== t) proStatusEl.textContent = t;
+  const c = proControls(S.line.pro, S.line.canBuy);
+  // 焦点所在的控件要藏起来时，挪到换上来的那个上面
+  const held = document.activeElement, move = (!c.activate && proActField.contains(held)) || (!c.off && held === proOffBtn);
+  proActField.hidden = !c.activate;
+  proBuyBtn.hidden = !c.buy;
+  proOffBtn.hidden = !c.off;
+  if (!c.activate) paintProErr();
+  if (!c.off) paintProOffErr();
+  if (move) (c.off ? proOffBtn : c.activate ? proCodeIn : $('#st-tab-pro')).focus();
 }
-function paintProErr(msg = '') {
+function setProBusy(text: string) {
+  proBusy = text;
+  proActBtn.disabled = proOffBtn.disabled = !!text;
+  proCodeIn.readOnly = !!text;
+  for (const b of proDevicesEl.querySelectorAll('button')) b.disabled = !!text;
+  paintProStatus();
+}
+/** 输入框下方的错误；设备满员时下面列出已绑定的设备，每台一个“解绑” */
+function paintProErr(msg = '', devices: BoundDevice[] = []) {
   proCodeErr.textContent = msg;
   proCodeErr.hidden = !msg;
   proCodeIn.setAttribute('aria-invalid', String(!!msg));
+  proDevicesEl.replaceChildren(...devices.map((d) => {
+    const row = document.createElement('div'), text = document.createElement('span'), name = document.createElement('b'), when = document.createElement('small'), btn = document.createElement('button');
+    row.className = 'line';
+    name.textContent = d.name || '未命名设备';
+    when.textContent = deviceLine(d.activatedAt);
+    text.append(name, when);
+    btn.type = 'button';
+    btn.className = 'btn sm';
+    btn.textContent = '解绑';
+    btn.setAttribute('aria-label', `解绑 ${name.textContent}`);
+    btn.addEventListener('click', () => unbindPro(d.id, devices));
+    row.append(text, btn);
+    return row;
+  }));
+  proDevicesEl.hidden = !devices.length;
   paintStErr();
+}
+function paintProOffErr(msg = '') {
+  proOffErr.textContent = msg;
+  proOffErr.hidden = !msg;
+  paintStErr();
+}
+/** 激活、停用成功后：换上新状态，样式选择器跟着解锁或锁住 */
+function setPro(p: LineView['pro']) {
+  S.line.pro = p;
+  stylePicker?.set(draftLineStyle, lineLocked());
 }
 function activatePro() {
   const code = proCodeIn.value.trim();
-  if (!code || proActBtn.disabled) return;
-  proActBtn.disabled = true;
+  if (!code || proBusy) return;
+  setProBusy('正在激活…');
+  // 进行中按钮不可点，焦点会丢：结束后放到换上来的“停用”上，没成放回输入框
   void proActivate(code).then((p) => {
-    S.line.pro = p;
-    paintProStatus();
-    stylePicker?.set(draftLineStyle, lineLocked());
+    setPro(p);
     proCodeIn.value = '';
     paintProErr();
-  }, (err: AppError) => paintProErr(err.message)).finally(() => (proActBtn.disabled = false));
+    setProBusy('');
+    proOffBtn.focus();
+  }, (err: AppError) => {
+    paintProErr(err.message, err.kind === 'deviceLimit' ? err.devices : []);
+    setProBusy('');
+    proCodeIn.focus();
+  });
+}
+/** 解绑列表里的一台，成了就用同一个授权码重新激活；没成（比如解绑次数用完）写在同一处，列表留着 */
+function unbindPro(id: number, devices: BoundDevice[]) {
+  const code = proCodeIn.value.trim();
+  if (!code || proBusy) return;
+  setProBusy('正在解绑…');
+  void proUnbind(code, id).then(() => {
+    setProBusy('');
+    activatePro();
+  }, (err: AppError) => {
+    paintProErr(err.message, devices);
+    setProBusy('');
+    proCodeIn.focus();
+  });
+}
+async function deactivatePro() {
+  if (proBusy) return;
+  const ok = await confirm({
+    title: '在这台设备上停用',
+    body: '停用后这台设备不再占用授权名额，之后可以用同一个授权码重新激活。停用前请确认授权码还找得到（在购买时收到的邮件里）',
+    ok: '停用',
+    danger: true,
+  });
+  if (!ok || proBusy) return;
+  paintProOffErr();
+  setProBusy('正在停用…');
+  void proDeactivate().then((p) => {
+    setPro(p);
+    setProBusy('');
+    proCodeIn.focus();
+  }, (err: AppError) => {
+    paintProOffErr(err.message);
+    setProBusy('');
+    proOffBtn.focus();
+  });
+}
+/** `xpaste://activate?code=…`：打开“Pro”标签，把授权码填进去并激活；已经授权了就只打开标签 */
+function activateFromLink() {
+  if (!S.line.available) return;
+  void proTakeLink().then((code) => {
+    if (!code) return;
+    openSettingsAt('st-tab-pro');
+    if (S.line.pro.state === 'licensed' || proBusy) return;
+    showStControl(proCodeIn);
+    proCodeIn.value = code;
+    paintProErr();
+    activatePro();
+  }, () => {});
 }
 proActBtn.addEventListener('click', activatePro);
+proOffBtn.addEventListener('click', () => void deactivatePro());
+proBuyBtn.addEventListener('click', () => void proBuy().catch((err: AppError) => paintProErr(err.message)));
 
 // 晾衣绳样式选择器只在带 pro/ 的构建里有；没有时 glob 为空，这一项一直隐藏。
 // 类型在这里写一份，不引用 pro/ 里的文件：公开源码里没有它，tsc 也得过
@@ -2424,8 +2526,12 @@ function openSettings() {
       paintProStatus();
       stylePicker?.set(draftLineStyle, lineLocked());
     }, () => {});
-  proCodeIn.value = '';
-  paintProErr();
+  // 激活进行中（激活链接拉起时设置可能已经开着）不清输入框
+  if (!proBusy) {
+    proCodeIn.value = '';
+    paintProErr();
+  }
+  paintProOffErr();
   // 启动时被其他应用占用、没注册上的快捷键：只发过系统通知（可能被关掉），这里在录制框下标红、标签上出红点
   void hotkeyStatus().then((h) => {
     const taken = (name: string) => `${name}快捷键被其他应用占用，没有生效，请换一个`;
@@ -3083,8 +3189,10 @@ await onOpenSettings((tab) => {
   if (tab === 'translate') return openTrSettings();
   if (tab !== 'pro' || !S.line.available) return openSettings();
   openSettingsAt('st-tab-pro');
-  showStControl(proCodeIn);
+  showStControl(proActField.hidden ? proOffBtn : proCodeIn);
 });
+// 官网付款成功页用 xpaste://activate?code=… 拉起：后端已唤起面板
+await onProLink(activateFromLink);
 // 设置对话框开着时提示条被它盖住，结果同样写进“历史记录”行内：先切到“记录”标签，
 // 如同点了行内的“清空历史…”（确认框关闭后焦点回到这个按钮）
 await onConfirmClear(() => {
@@ -3568,6 +3676,8 @@ for (const a of document.getAnimations()) if (a instanceof CSSTransition) a.fini
 // 列表已渲染好，后端这时才允许面板上屏：启动后网页就绪前按的快捷键 / 托盘 / 首次启动在这里补显示，
 // 用户看到的第一帧就是完整列表，不会先空白再出现
 void frontendReady().catch((e: AppError) => info(`frontend_ready 失败：${e?.message || e}`));
+// 应用是被激活链接拉起来的：那时面板还没订阅事件，这里补取一次
+activateFromLink();
 void document.fonts?.ready.then(() => {
   renderTabs(true);
   moveInd({ instant: true });

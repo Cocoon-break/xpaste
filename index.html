@@ -352,14 +352,17 @@
           <section class="dlg-body" role="tabpanel" id="st-pro" aria-labelledby="st-tab-pro" inert hidden>
             <div class="line" style="--i:0">
               <span><b>xPaste Pro</b><small id="proStatus" role="status" aria-live="polite"></small></span>
+              <span class="btns"><button class="btn sm" type="button" id="proBuyBtn" hidden>购买 xPaste Pro</button><button class="btn sm" type="button" id="proOffBtn" aria-describedby="proOffErr" hidden>在这台设备上停用…</button></span>
             </div>
+            <p class="err" id="proOffErr" role="alert" style="--i:0" hidden></p>
             <div class="switches" style="--i:1">
               <label class="switch"><span><b>晾衣绳便签</b><small id="lineOnHelp"></small></span><input type="checkbox" id="lineOn"></label>
             </div>
-            <div class="field" style="--i:2">
+            <div class="field" id="proActField" style="--i:2">
               <label for="proCode">授权码</label>
               <div class="pick"><input id="proCode" autocomplete="off" spellcheck="false" placeholder="粘贴授权码" aria-describedby="proCodeErr"><button class="btn" type="button" id="proActBtn">激活</button></div>
-              <p class="err" id="proCodeErr" hidden></p>
+              <p class="err" id="proCodeErr" role="alert" hidden></p>
+              <div class="switches" id="proDevices" role="group" aria-label="已绑定的设备" hidden></div>
             </div>
             <div class="field" style="--i:3">
               <label for="lineHotkey">便签快捷键</label>

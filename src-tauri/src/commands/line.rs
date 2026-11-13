@@ -1,4 +1,4 @@
-//! 晾衣绳便签的命令：记录、拖进来的文件转成便签，复制、打开，以及 Pro 状态与授权码。
+//! 晾衣绳便签的命令：记录、拖进来的文件转成便签，复制、打开，以及 Pro 状态、激活、解绑与停用。
 //! 日志只记便签 id、记录 id、类型和字节数，不记正文、标题、备注和路径。
 
 use std::path::{Path, PathBuf};
@@ -8,15 +8,17 @@ use std::sync::{Mutex, PoisonError};
 use serde::Serialize;
 use tauri::ipc::{InvokeBody, Request};
 use tauri::{AppHandle, Manager, State};
+use tauri_plugin_opener::OpenerExt;
 use xpaste_core::detect::{VIDEO_EXTS, is_image_file};
 use xpaste_core::{Kind, LineSide, LineStyle, RecordDetail};
-use xpaste_pro::{Line, LineError, NewNote, Note, Pro};
+use xpaste_pro::{Line, LineError, NewNote, Note, Pro, Rejection};
 
 use crate::assets::asset_url;
 use crate::clock::now_ms;
 use crate::commands::records::{precheck, write_marked, write_text_plain, write_then_paste};
 use crate::error::AppError;
 use crate::events::{LINE_CHANGED, LINE_DROP, emit, emit_to};
+use crate::license::{self, Fail, Unbind};
 use crate::state::AppState;
 
 /// 便签正文的上限，记录正文超出时截断
@@ -65,6 +67,8 @@ pub struct LineView {
     pub pinned: bool,
     /// 这次启动时便签文件读不全，已留底：页面提示一次
     pub recovered: bool,
+    /// 有购买页可去（构建时给了站点地址）：设置里显示“购买 xPaste Pro”
+    pub can_buy: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -258,6 +262,7 @@ pub fn view(state: &AppState) -> LineView {
         side,
         pinned,
         recovered: line.recovered(),
+        can_buy: license::site().is_some(),
     }
 }
 
@@ -845,17 +850,66 @@ pub fn pro_status(state: State<'_, AppState>) -> Pro {
     state.line().status(now())
 }
 
-/// 激活授权码；成功后广播视图（里面带新的 Pro 状态）。日志不带授权码和邮箱
-#[tauri::command(async)]
-pub fn pro_activate(
+/// 联网激活授权码：授权服务发来的凭证验过、存下才算数；成功后广播视图（里面带新的 Pro 状态）。
+/// 设备满员时错误的 `kind` 是 `deviceLimit`，带已绑定的设备。持锁期间不做网络请求。日志不带授权码和邮箱
+#[tauri::command]
+pub async fn pro_activate(
     app: AppHandle,
     state: State<'_, AppState>,
     code: String,
 ) -> Result<Pro, AppError> {
-    let pro = state.line().activate(code.trim(), now())?;
-    log::info!("授权码已激活");
+    let code = xpaste_pro::normalize_code(&code)?;
+    let device = state.line().device()?;
+    let site = license::site().ok_or_else(license::no_site)?;
+    let credential = license::activate(&site, &code, &device, false).await?;
+    let pro = state.line().accept(&code, &credential, now())?;
+    log::info!("授权已激活");
     changed(&app);
     Ok(pro)
+}
+
+/// 设备满员时解绑列表里的一台，腾出名额；前端随后重新激活。那台已经不在列表里也算成
+#[tauri::command]
+pub async fn pro_unbind(code: String, device_id: i64) -> Result<(), AppError> {
+    let code = xpaste_pro::normalize_code(&code)?;
+    let site = license::site().ok_or_else(license::no_site)?;
+    match license::deactivate(&site, &code, Unbind::Id(device_id)).await {
+        Ok(()) | Err(Fail::NotFound) => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// 在本机停用：先让授权服务解绑本机，再清掉本机的授权码和凭证。授权服务说没有这台设备、没有这个授权码也算成；
+/// 连不上时不清本机的（否则名额还占着，本机却已经用不了），报错让用户稍后再试
+#[tauri::command]
+pub async fn pro_deactivate(app: AppHandle, state: State<'_, AppState>) -> Result<Pro, AppError> {
+    let code = state.line().code();
+    if let Some(code) = code {
+        let device = state.line().device()?;
+        let site = license::site().ok_or_else(license::no_site)?;
+        match license::deactivate(&site, &code, Unbind::This(&device)).await {
+            Ok(()) | Err(Fail::NotFound | Fail::Rejected(Rejection::InvalidCode)) => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    state.line().forget()?;
+    log::info!("已在本机停用授权");
+    changed(&app);
+    Ok(state.line().status(now()))
+}
+
+/// 用浏览器打开购买页；没有站点地址时界面不显示入口
+#[tauri::command(async)]
+pub fn pro_buy(app: AppHandle) -> Result<(), AppError> {
+    let url = license::buy_url().ok_or_else(license::no_site)?;
+    app.opener().open_url(url, None::<&str>)?;
+    Ok(())
+}
+
+/// 取走 `xpaste://activate?code=…` 带来的授权码（只给一次），没有为 null
+#[tauri::command]
+pub fn pro_take_link() -> Option<String> {
+    license::take_link_code()
 }
 
 #[cfg(test)]
@@ -1161,8 +1215,13 @@ mod tests {
             assert!(v.notes.is_empty() && v.hung.is_empty());
             let e = AppError::from(state.line().add(blank_note(), None, 0).err().unwrap());
             assert_eq!(e.to_string(), "这个版本不含晾衣绳");
-            let e = AppError::from(state.line().activate("XP1-a.b", 0).err().unwrap());
+            let e = AppError::from(
+                xpaste_pro::normalize_code("XP-Y3PZC-XY28W-3Q5B5-J92PF")
+                    .err()
+                    .unwrap(),
+            );
             assert_eq!(e.to_string(), "这个版本不含晾衣绳");
+            assert!(state.line().renewal(0).is_none());
         }
     }
 
@@ -1254,6 +1313,14 @@ mod tests {
         assert_eq!(
             v(LicenseError::Io("PermissionDenied".into()).into())["message"],
             "授权码保存失败，请重试"
+        );
+        assert_eq!(
+            v(LicenseError::Format.into()),
+            serde_json::json!({"kind": "line", "message": "授权码格式不对"})
+        );
+        assert_eq!(
+            v(LicenseError::Rejected(Rejection::Revoked).into())["message"],
+            "这个授权码已停用"
         );
     }
 }

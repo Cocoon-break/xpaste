@@ -1230,6 +1230,64 @@ fn ax_attr(el: &CFType, name: &'static str) -> Option<CFRetained<CFType>> {
     }
 }
 
+#[link(name = "IOKit", kind = "framework")]
+unsafe extern "C" {
+    fn IOServiceMatching(name: *const c_char) -> *mut c_void;
+    fn IOServiceGetMatchingService(main_port: u32, matching: *mut c_void) -> u32;
+    fn IORegistryEntryCreateCFProperty(
+        entry: u32,
+        key: &CFString,
+        allocator: *const c_void,
+        options: u32,
+    ) -> Option<NonNull<CFType>>;
+    fn IOObjectRelease(object: u32) -> i32;
+}
+
+#[link(name = "SystemConfiguration", kind = "framework")]
+unsafe extern "C" {
+    fn SCDynamicStoreCopyComputerName(
+        store: *const c_void,
+        encoding: *mut u32,
+    ) -> Option<NonNull<CFString>>;
+}
+
+/// 这台电脑的硬件标识（`IOPlatformUUID`），授权绑定设备用；读不到为 None。
+/// 重装应用、重装系统都不变。调用方只拿它算哈希，原值不上传、不落盘、不进日志。
+pub fn hardware_id() -> Option<String> {
+    // SAFETY: 名字是以 NUL 结尾的常量；IOServiceGetMatchingService 消耗匹配字典；
+    // 拿到的服务用完释放；属性按 Create 规则返回，由 CFRetained 接管
+    let v = unsafe {
+        let service =
+            IOServiceGetMatchingService(0, IOServiceMatching(c"IOPlatformExpertDevice".as_ptr()));
+        if service == 0 {
+            return None;
+        }
+        let v = IORegistryEntryCreateCFProperty(
+            service,
+            &CFString::from_static_str("IOPlatformUUID"),
+            std::ptr::null(),
+            0,
+        );
+        IOObjectRelease(service);
+        CFRetained::from_raw(v?)
+    };
+    let id = v.downcast::<CFString>().ok()?.to_string();
+    (!id.is_empty()).then_some(id)
+}
+
+/// 电脑名（系统设置“共享”里的那个），用户在已绑定设备的列表里靠它认设备；读不到为 None。
+pub fn device_name() -> Option<String> {
+    // SAFETY: 两个参数都可以为空；按 Copy 规则返回的引用由 CFRetained 接管
+    let name = unsafe {
+        CFRetained::from_raw(SCDynamicStoreCopyComputerName(
+            std::ptr::null(),
+            std::ptr::null_mut(),
+        )?)
+    };
+    let name = name.to_string();
+    (!name.trim().is_empty()).then_some(name)
+}
+
 /// 能否自动滚动：要辅助功能权限，同模拟粘贴（M23 规则 13）。
 pub fn can_auto_scroll() -> bool {
     can_paste(None) == PasteBlock::None
@@ -1291,6 +1349,14 @@ pub fn fullscreen_app() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hardware_id_is_stable_uuid() {
+        let id = hardware_id().expect("读得到 IOPlatformUUID");
+        assert_eq!(id.len(), 36);
+        assert_eq!(hardware_id().as_deref(), Some(id.as_str()));
+        assert!(device_name().is_none_or(|n| !n.trim().is_empty()));
+    }
     use objc2_core_graphics::kCGColorSpaceLinearSRGB;
 
     /// 取各类事件里最近的一次；从没有过（系统报极大值）或无效值不算（M23 规则 13）

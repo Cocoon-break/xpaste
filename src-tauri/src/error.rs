@@ -2,7 +2,7 @@ use serde::ser::{Serialize, SerializeStruct, Serializer};
 use xpaste_core::CoreError;
 use xpaste_pro::{LicenseError, LineError};
 
-/// 命令返回给前端的错误，序列化为 `{ kind, message }`（`translatePack` 另带 `source`、`target`）。
+/// 命令返回给前端的错误，序列化为 `{ kind, message }`（`translatePack` 另带 `source`、`target`，`deviceLimit` 另带 `devices`）。
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
     #[error("原文件已移动或删除，无法粘贴")]
@@ -47,9 +47,12 @@ pub enum AppError {
     /// 晾衣绳的错误，消息见 `From<LineError>`
     #[error("{0}")]
     Line(&'static str),
-    /// 授权码的错误，文案见 `LicenseError::message`（存着的授权码失效时也用它说明原因）
+    /// 授权的错误：本机的见 `LicenseError::message`，授权服务的见 `license::Fail`
     #[error("{0}")]
     License(String),
+    /// 激活时设备满员，带已绑定的设备，序列化为 `devices`：设置里列出来让用户解绑一台
+    #[error("设备数量已达上限，先解绑一台不用的")]
+    DeviceLimit(Vec<crate::license::Device>),
     /// 试用已结束：面板据 `kind` 在提示条上带“输入授权码”按钮
     #[error("试用已结束，挂新便签要 xPaste Pro")]
     LineExpired,
@@ -77,6 +80,7 @@ impl AppError {
             Self::TranslateOs => "translateOs",
             Self::Translate(_) => "translate",
             Self::Line(_) | Self::License(_) => "line",
+            Self::DeviceLimit(_) => "deviceLimit",
             Self::LineExpired => "lineExpired",
             Self::LineDuplicate(_) => "duplicate",
             Self::Core(CoreError::InvalidSettings(_)) => "invalidSettings",
@@ -96,6 +100,9 @@ impl Serialize for AppError {
         }
         if let Self::LineDuplicate(id) = self {
             s.serialize_field("id", id)?;
+        }
+        if let Self::DeviceLimit(devices) = self {
+            s.serialize_field("devices", devices)?;
         }
         s.end()
     }

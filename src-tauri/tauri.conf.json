@@ -38,6 +38,11 @@
       }
     }
   },
+  "plugins": {
+    "deep-link": {
+      "desktop": { "schemes": ["xpaste"] }
+    }
+  },
   "bundle": {
     "active": true,
     "icon": [
