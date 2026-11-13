@@ -38,6 +38,21 @@ const inline = {
   },
 };
 
+/** 私有组件（pro/）不进官网：开发机上有 pro/ 时，指向它的 glob 换成空对象，其余引用解析成空模块；
+ *  打包结束时还有 pro/ 里的模块就报错。make site-demo 打包后再 grep 一遍产物，见 Makefile */
+const proDir = path.join(repo, 'pro') + path.sep;
+const noPro = {
+  name: 'site-demo-no-pro',
+  enforce: 'pre',
+  transform: (code, id) => (id.startsWith(repo) && code.includes('../pro/')
+    ? code.replace(/import\.meta\.glob(<[\s\S]*?>)?\(\s*(['"])\.\.\/pro\/[^'"]*\2\s*\)/g, '({})') : null),
+  resolveId: (src, from) => (from && path.resolve(path.dirname(from), src).startsWith(proDir) ? '\0site-demo-empty' : null),
+  load: (id) => (id === '\0site-demo-empty' ? 'export {};' : null),
+  buildEnd() {
+    for (const id of this.getModuleIds()) if (id.startsWith(proDir)) this.error('pro/ 里的私有组件混进了官网演示');
+  },
+};
+
 export default {
   root: repo,
   base: './',
@@ -55,6 +70,7 @@ export default {
     },
   },
   plugins: [
+    noPro,
     {
       // 演示用的桥接脚本排在应用入口之前
       name: 'site-demo-boot',

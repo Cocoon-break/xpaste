@@ -1,0 +1,9 @@
+# 默认模式（NGINX_MODE=http）：只听 80，直接提供站点。
+# 用在：域名和证书还没有的时候本机验证；或者 HTTPS 由前面另一层（云负载均衡、CDN）终结的时候。
+include /etc/nginx/conf.d/xpaste-http.inc;
+
+server {
+  listen 80;
+  server_name ${SERVER_NAME};
+  include /etc/nginx/conf.d/xpaste-site.inc;
+}

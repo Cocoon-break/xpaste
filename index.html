@@ -144,6 +144,8 @@
           <button type="button" role="tab" id="st-tab-shot" aria-controls="st-shot" aria-selected="false" tabindex="-1">截图</button>
           <button type="button" role="tab" id="st-tab-rec" class="os-mac" aria-controls="st-rec" aria-selected="false" tabindex="-1">录屏</button>
           <button type="button" role="tab" id="st-tab-translate" aria-controls="st-translate" aria-selected="false" tabindex="-1">翻译</button>
+          <!-- 晾衣绳：只在含晾衣绳的版本里显示 -->
+          <button type="button" role="tab" id="st-tab-pro" aria-controls="st-pro" aria-selected="false" tabindex="-1" hidden>Pro</button>
           <span class="st-ind" aria-hidden="true"></span>
         </div>
         <div class="st-panes">
@@ -346,6 +348,41 @@
                 <button class="btn" type="button" id="trTestBtn">测试翻译</button>
               </div>
             </div>
+          </section>
+          <section class="dlg-body" role="tabpanel" id="st-pro" aria-labelledby="st-tab-pro" inert hidden>
+            <div class="line" style="--i:0">
+              <span><b>xPaste Pro</b><small id="proStatus" role="status" aria-live="polite"></small></span>
+              <span class="btns"><button class="btn sm" type="button" id="proBuyBtn" hidden>购买 xPaste Pro</button><button class="btn sm" type="button" id="proOffBtn" aria-describedby="proOffErr" hidden>在这台设备上停用…</button></span>
+            </div>
+            <p class="err" id="proOffErr" role="alert" style="--i:0" hidden></p>
+            <div class="switches" style="--i:1">
+              <label class="switch"><span><b>晾衣绳便签</b><small id="lineOnHelp"></small></span><input type="checkbox" id="lineOn"></label>
+            </div>
+            <div class="field" id="proActField" style="--i:2">
+              <label for="proCode">授权码</label>
+              <div class="pick"><input id="proCode" autocomplete="off" spellcheck="false" placeholder="粘贴授权码" aria-describedby="proCodeErr"><button class="btn" type="button" id="proActBtn">激活</button></div>
+              <p class="err" id="proCodeErr" role="alert" hidden></p>
+              <div class="switches" id="proDevices" role="group" aria-label="已绑定的设备" hidden></div>
+            </div>
+            <div class="field" style="--i:3">
+              <label for="lineHotkey">便签快捷键</label>
+              <input id="lineHotkey" readonly autocomplete="off" spellcheck="false" placeholder="未启用" aria-describedby="lineHotkeyHelp">
+              <p class="help" id="lineHotkeyHelp">把最近复制的一条挂到晾衣绳上；面板开着时挂选中的那条</p>
+            </div>
+            <div class="field" id="lineSideField" style="--i:4">
+              <span class="lbl" id="lineSideLabel">位置</span>
+              <div class="side-pick" id="lineSide" role="radiogroup" aria-labelledby="lineSideLabel" aria-describedby="lineSideHelp lineSideHint">
+                <label><input type="radio" name="lineSide" value="top"><svg viewBox="0 0 100 62" aria-hidden="true"><rect class="scr" x="1" y="1" width="98" height="60" rx="6"/><path d="M12 14H88"/><rect x="27" y="19" width="13" height="11" rx="1.5"/><rect x="45" y="19" width="13" height="11" rx="1.5"/><rect x="63" y="19" width="13" height="11" rx="1.5"/></svg><span>顶部</span></label>
+                <label><input type="radio" name="lineSide" value="left"><svg viewBox="0 0 100 62" aria-hidden="true"><rect class="scr" x="1" y="1" width="98" height="60" rx="6"/><path d="M22 8V54"/><rect x="14" y="12" width="16" height="10" rx="1.5"/><rect x="14" y="26" width="16" height="10" rx="1.5"/><rect x="14" y="40" width="16" height="10" rx="1.5"/></svg><span>左侧</span></label>
+                <label><input type="radio" name="lineSide" value="right"><svg viewBox="0 0 100 62" aria-hidden="true"><rect class="scr" x="1" y="1" width="98" height="60" rx="6"/><path d="M78 8V54"/><rect x="70" y="12" width="16" height="10" rx="1.5"/><rect x="70" y="26" width="16" height="10" rx="1.5"/><rect x="70" y="40" width="16" height="10" rx="1.5"/></svg><span>右侧</span></label>
+              </div>
+              <p class="help" id="lineSideHelp"></p>
+              <p class="help" id="lineSideHint" hidden></p>
+            </div>
+            <div class="switches" id="linePinField" style="--i:5">
+              <label class="switch"><span><b>一直显示晾衣绳</b><small>绳子和便签一直留在屏幕上，空白处可以点穿</small></span><input type="checkbox" id="linePin"></label>
+            </div>
+            <div class="field" id="lineStyleField" style="--i:6" hidden></div>
           </section>
         </div>
         <footer class="dlg-foot">

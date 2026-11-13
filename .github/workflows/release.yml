@@ -18,6 +18,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { ref: "${{ env.TAG }}" }
+      # 官方安装包带上私有的 Pro 代码：PRO_DEPLOY_KEY 是 xpaste-pro 仓库的只读 deploy key。
+      # 私有仓库要先打同名标签：同一个标签每次构建都用同一份私有代码，没有这个标签就在这里失败
+      - uses: actions/checkout@v4
+        with: { repository: Cocoon-break/xpaste-pro, path: pro, ref: "refs/tags/${{ env.TAG }}", ssh-key: "${{ secrets.PRO_DEPLOY_KEY }}" }
+      - name: 确认已带上 Pro
+        run: test -f pro/rust/mod.rs && test -f pro/web/line.html
+      # 站点地址（仓库变量 XPASTE_SITE，如 https://xpaste.example.com，不带末尾斜杠）编进安装包：购买页和授权服务都在它下面。
+      # 正式版没设、或 Pro 里验凭证的公钥还是本机联调的那把，就在这里停下：发出去的版本买不了、激活不了。内测标签（带 -）不拦
+      - name: 正式版要有站点地址和正式公钥
+        if: ${{ !contains(env.TAG, '-') }}
+        env:
+          XPASTE_SITE: ${{ vars.XPASTE_SITE }}
+        run: |
+          [ -n "$XPASTE_SITE" ] || { echo "仓库变量 XPASTE_SITE 没设：Settings → Secrets and variables → Actions → Variables 里加上站点地址再发正式版" >&2; exit 1; }
+          ! grep -q 'LOCAL-E2E-KEY' pro/rust/license.rs || { echo "pro/rust/license.rs 里还是本机联调的公钥：换成管理后台“应用”页里 xpaste 的公钥，并去掉 LOCAL-E2E-KEY 标记" >&2; exit 1; }
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with: { node-version: 25, cache: pnpm }
@@ -43,16 +58,26 @@ jobs:
         run: |
           pnpm check:version
           ver=$(node -p "require('./package.json').version")
-          test "v$ver" = "$TAG" || { echo "标签 $TAG 与 package.json 版本 $ver 不一致" >&2; exit 1; }
+          # 内测标签带后缀（v0.8.0-beta.1）：去掉后缀再和版本号比
+          test "v$ver" = "${TAG%%-*}" || { echo "标签 $TAG 与 package.json 版本 $ver 不一致" >&2; exit 1; }
       # APPLE_* 来自仓库 Secrets：Tauri 把 .p12 导入临时钥匙串，签名并公证 macOS 包（Windows 上不起作用）
       - run: make release
         env:
+          XPASTE_SITE: ${{ vars.XPASTE_SITE }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      # 标记 pro.json.tmp 来自 pro/rust/trial.rs，只有带 Pro 编译的二进制里才有；改名时两处同步
+      - name: 确认 Rust 侧带上 Pro
+        run: |
+          bin=target/release/xpaste
+          [ "$RUNNER_OS" = Windows ] && bin=$bin.exe
+          grep -a -q 'pro.json.tmp' "$bin" || { echo "$bin 里没有 Pro 标记：Rust 侧没带上 Pro" >&2; exit 1; }
+      - name: 前端产物里有晾衣绳页面
+        run: test -f dist/pro/web/line.html
       # Tauri 只公证 dmg 里的 .app，dmg 本身只签名：这里再把 dmg 提交公证并附上票据，
       # 系统单独检查下载下来的 dmg 时也认作已公证（Apple 建议公证最外层的分发文件）
       - if: runner.os == 'macOS'
@@ -75,10 +100,12 @@ jobs:
             xcrun stapler staple "$f"
           done
       # Secrets 缺失或公证没做成时在这里失败，不让未公证的包发出去：dmg 和里面的 .app 都要带公证票据，
-      # 且按“浏览器下载的文件”检查时系统放行
+      # 且按“浏览器下载的文件”检查时系统放行。
+      # 签名团队还要和 pro/rust/genuine.rs 的 TEAM_ID 一致：对不上时 Pro 在所有 Mac 上都悄悄不可用
       - if: runner.os == 'macOS'
         name: dmg 与里面的应用都已公证
         run: |
+          want=$(sed -nE 's/^const TEAM_ID: &str = "([A-Z0-9]+)";.*/\1/p' pro/rust/genuine.rs)
           for f in target/installers/xPaste_*.dmg; do
             xcrun stapler validate "$f"
             spctl -a -t open --context context:primary-signature -vv "$f"
@@ -86,13 +113,16 @@ jobs:
             hdiutil attach -nobrowse -readonly -mountpoint "$m" "$f"
             xcrun stapler validate "$m/xPaste.app"
             spctl -a -vv "$m/xPaste.app"
+            got=$(codesign -dv "$m/xPaste.app" 2>&1 | sed -n 's/^TeamIdentifier=//p')
+            [ -n "$want" ] && [ "$got" = "$want" ] || { echo "$f 的签名团队是 ${got:-（读不到）}，genuine.rs 里的 TEAM_ID 是 ${want:-（读不到）}" >&2; exit 1; }
             hdiutil detach "$m"
           done
       # 再存一份不带版本号的文件名，官网用 releases/latest/download/<文件名> 固定链接到最新版
       - name: 不带版本号的副本
         run: |
+          ver=$(node -p "require('./package.json').version")
           cd target/installers
-          for f in xPaste_*; do cp "$f" "${f/_${TAG#v}_/_}"; done
+          for f in xPaste_*; do cp "$f" "${f/_${ver}_/_}"; done
           ls -l
       - uses: actions/upload-artifact@v4
         with:
@@ -116,6 +146,10 @@ jobs:
         with:
           tag_name: ${{ env.TAG }}
           name: xPaste ${{ env.TAG }}
+          # 内测标签（带 -）只建草稿预发布：只有仓库成员看得到，不算最新版，官网下载、检查更新和 Homebrew 都不受影响
+          draft: ${{ contains(env.TAG, '-') }}
+          prerelease: ${{ contains(env.TAG, '-') }}
+          make_latest: ${{ contains(env.TAG, '-') && 'false' || 'true' }}
           files: dist/*
           generate_release_notes: true
           body: |
@@ -140,6 +174,8 @@ jobs:
   # 给旧标签补发时不动 tap，免得把它退回旧版本；这一步失败不影响已经发布的安装包。
   tap:
     needs: release
+    # 内测不动 tap（job 级 if 用不了 env，这里照 TAG 的写法重算）
+    if: ${{ !contains(inputs.tag || github.ref_name, '-') }}
     runs-on: ubuntu-latest
     env:
       TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}

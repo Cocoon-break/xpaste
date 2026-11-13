@@ -4,19 +4,19 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>xPaste · 能搜截图文字的剪切板历史，自带截图、录屏与翻译</title>
-<meta name="description" content="xPaste 是免费、开源、纯本地的 macOS / Windows 剪切板历史，自带截图、贴图、录屏（录屏仅 macOS）和翻译。截图里的字、文件里的内容都能搜到，按 Enter 贴回刚才的应用；任何应用里选中的文字都能翻译。">
+<meta name="description" content="xPaste 是开源、纯本地的 macOS / Windows 剪切板历史，自带截图、贴图、录屏（录屏仅 macOS）和翻译，这些都免费。截图里的字、文件里的内容都能搜到，按 Enter 贴回刚才的应用。晾衣绳便签是 Pro 功能，可免费试用 14 天。">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#F5F5F7" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#1C1C1E" media="(prefers-color-scheme: dark)">
 <link rel="icon" type="image/svg+xml" href="assets/logo.svg">
 <meta property="og:type" content="website">
 <meta property="og:title" content="xPaste · 剪切板历史，自带截图、录屏与翻译">
-<meta property="og:description" content="免费、开源、纯本地的剪切板历史，自带截图、贴图、录屏和翻译。截图里的字、文件里的内容都能搜到。">
+<meta property="og:description" content="开源、纯本地的剪切板历史，自带截图、贴图、录屏和翻译，这些都免费。截图里的字、文件里的内容都能搜到。">
 <meta property="og:url" content="https://cocoon-break.github.io/xpaste/">
 <meta property="og:image" content="https://cocoon-break.github.io/xpaste/assets/og.jpg">
 <meta name="twitter:card" content="summary_large_image">
 <script type="application/ld+json">
-{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"xPaste 收费吗？","acceptedAnswer":{"@type":"Answer","text":"免费，代码开源。没有付费版本，也没有内购。"}},
+{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"xPaste 收费吗？","acceptedAnswer":{"@type":"Answer","text":"剪切板历史、搜索、截图、贴图、录屏和翻译免费，代码开源。晾衣绳便签是 Pro 功能，可以免费试用 14 天；之后挂新便签需要购买，已经挂上的便签照常能用。Pro 的实现不开源。"}},
 {"@type":"Question","name":"我复制的内容会上传到哪里吗？","acceptedAnswer":{"@type":"Answer","text":"不会。xPaste 没有账号、没有云同步、没有使用统计，数据只存在本机。日志里也不会出现剪切板内容、标题、文件路径和搜索词。唯一的例外是你手动发起的翻译。"}},
 {"@type":"Question","name":"翻译会把内容发到哪里？","acceptedAnswer":{"@type":"Answer","text":"只在你按翻译时发送要翻译的那一段文字。macOS 26 的系统翻译在本机完成；AI 翻译发到你自己在设置里填的 OpenAI 兼容接口，接本机的 Ollama 时不出本机。"}},
 {"@type":"Question","name":"按 Enter 为什么没有直接粘贴？","acceptedAnswer":{"@type":"Answer","text":"macOS 上自动粘贴需要“辅助功能”权限，在系统设置 → 隐私与安全性 → 辅助功能里打开 xPaste。没授权时 Enter 会复制好并提示，到目标应用里按 ⌘ V 就行。"}},
@@ -184,6 +184,14 @@ h3 { font: 600 18px/26px var(--ui); }
 .facts dt { font-weight: 600; font-size: 15px; line-height: 24px; }
 .facts dd { margin-top: 4px; color: var(--muted); font-size: 14px; line-height: 22px; overflow-wrap: anywhere; }
 
+/* Pro：只有文字。价格从接口取，取不到就不显示价格和购买按钮 */
+.pro { display: grid; grid-template-columns: 5fr 6fr; gap: 64px; align-items: start; }
+.price { margin-top: 32px; }
+.price b { display: block; font: 600 40px/1.18 var(--ui); letter-spacing: -.015em; }
+.price span { display: block; margin-top: 4px; color: var(--muted); font-size: 14px; line-height: 22px; }
+.pro .more { max-width: 440px; margin-top: 24px; }
+#pro [hidden] { display: none; }
+
 .dl { margin-top: 48px; border-top: 1px solid var(--line-2); }
 .dl li { display: grid; grid-template-columns: 240px 1fr auto; gap: 24px; align-items: center; padding: 20px 0; border-bottom: 1px solid var(--line-2); }
 .dl b { font-weight: 600; font-size: 17px; line-height: 26px; }
@@ -229,7 +237,7 @@ footer nav a:hover { color: var(--fg); }
 @media (max-width: 960px) {
   .nav-links { display: none; }
   .theme { margin-left: auto; }
-  .hero-head, .oss, .faqs, .help { grid-template-columns: 1fr; gap: 32px; }
+  .hero-head, .oss, .pro, .faqs, .help { grid-template-columns: 1fr; gap: 32px; }
   h1 { font-size: 48px; }
   .dl li { grid-template-columns: 1fr auto; }
   .dl span { grid-column: 1; grid-row: 2; }
@@ -273,6 +281,7 @@ footer nav a:hover { color: var(--fg); }
       <a href="#translate">翻译</a>
       <a href="#privacy">隐私</a>
       <a href="#faq">常见问题</a>
+      <a href="buy.html">购买</a>
       <a href="https://github.com/Cocoon-break/xpaste">GitHub</a>
     </nav>
     <div class="theme" role="group" aria-label="主题">
@@ -296,7 +305,7 @@ footer nav a:hover { color: var(--fg); }
           <a class="btn primary" href="#download"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>下载 xPaste</a>
           <a class="btn" href="https://github.com/Cocoon-break/xpaste">在 GitHub 查看源码</a>
         </div>
-        <p class="meta">免费、开源 · 数据只存在本机 · macOS 13+ 与 Windows 10 / 11</p>
+        <p class="meta">核心功能免费、开源 · 数据只存在本机 · macOS 13+ 与 Windows 10 / 11</p>
       </div>
     </div>
     <div class="demo" data-scene="hero">
@@ -408,8 +417,8 @@ footer nav a:hover { color: var(--fg); }
     <p class="say">复制过的一切，都留在你的电脑上。没有账号，没有云，也没有统计</p>
     <div class="oss">
       <div>
-        <h3>每一行代码都能查</h3>
-        <p class="lede" style="font-size:15px;line-height:24px">说数据不离开本机，不该只靠一句承诺。代码全部在 GitHub 上，网络请求、日志写了什么，你都可以自己看。</p>
+        <h3>代码公开，可以自己查</h3>
+        <p class="lede" style="font-size:15px;line-height:24px">说数据不离开本机，不该只靠一句承诺。剪切板历史、搜索、截图、录屏和翻译的代码都在 GitHub 上，网络请求、日志写了什么，你都可以自己看。Pro 的晾衣绳便签不开源。</p>
         <a class="btn" href="https://github.com/Cocoon-break/xpaste">在 GitHub 查看源码</a>
       </div>
       <dl class="facts">
@@ -423,10 +432,31 @@ footer nav a:hover { color: var(--fg); }
 
 <div class="wrap"><hr class="rule"></div>
 
+<section id="pro" aria-labelledby="pro-title">
+  <div class="wrap pro">
+    <div>
+      <span class="n">Pro</span>
+      <h2 id="pro-title">要紧的几条，晾在屏幕边上</h2>
+      <p class="lede">碰一下屏幕顶端的边缘，放下一根晾衣绳。复制过的文字、图片、链接和文件，夹上去就是一张便签。</p>
+      <p class="price" id="pro-price" hidden><b></b><span></span></p>
+      <p class="more">应用内可以免费试用 14 天。之后挂新便签需要购买，已经挂上的便签照常能用。</p>
+      <div class="cta" id="pro-cta" hidden><a class="btn primary" href="buy.html">购买 Pro</a></div>
+    </div>
+    <dl class="facts">
+      <div><dt>复制过的东西，夹上去</dt><dd>文字、图片、链接、文件都能当便签，不用另外打开一个便签应用</dd></div>
+      <div><dt>改写、备注、提醒</dt><dd>便签上的内容可以改，可以加一句备注，也可以设一个提醒</dd></div>
+      <div><dt>绳子在哪一边，你定</dt><dd>默认在屏幕顶端，也可以设到左右两侧</dd></div>
+      <div><dt>样式自己搭</dt><dd>绳子、夹子、纸张各有几种样式，随意搭配</dd></div>
+    </dl>
+  </div>
+</section>
+
+<div class="wrap"><hr class="rule"></div>
+
 <section id="download" aria-labelledby="dl-title">
   <div class="wrap">
     <h2 id="dl-title">免费下载，装上就能用</h2>
-    <p class="lede">永久免费，不用注册账号。更新说明和旧版本在<a class="link" href="https://github.com/Cocoon-break/xpaste/releases">版本历史</a>。</p>
+    <p class="lede">下载免费，剪切板历史、搜索、截图、录屏和翻译一直免费，不用注册账号。更新说明和旧版本在<a class="link" href="https://github.com/Cocoon-break/xpaste/releases">版本历史</a>。</p>
     <ul class="dl">
       <li><b>macOS · Apple 芯片</b><span>macOS 13 及以上 · M 系列芯片的 Mac</span><a class="btn" href="https://github.com/Cocoon-break/xpaste/releases/latest/download/xPaste_aarch64.dmg"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>下载 .dmg</a></li>
       <li><b>macOS · Intel</b><span>macOS 13 及以上 · Intel 处理器的 Mac</span><a class="btn" href="https://github.com/Cocoon-break/xpaste/releases/latest/download/xPaste_x64.dmg"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>下载 .dmg</a></li>
@@ -451,7 +481,7 @@ footer nav a:hover { color: var(--fg); }
   <div class="wrap faqs">
     <h2 id="faq-title">装之前，你可能想知道</h2>
     <div class="faq">
-      <details><summary>xPaste 收费吗？<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary><div class="a">免费，代码开源。没有付费版本，也没有内购。</div></details>
+      <details><summary>xPaste 收费吗？<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary><div class="a">剪切板历史、搜索、截图、贴图、录屏和翻译免费，代码开源。晾衣绳便签是 Pro 功能，可以免费试用 14 天；之后挂新便签需要购买，已经挂上的便签照常能用。Pro 的实现不开源。详见<a href="#pro">晾衣绳便签</a>。</div></details>
       <details><summary>我复制的内容会上传到哪里吗？<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary><div class="a">不会。没有账号、没有云同步、没有使用统计，数据只存在本机。来自密码管理器或被系统标记为敏感的内容默认不记录；日志里也不会出现剪切板内容、标题、文件路径和搜索词。唯一的例外是翻译，见下一条。</div></details>
       <details><summary>翻译会把内容发到哪里？<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary><div class="a">只在你按翻译时，把要翻译的那一段文字发出去，复制、选中、唤起都不会。用 macOS 26 自带的系统翻译时在本机完成，不联网；用 AI 翻译时发到你自己在设置里填的 OpenAI 兼容接口，接本机的 Ollama 时同样不出本机。请求按系统代理设置发出。密码管理器里的内容和被标记为敏感的内容不翻译。</div></details>
       <details><summary>按 Enter 为什么没有直接粘贴？<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary><div class="a">macOS 上自动粘贴需要“辅助功能”权限，在系统设置 → 隐私与安全性 → 辅助功能里打开 xPaste。没授权时 Enter 会复制好并提示，到目标应用里按 ⌘ V 就行。</div></details>
@@ -468,7 +498,7 @@ footer nav a:hover { color: var(--fg); }
 <section class="final" aria-labelledby="final-title">
   <div class="wrap">
     <h2 id="final-title">复制过的一切，一键找回</h2>
-    <p>免费、开源、纯本地</p>
+    <p>核心功能免费、开源，数据只存在本机</p>
     <div class="cta"><a class="btn primary" href="#download"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>下载 xPaste</a></div>
   </div>
 </section>
@@ -479,6 +509,7 @@ footer nav a:hover { color: var(--fg); }
   <div class="wrap">
     <a class="brand" href="#top"><img src="assets/logo.svg" alt="" width="24" height="24">xPaste</a>
     <nav aria-label="页脚">
+      <a href="buy.html">购买 Pro</a>
       <a href="privacy.html">隐私说明</a>
       <a href="https://github.com/Cocoon-break/xpaste">GitHub</a>
       <a href="https://github.com/Cocoon-break/xpaste/issues">反馈问题</a>
@@ -627,6 +658,29 @@ document.querySelectorAll('.cmd button').forEach((b) => b.addEventListener('clic
   catch { label.textContent = '复制失败'; }
   setTimeout(() => { label.textContent = '复制'; }, 2400);
 }));
+</script>
+<script type="module">
+// —— Pro 的价格：从接口取。取不到（官网挂在纯静态托管上时没有这个接口）就保持不显示，只留介绍和试用说明 ——
+import { formatMoney, describeProduct, lowestPrice, priceOf, sellable } from './assets/buy-core.js';
+const get = async (path) => {
+  const r = await fetch(path, { headers: { Accept: 'application/json' } });
+  return r.ok && (r.headers.get('content-type') || '').includes('json') ? r.json() : null;
+};
+try {
+  const [products, providers] = await Promise.all([get('api/products'), get('api/providers')]);
+  const list = Array.isArray(products) && Array.isArray(providers) ? sellable(products, providers) : [];
+  if (list.length) {
+    const low = lowestPrice(list, 'CNY');
+    if (low != null) {
+      const box = document.getElementById('pro-price');
+      const one = list.length === 1 ? list[0] : null;
+      box.querySelector('b').textContent = formatMoney(low, 'CNY') + (one ? '' : ' 起');
+      box.querySelector('span').textContent = one ? describeProduct(one) : '有几种档位，到购买页选';
+      box.hidden = false;
+    }
+    document.getElementById('pro-cta').hidden = false;
+  }
+} catch {}
 </script>
 </body>
 </html>

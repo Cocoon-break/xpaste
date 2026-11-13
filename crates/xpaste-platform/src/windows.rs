@@ -51,6 +51,9 @@ use windows::Win32::System::Memory::{
     GMEM_MOVEABLE, GMEM_ZEROINIT, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock,
 };
 use windows::Win32::System::Ole::CF_UNICODETEXT;
+use windows::Win32::System::Registry::{
+    HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RRF_SUBKEY_WOW6464KEY, RegGetValueW,
+};
 use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
 use windows::Win32::System::Threading::{
     GetCurrentProcess, GetCurrentProcessId, GetCurrentThread, GetThreadId, OpenProcess,
@@ -71,8 +74,9 @@ use windows::Win32::UI::Shell::PropertiesSystem::{
     GPS_DEFAULT, IPropertyStore, SHGetPropertyStoreFromParsingName,
 };
 use windows::Win32::UI::Shell::{
-    IShellItemImageFactory, IShellLinkW, SHCreateItemFromParsingName, SHDefExtractIconW,
-    SIIGBF_THUMBNAILONLY, ShellLink,
+    ABE_BOTTOM, ABE_LEFT, ABE_RIGHT, ABM_GETSTATE, ABM_GETTASKBARPOS, ABS_AUTOHIDE, APPBARDATA,
+    IShellItemImageFactory, IShellLinkW, SHAppBarMessage, SHCreateItemFromParsingName,
+    SHDefExtractIconW, SIIGBF_THUMBNAILONLY, ShellLink,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyIcon, DispatchMessageW,
@@ -690,6 +694,70 @@ pub fn hide_window(hwnd: isize) {
     unsafe {
         let _ = ShowWindow(HWND(hwnd as *mut _), SW_HIDE);
     }
+}
+
+/// 一次设好窗口的位置和尺寸（物理像素），不分两步：贴着屏幕右边的窗口改宽时右边缘不跳。不激活、不改层级。
+/// 只用于同一块屏里改尺寸（跨不同 DPI 的屏要先移过去再定尺寸）。hwnd 失效时什么也不做。
+pub fn set_window_rect(hwnd: isize, x: i32, y: i32, w: i32, h: i32) {
+    use windows::Win32::UI::WindowsAndMessaging::{SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos};
+    // SAFETY: hwnd 失效时调用失败而不会崩溃
+    unsafe {
+        let _ = SetWindowPos(
+            HWND(hwnd as *mut _),
+            None,
+            x,
+            y,
+            w,
+            h,
+            SWP_NOACTIVATE | SWP_NOZORDER,
+        );
+    }
+}
+
+/// 浮层窗口（晾衣绳）不进 Alt+Tab：扩展样式补上 WS_EX_TOOLWINDOW、去掉 WS_EX_APPWINDOW。tao 每次改窗口状态（显示、点穿）
+/// 都按自己的标记整个重写扩展样式，所以另挂一个窗口子类，在 WM_STYLECHANGING 里每次改回来。窗口还没显示时、在它所在的线程（主线程）调用。
+pub fn tool_window(hwnd: isize) {
+    use windows::Win32::UI::Shell::SetWindowSubclass;
+    use windows::Win32::UI::WindowsAndMessaging::{SetWindowLongW, WS_EX_APPWINDOW};
+    let h = HWND(hwnd as *mut _);
+    // SAFETY: hwnd 失效时调用失败而不会崩溃；子类回调是静态函数，随窗口销毁
+    unsafe {
+        let _ = SetWindowSubclass(h, Some(keep_tool_window), 1, 0);
+        let ex = (GetWindowLongW(h, GWL_EXSTYLE) as u32 | WS_EX_TOOLWINDOW.0) & !WS_EX_APPWINDOW.0;
+        SetWindowLongW(h, GWL_EXSTYLE, ex as i32);
+    }
+}
+
+unsafe extern "system" fn keep_tool_window(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id: usize,
+    _data: usize,
+) -> LRESULT {
+    use windows::Win32::UI::Shell::DefSubclassProc;
+    use windows::Win32::UI::WindowsAndMessaging::{STYLESTRUCT, WM_STYLECHANGING, WS_EX_APPWINDOW};
+    if msg == WM_STYLECHANGING && wparam.0 as i32 == GWL_EXSTYLE.0 {
+        // SAFETY: WM_STYLECHANGING 的 lparam 指向系统给的 STYLESTRUCT，回调返回前有效
+        let s = unsafe { &mut *(lparam.0 as *mut STYLESTRUCT) };
+        s.styleNew = (s.styleNew | WS_EX_TOOLWINDOW.0) & !WS_EX_APPWINDOW.0;
+    }
+    // SAFETY: 参数原样交给下一个处理者
+    unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+}
+
+/// 前台是全屏应用（全屏的视频、游戏、演示，或开着演示设置）：按系统决定要不要弹通知时的判断，不分哪块屏。读不到算不是。
+pub fn fullscreen_app() -> bool {
+    use windows::Win32::UI::Shell::{
+        QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN,
+        SHQueryUserNotificationState,
+    };
+    // SAFETY: 只读查询
+    matches!(
+        unsafe { SHQueryUserNotificationState() },
+        Ok(s) if s == QUNS_BUSY || s == QUNS_RUNNING_D3D_FULL_SCREEN || s == QUNS_PRESENTATION_MODE
+    )
 }
 
 /// 把 `target` 切回前台（最多等 100 ms），再发 Ctrl+V。
@@ -1395,6 +1463,24 @@ pub fn mouse_button_down() -> bool {
     }
 }
 
+/// 拖拽剪切板的计数：Windows 没有这一项，为 None（调用方只看 `moving_window`）
+pub fn drag_count() -> Option<i64> {
+    None
+}
+
+/// 前台线程正在拖动、缩放窗口（拖标题栏贴顶最大化也是）。读不到算不是。
+pub fn moving_window() -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GUI_INMOVESIZE, GUITHREADINFO, GetGUIThreadInfo,
+    };
+    let mut info = GUITHREADINFO {
+        cbSize: size_of::<GUITHREADINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: info 是本地变量，cbSize 已填；线程 0 表示前台线程
+    unsafe { GetGUIThreadInfo(0, &mut info) }.is_ok() && info.flags.contains(GUI_INMOVESIZE)
+}
+
 // 长截图自动滚动（M23 规则 13）
 
 /// Windows 的滚轮作用于指针下的窗口：`scroll_at` 的 (x, y) 只供调用方判断指针在不在选区里
@@ -1565,12 +1651,81 @@ extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> L
     unsafe { CallNextHookEx(None, code, wparam, lparam) }
 }
 
+/// Windows 屏幕没有刘海。
+pub fn notch_inset(_x: f64, _w: f64) -> f64 {
+    0.0
+}
+
 /// 指针的屏幕坐标（物理像素，与 `capture_rect` 同一坐标系：进程是 Per-Monitor-v2）。
 pub fn pointer_position() -> Option<(f64, f64)> {
     let mut p = POINT::default();
     // SAFETY: p 是本地变量
     unsafe { GetCursorPos(&mut p) }.ok()?;
     Some((f64::from(p.x), f64::from(p.y)))
+}
+
+/// 任务栏停在哪一边、是否自动隐藏，以及它的矩形（物理像素，同 `pointer_position`）。任务栏总是占满那一整条边。
+/// 读不到或停在顶部时为 None。
+pub fn dock() -> Option<crate::DockFrame> {
+    use crate::{DockEdge, DockFrame};
+    let mut abd = APPBARDATA {
+        cbSize: size_of::<APPBARDATA>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: abd 是本地变量，cbSize 已填
+    if unsafe { SHAppBarMessage(ABM_GETTASKBARPOS, &mut abd) } == 0 {
+        return None;
+    }
+    let edge = match abd.uEdge {
+        ABE_LEFT => DockEdge::Left,
+        ABE_RIGHT => DockEdge::Right,
+        ABE_BOTTOM => DockEdge::Bottom,
+        _ => return None,
+    };
+    // SAFETY: 同上；ABM_GETSTATE 只读 cbSize
+    let state = unsafe { SHAppBarMessage(ABM_GETSTATE, &mut abd) } as u32;
+    let rc = abd.rc;
+    Some(DockFrame {
+        x: f64::from(rc.left),
+        y: f64::from(rc.top),
+        w: f64::from(rc.right - rc.left),
+        h: f64::from(rc.bottom - rc.top),
+        edge,
+        autohide: state & ABS_AUTOHIDE != 0,
+    })
+}
+
+/// 这台电脑的硬件标识（注册表 `MachineGuid`），授权绑定设备用；读不到为 None。
+/// 重装应用不变，重装系统会变。调用方只拿它算哈希，原值不上传、不落盘、不进日志。
+pub fn hardware_id() -> Option<String> {
+    // GUID 是 36 个字符，留足余量；RRF_RT_REG_SZ 保证读回的是以 NUL 结尾的字符串
+    let mut buf = [0u16; 128];
+    let mut bytes = size_of_val(&buf) as u32;
+    // SAFETY: buf 和 bytes 是本地变量，bytes 是 buf 的字节数；64 位视图，32 位进程读到的也是同一个值
+    let r = unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            w!(r"SOFTWARE\Microsoft\Cryptography"),
+            w!("MachineGuid"),
+            RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY,
+            None,
+            Some(buf.as_mut_ptr().cast()),
+            Some(&mut bytes),
+        )
+    };
+    if r.is_err() {
+        return None;
+    }
+    let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    let id = String::from_utf16(&buf[..len]).ok()?;
+    (!id.trim().is_empty()).then_some(id)
+}
+
+/// 电脑名，用户在已绑定设备的列表里靠它认设备；读不到为 None。
+pub fn device_name() -> Option<String> {
+    std::env::var("COMPUTERNAME")
+        .ok()
+        .filter(|n| !n.trim().is_empty())
 }
 
 /// Windows 发滚动不需要权限（M23 规则 13）

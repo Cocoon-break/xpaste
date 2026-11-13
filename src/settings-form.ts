@@ -65,6 +65,7 @@ export type SettingsForm = {
   recQuality: string;
   recFps: string;
   panelStyle: PanelStyle;
+  lineHotkey: string;
 };
 
 export const formToSettings = (base: Settings, f: SettingsForm): Settings => ({
@@ -93,6 +94,7 @@ export const formToSettings = (base: Settings, f: SettingsForm): Settings => ({
   recQuality: f.recQuality as RecQuality,
   recFps: Number(f.recFps),
   panelStyle: f.panelStyle,
+  lineHotkey: f.lineHotkey,
 });
 
 /** 翻译接口地址（M26 规则 6）：空视为未填；否则必须以 http:// 或 https:// 开头。 */

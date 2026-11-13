@@ -55,7 +55,11 @@ test('formToSettings 只改表单字段，其余（含外观：点选即保存�
     recHotkey: 'Alt+Shift+R', recDir: '', recSystemAudio: false, recMicrophone: false, recCopy: true,
     recQuality: 'standard', recFps: 30,
     translateEngine: '', translateBaseUrl: 'https://api.openai.com/v1', translateApiKey: '', translateModel: '', translateLang: 'zh-Hans',
-    translateHotkey: 'Alt+Shift+T',
+    translateHotkey: 'Alt+Shift+T', lineHotkey: 'Alt+Shift+N',
+    lineStyle: { rope: 'jute', thick: 'mid', peg: 'plastic', paper: 'parch', edge: 'auto' },
+    lineEnabled: true,
+    lineSide: 'top',
+    linePinned: false,
   };
   assert.deepEqual(
     formToSettings(base, {
@@ -63,7 +67,7 @@ test('formToSettings 只改表单字段，其余（含外观：点选即保存�
       launchAtLogin: false, updateCheck: false, frequent: 5, ocrEnabled: false, ocrBackfill: false, searchFileText: true,
       shotHotkey: 'Alt+Shift+S', shotDir: '/x', shotSaveCopy: false, longAutoScroll: true,
       recHotkey: 'Alt+Shift+T', recDir: '/y', recSystemAudio: true, recMicrophone: true, recCopy: false,
-      recQuality: 'small', recFps: '60', panelStyle: 'compact',
+      recQuality: 'small', recFps: '60', panelStyle: 'compact', lineHotkey: 'Alt+Shift+L',
     }),
     {
       hotkey: 'CommandOrControl+Alt+C', retentionDays: null, maxRecords: 1000, ignoredApps: ['a', 'b'], skipSensitive: false,
@@ -74,7 +78,11 @@ test('formToSettings 只改表单字段，其余（含外观：点选即保存�
       recHotkey: 'Alt+Shift+T', recDir: '/y', recSystemAudio: true, recMicrophone: true, recCopy: false,
       recQuality: 'small', recFps: 60,
       translateEngine: '', translateBaseUrl: 'https://api.openai.com/v1', translateApiKey: '', translateModel: '', translateLang: 'zh-Hans',
-    translateHotkey: 'Alt+Shift+T',
+      translateHotkey: 'Alt+Shift+T', lineHotkey: 'Alt+Shift+L',
+      lineStyle: { rope: 'jute', thick: 'mid', peg: 'plastic', paper: 'parch', edge: 'auto' },
+      lineEnabled: true,
+      lineSide: 'top',
+      linePinned: false,
     },
   );
 });

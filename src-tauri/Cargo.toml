@@ -22,6 +22,7 @@ embed-resource = "3"
 tauri = { workspace = true, features = ["macos-private-api", "protocol-asset", "tray-icon"] }
 xpaste-core = { workspace = true, features = ["store"] }
 xpaste-platform.workspace = true
+xpaste-pro.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -31,7 +32,9 @@ image.workspace = true
 tauri-plugin-log = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-opener = "2"
-tauri-plugin-single-instance = "2"
+# deep-link：Windows 上第二个进程带着 xpaste:// 链接启动时，把链接转给已运行的实例
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+tauri-plugin-deep-link = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
 window-vibrancy = "0.8"

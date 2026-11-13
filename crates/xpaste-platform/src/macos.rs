@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::path::{Path, PathBuf};
+use std::ptr::NonNull;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -10,19 +11,22 @@ use objc2::runtime::{AnyClass, AnyObject, ProtocolObject};
 use objc2::{AllocAnyThread, ClassType, msg_send};
 use objc2_app_kit::{
     NSApplicationActivationPolicy, NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard,
-    NSPasteboardItem, NSPasteboardTypeFileURL, NSPasteboardTypeHTML, NSPasteboardTypeString,
-    NSWorkspace,
+    NSPasteboardItem, NSPasteboardNameDrag, NSPasteboardTypeFileURL, NSPasteboardTypeHTML,
+    NSPasteboardTypeString, NSRunningApplication, NSWorkspace,
 };
 use objc2_av_foundation::{AVAssetImageGenerator, AVAssetTrack, AVMediaTypeVideo, AVURLAsset};
-use objc2_core_foundation::{CFData, CGPoint};
+use objc2_core_foundation::{
+    CFArray, CFData, CFPreferencesCopyAppValue, CFPreferencesGetAppBooleanValue, CFRetained,
+    CFString, CFType, CGPoint, CGSize, Type,
+};
 use objc2_core_graphics::{
     CGBitmapContextCreate, CGBitmapInfo, CGBlendMode, CGColorRenderingIntent, CGColorSpace,
     CGContext, CGDataProvider, CGDirectDisplayID, CGDisplayBounds, CGDisplayMirrorsDisplay,
     CGError, CGEvent, CGEventField, CGEventFlags, CGEventSource, CGEventSourceStateID,
     CGEventTapLocation, CGEventType, CGGetActiveDisplayList, CGImage, CGImageAlphaInfo,
-    CGImageByteOrderInfo, CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess,
-    CGScrollEventUnit, CGWindowListCopyWindowInfo, CGWindowListOption, kCGColorSpaceSRGB,
-    kCGNullWindowID,
+    CGImageByteOrderInfo, CGMainDisplayID, CGPreflightScreenCaptureAccess,
+    CGRequestScreenCaptureAccess, CGScrollEventUnit, CGWindowListCopyWindowInfo,
+    CGWindowListOption, kCGColorSpaceSRGB, kCGNullWindowID,
 };
 use objc2_core_media::{CMFormatDescription, CMTime};
 use objc2_foundation::{
@@ -52,7 +56,20 @@ use crate::{
 unsafe extern "C" {
     fn AXIsProcessTrusted() -> u8;
     fn AXIsProcessTrustedWithOptions(options: *const NSDictionary<NSString, NSNumber>) -> u8;
+    // 读程序坞的位置和大小；objc2 没有这几个绑定。AXUIElementRef、AXValueRef 都是 CFType
+    fn AXUIElementCreateApplication(pid: i32) -> Option<NonNull<CFType>>;
+    fn AXUIElementSetMessagingTimeout(element: &CFType, timeout: f32) -> i32;
+    fn AXUIElementCopyAttributeValue(
+        element: &CFType,
+        attribute: &CFString,
+        value: *mut *const CFType,
+    ) -> i32;
+    fn AXValueGetValue(value: &CFType, the_type: u32, value_ptr: *mut c_void) -> u8;
 }
+
+/// `kAXValueCGPointType`、`kAXValueCGSizeType`
+const AX_POINT: u32 = 1;
+const AX_SIZE: u32 = 2;
 
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
@@ -420,12 +437,49 @@ fn unpremultiply(rgba: &mut [u8]) {
 /// 屏上窗口外框，由前到后：别的应用只取 layer 0、不透明度大于 0 的普通窗口；本进程只取贴图窗口。
 /// 不读其他应用的窗口标题（需要屏幕录制权限，也用不到）。
 pub fn window_rects() -> Vec<WinRect> {
+    let me = i64::from(std::process::id());
+    on_screen_windows(|w| {
+        if num(w, "kCGWindowOwnerPID").map(|n| n.longLongValue()) == Some(me) {
+            w.objectForKey(ns_string!("kCGWindowName"))
+                .and_then(|v| v.downcast::<NSString>().ok())
+                .is_some_and(|t| t.to_string().starts_with(PIN_TITLE_PREFIX))
+        } else {
+            num(w, "kCGWindowLayer").is_some_and(|n| n.longLongValue() == 0)
+                && num(w, "kCGWindowAlpha").is_some_and(|n| n.doubleValue() > 0.0)
+        }
+    })
+}
+
+/// 最前面那个应用在屏上的窗口外框（含 layer 0 以上的，放映窗口常在更高的层级；不透明度大于 0），由前到后。
+/// 看它有没有盖满一块屏，就知道前台是不是全屏应用、全屏演示。读不到前台应用时为空。
+pub fn front_app_windows() -> Vec<WinRect> {
+    let Some(pid) = autoreleasepool(|_| {
+        NSWorkspace::sharedWorkspace()
+            .frontmostApplication()
+            .map(|a| i64::from(a.processIdentifier()))
+    }) else {
+        return Vec::new();
+    };
+    on_screen_windows(|w| {
+        num(w, "kCGWindowOwnerPID").map(|n| n.longLongValue()) == Some(pid)
+            && num(w, "kCGWindowLayer").is_some_and(|n| n.longLongValue() >= 0)
+            && num(w, "kCGWindowAlpha").is_some_and(|n| n.doubleValue() > 0.0)
+    })
+}
+
+/// 窗口信息字典里的一个数值项
+fn num(w: &NSDictionary<NSString, AnyObject>, k: &str) -> Option<Retained<NSNumber>> {
+    w.objectForKey(&NSString::from_str(k))
+        .and_then(|v| v.downcast::<NSNumber>().ok())
+}
+
+/// 屏上（不含桌面）满足 `keep` 的窗口外框，由前到后（全局点，同 `pointer_position`）
+fn on_screen_windows(keep: impl Fn(&NSDictionary<NSString, AnyObject>) -> bool) -> Vec<WinRect> {
     let option =
         CGWindowListOption::OptionOnScreenOnly | CGWindowListOption::ExcludeDesktopElements;
     let Some(list) = CGWindowListCopyWindowInfo(option, kCGNullWindowID) else {
         return Vec::new();
     };
-    let me = i64::from(std::process::id());
     autoreleasepool(|_| {
         // SAFETY: CFArray 与 NSArray 免费桥接，元素都是 CFDictionary；list 在闭包内存活
         let list: &NSArray<NSDictionary<NSString, AnyObject>> = unsafe {
@@ -434,30 +488,13 @@ pub fn window_rects() -> Vec<WinRect> {
                 .cast())
         };
         list.iter()
-            .filter(|w| {
-                let num = |k: &str| {
-                    w.objectForKey(&NSString::from_str(k))
-                        .and_then(|v| v.downcast::<NSNumber>().ok())
-                };
-                if num("kCGWindowOwnerPID").map(|n| n.longLongValue()) == Some(me) {
-                    w.objectForKey(ns_string!("kCGWindowName"))
-                        .and_then(|v| v.downcast::<NSString>().ok())
-                        .is_some_and(|t| t.to_string().starts_with(PIN_TITLE_PREFIX))
-                } else {
-                    num("kCGWindowLayer").is_some_and(|n| n.longLongValue() == 0)
-                        && num("kCGWindowAlpha").is_some_and(|n| n.doubleValue() > 0.0)
-                }
-            })
+            .filter(|w| keep(w))
             .filter_map(|w| {
                 let b = w.objectForKey(ns_string!("kCGWindowBounds"))?;
                 // SAFETY: kCGWindowBounds 的值是 CGRect 的字典表示（X、Y、Width、Height 为 NSNumber）
                 let b: Retained<NSDictionary<NSString, AnyObject>> =
                     unsafe { Retained::cast_unchecked(b) };
-                let f = |k: &str| {
-                    b.objectForKey(&NSString::from_str(k))
-                        .and_then(|v| v.downcast::<NSNumber>().ok())
-                        .map(|n| n.doubleValue())
-                };
+                let f = |k: &str| num(&b, k).map(|n| n.doubleValue());
                 let r = WinRect {
                     x: f("X")?,
                     y: f("Y")?,
@@ -498,6 +535,20 @@ pub fn mouse_button_down() -> bool {
     // kCGEventSourceStateCombinedSessionState = 0，kCGMouseButtonLeft = 0
     // SAFETY: 纯查询，无指针参数
     unsafe { CGEventSourceButtonState(0, 0) != 0 }
+}
+
+/// 拖拽剪切板的 `changeCount`：拖文件、拖文字开始时系统往这块剪切板写内容，按下鼠标后它变了才是真在拖东西。
+pub fn drag_count() -> Option<i64> {
+    autoreleasepool(|_| {
+        // SAFETY: 系统常量，进程内一直有效
+        let name = unsafe { NSPasteboardNameDrag };
+        Some(NSPasteboard::pasteboardWithName(name).changeCount() as i64)
+    })
+}
+
+/// 系统正在拖动、缩放窗口：macOS 读不到，算不是（按下后拖拽剪切板没变就已经不算在拖东西）
+pub fn moving_window() -> bool {
+    false
 }
 
 /// 应用图标转 PNG：取 64 pt 对应的那档图像（Retina 屏上为 128×128 px），不重新绘制。
@@ -1048,11 +1099,193 @@ fn input_age(secs: impl IntoIterator<Item = f64>) -> Option<Duration> {
         .map(Duration::from_secs_f64)
 }
 
+/// 屏幕顶端被刘海挡住的高度（点）：菜单栏自动隐藏或全屏时工作区从屏幕最顶上开始，刘海会盖住那一条。
+/// `x`、`w` 是这块屏的全局横坐标与宽（点），按它们找对应的 NSScreen；没有刘海、找不到或不在主线程时为 0。
+pub fn notch_inset(x: f64, w: f64) -> f64 {
+    let Some(mtm) = objc2::MainThreadMarker::new() else {
+        return 0.0;
+    };
+    objc2_app_kit::NSScreen::screens(mtm)
+        .iter()
+        .find(|s| {
+            let f = s.frame();
+            (f.origin.x - x).abs() < 1.0 && (f.size.width - w).abs() < 1.0
+        })
+        .map_or(0.0, |s| s.safeAreaInsets().top)
+}
+
 /// 指针的全局坐标（点，主屏左上为原点）。
 pub fn pointer_position() -> Option<(f64, f64)> {
     let event = CGEvent::new(None)?;
     let p = CGEvent::location(Some(&event));
     Some((p.x, p.y))
+}
+
+/// 程序坞停在哪一边、是否自动隐藏（读 `com.apple.dock` 的偏好），以及露出来的矩形（全局点，同 `pointer_position`）。
+/// 停在左右两侧且常驻时，有辅助功能权限就读程序坞那一排图标（`AXList`）的位置和大小；没有权限或读不到为 None
+/// （当作没占那一侧：宁可碰到程序坞旁边的屏幕边时放下，也不把整条边都当成占满）。
+/// 停在底部、自动隐藏（这两种用不到矩形）时，按占满主屏那一整条边算。
+pub fn dock() -> Option<crate::DockFrame> {
+    use crate::{DockEdge, DockFrame};
+    let app = CFString::from_static_str("com.apple.dock");
+    let edge = match CFPreferencesCopyAppValue(&CFString::from_static_str("orientation"), &app)
+        .and_then(|v| v.downcast::<CFString>().ok())
+        .map(|v| v.to_string())
+        .as_deref()
+    {
+        Some("left") => DockEdge::Left,
+        Some("right") => DockEdge::Right,
+        // 没写过这一项就是默认的底部
+        _ => DockEdge::Bottom,
+    };
+    // SAFETY: 第三个参数可以为空
+    let autohide = unsafe {
+        CFPreferencesGetAppBooleanValue(
+            &CFString::from_static_str("autohide"),
+            &app,
+            std::ptr::null_mut(),
+        )
+    };
+    let main = CGDisplayBounds(CGMainDisplayID());
+    let full = WinRect {
+        x: if edge == DockEdge::Right {
+            main.origin.x + main.size.width - 1.0
+        } else {
+            main.origin.x
+        },
+        y: main.origin.y,
+        w: 1.0,
+        h: main.size.height,
+    };
+    let r = if edge != DockEdge::Bottom && !autohide {
+        dock_list_frame()?
+    } else {
+        full
+    };
+    Some(DockFrame {
+        x: r.x,
+        y: r.y,
+        w: r.w,
+        h: r.h,
+        edge,
+        autohide,
+    })
+}
+
+/// 程序坞那一排图标的矩形；没有辅助功能权限、程序坞没在跑或读不到时为 None。
+fn dock_list_frame() -> Option<WinRect> {
+    // SAFETY: 无参数的只读查询
+    if unsafe { AXIsProcessTrusted() } == 0 {
+        return None;
+    }
+    autoreleasepool(|_| {
+        let pid = NSRunningApplication::runningApplicationsWithBundleIdentifier(ns_string!(
+            "com.apple.dock"
+        ))
+        .firstObject()?
+        .processIdentifier();
+        // SAFETY: 按 Create 规则返回的引用由 CFRetained 接管
+        let dock = unsafe { CFRetained::from_raw(AXUIElementCreateApplication(pid)?) };
+        ax_timeout(&dock);
+        let kids = ax_attr(&dock, "AXChildren")?.downcast::<CFArray>().ok()?;
+        let list = (0..kids.count()).find_map(|i| {
+            // SAFETY: 下标在范围内；元素由数组持有，kids 存活期间有效
+            let el = unsafe { &*kids.value_at_index(i).cast::<CFType>() };
+            // 后面读 list 的位置和大小也走这个元素（list 是它多持有的一份引用）
+            ax_timeout(el);
+            let role = ax_attr(el, "AXRole")?.downcast::<CFString>().ok()?;
+            (role.to_string() == "AXList").then(|| el.retain())
+        })?;
+        let (pos, size) = (ax_attr(&list, "AXPosition")?, ax_attr(&list, "AXSize")?);
+        let (mut p, mut s) = (CGPoint::ZERO, CGSize::ZERO);
+        // SAFETY: 两个属性的值是对应类型的 AXValue，p、s 是本地变量
+        let ok = unsafe {
+            AXValueGetValue(&pos, AX_POINT, (&raw mut p).cast()) != 0
+                && AXValueGetValue(&size, AX_SIZE, (&raw mut s).cast()) != 0
+        };
+        ok.then_some(WinRect {
+            x: p.x,
+            y: p.y,
+            w: s.width,
+            h: s.height,
+        })
+    })
+}
+
+/// 程序坞卡住时，对这个元素的每次查询最多等 0.1 s，不拖住调用线程（超时只对设过的那个元素生效，子元素要各设一次）。
+fn ax_timeout(el: &CFType) {
+    // SAFETY: el 是有效的 AX 元素
+    unsafe { AXUIElementSetMessagingTimeout(el, 0.1) };
+}
+
+/// 取 AX 元素的一个属性；失败为 None。
+fn ax_attr(el: &CFType, name: &'static str) -> Option<CFRetained<CFType>> {
+    let mut v: *const CFType = std::ptr::null();
+    // SAFETY: el 是有效的 AX 元素，v 是本地变量；按 Copy 规则，成功时返回的引用由 CFRetained 接管
+    unsafe {
+        if AXUIElementCopyAttributeValue(el, &CFString::from_static_str(name), &mut v) != 0 {
+            return None;
+        }
+        NonNull::new(v.cast_mut()).map(|v| CFRetained::from_raw(v))
+    }
+}
+
+#[link(name = "IOKit", kind = "framework")]
+unsafe extern "C" {
+    fn IOServiceMatching(name: *const c_char) -> *mut c_void;
+    fn IOServiceGetMatchingService(main_port: u32, matching: *mut c_void) -> u32;
+    fn IORegistryEntryCreateCFProperty(
+        entry: u32,
+        key: &CFString,
+        allocator: *const c_void,
+        options: u32,
+    ) -> Option<NonNull<CFType>>;
+    fn IOObjectRelease(object: u32) -> i32;
+}
+
+#[link(name = "SystemConfiguration", kind = "framework")]
+unsafe extern "C" {
+    fn SCDynamicStoreCopyComputerName(
+        store: *const c_void,
+        encoding: *mut u32,
+    ) -> Option<NonNull<CFString>>;
+}
+
+/// 这台电脑的硬件标识（`IOPlatformUUID`），授权绑定设备用；读不到为 None。
+/// 重装应用、重装系统都不变。调用方只拿它算哈希，原值不上传、不落盘、不进日志。
+pub fn hardware_id() -> Option<String> {
+    // SAFETY: 名字是以 NUL 结尾的常量；IOServiceGetMatchingService 消耗匹配字典；
+    // 拿到的服务用完释放；属性按 Create 规则返回，由 CFRetained 接管
+    let v = unsafe {
+        let service =
+            IOServiceGetMatchingService(0, IOServiceMatching(c"IOPlatformExpertDevice".as_ptr()));
+        if service == 0 {
+            return None;
+        }
+        let v = IORegistryEntryCreateCFProperty(
+            service,
+            &CFString::from_static_str("IOPlatformUUID"),
+            std::ptr::null(),
+            0,
+        );
+        IOObjectRelease(service);
+        CFRetained::from_raw(v?)
+    };
+    let id = v.downcast::<CFString>().ok()?.to_string();
+    (!id.is_empty()).then_some(id)
+}
+
+/// 电脑名（系统设置“共享”里的那个），用户在已绑定设备的列表里靠它认设备；读不到为 None。
+pub fn device_name() -> Option<String> {
+    // SAFETY: 两个参数都可以为空；按 Copy 规则返回的引用由 CFRetained 接管
+    let name = unsafe {
+        CFRetained::from_raw(SCDynamicStoreCopyComputerName(
+            std::ptr::null(),
+            std::ptr::null_mut(),
+        )?)
+    };
+    let name = name.to_string();
+    (!name.trim().is_empty()).then_some(name)
 }
 
 /// 能否自动滚动：要辅助功能权限，同模拟粘贴（M23 规则 13）。
@@ -1108,9 +1341,22 @@ pub fn show_no_activate(_hwnd: isize) {}
 /// Windows 上收起经 `show_no_activate` 显示的窗口；macOS 无操作。
 pub fn hide_window(_hwnd: isize) {}
 
+/// Windows 上看前台是不是全屏应用；macOS 的全屏应用在自己的空间里，由窗口的空间规则让开，恒为 false。
+pub fn fullscreen_app() -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hardware_id_is_stable_uuid() {
+        let id = hardware_id().expect("读得到 IOPlatformUUID");
+        assert_eq!(id.len(), 36);
+        assert_eq!(hardware_id().as_deref(), Some(id.as_str()));
+        assert!(device_name().is_none_or(|n| !n.trim().is_empty()));
+    }
     use objc2_core_graphics::kCGColorSpaceLinearSRGB;
 
     /// 取各类事件里最近的一次；从没有过（系统报极大值）或无效值不算（M23 规则 13）

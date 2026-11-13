@@ -271,11 +271,15 @@ pub async fn translate_download(
     if card {
         crate::trcard::set_downloading(&app, true);
     }
+    state
+        .tr_download_panel
+        .store(window_label == "panel", Ordering::SeqCst);
     let r = tauri::async_runtime::spawn_blocking(move || {
         // SAFETY: 面板（及其他 xPaste 窗口）常驻、不销毁，指针在等待期间一直有效
         unsafe { xpaste_platform::translate_prepare(&src, &target, ns as *mut std::ffi::c_void) }
     })
     .await;
+    state.tr_download_panel.store(false, Ordering::SeqCst);
     drop(guard);
     if card {
         crate::trcard::set_downloading(&app, false);

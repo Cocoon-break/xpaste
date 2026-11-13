@@ -6,12 +6,17 @@ mod diag;
 mod enrich;
 pub mod error;
 mod events;
+#[cfg(debug_assertions)]
+mod focus_check;
 mod hotkey;
 mod housekeeping;
+mod license;
+mod line;
 mod longshot;
 mod ocr;
 mod panel;
 mod rec;
+mod remind;
 mod shot;
 pub mod state;
 mod translate;
@@ -38,7 +43,11 @@ pub fn run() {
     let builder = if override_.is_some() {
         builder
     } else {
-        builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+        builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            // 第二个进程是被 xpaste:// 链接拉起的（Windows）：链接已转给 deep-link 插件处理，这里不再切换面板
+            if argv.iter().any(|a| a.starts_with("xpaste://")) {
+                return;
+            }
             panel::toggle(app, None, panel::Trigger::Relaunch)
         }))
     };
@@ -84,7 +93,7 @@ pub fn run() {
             if isolated {
                 log::info!("数据目录已由 XPASTE_DATA_DIR 覆盖，不启用单实例");
                 // tauri.conf.json 的 assetProtocol.scope 只覆盖默认数据目录
-                for sub in ["images", "thumbs", "icons", "pins"] {
+                for sub in ["images", "thumbs", "icons", "pins", "line"] {
                     if let Err(e) = app
                         .asset_protocol_scope()
                         .allow_directory(data_dir.join(sub), true)
@@ -99,12 +108,18 @@ pub fn run() {
                 Store::open(&data_dir).inspect_err(|e| log::error!("打开数据库失败：{e}"))?;
             let first_run = matches!(store.kv_get("onboarded"), Ok(None));
             let settings = store.load_settings();
-            let (hotkey, shot_hotkey, rec_hotkey, tr_hotkey, appearance) = (
+            let (hotkey, shot_hotkey, rec_hotkey, tr_hotkey, line_hotkey, appearance) = (
                 settings.hotkey.clone(),
                 settings.shot_hotkey.clone(),
                 settings.rec_hotkey.clone(),
                 settings.translate_hotkey.clone(),
+                settings.effective_line_hotkey().to_owned(),
                 settings.appearance,
+            );
+            line::configure(
+                settings.line_enabled,
+                settings.line_side,
+                settings.line_pinned,
             );
             let enrich = enrich::start(app.handle().clone());
             let ocr = ocr::start(app.handle().clone());
@@ -118,6 +133,7 @@ pub fn run() {
             ocr.schedule_backfill(app.handle(), ocr::BACKFILL_DELAY);
             housekeeping::start(app.handle().clone());
             update::start(app.handle().clone());
+            license::start(app.handle().clone());
             #[cfg(target_os = "macos")]
             panel::setup_macos(app).inspect_err(|e| log::error!("面板初始化失败：{e}"))?;
             #[cfg(windows)]
@@ -126,17 +142,31 @@ pub fn run() {
             if let Err(e) = tray::setup(app) {
                 log::warn!("托盘图标创建失败：{e}");
             }
-            if let Err(e) =
-                hotkey::register(app.handle(), &hotkey, &shot_hotkey, &rec_hotkey, &tr_hotkey)
-            {
+            if let Err(e) = hotkey::register(
+                app.handle(),
+                &hotkey,
+                &shot_hotkey,
+                &rec_hotkey,
+                &tr_hotkey,
+                &line_hotkey,
+            ) {
                 log::warn!("快捷键注册失败：{e}");
-                // register 只报第一个失败，截图、录屏、翻译是否注册上另查；它们失败只提示，不标记托盘
+                // register 只报第一个失败，截图、录屏、翻译、便签是否注册上另查；它们失败只提示，不标记托盘
                 let panel_failed = matches!(e, error::AppError::HotkeyTaken);
-                let (shot_failed, rec_failed, tr_failed) =
-                    hotkey::unregistered(app.handle(), &shot_hotkey, &rec_hotkey, &tr_hotkey);
-                if let Some(body) =
-                    hotkey::failure_notice(panel_failed, shot_failed, rec_failed, tr_failed)
-                {
+                let (shot_failed, rec_failed, tr_failed, line_failed) = hotkey::unregistered(
+                    app.handle(),
+                    &shot_hotkey,
+                    &rec_hotkey,
+                    &tr_hotkey,
+                    &line_hotkey,
+                );
+                if let Some(body) = hotkey::failure_notice(
+                    panel_failed,
+                    shot_failed,
+                    rec_failed,
+                    tr_failed,
+                    line_failed,
+                ) {
                     notify(app.handle(), &body);
                 }
                 if panel_failed {
@@ -146,6 +176,23 @@ pub fn run() {
             clipboard::start(app.handle().clone());
             shot::prewarm(app.handle());
             trcard::prewarm(app.handle());
+            if crate::line::enabled() {
+                line::start(app.handle());
+                #[cfg(debug_assertions)]
+                focus_check::start(app.handle());
+            }
+            // xpaste://activate?code=…（官网付款成功页拉起）。应用已在运行时：macOS 由系统把链接交过来，
+            // Windows 靠单实例插件把第二个进程的参数转过来。Windows 上被链接冷启动时链接在命令行参数里，
+            // 插件初始化时已经读过，这里补取一次。开发版没有安装，系统里注册不上这个协议
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let handle = app.handle().clone();
+                app.deep_link()
+                    .on_open_url(move |event| license::opened(&handle, &event.urls()));
+                if let Ok(Some(urls)) = app.deep_link().get_current() {
+                    license::opened(app.handle(), &urls);
+                }
+            }
             // 首次启动直接显示面板与引导（AC-M18-01）
             if first_run {
                 app.state::<AppState>()
@@ -156,6 +203,7 @@ pub fn run() {
             Ok(())
         })
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_notification::init())
         // 设置里选截图文件夹
         .plugin(tauri_plugin_dialog::init())
@@ -173,7 +221,7 @@ pub fn run() {
                     if longshot::key(shortcut) {
                         return;
                     }
-                    let (p, s, r, t) = {
+                    let (p, s, r, t, l) = {
                         let st = app.state::<AppState>();
                         let s = st.settings();
                         (
@@ -181,15 +229,17 @@ pub fn run() {
                             s.shot_hotkey.clone(),
                             s.rec_hotkey.clone(),
                             s.translate_hotkey.clone(),
+                            s.effective_line_hotkey().to_owned(),
                         )
                     };
-                    match hotkey::role_of(shortcut, &p, &s, &r, &t) {
+                    match hotkey::role_of(shortcut, &p, &s, &r, &t, &l) {
                         Some(hotkey::Role::Panel) => {
                             panel::toggle(app, timing.then(now_unix_ms), panel::Trigger::Hotkey)
                         }
                         Some(hotkey::Role::Shot) => hotkey::shot_pressed(app),
                         Some(hotkey::Role::Rec) => hotkey::rec_pressed(app),
                         Some(hotkey::Role::Translate) => hotkey::translate_pressed(app),
+                        Some(hotkey::Role::Line) => line::hotkey_pressed(app),
                         None => {}
                     }
                 })
@@ -211,6 +261,44 @@ pub fn run() {
                 let app = window.app_handle();
                 trcard::close(app, trcard::current(app));
             }
+            // 晾衣绳同理，Alt+F4 当作 Esc：收起；一直显示时不收，只交还键盘
+            if window.label() == line::LABEL
+                && let WindowEvent::CloseRequested { api, .. } = event
+            {
+                api.prevent_close();
+                if line::pinned() {
+                    line::keyboard(window.app_handle(), false);
+                } else {
+                    line::hide(window.app_handle());
+                }
+            }
+            // 排查“面板挂完便签后点外面、按 Esc 都不收起”：记下面板与晾衣绳的焦点变化（只有窗口名）
+            if (window.label() == "panel" || window.label() == line::LABEL)
+                && let WindowEvent::Focused(f) = event
+            {
+                log::info!(
+                    "焦点 {} {}",
+                    window.label(),
+                    if *f { "获得" } else { "失去" }
+                );
+            }
+            // 面板开着时点到晾衣绳：macOS 有时不给面板发失焦（两块 NSPanel 之间切换键盘时），面板就一直挂着、
+            // 键盘也不在它身上，点外面、按 Esc 都收不掉。晾衣绳拿到键盘时按面板失焦的规则替它收起
+            if window.label() == line::LABEL && matches!(event, WindowEvent::Focused(true)) {
+                // 页面没申请键盘时（点按钮、拖木珠）也记下，交还时切回原来的窗口
+                line::focused();
+            }
+            // 划词卡片、贴图同理（遮罩除外：遮罩期间面板按规则留着，结束后把键盘还给它）
+            if window.label() != "panel"
+                && shot::overlay_index(window.label()).is_none()
+                && matches!(event, WindowEvent::Focused(true))
+            {
+                panel::other_took_key(window.app_handle());
+            }
+            // 晾衣绳失焦（点了别的应用）：收起时不再把键盘切回拿键盘前的窗口
+            if window.label() == line::LABEL && matches!(event, WindowEvent::Focused(false)) {
+                line::blur();
+            }
             // 截图遮罩（shot-*）与贴图（pin-*）失焦不处理
             if window.label() != "panel" {
                 return;
@@ -219,7 +307,9 @@ pub fn run() {
                 // 失焦即隐藏，设置、确认框开着也一样；例外见 panel::blur_hides（M04 规则 3）
                 WindowEvent::Focused(false) => {
                     let app = window.app_handle();
-                    if panel::blur_hides(app) {
+                    let hides = panel::blur_hides(app);
+                    log::info!("面板失焦，按规则{}", if hides { "隐藏" } else { "保留" });
+                    if hides {
                         panel::hide(app);
                     }
                 }
@@ -295,7 +385,37 @@ pub fn run() {
             commands::translate::trcard_close,
             commands::translate::trcard_blur,
             commands::translate::trcard_focus,
-            commands::translate::trcard_resize
+            commands::translate::trcard_resize,
+            commands::line::line_view,
+            commands::line::line_hang_record,
+            commands::line::line_hang_from_panel,
+            commands::line::line_drag_hover,
+            commands::line::line_drag_drop,
+            commands::line::line_hang_paths,
+            commands::line::line_add,
+            commands::line::line_edit,
+            commands::line::line_paste_image,
+            commands::line::line_reorder,
+            commands::line::line_place,
+            commands::line::line_remind,
+            commands::line::line_remove,
+            commands::line::line_restore,
+            commands::line::line_copy,
+            commands::line::line_open,
+            commands::line::line_preview_src,
+            commands::line::line_ready,
+            commands::line::line_resize,
+            commands::line::line_side_hint,
+            commands::line::line_hit_rects,
+            commands::line::line_hide,
+            commands::line::line_hidden,
+            commands::line::line_keyboard,
+            commands::line::pro_status,
+            commands::line::pro_activate,
+            commands::line::pro_unbind,
+            commands::line::pro_deactivate,
+            commands::line::pro_buy,
+            commands::line::pro_take_link
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

@@ -298,10 +298,12 @@ kbd {
   box-shadow: 0 0 0 1px rgb(0 0 0 / .2);
 }
 .tail { position: relative; min-width: 62px; display: flex; align-items: center; justify-content: flex-end; gap: 6px; color: var(--tc); }
-.idx, .pin-mark { transition: opacity 120ms ease-out; display: inline-flex; }
+.idx, .pin-mark, .hung { transition: opacity 120ms ease-out; display: inline-flex; }
 .idx { background: transparent; color: var(--faint); }
 .idx kbd, .tail kbd { border-color: transparent; background: none; }
 .pin-mark { color: var(--faint); }
+/* 已挂在晾衣绳上：一根类型色刻线（片段没有图形色，用片段色） */
+.hung { width: 3px; height: 12px; background: var(--tg, var(--tc)); border-radius: 1px; }
 .row[aria-selected="true"] .idx { color: var(--fg); }
 /* 选中行的副信息落在 --sel 上，--faint 不足 4.5:1，改 --muted（M21 无障碍） */
 .row[aria-selected="true"] .meta { color: var(--muted); }
@@ -319,10 +321,10 @@ kbd {
 .qa button:active { transform: scale(.9); }
 /* 多选时复制、编辑不可用（M25 规则 6）：快捷按钮不出现，悬停时序号与图钉照常显示 */
 .list.multi .qa { display: none; }
-.list.multi .row:hover .idx, .list.multi .row:hover .pin-mark { opacity: 1; }
+.list.multi .row:hover .idx, .list.multi .row:hover .pin-mark, .list.multi .row:hover .hung { opacity: 1; }
 @media (hover: hover) and (pointer: fine) {
   .row:hover .qa { opacity: 1; transform: translate(0, -50%); pointer-events: auto; }
-  .row:hover .idx, .row:hover .pin-mark { opacity: 0; }
+  .row:hover .idx, .row:hover .pin-mark, .row:hover .hung { opacity: 0; }
 }
 mark { background: var(--mark-bg); color: var(--mark-fg); border-radius: 3px; padding: 0 1px; box-shadow: 0 0 0 1px var(--mark-ring); }
 
@@ -644,6 +646,22 @@ dialog > form { display: contents; }
 .tr-pick b { display: block; font-weight: 500; font-size: 13px; }
 .tr-pick small { display: block; font-size: 12px; color: var(--faint); }
 @media (hover: hover) and (pointer: fine) { .tr-pick label:not(:has(:checked)):hover { border-color: var(--muted); } }
+/* Pro 标签的晾衣绳位置：三个带小示意图的单选格子（原生单选框藏起来，方向键照常切换）；总开关关着时这一项和样式选择器变淡，仍可改 */
+.side-pick { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.side-pick label {
+  position: relative; display: grid; justify-items: center; gap: 5px; padding: 8px 4px 6px; border-radius: 8px; cursor: pointer;
+  background: var(--glass-2); color: var(--muted); font-size: 11.5px; box-shadow: inset 0 0 0 1px var(--line); transition: background-color .13s, color .13s, box-shadow .13s;
+}
+.side-pick label:has(:checked) { background: var(--sel); color: var(--fg); box-shadow: inset 0 0 0 1.5px var(--beam); }
+.side-pick label:has(:focus-visible) { outline: 2px solid var(--beam); outline-offset: 1px; }
+@media (hover: hover) and (pointer: fine) { .side-pick label:not(:has(:checked)):hover { background: var(--hover); color: var(--fg); } }
+.field .side-pick input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.side-pick svg { width: 64px; height: 40px; fill: none; stroke: currentColor; stroke-width: 2; }
+.side-pick svg .scr { stroke: var(--line-2); stroke-width: 1.5; }
+.side-pick svg rect:not(.scr) { fill: currentColor; stroke: none; opacity: .55; }
+.side-pick label:has(:checked) svg path { stroke: var(--beam); }
+.line-off { opacity: .4; }
+@media (prefers-reduced-motion: reduce) { .side-pick label { transition: none; } }
 /* 设置里带小标题的一组（“截图”标签的截图 / 长截图，“翻译”标签的两种方式）：上面一道分隔线；标签内第一组不画，免得和标签栏的分隔线叠成两道 */
 .st-group { display: grid; gap: 12px; padding-top: 16px; border-top: 1px solid var(--line); }
 .st-panes .dlg-body > .st-group:first-child { padding-top: 0; border-top: 0; }
@@ -750,7 +768,7 @@ dialog > form { display: contents; }
 :root[data-style="compact"] .tail .ic { width: 13px; height: 13px; }
 :root[data-style="compact"] .idx { padding: 0 2px; font-variant-numeric: tabular-nums; }
 /* 没有悬停按钮，序号与图钉悬停时也留着 */
-:root[data-style="compact"] .row:hover .idx, :root[data-style="compact"] .row:hover .pin-mark { opacity: 1; }
+:root[data-style="compact"] .row:hover .idx, :root[data-style="compact"] .row:hover .pin-mark, :root[data-style="compact"] .row:hover .hung { opacity: 1; }
 /* 分组：片段组时的小标题，置顶之后的细线（M27 规则 6） */
 :root[data-style="compact"] .glabel { height: 24px; box-sizing: border-box; display: flex; align-items: center; gap: 8px; padding: 4px 12px 0; font-size: 11px; color: var(--faint); }
 :root[data-style="compact"] .glabel::after, :root[data-style="compact"] .rule::before { content: ""; flex: 1; height: 1px; background: var(--line); }

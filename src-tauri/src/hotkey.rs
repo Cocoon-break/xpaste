@@ -9,15 +9,16 @@ use crate::state::AppState;
 /// 录屏只在 macOS 上做（M24）：Windows 上从不注册录屏快捷键。
 const REC_SUPPORTED: bool = cfg!(target_os = "macos");
 
-/// 注销全部后注册唤起、截图、录屏与翻译快捷键（后三个为空串表示不启用，跳过）；任何失败都视为被占用。
-/// 四个都会尝试注册，按唤起、截图、录屏、翻译的顺序返回第一个失败：
-/// `HotkeyTaken` / `ShotHotkeyTaken` / `RecHotkeyTaken` / `TranslateHotkeyTaken`。
+/// 注销全部后注册唤起、截图、录屏、翻译与便签快捷键（后四个为空串表示不启用，跳过；不含晾衣绳的版本不注册便签）；任何失败都视为被占用。
+/// 五个都会尝试注册，按唤起、截图、录屏、翻译、便签的顺序返回第一个失败：
+/// `HotkeyTaken` / `ShotHotkeyTaken` / `RecHotkeyTaken` / `TranslateHotkeyTaken` / `LineHotkeyTaken`。
 pub fn register(
     app: &AppHandle,
     panel: &str,
     shot: &str,
     rec: &str,
     translate: &str,
+    line: &str,
 ) -> Result<(), AppError> {
     let gs = app.global_shortcut();
     let taken = |e: tauri_plugin_global_shortcut::Error| log::debug!("全局快捷键插件错误：{e}");
@@ -29,23 +30,44 @@ pub fn register(
     let shot_ok = shot.is_empty() || gs.register(shot).map_err(taken).is_ok();
     let rec_ok = !REC_SUPPORTED || rec.is_empty() || gs.register(rec).map_err(taken).is_ok();
     let tr_ok = translate.is_empty() || gs.register(translate).map_err(taken).is_ok();
-    match (panel_ok, shot_ok, rec_ok, tr_ok) {
+    let line_ok =
+        !crate::line::enabled() || line.is_empty() || gs.register(line).map_err(taken).is_ok();
+    first_failure(panel_ok, shot_ok, rec_ok, tr_ok, line_ok)
+}
+
+/// 按唤起、截图、录屏、翻译、便签的顺序取第一个没注册上的。
+fn first_failure(
+    panel: bool,
+    shot: bool,
+    rec: bool,
+    translate: bool,
+    line: bool,
+) -> Result<(), AppError> {
+    match (panel, shot, rec, translate, line) {
         (false, ..) => Err(AppError::HotkeyTaken),
-        (true, false, ..) => Err(AppError::ShotHotkeyTaken),
-        (true, true, false, _) => Err(AppError::RecHotkeyTaken),
-        (true, true, true, false) => Err(AppError::TranslateHotkeyTaken),
-        (true, true, true, true) => Ok(()),
+        (_, false, ..) => Err(AppError::ShotHotkeyTaken),
+        (_, _, false, ..) => Err(AppError::RecHotkeyTaken),
+        (_, _, _, false, _) => Err(AppError::TranslateHotkeyTaken),
+        (_, _, _, _, false) => Err(AppError::LineHotkeyTaken),
+        _ => Ok(()),
     }
 }
 
-/// 截图、录屏、翻译快捷键各自是否该注册却没注册上（空串不启用；Windows 上录屏从不注册，不算）。
-pub fn unregistered(app: &AppHandle, shot: &str, rec: &str, translate: &str) -> (bool, bool, bool) {
+/// 截图、录屏、翻译、便签快捷键各自是否该注册却没注册上（空串不启用；Windows 上录屏从不注册，不含晾衣绳的版本不注册便签，不算）。
+pub fn unregistered(
+    app: &AppHandle,
+    shot: &str,
+    rec: &str,
+    translate: &str,
+    line: &str,
+) -> (bool, bool, bool, bool) {
     let gs = app.global_shortcut();
     let missing = |s: &str| !s.is_empty() && !gs.is_registered(s);
     (
         missing(shot),
         REC_SUPPORTED && missing(rec),
         missing(translate),
+        crate::line::enabled() && missing(line),
     )
 }
 
@@ -55,6 +77,7 @@ pub enum Role {
     Shot,
     Rec,
     Translate,
+    Line,
 }
 
 /// 触发的快捷键是哪一个（M23 规则 1、M24、M26 规则 18）：按解析后的组合比较；截图、录屏、翻译为空串时不认。
@@ -65,6 +88,7 @@ pub fn role_of(
     shot: &str,
     rec: &str,
     translate: &str,
+    line: &str,
 ) -> Option<Role> {
     let is = |s: &str| !s.is_empty() && s.parse::<Shortcut>().is_ok_and(|k| k == *pressed);
     if is(panel) {
@@ -75,6 +99,8 @@ pub fn role_of(
         Some(Role::Rec)
     } else if is(translate) {
         Some(Role::Translate)
+    } else if crate::line::enabled() && is(line) {
+        Some(Role::Line)
     } else {
         None
     }
@@ -112,6 +138,8 @@ pub fn translate_pressed(app: &AppHandle) {
         ShotRoute::Recorder => {
             crate::events::emit_to(app, "panel", crate::events::HOTKEY_PRESSED, "translate")
         }
+        // 截图、录屏遮罩或长截图进行中不弹卡片：卡片在遮罩下面看不见，却会拿走键盘
+        ShotRoute::Begin if crate::shot::active(app) || crate::longshot::active() => {}
         ShotRoute::Begin => crate::trcard::pressed(app),
     }
 }
@@ -160,12 +188,14 @@ pub fn failure_notice(
     shot_failed: bool,
     rec_failed: bool,
     translate_failed: bool,
+    line_failed: bool,
 ) -> Option<String> {
     let names: Vec<_> = [
         (panel_failed, "唤起"),
         (shot_failed, "截图"),
         (rec_failed, "录屏"),
         (translate_failed, "翻译"),
+        (line_failed, "便签"),
     ]
     .into_iter()
     .filter_map(|(failed, name)| failed.then_some(name))
@@ -218,7 +248,10 @@ pub fn label(shortcut: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{REC_SUPPORTED, Role, ShotRoute, failure_notice, label, role_of, shot_route};
+    use super::{
+        REC_SUPPORTED, Role, ShotRoute, failure_notice, first_failure, label, role_of, shot_route,
+    };
+    use crate::error::AppError;
 
     #[test]
     fn shot_goes_to_panel_only_while_dialog_open_and_panel_focused() {
@@ -236,7 +269,7 @@ mod tests {
     #[test]
     fn failure_notice_names_every_taken_hotkey() {
         let tail = "快捷键被其他应用占用，请在设置中更换";
-        let n = |p, s, r| failure_notice(p, s, r, false);
+        let n = |p, s, r| failure_notice(p, s, r, false, false);
         assert_eq!(n(false, false, false), None);
         for (flags, names) in [
             ((true, false, false), "唤起"),
@@ -250,12 +283,20 @@ mod tests {
             assert_eq!(n(flags.0, flags.1, flags.2), Some(format!("{names}{tail}")));
         }
         assert_eq!(
-            failure_notice(false, false, false, true),
+            failure_notice(false, false, false, true, false),
             Some(format!("翻译{tail}"))
         );
         assert_eq!(
-            failure_notice(true, true, true, true),
+            failure_notice(true, true, true, true, false),
             Some(format!("唤起、截图、录屏与翻译{tail}"))
+        );
+        assert_eq!(
+            failure_notice(false, false, false, false, true),
+            Some(format!("便签{tail}"))
+        );
+        assert_eq!(
+            failure_notice(true, true, true, true, true),
+            Some(format!("唤起、截图、录屏、翻译与便签{tail}"))
         );
     }
 
@@ -266,26 +307,30 @@ mod tests {
         let rec = "Alt+Shift+R".parse().unwrap();
         let (p, s, r) = ("CommandOrControl+Shift+V", "Alt+Shift+A", "Alt+Shift+R");
         let t = "Alt+Shift+T";
-        assert_eq!(role_of(&shot, p, s, r, t), Some(Role::Shot));
-        assert_eq!(role_of(&panel, p, s, r, t), Some(Role::Panel));
+        let l = "Alt+Shift+N";
+        assert_eq!(role_of(&shot, p, s, r, t, l), Some(Role::Shot));
+        assert_eq!(role_of(&panel, p, s, r, t, l), Some(Role::Panel));
         // Windows 不注册录屏快捷键（REC_SUPPORTED），也就不认
         assert_eq!(
-            role_of(&rec, p, s, r, t),
+            role_of(&rec, p, s, r, t, l),
             REC_SUPPORTED.then_some(Role::Rec)
         );
         // 截图、录屏为空串表示不启用：不认
-        assert_eq!(role_of(&shot, p, "", r, t), None);
-        assert_eq!(role_of(&rec, p, s, "", t), None);
-        assert_eq!(role_of(&panel, p, "", "", ""), Some(Role::Panel));
+        assert_eq!(role_of(&shot, p, "", r, t, l), None);
+        assert_eq!(role_of(&rec, p, s, "", t, l), None);
+        assert_eq!(role_of(&panel, p, "", "", "", ""), Some(Role::Panel));
     }
 
     #[test]
     fn role_of_translate() {
         let tr = "Alt+Shift+T".parse().unwrap();
         let (p, s, r) = ("CommandOrControl+Shift+V", "Alt+Shift+A", "Alt+Shift+R");
-        assert_eq!(role_of(&tr, p, s, r, "alt+shift+t"), Some(Role::Translate));
+        assert_eq!(
+            role_of(&tr, p, s, r, "alt+shift+t", ""),
+            Some(Role::Translate)
+        );
         // 为空串表示不启用：不认
-        assert_eq!(role_of(&tr, p, s, r, ""), None);
+        assert_eq!(role_of(&tr, p, s, r, "", ""), None);
         // Windows 上录屏不注册（M24）：翻译用了留着默认值的录屏组合时按翻译认，不能开录屏
         let rec = "Alt+Shift+R".parse().unwrap();
         let want = if cfg!(target_os = "macos") {
@@ -293,7 +338,44 @@ mod tests {
         } else {
             Role::Translate
         };
-        assert_eq!(role_of(&rec, p, s, r, r), Some(want));
+        assert_eq!(role_of(&rec, p, s, r, r, ""), Some(want));
+    }
+
+    #[test]
+    fn role_of_line() {
+        let key = "Alt+Shift+N".parse().unwrap();
+        let (p, s, r, t) = (
+            "CommandOrControl+Shift+V",
+            "Alt+Shift+A",
+            "Alt+Shift+R",
+            "Alt+Shift+T",
+        );
+        // 不含晾衣绳的版本不注册便签，也就不认
+        assert_eq!(
+            role_of(&key, p, s, r, t, "alt+shift+n"),
+            crate::line::enabled().then_some(Role::Line)
+        );
+        // 为空串表示不启用：不认
+        assert_eq!(role_of(&key, p, s, r, t, ""), None);
+    }
+
+    #[test]
+    fn register_reports_first_failure_in_order() {
+        let kind = |f: [bool; 5]| match first_failure(f[0], f[1], f[2], f[3], f[4]) {
+            Ok(()) => "ok",
+            Err(AppError::HotkeyTaken) => "panel",
+            Err(AppError::ShotHotkeyTaken) => "shot",
+            Err(AppError::RecHotkeyTaken) => "rec",
+            Err(AppError::TranslateHotkeyTaken) => "translate",
+            Err(AppError::LineHotkeyTaken) => "line",
+            Err(_) => "other",
+        };
+        assert_eq!(kind([true; 5]), "ok");
+        assert_eq!(kind([true, true, true, true, false]), "line");
+        assert_eq!(kind([true, true, true, false, false]), "translate");
+        assert_eq!(kind([true, true, false, false, false]), "rec");
+        assert_eq!(kind([true, false, false, false, false]), "shot");
+        assert_eq!(kind([false; 5]), "panel");
     }
 
     #[test]

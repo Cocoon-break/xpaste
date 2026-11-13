@@ -1,4 +1,5 @@
 // 与 crates/xpaste-core/src/model.rs、src-tauri/src/commands/*.rs 对应，改字段时同步两边
+import type { LineView } from './line';
 
 export type Kind = 'text' | 'link' | 'code' | 'image' | 'video' | 'file';
 
@@ -53,7 +54,20 @@ export interface Settings {
   translateLang: string;
   /** 划词翻译全局快捷键；'' 表示不启用（M15、M26 规则 18） */
   translateHotkey: string;
+  /** 把最近复制或面板选中的记录挂上晾衣绳的全局快捷键；'' 表示不启用 */
+  lineHotkey: string;
+  /** 晾衣绳样式，各项是选项键 */
+  lineStyle: LineStyle;
+  /** 晾衣绳总开关 */
+  lineEnabled: boolean;
+  lineSide: LineSide;
+  /** 一直显示晾衣绳：空白处点击穿透 */
+  linePinned: boolean;
 }
+
+export type LineSide = 'top' | 'left' | 'right';
+
+export interface LineStyle { rope: string; thick: string; peg: string; paper: string; edge: string }
 
 export interface PlatformInfo {
   os: 'macos' | 'windows';
@@ -64,6 +78,8 @@ export interface PlatformInfo {
 
 export interface Bootstrap {
   settings: Settings;
+  /** 晾衣绳：这个构建带不带、Pro 状态、已挂的记录 */
+  line: LineView;
   platform: PlatformInfo;
   records: RecordSummary[];
   firstRun: boolean;
@@ -159,17 +175,35 @@ export interface AppError {
     | 'shotHotkeyTaken'
     | 'recHotkeyTaken'
     | 'translateHotkeyTaken'
+    | 'lineHotkeyTaken'
     | 'invalidSettings'
     | 'invalid'
     | 'internal'
     | 'translateConfig'
     | 'translatePack'
     | 'translateOs'
-    | 'translate';
+    | 'translate'
+    | 'line'
+    | 'deviceLimit'
+    | 'lineExpired'
+    | 'duplicate';
   message: string;
   /** 只有 translatePack：识别出的源语言代码与目标语言代码，下载语言包并重试时用（M26 规则 17） */
   source?: string;
   target?: string;
+  /** 只有 duplicate：已经挂着的那张便签的 id */
+  id?: number;
+  /** 只有 deviceLimit：授权码当前绑定着的设备，解绑一台后才能激活这台 */
+  devices?: BoundDevice[];
+}
+
+/** 授权码绑定着的一台设备（对应 `license::Device`） */
+export interface BoundDevice {
+  id: number;
+  /** 激活时上报的电脑名 */
+  name: string;
+  /** 激活时间，RFC 3339 */
+  activatedAt: string;
 }
 
 /** `translate_record` 的结果：去掉首尾空白的译文与实际翻成的语言代码（M26 规则 8、9）。 */

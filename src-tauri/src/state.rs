@@ -8,7 +8,7 @@ use xpaste_core::{Settings, Store};
 use crate::{enrich, ocr, rec, shot, trcard};
 
 /// 由 Tauri 托管、各命令共享的应用状态。
-/// 锁顺序：不同时持有 `settings` 与 `store`；持锁期间不发事件。
+/// 锁顺序：`settings`、`store`、`line` 三把锁两两不同时持有；持锁期间不发事件。
 pub struct AppState {
     pub settings: Mutex<Settings>,
     pub store: Mutex<Store>,
@@ -39,8 +39,12 @@ pub struct AppState {
     pub translating: Mutex<HashMap<i64, u64>>,
     /// 正在下载语言包：系统确认框可能抢走焦点，期间面板失焦不隐藏；同一时刻只下载一个（M26 规则 17）
     pub tr_downloading: AtomicBool,
+    /// 上面这次下载是面板发起的：只有这时面板失焦才不隐藏（划词卡片、截图里下载时不牵连面板）
+    pub tr_download_panel: AtomicBool,
     /// 划词翻译卡片的会话（M26 规则 19）
     pub trcard: Mutex<trcard::Session>,
+    /// 晾衣绳便签与 Pro 状态；没有私有代码的构建里是空实现
+    pub line: Mutex<xpaste_pro::Line>,
 }
 
 impl AppState {
@@ -53,6 +57,12 @@ impl AppState {
     ) -> Self {
         // 暂停跨重启：kv `paused` 为 "1" 即暂停；托盘与 bootstrap 都从这个原子读初值
         let paused = matches!(store.kv_get("paused"), Ok(Some(v)) if v == "1");
+        let line = xpaste_pro::Line::open(
+            &data_dir,
+            crate::clock::now_ms() / 1000,
+            app_major(),
+            xpaste_platform::hardware_id,
+        );
         Self {
             settings: Mutex::new(settings),
             store: Mutex::new(store),
@@ -70,7 +80,9 @@ impl AppState {
             rec: Mutex::default(),
             translating: Mutex::default(),
             tr_downloading: AtomicBool::new(false),
+            tr_download_panel: AtomicBool::new(false),
             trcard: Mutex::default(),
+            line: Mutex::new(line),
         }
     }
 
@@ -80,6 +92,10 @@ impl AppState {
 
     pub fn settings(&self) -> MutexGuard<'_, Settings> {
         self.settings.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub fn line(&self) -> MutexGuard<'_, xpaste_pro::Line> {
+        self.line.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// 测试用：内存数据库、无人接收的补全通道、没有识别线程的队列。
@@ -95,6 +111,15 @@ impl AppState {
             dir,
         )
     }
+}
+
+/// 应用的大版本号，买断授权按它判断适用范围（0.x 由授权校验按 1 算）
+fn app_major() -> u32 {
+    env!("CARGO_PKG_VERSION")
+        .split('.')
+        .next()
+        .and_then(|m| m.parse().ok())
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

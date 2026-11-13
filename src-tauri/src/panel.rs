@@ -109,7 +109,7 @@ pub fn setup_windows(app: &tauri::App) {
 }
 
 /// 逻辑像素的矩形区域。
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
     pub x: f64,
     pub y: f64,
@@ -127,7 +127,7 @@ pub fn place_in_work_area(work: Rect, (w, h): (f64, f64)) -> (f64, f64) {
     (x, y)
 }
 
-fn window(app: &AppHandle) -> Option<WebviewWindow> {
+pub(crate) fn window(app: &AppHandle) -> Option<WebviewWindow> {
     let w = app.get_webview_window(LABEL);
     if w.is_none() {
         log::warn!("找不到面板窗口");
@@ -241,7 +241,11 @@ fn try_show(
     if let Err(e) = animate_alpha(w, start, 0.0) {
         log::warn!("复位面板透明度失败：{e}");
     }
+    // 键盘在本应用别的窗口上时先让它交出，否则两边都自认为拿着键盘，对方一撤下面板的键盘跟着没了
+    others_yield(app);
     front_and_focus(app, w)?;
+    UP.store(true, Ordering::SeqCst);
+    watch(app);
     if let Some(ms) = fade_in
         && let Err(e) = animate_alpha(w, 1.0, ms as f64 / 1000.0)
     {
@@ -357,6 +361,9 @@ pub fn frontend_ready(app: &AppHandle) {
 /// `trigger` 随 `panel-shown` 发给前端，决定进入动效的时长（托盘单击用鼠标时长）。
 /// 网页未就绪时只记下来源，`frontend_ready` 时再显示（见 `READY`）。
 pub fn show(app: &AppHandle, t0: Option<u64>, trigger: Trigger) {
+    if under_overlay(app) {
+        return;
+    }
     let ready = READY.load(Ordering::SeqCst);
     let now = PENDING_SHOW
         .lock()
@@ -382,6 +389,12 @@ pub fn paste_target(trigger: Trigger, foreground: Option<isize>) -> isize {
     } else {
         foreground.unwrap_or(0)
     }
+}
+
+/// 截图、录屏遮罩或长截图进行中：这时唤起面板，它在遮罩下面看不见，却会拿走键盘，遮罩里按 Esc 就失效了；
+/// 长截图还全局占着回车、Esc、空格，面板里这三个键不起作用。快捷键、托盘、再次启动都不唤起也不切换
+fn under_overlay(app: &AppHandle) -> bool {
+    crate::shot::active(app) || crate::longshot::active()
 }
 
 /// 粘贴失败后重新显示面板给出降级提示；不覆盖 `previous_window`（此时前台可能已是别的窗口）。
@@ -463,6 +476,7 @@ pub fn hide(app: &AppHandle) {
     state.blur_keeps.store(false, Ordering::SeqCst);
     HIDE_REQ.store(0, Ordering::Relaxed);
     FADING.store(0, Ordering::Relaxed);
+    UP.store(false, Ordering::SeqCst);
     on_main(app, |app| {
         // NSPanel 上 hide 即 orderOut:
         let Some(w) = window(app) else { return };
@@ -478,12 +492,174 @@ pub fn hide(app: &AppHandle) {
                 }
                 LAST_HIDE_MS.store(crate::clock::now_ms(), Ordering::Relaxed);
                 app.state::<AppState>().ocr.set_paused(false);
-                crate::events::emit(app, crate::events::PANEL_HIDDEN, ())
+                crate::events::emit(app, crate::events::PANEL_HIDDEN, ());
             }
             Err(e) => log::warn!("隐藏面板失败：{e}"),
         }
     });
 }
+
+/// 面板此刻是否拿着键盘（macOS 看 isKeyWindow，其他平台看窗口焦点）。主线程调用。
+#[cfg(target_os = "macos")]
+#[allow(deprecated, unexpected_cfgs)] // 同 animate_alpha
+pub fn holds_key(app: &AppHandle) -> bool {
+    use tauri_nspanel::cocoa::base::{BOOL, YES, id};
+    use tauri_nspanel::objc::{msg_send, sel, sel_impl};
+    let Some(ns) = window(app).and_then(|w| w.ns_window().ok()) else {
+        return false;
+    };
+    let key: BOOL = unsafe { msg_send![ns as id, isKeyWindow] };
+    key == YES
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn holds_key(app: &AppHandle) -> bool {
+    window(app).is_some_and(|w| w.is_focused().unwrap_or(false))
+}
+
+/// 等 `ms` 毫秒后回主线程执行。从别的线程投递，主线程处理完手上的窗口事件才轮到它
+/// （在主线程上直接 on_main 会同步执行，窗口还在交接键盘的半途）
+fn later(app: &AppHandle, ms: u64, f: impl FnOnce(&AppHandle) + Send + 'static) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(ms));
+        on_main(&app, f);
+    });
+}
+
+// —— 面板与本应用其他窗口之间的键盘 ——
+// 面板、晾衣绳都是不激活应用的 NSPanel。macOS 在它们之间换键盘时，常常不给面板发失焦，
+// 面板“失焦即隐藏”的规则就落空：面板留在屏上、键盘不在它身上，Esc 到不了、点外面也没有失焦可收。
+// 这里守住一条：面板在屏上就得拿着键盘，否则按失焦收起。分三处：
+// 划词卡片、贴图也是这种窗口，同样处理。
+// 1. 面板唤起前，本应用别的窗口拿着键盘 → `others_yield`：先让它们交出，面板是唯一拿键盘的；
+// 2. 面板开着时本应用别的窗口拿到键盘（用户点了晾衣绳、贴图，弹了划词卡片）→ `other_took_key`：
+//    面板交出键盘，按失焦规则收起（规则不让收时留着，之后由 `hide_if_unfocused` 或看门收）；
+// 3. 晾衣绳撤下时把面板的键盘连带收走 → `regain_key`：还给面板；
+// 4. 其余没想到的路径 → `watch`：面板拿到过键盘、之后在屏上却连续两次查到没有键盘，按失焦收起。
+
+/// 面板要拿键盘了：本应用别的窗口拿着键盘的先交出来。主线程调用。
+fn others_yield(app: &AppHandle) {
+    crate::line::yield_keyboard(app);
+    #[cfg(target_os = "macos")]
+    {
+        use tauri_nspanel::ManagerExt;
+        for (label, w) in app.webview_windows() {
+            if label != LABEL
+                && crate::shot::overlay_index(&label).is_none()
+                && w.is_focused().unwrap_or(false)
+                && let Ok(p) = app.get_webview_panel(&label)
+            {
+                p.resign_key_window();
+            }
+        }
+    }
+}
+
+/// 面板开着时本应用别的窗口拿到了键盘：替面板补上没收到的失焦。这时两边可能都自认为拿着键盘，
+/// 先让面板交出（之后 `is_focused` 才准），按规则该隐藏就隐藏。不在对方拿键盘的那次回调里做，推到下一轮事件循环
+pub fn other_took_key(app: &AppHandle) {
+    later(app, 0, |app| {
+        if !visible(app) {
+            return;
+        }
+        resign_key(app);
+        if blur_hides(app) {
+            log::info!("本应用别的窗口拿到键盘，面板没收到失焦，替它隐藏");
+            hide(app);
+        }
+    });
+}
+
+/// 晾衣绳撤下前面板拿着键盘（`line::take_down` 查的），撤下后却没了：键盘被系统连带收走，还给面板。
+pub fn regain_key(app: &AppHandle) {
+    later(app, 50, |app| {
+        let Some(w) = window(app) else { return };
+        if !UP.load(Ordering::SeqCst) || !visible(app) || holds_key(app) {
+            return;
+        }
+        log::info!("晾衣绳撤下时带走了面板的键盘，还给面板");
+        if let Err(e) = front_and_focus(app, &w) {
+            log::warn!("面板取回键盘失败：{e}");
+        }
+    });
+}
+
+/// 面板还占着键盘时让它交出（发失焦）。主线程调用。
+#[cfg(target_os = "macos")]
+fn resign_key(app: &AppHandle) {
+    use tauri_nspanel::ManagerExt;
+    if holds_key(app)
+        && let Ok(p) = app.get_webview_panel(LABEL)
+    {
+        p.resign_key_window();
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn resign_key(_: &AppHandle) {}
+
+/// 看门收起过几次（开发版自检用：靠它兜住的场景不算通过）
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))] // 看门只在 macOS 上，Windows 的发布构建里没人读
+pub static WATCH_HITS: AtomicU64 = AtomicU64::new(0);
+/// 面板已唤起、还没隐藏
+static UP: AtomicBool = AtomicBool::new(false);
+/// `watch` 的线程在跑
+#[cfg(target_os = "macos")]
+static WATCHING: AtomicBool = AtomicBool::new(false);
+/// 连续几次查到面板在屏上却没有键盘
+#[cfg(target_os = "macos")]
+static NO_KEY: AtomicU64 = AtomicU64::new(0);
+/// 这次唤起后面板拿到过键盘。从没拿到过的不管（首次运行的引导面板可见但没有焦点是正常的）
+#[cfg(target_os = "macos")]
+static HAD_KEY: AtomicBool = AtomicBool::new(false);
+
+/// 看门：面板在屏上期间每 300 ms 查一次，连续两次没有键盘、按规则又该失焦隐藏，就当作漏掉的失焦收起。
+/// 只在 macOS 上做：Windows 的失焦事件可靠，而且前台被系统拦下时面板可以没有焦点地留着。面板隐藏后线程退出
+#[cfg(target_os = "macos")]
+fn watch(app: &AppHandle) {
+    NO_KEY.store(0, Ordering::SeqCst);
+    HAD_KEY.store(false, Ordering::SeqCst);
+    if WATCHING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_millis(300));
+            if !UP.load(Ordering::SeqCst) {
+                WATCHING.store(false, Ordering::SeqCst);
+                // 刚好又唤起了、对方看到 WATCHING 还是 true 没起线程：接着跑
+                if UP.load(Ordering::SeqCst) && !WATCHING.swap(true, Ordering::SeqCst) {
+                    continue;
+                }
+                break;
+            }
+            on_main(&app, |app| {
+                if UP.load(Ordering::SeqCst) && holds_key(app) {
+                    HAD_KEY.store(true, Ordering::SeqCst);
+                }
+                let lost = UP.load(Ordering::SeqCst)
+                    && HAD_KEY.load(Ordering::SeqCst)
+                    && FADING.load(Ordering::Relaxed) == 0
+                    && visible(app)
+                    && !holds_key(app)
+                    && blur_hides(app);
+                if !lost {
+                    NO_KEY.store(0, Ordering::SeqCst);
+                } else if NO_KEY.fetch_add(1, Ordering::SeqCst) >= 1 {
+                    NO_KEY.store(0, Ordering::SeqCst);
+                    log::warn!("面板在屏上却没有键盘，按失焦收起");
+                    WATCH_HITS.fetch_add(1, Ordering::SeqCst);
+                    hide(app);
+                }
+            });
+        }
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn watch(_: &AppHandle) {}
 
 /// 面板失焦时能不能隐藏（M04 规则 3）：设置、确认框开着照常隐藏；片段对话框开着或正在选文件夹、
 /// 下载语言包期间（系统确认框会抢焦点）、划词卡片拿着键盘时（M26 规则 18）、截图或录屏遮罩进行中
@@ -491,9 +667,14 @@ pub fn hide(app: &AppHandle) {
 pub fn blur_hides(app: &AppHandle) -> bool {
     let state = app.state::<AppState>();
     !state.blur_keeps.load(Ordering::SeqCst)
-        && !state.tr_downloading.load(Ordering::SeqCst)
+        && !state.tr_download_panel.load(Ordering::SeqCst)
         && !crate::trcard::has_keyboard(app)
         && !crate::shot::active(app)
+}
+
+/// 面板可见。
+pub fn visible(app: &AppHandle) -> bool {
+    window(app).is_some_and(|w| w.is_visible().unwrap_or(false))
 }
 
 /// 可见但已失焦、且 `blur_hides` 时隐藏：补上期间被忽略的失焦（片段对话框关闭、选完文件夹、下载语言包结束、
@@ -574,6 +755,9 @@ fn hide_pending(req: u64, fading: u64) -> bool {
 /// 以窗口实际可见性为准切换。可见时不直接隐藏，请前端先播淡出再调 `hide_panel`；
 /// 前端失效时由兜底线程隐藏。
 pub fn toggle(app: &AppHandle, t0: Option<u64>, trigger: Trigger) {
+    if under_overlay(app) {
+        return;
+    }
     let Some(w) = window(app) else { return };
     let visible = match w.is_visible() {
         Ok(v) => v,

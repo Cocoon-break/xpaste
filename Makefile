@@ -31,6 +31,9 @@ dev-isolated: ## 启动开发版，数据目录隔离在 .xpaste-dev/（自动�
 
 fmt: ## 格式化 Rust 代码
 	cargo fmt --all
+ifneq ($(wildcard pro/Makefile),)
+	$(MAKE) -C pro fmt
+endif
 
 lint: ## 格式检查 + clippy（含 Windows 交叉检查，若已安装 target）+ 版本号一致性
 	cargo fmt --all --check
@@ -40,12 +43,19 @@ ifneq ($(HAS_WIN_TARGET),0)
 	cargo clippy -p xpaste-platform --all-targets --target $(WIN_TARGET) -- -D warnings
 endif
 	pnpm check:version
+ifneq ($(wildcard pro/Makefile),)
+	$(MAKE) -C pro fmt-check
+endif
 
 test-rust: ## Rust 单元测试（三个 crate）
 	cargo test --workspace
 
-test-web: ## 前端单元测试（自动发现 src/**/*.test.ts）
+test-web: ## 前端单元测试（自动发现 src/**/*.test.ts；官网购买流程的纯函数；带 pro/web 时再跑它的测试）
 	pnpm test
+	node --test 'scripts/site/*.test.js'
+ifneq ($(wildcard pro/web),)
+	node --test 'pro/web/**/*.test.ts'
+endif
 
 test: test-rust test-web ## 全部单元测试
 
@@ -94,6 +104,8 @@ release-report: ## 把各目标的安装包收拢到 target/installers/ 并列�
 site-demo: ## 重新生成官网上可操作的演示面板（website/demo/）：改了 src/ 的界面或 scripts/site-demo/ 之后跑，产物一起提交
 	rm -rf website/demo
 	for e in index card shot; do SITE_DEMO_ENTRY=$$e pnpm exec vite build --config scripts/site-demo/vite.config.mjs || exit 1; done
+	@# 私有组件不能进官网：产物里出现样式选择器的类名或文案就失败（公开代码里也有 mountStylePicker 这个名字，不能拿它判断）
+	@! grep -lE 'lsp-|激活 Pro 后可换样式' website/demo/*.html || { echo "website/demo 里混进了私有组件"; exit 1; }
 
 measure: ## macOS 性能与可靠性测量（先 make release-app；离开电脑时运行，约 15 分钟；终端要有辅助功能权限）
 	bash scripts/measure.sh all

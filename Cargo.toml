@@ -1,9 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["src-tauri", "crates/xpaste-core", "crates/xpaste-platform"]
+members = ["src-tauri", "crates/xpaste-core", "crates/xpaste-platform", "crates/xpaste-pro"]
 
 [workspace.package]
-version = "0.7.2"
+version = "0.8.0"
 edition = "2024"
 rust-version = "1.90"
 
@@ -19,6 +19,9 @@ tauri = { version = "2", features = [] }
 # 默认不带 store：平台层只用模型类型，Windows 交叉 clippy 无需编译 SQLite
 xpaste-core = { path = "crates/xpaste-core", default-features = false }
 xpaste-platform = { path = "crates/xpaste-platform" }
+xpaste-pro = { path = "crates/xpaste-pro" }
+ed25519-dalek = "2"
+base64 = "0.22"
 
 # 开发构建只留行号表、依赖不带调试信息：target 从约 4.3 GB 降到约 2.2 GB，panic 回溯仍有文件与行号
 [profile.dev]

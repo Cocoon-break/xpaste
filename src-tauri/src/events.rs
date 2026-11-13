@@ -20,8 +20,35 @@ pub const PAUSED_CHANGED: &str = "paused-changed";
 pub const SETTINGS_CHANGED: &str = "settings-changed";
 /// 托盘“设置…”、划词卡片“去设置”：面板显示后打开设置弹窗。载荷为要切到的标签（`translate`），null 时停在上次的标签。
 pub const OPEN_SETTINGS: &str = "open-settings";
+/// 收到 `xpaste://activate?code=…`：面板显示后用 `pro_take_link` 取走授权码，打开设置的“Pro”标签并激活。
+/// 载荷为空：授权码不走事件，面板还没订阅时（冷启动）也不会丢。
+pub const PRO_LINK: &str = "pro-link";
 /// 托盘“清空历史…”：面板显示后打开清空确认。
 pub const CONFIRM_CLEAR: &str = "confirm-clear";
+
+/// 晾衣绳的便签或 Pro 状态变了，载荷是完整的 `commands::line::LineView`；面板据此更新已挂的刻线。
+pub const LINE_CHANGED: &str = "line-changed";
+/// 便签快捷键按下时面板可见：只发给 `panel`，面板把选中的那条记录挂上绳子（没有选中就挂最新一条）。
+pub const LINE_HANG_SELECTED: &str = "line-hang-selected";
+/// 快捷键没挂成时的提示，只发给 `line`：`{ text, action?, id? }`，见 `line::Toast`。
+/// `action` 为 `"pro"` 时提示条带“输入授权码”按钮；`id` 是已挂着的那张便签，页面让它轻摆一下。
+pub const LINE_TOAST: &str = "line-toast";
+/// 晾衣绳窗口放下，只发给 `line`：`{ how, id }`，见 `line::How`（`peek` 只露绳子；peek 之后再放下只换 `how`，窗口不挪）。
+/// `id` 不为 null 时是要选中的便签：快捷键挂的内容已经挂着、绳子又放下着，键盘落在那张上。
+pub const LINE_SHOW: &str = "line-show";
+/// 晾衣绳要收起，只发给 `line`：页面播完收起后调 `line_hidden`，窗口才真正隐藏。
+pub const LINE_HIDE: &str = "line-hide";
+/// 面板里把行拖出顶边，只发给 `line`：`{ x, y }`，光标的屏幕逻辑坐标，页面据 x 空出落点。
+pub const LINE_DRAG: &str = "line-drag";
+/// 面板里拖着行又拖回面板松手、绳子一直显示着（不收起），只发给 `line`：无载荷，页面拿掉跟手的影子便签和让出的空位。
+pub const LINE_DRAG_CANCEL: &str = "line-drag-cancel";
+/// 面板里拖着行在顶端松手，只发给 `line`：`{ id, x }`，页面按 x 算出位置后调 `line_hang_record`。
+pub const LINE_DROP: &str = "line-drop";
+/// 绳子放下期间光标进出便签区域，只发给 `line`：`{ inside }`，变了才发。区域是晾衣绳窗口往上延到屏幕顶端（含菜单栏那一条），
+/// 页面据此在离开 350 ms 后收起。一直显示时窗口刚从接收点击换成穿透，另带 `pass: true`，页面去掉悬停的样子。
+pub const LINE_POINTER: &str = "line-pointer";
+/// 便签的提醒到了，只发给 `line`：`{ id }`，每张到期的发一次，同时放下绳子（`line-show { how: "remind" }`，经主线程发出，通常比它晚到，先后不保证，页面不依赖顺序）；页面让那张高亮。
+pub const LINE_REMIND: &str = "line-remind";
 
 /// 冻结完成，发给每块屏的遮罩 `shot-<i>`（载荷见 `shot::BeginPayload`）。
 pub const SHOT_BEGIN: &str = "shot-begin";

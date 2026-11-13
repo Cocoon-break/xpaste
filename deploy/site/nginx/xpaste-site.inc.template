@@ -1,0 +1,99 @@
+# 站点本体（server 级别）：静态文件 + 反向代理。由 http.conf / tls.conf 的 server 块引入。
+
+server_tokens off;
+root /usr/share/nginx/html;
+index index.html;
+charset utf-8;
+error_page 404 /404.html;
+
+gzip on;
+gzip_vary on;
+gzip_min_length 1024;
+gzip_types text/css application/javascript application/json image/svg+xml;
+
+# 安全头。首页的样式和脚本是内联的，所以 script-src / style-src 带 'unsafe-inline'；
+# 演示是同源 iframe（demo/），里面的图片有 data: 和 blob:。站点不加载任何第三方资源。
+add_header X-Content-Type-Options "nosniff" always;
+add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+add_header X-Frame-Options "SAMEORIGIN" always;
+add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'" always;
+add_header Cache-Control $xp_cache;
+
+# 证书签发时的验证文件（certbot --webroot）
+location ^~ /.well-known/acme-challenge/ { root /var/www/certbot; }
+# 点开头的文件（.DS_Store 之类）不给
+location ~ /\. { return 404; }
+
+location / { try_files $uri $uri/ =404; }
+
+# —— 浏览器 → 授权服务内网端口的站点接口 ——
+# 只放行下面五条和各自的方法，其余 /api/ 一律 404。站点密钥由这里加上，浏览器自己带的 Authorization 被覆盖掉。
+location ^~ /api/ {
+  client_max_body_size 8k;
+  default_type application/json;
+  add_header Cache-Control "no-store" always;
+  add_header X-Content-Type-Options "nosniff" always;
+
+  proxy_http_version 1.1;
+  proxy_set_header Connection "";
+  proxy_set_header Host $host;
+  proxy_set_header Authorization "Bearer ${SITE_SECRET}";
+  proxy_set_header Cookie "";
+  proxy_set_header X-Forwarded-For $remote_addr;
+  proxy_connect_timeout 5s;
+  proxy_read_timeout 30s;
+
+  location = /api/products {
+    if ($request_method != GET) { return 405; }
+    limit_req zone=xp_query burst=20 nodelay;
+    proxy_pass http://issuance_internal/v1/site/products;
+  }
+  location = /api/providers {
+    if ($request_method != GET) { return 405; }
+    limit_req zone=xp_query burst=20 nodelay;
+    proxy_pass http://issuance_internal/v1/site/providers;
+  }
+  location = /api/orders {
+    if ($request_method != POST) { return 405; }
+    limit_req zone=xp_order burst=5 nodelay;
+    proxy_pass http://issuance_internal/v1/site/orders;
+  }
+  location ~ ^/api/orders/([A-Za-z0-9_-]+)$ {
+    if ($request_method != GET) { return 405; }
+    limit_req zone=xp_query burst=20 nodelay;
+    proxy_pass http://issuance_internal/v1/site/orders/$1;
+  }
+  location = /api/licenses/resend {
+    if ($request_method != POST) { return 405; }
+    limit_req zone=xp_order burst=5 nodelay;
+    proxy_pass http://issuance_internal/v1/site/licenses/resend;
+  }
+
+  return 404 '{"error":"not_found","message":"接口不存在"}';
+}
+
+# —— 应用和支付渠道 → 授权服务公网端口，原样转发 ——
+# 只放行激活、解绑、设备列表和渠道回调，其余 /v1/（包括 /v1/site/）一律 404。
+# X-Forwarded-For 写成直连的对端地址（不沿用客户端自己带来的），授权服务要把这台 nginx 的地址
+# 填进 TRUSTED_PROXIES 才会读它，否则所有用户共用一个限流额度。
+location ^~ /v1/ {
+  client_max_body_size 16k;
+  default_type application/json;
+  add_header Cache-Control "no-store" always;
+  add_header X-Content-Type-Options "nosniff" always;
+
+  proxy_http_version 1.1;
+  proxy_set_header Connection "";
+  proxy_set_header Host $host;
+  proxy_set_header X-Forwarded-For $remote_addr;
+  proxy_set_header X-Forwarded-Proto $scheme;
+  proxy_connect_timeout 5s;
+  proxy_read_timeout 30s;
+
+  location = /v1/activate   { proxy_pass http://issuance_public; }
+  location = /v1/deactivate { proxy_pass http://issuance_public; }
+  location = /v1/devices    { proxy_pass http://issuance_public; }
+  location ^~ /v1/webhooks/ { client_max_body_size 1m; proxy_pass http://issuance_public; }
+
+  return 404 '{"error":"not_found","message":"接口不存在"}';
+}

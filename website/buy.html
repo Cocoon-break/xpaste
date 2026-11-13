@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>购买 xPaste Pro · 晾衣绳便签</title>
+<meta name="description" content="购买 xPaste Pro（晾衣绳便签）。应用内可以先免费试用 14 天；付款后授权码会显示在页面上，并发到你的邮箱。">
+<link rel="icon" type="image/svg+xml" href="assets/logo.svg">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F5F5F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1C1C1E" media="(prefers-color-scheme: dark)">
+<script>
+// 首页上手动选过主题的话，这里跟着用
+try { const t = localStorage.getItem('xp-theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch {}
+</script>
+<style>
+/* 与首页同一套「刻度」取值：系统中性灰、系统字体，一根品牌青 */
+:root {
+  color-scheme: light;
+  --bg: #F5F5F7; --surface: #FFFFFF; --raised: #ECECEF;
+  --line: rgb(0 0 0 / .08); --line-2: rgb(0 0 0 / .14);
+  --fg: #1D1D1F; --muted: #5C5C64; --faint: #6E6E76;
+  --accent: #0E7FA3; --accent-hover: #0B6E8E; --on-accent: #FFFFFF; --accent-ink: #0B6E8E;
+  --bad: #B3261E;
+  --ease: cubic-bezier(.22, 1, .36, 1);
+  --ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #1C1C1E; --surface: #242426; --raised: #2C2C2F;
+    --line: rgb(255 255 255 / .08); --line-2: rgb(255 255 255 / .14);
+    --fg: #ECECEE; --muted: #ABABB2; --faint: #93939A;
+    --accent: #23809F; --accent-hover: #2B8CAE; --accent-ink: #6BB6CF;
+    --bad: #F2A39B;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #1C1C1E; --surface: #242426; --raised: #2C2C2F;
+  --line: rgb(255 255 255 / .08); --line-2: rgb(255 255 255 / .14);
+  --fg: #ECECEE; --muted: #ABABB2; --faint: #93939A;
+  --accent: #23809F; --accent-hover: #2B8CAE; --accent-ink: #6BB6CF;
+  --bad: #F2A39B;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 400 16px/26px var(--ui); -webkit-font-smoothing: antialiased; }
+main { max-width: 680px; margin: 0 auto; padding: 96px 16px; }
+a { color: var(--accent-ink); text-underline-offset: 3px; }
+button, input { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; border-radius: 6px; }
+h1:focus, h2:focus { outline: none; }
+.back { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); text-decoration: none; font-size: 14px; line-height: 20px; transition: color .15s var(--ease); }
+.back:hover { color: var(--fg); }
+.back img { width: 24px; height: 24px; }
+h1 { margin: 32px 0 0; font-size: 36px; line-height: 44px; font-weight: 600; letter-spacing: -.01em; text-wrap: balance; }
+h2 { margin: 0; font-size: 20px; line-height: 28px; font-weight: 600; }
+p { margin: 12px 0 0; color: var(--muted); text-wrap: pretty; }
+.intro { margin-top: 16px; }
+.block { margin-top: 48px; }
+
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 44px; padding: 0 20px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--surface); color: var(--fg); font: 500 15px/1 var(--ui); text-decoration: none; cursor: pointer; transition: background-color .15s var(--ease), transform .15s var(--ease); }
+.btn:hover { background: var(--raised); }
+.btn:active { transform: scale(.98); }
+.btn.primary { border-color: transparent; background: var(--accent); color: var(--on-accent); }
+.btn.primary:hover { background: var(--accent-hover); }
+.btn[disabled] { opacity: .6; cursor: default; transform: none; }
+.btn.sm { height: 32px; padding: 0 12px; border-radius: 8px; font-size: 14px; }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 24px; }
+.linkish { padding: 0; border: 0; background: none; color: var(--accent-ink); font-size: 14px; line-height: 20px; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+
+/* 表单 */
+.field { margin: 28px 0 0; padding: 0; border: 0; min-width: 0; }
+.field > label, .field > legend { display: block; padding: 0; font-weight: 600; font-size: 15px; line-height: 24px; }
+.hint { margin-top: 6px; color: var(--faint); font-size: 13px; line-height: 20px; }
+input[type="email"], input[type="text"] { display: block; width: 100%; height: 44px; margin-top: 8px; padding: 0 12px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--surface); }
+input::placeholder { color: var(--faint); }
+input[aria-invalid="true"] { border-color: var(--bad); }
+.opts { display: grid; gap: 8px; margin-top: 8px; }
+.opts.inline { display: flex; flex-wrap: wrap; }
+.opt { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 10px 16px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--surface); cursor: pointer; }
+.opt:has(input:checked) { border-color: var(--accent-ink); box-shadow: inset 0 0 0 1px var(--accent-ink); }
+.opt:has(input:focus-visible) { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
+.opt input { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--accent); outline: none; }
+.opt .what { flex: 1; min-width: 0; }
+.opt b, .item b { display: block; font-weight: 600; font-size: 16px; line-height: 24px; }
+.opt small, .item small { display: block; color: var(--muted); font-size: 13px; line-height: 20px; }
+.opt .amt { font-weight: 600; white-space: nowrap; }
+/* 只有一个商品时：不画成单选，直接摆出来 */
+.item { display: flex; align-items: center; gap: 16px; margin-top: 32px; padding: 20px 0; border-top: 1px solid var(--line-2); border-bottom: 1px solid var(--line-2); }
+.item .what { flex: 1; min-width: 0; }
+.item .amt { font: 600 28px/36px var(--ui); letter-spacing: -.01em; white-space: nowrap; }
+.total { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--line-2); color: var(--muted); font-size: 15px; }
+.total output { color: var(--fg); font: 600 28px/36px var(--ui); letter-spacing: -.01em; }
+.err { margin-top: 12px; color: var(--bad); font-size: 14px; line-height: 22px; }
+.err:empty, .say:empty { display: none; }
+.say { font-size: 14px; line-height: 22px; }
+
+/* 付款与结果 */
+.box { margin-top: 20px; padding: 16px 20px; border: 1px solid var(--line-2); border-radius: 12px; background: var(--surface); }
+.note { margin: 0; color: var(--fg); font: 15px/26px var(--ui); white-space: pre-wrap; overflow-wrap: anywhere; }
+.kv { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 16px; color: var(--muted); font-size: 14px; line-height: 22px; }
+.kv code, .code { font-family: var(--mono); color: var(--fg); overflow-wrap: anywhere; user-select: all; -webkit-user-select: all; }
+.kv code { font-size: 13px; }
+.qr { display: block; width: 220px; max-width: 100%; height: auto; border-radius: 8px; background: #FFFFFF; }
+.codebox { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.code { flex: 1; min-width: 0; font-size: 20px; line-height: 32px; font-weight: 500; }
+ol { margin: 12px 0 0; padding-left: 24px; color: var(--muted); }
+ol li + li { margin-top: 6px; }
+h3 { margin: 32px 0 0; font-size: 15px; line-height: 24px; font-weight: 600; }
+.resend { margin-top: 72px; padding-top: 32px; border-top: 1px solid var(--line-2); }
+.inline-form { display: flex; gap: 8px; margin-top: 8px; }
+.inline-form input { margin-top: 0; }
+.inline-form .btn { flex: none; }
+.foot { margin-top: 48px; color: var(--faint); font-size: 13px; line-height: 20px; }
+
+@media (max-width: 640px) {
+  main { padding: 48px 16px 64px; }
+  h1 { font-size: 30px; line-height: 38px; }
+  .inline-form { flex-direction: column; }
+  .code { flex-basis: 100%; font-size: 17px; }
+}
+</style>
+</head>
+<body>
+<main>
+<a class="back" href="index.html"><img src="assets/logo.svg" alt="" width="24" height="24">返回 xPaste 首页</a>
+<h1>购买 xPaste Pro</h1>
+<p class="intro">Pro 目前包含晾衣绳便签。应用内可以先免费试用 14 天，不用先付款；剪切板历史、搜索、截图、录屏和翻译一直免费。</p>
+
+<!-- 进页面先取商品和渠道；取到之前只有这一行字 -->
+<p class="block" id="loading" role="status">正在读取价格…</p>
+
+<!-- 接口不可用（比如官网还挂在纯静态托管上） -->
+<section class="block" id="closed" hidden aria-labelledby="closed-title">
+  <h2 id="closed-title" tabindex="-1">购买暂未开放</h2>
+  <p id="closed-text">应用内可以免费试用 14 天，装上就能用。</p>
+  <div class="row">
+    <a class="btn primary" href="index.html#download">下载 xPaste</a>
+    <button class="btn" type="button" id="reload" hidden>重试</button>
+  </div>
+</section>
+
+<!-- 选商品 → 填邮箱 → 选付款方式 -->
+<form id="order" hidden novalidate aria-label="下单">
+  <div id="products"></div>
+  <fieldset class="field" id="currency-field" hidden><legend>币种</legend><div class="opts inline" id="currencies"></div></fieldset>
+  <fieldset class="field" id="provider-field" hidden><legend>付款方式</legend><div class="opts" id="providers"></div></fieldset>
+  <div class="field">
+    <label for="email">邮箱</label>
+    <input id="email" name="email" type="email" autocomplete="email" inputmode="email" required aria-describedby="email-hint order-err" placeholder="you@example.com">
+    <p class="hint" id="email-hint">授权码会发到这个邮箱。以后找回授权码也靠它。</p>
+  </div>
+  <div class="field" id="renew-field" hidden>
+    <label for="renew">已有授权码（续费时填）</label>
+    <input id="renew" name="renew_code" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-describedby="renew-hint" placeholder="XP-XXXXX-XXXXX-XXXXX-XXXXX">
+    <p class="hint" id="renew-hint">填了就给这张授权续期，不发新的授权码；第一次购买留空。</p>
+  </div>
+  <div class="total"><span>应付</span><output id="total" for="products currencies"></output></div>
+  <p class="err" id="order-err" role="alert"></p>
+  <div class="row"><button class="btn primary" type="submit" id="submit">去付款</button></div>
+</form>
+
+<!-- 等待付款 -->
+<section class="block" id="pay" hidden aria-labelledby="pay-title">
+  <h2 id="pay-title" tabindex="-1">等待付款</h2>
+  <p id="pay-lead"></p>
+  <div class="box" id="pay-box" hidden></div>
+  <p class="kv" id="pay-order" hidden>订单号 <code id="pay-id"></code></p>
+  <p class="say" id="pay-say" role="status"></p>
+  <div class="row">
+    <button class="btn" type="button" id="recheck" hidden>我已付款，重新查询</button>
+    <button class="linkish" type="button" data-act="restart">放弃这笔订单，重新下单</button>
+  </div>
+</section>
+
+<!-- 已付款 -->
+<section class="block" id="done" hidden aria-labelledby="done-title">
+  <h2 id="done-title" tabindex="-1">付款成功</h2>
+  <p id="done-lead">这是你的授权码，已经同时发到你的邮箱。</p>
+  <div class="box codebox">
+    <code class="code" id="code" aria-label="授权码"></code>
+    <button class="btn sm" type="button" id="copy">复制</button>
+  </div>
+  <p class="say" id="copy-say" role="status"></p>
+  <div class="row"><a class="btn primary" id="activate" href="#">打开 xPaste 并激活</a></div>
+  <h3>按钮没反应时，手动激活</h3>
+  <ol>
+    <li>打开 xPaste 的设置，进入“Pro”。</li>
+    <li>把上面的授权码粘贴进去。</li>
+    <li>点“激活”。</li>
+  </ol>
+</section>
+
+<!-- 已退款 / 已取消 / 超时 / 找不到 -->
+<section class="block" id="ended" hidden aria-labelledby="ended-title">
+  <h2 id="ended-title" tabindex="-1"></h2>
+  <p id="ended-text"></p>
+  <div class="row"><button class="btn primary" type="button" data-act="restart">重新购买</button></div>
+</section>
+
+<!-- 找回授权码 -->
+<form class="resend" id="resend" hidden novalidate aria-labelledby="resend-title">
+  <h2 id="resend-title">找回授权码</h2>
+  <p>买过但找不到授权码了：填购买时用的邮箱，我们把授权码再发一遍。</p>
+  <div class="field" style="margin-top:16px">
+    <label for="resend-email">购买时用的邮箱</label>
+    <div class="inline-form">
+      <input id="resend-email" type="email" autocomplete="email" inputmode="email" required aria-describedby="resend-say" placeholder="you@example.com">
+      <button class="btn" type="submit" id="resend-btn">重新发送</button>
+    </div>
+  </div>
+  <p class="say" id="resend-say" role="status"></p>
+</form>
+
+<p class="foot" id="foot" hidden>付款由支付渠道处理，这个页面只收邮箱和订单信息，见<a href="privacy.html">隐私说明</a>。遇到问题到 <a href="https://github.com/Cocoon-break/xpaste/issues">GitHub issues</a> 说明情况，不要贴出订单号、授权码和邮箱。</p>
+</main>
+
+<script type="module">
+import { formatMoney, describeProduct, priceOf, currenciesFor, providersFor, sellable, providerLabel, isEmail, paymentView, orderView, errorMessage, POLL_MS, pollExpired } from './assets/buy-core.js';
+
+const $ = (id) => document.getElementById(id);
+// 建节点：接口返回的文字一律走 textContent，不拼 HTML
+function el(tag, props = {}, ...kids) {
+  const n = Object.assign(document.createElement(tag), props);
+  n.append(...kids);
+  return n;
+}
+
+// 接口都用相对地址：站点挂在子目录下（GitHub Pages）时也只会请求到自己目录里
+async function api(path, body) {
+  try {
+    const r = await fetch(path, body
+      ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+      : { headers: { Accept: 'application/json' }, cache: 'no-store' });
+    const data = (r.headers.get('content-type') || '').includes('json') ? await r.json().catch(() => null) : null;
+    return { status: r.status, data };
+  } catch {
+    return { status: 0, data: null };
+  }
+}
+
+// 进行中的订单记在本机：付款方式只在下单时返回一次，刷新或从渠道跳回来要靠它接着显示
+const KEY = 'xp-order';
+const saved = () => { try { return JSON.parse(localStorage.getItem(KEY)); } catch { return null; } };
+const save = (o) => { try { localStorage.setItem(KEY, JSON.stringify(o)); } catch {} };
+const forget = () => { try { localStorage.removeItem(KEY); } catch {} };
+
+const VIEWS = ['loading', 'closed', 'order', 'pay', 'done', 'ended'];
+let view = 'loading';
+function show(name) {
+  if (view === name) return;
+  const first = view === 'loading';
+  view = name;
+  for (const v of VIEWS) $(v).hidden = v !== name;
+  $('resend').hidden = $('foot').hidden = name === 'loading' || name === 'closed';
+  // 换了一屏：把焦点交给新一屏的标题，读屏会念出来，键盘接着往下走
+  const head = $(name).querySelector('h2') ?? (name === 'order' ? document.querySelector('h1') : null);
+  if (head && !first) { head.tabIndex = -1; head.focus({ preventScroll: true }); scrollTo({ top: 0 }); }
+}
+
+// —— 下单表单 ——
+const S = { products: [], providers: [], product: null, currency: '', provider: '' };
+
+function radios(box, name, items, current, onPick) {
+  box.replaceChildren(...items.map((it) => {
+    const input = el('input', { type: 'radio', name, value: it.value, checked: it.value === current });
+    input.addEventListener('change', () => onPick(it.value));
+    return el('label', { className: 'opt' }, input, ...it.body);
+  }));
+}
+
+function renderProducts() {
+  const box = $('products');
+  if (S.products.length === 1) {
+    const p = S.products[0];
+    box.replaceChildren(el('div', { className: 'item' },
+      el('div', { className: 'what' }, el('b', { textContent: p.name }), el('small', { textContent: describeProduct(p) })),
+      el('span', { className: 'amt', id: 'item-amt' })));
+    return;
+  }
+  const list = el('div', { className: 'opts' });
+  box.replaceChildren(el('fieldset', { className: 'field' }, el('legend', { textContent: '选一个' }), list));
+  radios(list, 'product', S.products.map((p) => ({
+    value: p.slug,
+    body: [
+      el('span', { className: 'what' }, el('b', { textContent: p.name }), el('small', { textContent: describeProduct(p) })),
+      el('span', { className: 'amt', textContent: priceOf(p, S.currency) == null ? '' : formatMoney(priceOf(p, S.currency), S.currency) }),
+    ],
+  })), S.product.slug, (slug) => { S.product = S.products.find((p) => p.slug === slug); settle(); });
+}
+
+// 选了商品之后：币种取交集（默认 CNY），渠道按币种过滤；只剩一个选项的不显示选择
+function settle() {
+  const cs = currenciesFor(S.product, S.providers);
+  if (!cs.includes(S.currency)) S.currency = cs[0];
+  const ps = providersFor(S.providers, S.currency);
+  if (!ps.some((p) => p.name === S.provider)) S.provider = ps[0].name;
+
+  renderProducts();
+  $('currency-field').hidden = cs.length < 2;
+  radios($('currencies'), 'currency', cs.map((c) => ({ value: c, body: [el('span', { textContent: c })] })), S.currency, (c) => { S.currency = c; settle(); });
+  $('provider-field').hidden = ps.length < 2;
+  radios($('providers'), 'provider', ps.map((p) => ({ value: p.name, body: [el('span', { textContent: providerLabel(p.name) })] })), S.provider, (n) => { S.provider = n; });
+  $('renew-field').hidden = S.product.kind !== 'subscription';
+
+  const money = formatMoney(priceOf(S.product, S.currency), S.currency);
+  $('total').textContent = money;
+  const amt = $('item-amt');
+  if (amt) amt.textContent = money;
+  // 只有一个商品时价格已经写在商品那一行，不再重复一行“应付”
+  document.querySelector('.total').hidden = S.products.length === 1;
+}
+
+let busy = false;
+$('order').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (busy) return; // 连点不会下两单
+  const email = $('email'), err = $('order-err'), btn = $('submit');
+  err.textContent = '';
+  email.removeAttribute('aria-invalid');
+  if (!isEmail(email.value)) {
+    email.setAttribute('aria-invalid', 'true');
+    err.textContent = email.value.trim() ? '邮箱看起来不对，检查一下有没有写错' : '先填邮箱，授权码要发到这里';
+    email.focus();
+    return;
+  }
+  busy = true;
+  btn.disabled = true;
+  btn.textContent = '正在下单…';
+  const renew = S.product.kind === 'subscription' ? $('renew').value.trim() : '';
+  const r = await api('api/orders', {
+    product: S.product.slug, email: email.value.trim(), provider: S.provider, currency: S.currency, locale: 'zh',
+    // 订单号要下单之后才有，所以带不进 return_url；回来时靠上面记在本机的订单接着查
+    return_url: location.origin + location.pathname,
+    ...(renew ? { renew_code: renew } : {}),
+  });
+  busy = false;
+  btn.disabled = false;
+  btn.textContent = '去付款';
+  if (r.status !== 200 || !r.data?.order_id) {
+    err.textContent = errorMessage(r.status, r.data);
+    return;
+  }
+  const order = { id: r.data.order_id, payment: r.data.payment, renew: Boolean(renew) };
+  save(order);
+  history.replaceState(null, '', '?order=' + encodeURIComponent(order.id));
+  const pv = paymentView(order.payment);
+  track(order);
+  if (pv.kind === 'redirect') location.assign(pv.value);
+});
+
+// —— 等待付款 ——
+const loadQR = () => new Promise((ok, fail) => {
+  if (window.qrcode) return ok(window.qrcode);
+  const s = el('script', { src: 'assets/qrcode.js' });
+  s.onload = () => ok(window.qrcode);
+  s.onerror = fail;
+  document.head.append(s);
+});
+// 二维码永远是白底黑码（深色主题下也是），四周留 4 格空白
+async function drawQR(box, text) {
+  try {
+    const qr = (await loadQR())(0, 'M');
+    qr.addData(text);
+    qr.make();
+    const n = qr.getModuleCount(), q = 4;
+    let d = '';
+    for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (qr.isDark(r, c)) d += `M${c + q} ${r + q}h1v1h-1z`;
+    const NS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', `0 0 ${n + q * 2} ${n + q * 2}`);
+    svg.setAttribute('class', 'qr');
+    svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label', '付款二维码');
+    svg.setAttribute('shape-rendering', 'crispEdges');
+    const path = document.createElementNS(NS, 'path');
+    path.setAttribute('d', d);
+    path.setAttribute('fill', '#000000');
+    svg.append(path);
+    box.replaceChildren(svg);
+  } catch {
+    box.replaceChildren(el('p', { className: 'note', textContent: '二维码没画出来，刷新页面再试一次。' }));
+  }
+}
+
+function renderPay(order) {
+  const pv = order.payment ? paymentView(order.payment) : null;
+  const lead = $('pay-lead'), box = $('pay-box');
+  box.hidden = true;
+  box.replaceChildren();
+  $('pay-id').textContent = order.id;
+  $('pay-order').hidden = false;
+  if (!pv) {
+    lead.textContent = '正在等这笔订单的付款结果。付款确认后授权码会发到你的邮箱，这个页面也会自动更新。';
+  } else if (pv.kind === 'qr') {
+    lead.textContent = '用手机扫下面的二维码付款。付款确认后授权码会发到你的邮箱，这个页面也会自动更新。';
+    box.hidden = false;
+    void drawQR(box, pv.value);
+  } else if (pv.kind === 'manual') {
+    lead.textContent = '按下面的说明付款。确认到账后授权码会发到你的邮箱，这个页面也会自动更新。';
+    box.hidden = false;
+    box.append(el('p', { className: 'note', textContent: pv.value }));
+  } else if (pv.kind === 'redirect') {
+    lead.append('付款在支付渠道的页面上完成。付完回到这里，页面会自动更新；还没付的话，', el('a', { href: pv.value, textContent: '点这里去付款' }), '。');
+  } else {
+    lead.textContent = '这个付款方式没有可以在浏览器里打开的付款页面（测试渠道）。订单已经建好，付款确认后这个页面会自动更新。';
+    box.hidden = false;
+    box.append(el('p', { className: 'note', textContent: pv.value }));
+  }
+}
+
+let current = null, timer = 0, startedAt = 0, checking = false, polling = false;
+
+function track(order) {
+  current = order;
+  $('pay-lead').replaceChildren();
+  renderPay(order);
+  $('pay-say').textContent = '正在查询订单…';
+  $('recheck').hidden = true;
+  show('pay');
+  startedAt = Date.now();
+  polling = true;
+  void check();
+}
+
+async function check() {
+  clearTimeout(timer);
+  if (checking || !current) return;
+  checking = true;
+  const id = current.id;
+  const r = await api('api/orders/' + encodeURIComponent(id));
+  checking = false;
+  if (!current || current.id !== id) return; // 等结果的时候已经点了“重新下单”
+  const v = orderView(r.status, r.data);
+
+  if (v.state === 'paid') {
+    polling = false;
+    forget();
+    $('code').textContent = v.code;
+    $('activate').href = 'xpaste://activate?code=' + encodeURIComponent(v.code);
+    if (current.renew) {
+      $('done-title').textContent = '续费成功';
+      $('done-lead').textContent = '这张授权已经续期，授权码不变，应用会在下次联网时自动更新到期时间。';
+    }
+    show('done');
+    return;
+  }
+  if (!v.poll) {
+    polling = false;
+    forget();
+    $('ended-title').textContent = v.title;
+    $('ended-text').textContent = v.text;
+    show('ended');
+    return;
+  }
+  if (v.title) $('pay-title').textContent = v.title;
+  if (pollExpired(startedAt, Date.now())) {
+    polling = false;
+    $('pay-say').textContent = '已经等了 30 分钟，自动查询先停了。付过款的话点下面的按钮再查一次。';
+    $('recheck').hidden = false;
+    return;
+  }
+  $('pay-say').textContent = v.text;
+  // 页面不在前台时不查；回到前台由 visibilitychange 立刻查一次
+  if (!document.hidden) timer = setTimeout(check, POLL_MS);
+}
+
+document.addEventListener('visibilitychange', () => { if (!document.hidden && polling) void check(); });
+$('recheck').addEventListener('click', () => {
+  $('recheck').hidden = true;
+  $('pay-say').textContent = '正在查询订单…';
+  startedAt = Date.now();
+  polling = true;
+  void check();
+});
+
+document.querySelectorAll('[data-act="restart"]').forEach((b) => b.addEventListener('click', () => {
+  clearTimeout(timer);
+  polling = false;
+  current = null;
+  forget();
+  history.replaceState(null, '', location.pathname);
+  $('pay-title').textContent = '等待付款';
+  show('order');
+}));
+
+// —— 已付款：复制授权码 ——
+$('copy').addEventListener('click', async () => {
+  const say = $('copy-say');
+  try { await navigator.clipboard.writeText($('code').textContent); say.textContent = '已复制'; }
+  catch { say.textContent = '复制失败，请手动选中授权码再复制'; }
+  setTimeout(() => { say.textContent = ''; }, 4000);
+});
+
+// —— 找回授权码：不管邮箱买没买过，提示都一样 ——
+let resending = false;
+$('resend').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (resending) return;
+  const email = $('resend-email'), say = $('resend-say'), btn = $('resend-btn');
+  email.removeAttribute('aria-invalid');
+  if (!isEmail(email.value)) {
+    email.setAttribute('aria-invalid', 'true');
+    say.textContent = '邮箱看起来不对，检查一下有没有写错';
+    email.focus();
+    return;
+  }
+  resending = true;
+  btn.disabled = true;
+  say.textContent = '正在发送…';
+  const r = await api('api/licenses/resend', { email: email.value.trim() });
+  resending = false;
+  btn.disabled = false;
+  say.textContent = r.status === 200 ? '如果这个邮箱有购买记录，授权码已经发过去了。' : errorMessage(r.status, null);
+});
+
+// —— 进页面 ——
+$('reload').addEventListener('click', () => location.reload());
+async function boot() {
+  const [products, providers] = await Promise.all([api('api/products'), api('api/providers')]);
+  const ok = products.status === 200 && providers.status === 200 && Array.isArray(products.data) && Array.isArray(providers.data);
+  S.providers = ok ? providers.data : [];
+  S.products = ok ? sellable(products.data, S.providers) : [];
+  if (!S.products.length) {
+    // 接口在但这一下没通（断网、限流、服务重启）：说清楚是暂时的，给一个重试
+    const flaky = !ok && [products.status, providers.status].some((s) => s === 0 || s === 429 || s >= 500);
+    if (flaky) {
+      $('closed-title').textContent = '暂时连不上购买服务';
+      $('closed-text').textContent = '稍后再试。应用内可以免费试用 14 天，不用等这里。';
+      $('reload').hidden = false;
+    }
+    show('closed');
+    return;
+  }
+  S.product = S.products[0];
+  settle();
+
+  const id = new URLSearchParams(location.search).get('order');
+  const mine = saved();
+  if (id) track(mine?.id === id ? mine : { id });
+  else if (mine?.id) { history.replaceState(null, '', '?order=' + encodeURIComponent(mine.id)); track(mine); }
+  else show('order');
+}
+void boot();
+</script>
+</body>
+</html>

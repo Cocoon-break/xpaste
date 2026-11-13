@@ -21,7 +21,9 @@ import {
   onShotNeedPermission,
   onTranslateDelta,
 } from './api/events';
-import type { AppError, Appearance, Engines, FileEntry, PanelStyle, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
+import { lineDragDrop, lineDragHover, lineHangFromPanel, lineHide, lineSideHint, onLineChanged, onLineHangSelected, onProLink, proActivate, proBuy, proDeactivate, proStatus, proTakeLink, proUnbind, type LineView } from './api/line';
+import { deviceLine, proControls, proLine } from './pro-status';
+import type { AppError, Appearance, BoundDevice, Engines, FileEntry, LineSide, LineStyle, PanelStyle, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
 import { appCounts, bestApp, freshSug, fromApp, type Sug } from './source';
 import { COMPACT, compactGroups, compactHeadH, rowParts } from './compact';
 import { copyToast, needsAccessibility } from './copy-status';
@@ -84,6 +86,8 @@ const I = {
   pencil: '<path d="M4 16l1-4 8-8 3 3-8 8z"/><path d="M11.5 5.5l3 3"/>',
   // 翻译：“文”与“A”（M26 规则 2）
   translate: '<path d="M3 5h7M6.5 3.5V5M8.7 5c-.7 3-2.5 5.2-5.2 6.5M5.2 7.6c.9 1.7 2.3 2.9 4 3.6"/><path d="m10.5 16.5 3-7.5 3 7.5M11.6 14h3.8"/>',
+  // 挂到晾衣绳：衣架
+  hang: '<path d="M8 5.5a2 2 0 1 1 2 2V9"/><path d="M10 9 3 14.5h14z"/>',
 };
 const svg = (n: keyof typeof I, cls = '') =>
   `<svg class="ic ${cls}" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n]}</svg>`;
@@ -159,6 +163,8 @@ const S = {
   total: 0,
   /** 当前可见条数，供 aria-setsize */
   count: 0,
+  /** 晾衣绳：不含晾衣绳的版本 available 为 false，挂钩按钮、已挂刻线与“Pro”标签都不出现 */
+  line: { available: false, pro: { state: 'unavailable' }, notes: [], hung: [], hotkey: '', style: { rope: 'jute', thick: 'mid', peg: 'plastic', paper: 'parch', edge: 'auto' }, on: true, side: 'top', pinned: false, recovered: false, canBuy: false } as LineView,
 };
 const menuOpen = () => menu.dataset.open === 'true' || moreMenu.dataset.open === 'true';
 
@@ -216,9 +222,9 @@ const metaLine = (r: RecordSummary) => {
   return parts.join(' · ');
 };
 
-const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id === S.newId) => `
+const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id === S.newId, hung = lineOn() && S.line.hung.includes(r.id)) => `
     <div class="item${isNew ? ' is-new' : ''}${S.removing.has(r.id) ? ' is-removing' : ''}${S.multi.has(r.id) ? ' is-multi' : ''}${stagger && i < 12 ? ' stg' : ''}" data-id="${r.id}" style="--i:${i}">
-      <div class="row" role="option" id="opt-${r.id}" aria-selected="false" aria-posinset="${i + 1}" aria-label="${esc(r.title)}，${isSnip(r) ? '片段，' : ''}${LABEL[r.kind]}${S.snippets.has(r.id) ? `，识别文字中含“${esc(S.snippets.get(r.id))}”` : ''}" data-type="${typeOf(r)}">
+      <div class="row" role="option" id="opt-${r.id}" aria-selected="false" aria-posinset="${i + 1}" aria-label="${esc(r.title)}，${isSnip(r) ? '片段，' : ''}${LABEL[r.kind]}${S.snippets.has(r.id) ? `，识别文字中含“${esc(S.snippets.get(r.id))}”` : ''}${hung ? '，已挂在晾衣绳上' : ''}" data-type="${typeOf(r)}">
         <div class="row-in">
           ${thumb(r)}
           <div class="main">
@@ -226,10 +232,11 @@ const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id ===
             <div class="meta">${metaLine(r)}</div>
           </div>
           <div class="tail">
-            ${r.pinned ? `<span class="pin-mark">${svg('pinFill')}</span>` : ''}${i < 9 ? `<kbd class="idx">${idxLabel(i)}</kbd>` : ''}
+            ${hung ? '<span class="hung" role="img" aria-label="已挂在晾衣绳上"></span>' : ''}${r.pinned ? `<span class="pin-mark">${svg('pinFill')}</span>` : ''}${i < 9 ? `<kbd class="idx">${idxLabel(i)}</kbd>` : ''}
             <span class="qa" aria-hidden="true">
               ${isSnip(r) ? `<button type="button" tabindex="-1" data-qa="edit" title="编辑片段">${svg('pencil')}</button>`
                 : `<button type="button" tabindex="-1" data-qa="pin" title="${r.pinned ? '取消置顶' : '置顶'}">${svg(r.pinned ? 'pinFill' : 'pin')}</button>`}
+              ${lineOn() ? `<button type="button" tabindex="-1" data-qa="hang" title="挂到晾衣绳">${svg('hang')}</button>` : ''}
               <button type="button" tabindex="-1" data-qa="copy" title="${copyVerb(S.canPaste)}">${svg('copy')}</button>
             </span>
           </div>
@@ -882,10 +889,11 @@ function revealTr(id: number) {
   if (d) pbody.scrollBy({ top: d, behavior: reduced.matches ? 'auto' : 'smooth' });
 }
 // 设置已开着时停在原来的标签（M26 规则 19）
-const openTrSettings = () => {
-  if (!dlg.classList.contains('is-shown')) stTab = stTabs.findIndex((t) => t.id === 'st-tab-translate');
+const openSettingsAt = (tab: string) => {
+  if (!dlg.classList.contains('is-shown')) stTab = stTabs.findIndex((t) => t.id === tab);
   openSettings();
 };
+const openTrSettings = () => openSettingsAt('st-tab-translate');
 // 已有译文或正在翻译：只滚到区块，不发请求；上次失败、中断时等同重新翻译。again：先丢掉旧译文再请求。
 // engine：换用按钮单次指定的方式，不改设置；翻译中也能换用，后端中止进行中的请求（M26 规则 16）
 function doTranslate(id: number, again = false, engine?: Engine) {
@@ -1912,6 +1920,198 @@ function recordKeys(input: HTMLInputElement, help: (msg: string) => void, record
 }
 const shotKey = optHotkey('shotHotkey'), recKey = optHotkey('recHotkey');
 const trKey = optHotkey('trHotkey', '在任何应用里选中文字后按下，译文显示在鼠标旁');
+const lineKey = optHotkey('lineHotkey', '把最近复制的一条挂到晾衣绳上；面板开着时挂选中的那条');
+
+// “Pro”标签（只在含晾衣绳的版本里显示）：状态行、联网激活、设备满员时解绑、购买入口、在本机停用。
+// 出错写在输入框下方（提示条会被设置框盖住）
+const proStatusEl = $('#proStatus'), proCodeIn = $<HTMLInputElement>('#proCode'), proCodeErr = $('#proCodeErr'), proActBtn = $<HTMLButtonElement>('#proActBtn');
+const proActField = $('#proActField'), proDevicesEl = $('#proDevices'), proBuyBtn = $<HTMLButtonElement>('#proBuyBtn');
+const proOffBtn = $<HTMLButtonElement>('#proOffBtn'), proOffErr = $('#proOffErr');
+// 激活、解绑、停用进行中：状态行写着在做什么，按钮都不可点
+let proBusy = '';
+// 状态行是 live region：文字没变就不重写，免得读屏重复播报。没授权时显示输入框和购买入口，已授权时只显示停用
+function paintProStatus() {
+  const t = proBusy || proLine(S.line.pro);
+  if (proStatusEl.textContent !== t) proStatusEl.textContent = t;
+  const c = proControls(S.line.pro, S.line.canBuy);
+  // 焦点所在的控件要藏起来时，挪到换上来的那个上面
+  const held = document.activeElement, move = (!c.activate && proActField.contains(held)) || (!c.off && held === proOffBtn);
+  proActField.hidden = !c.activate;
+  proBuyBtn.hidden = !c.buy;
+  proOffBtn.hidden = !c.off;
+  if (!c.activate) paintProErr();
+  if (!c.off) paintProOffErr();
+  if (move) (c.off ? proOffBtn : c.activate ? proCodeIn : $('#st-tab-pro')).focus();
+}
+function setProBusy(text: string) {
+  proBusy = text;
+  proActBtn.disabled = proOffBtn.disabled = !!text;
+  proCodeIn.readOnly = !!text;
+  for (const b of proDevicesEl.querySelectorAll('button')) b.disabled = !!text;
+  paintProStatus();
+}
+/** 输入框下方的错误；设备满员时下面列出已绑定的设备，每台一个“解绑” */
+function paintProErr(msg = '', devices: BoundDevice[] = []) {
+  proCodeErr.textContent = msg;
+  proCodeErr.hidden = !msg;
+  proCodeIn.setAttribute('aria-invalid', String(!!msg));
+  proDevicesEl.replaceChildren(...devices.map((d) => {
+    const row = document.createElement('div'), text = document.createElement('span'), name = document.createElement('b'), when = document.createElement('small'), btn = document.createElement('button');
+    row.className = 'line';
+    name.textContent = d.name || '未命名设备';
+    when.textContent = deviceLine(d.activatedAt);
+    text.append(name, when);
+    btn.type = 'button';
+    btn.className = 'btn sm';
+    btn.textContent = '解绑';
+    btn.setAttribute('aria-label', `解绑 ${name.textContent}`);
+    btn.addEventListener('click', () => unbindPro(d.id, devices));
+    row.append(text, btn);
+    return row;
+  }));
+  proDevicesEl.hidden = !devices.length;
+  paintStErr();
+}
+function paintProOffErr(msg = '') {
+  proOffErr.textContent = msg;
+  proOffErr.hidden = !msg;
+  paintStErr();
+}
+/** 激活、停用成功后：换上新状态，样式选择器跟着解锁或锁住 */
+function setPro(p: LineView['pro']) {
+  S.line.pro = p;
+  stylePicker?.set(draftLineStyle, lineLocked());
+}
+function activatePro() {
+  const code = proCodeIn.value.trim();
+  if (!code || proBusy) return;
+  setProBusy('正在激活…');
+  // 进行中按钮不可点，焦点会丢：结束后放到换上来的“停用”上，没成放回输入框
+  void proActivate(code).then((p) => {
+    setPro(p);
+    proCodeIn.value = '';
+    paintProErr();
+    setProBusy('');
+    proOffBtn.focus();
+  }, (err: AppError) => {
+    paintProErr(err.message, err.kind === 'deviceLimit' ? err.devices : []);
+    setProBusy('');
+    proCodeIn.focus();
+  });
+}
+/** 解绑列表里的一台，成了就用同一个授权码重新激活；没成（比如解绑次数用完）写在同一处，列表留着 */
+function unbindPro(id: number, devices: BoundDevice[]) {
+  const code = proCodeIn.value.trim();
+  if (!code || proBusy) return;
+  setProBusy('正在解绑…');
+  void proUnbind(code, id).then(() => {
+    setProBusy('');
+    activatePro();
+  }, (err: AppError) => {
+    paintProErr(err.message, devices);
+    setProBusy('');
+    proCodeIn.focus();
+  });
+}
+async function deactivatePro() {
+  if (proBusy) return;
+  const ok = await confirm({
+    title: '在这台设备上停用',
+    body: '停用后这台设备不再占用授权名额，之后可以用同一个授权码重新激活。停用前请确认授权码还找得到（在购买时收到的邮件里）',
+    ok: '停用',
+    danger: true,
+  });
+  if (!ok || proBusy) return;
+  paintProOffErr();
+  setProBusy('正在停用…');
+  void proDeactivate().then((p) => {
+    setPro(p);
+    setProBusy('');
+    proCodeIn.focus();
+  }, (err: AppError) => {
+    paintProOffErr(err.message);
+    setProBusy('');
+    proOffBtn.focus();
+  });
+}
+/** `xpaste://activate?code=…`：打开“Pro”标签，把授权码填进去并激活；已经授权了就只打开标签 */
+function activateFromLink() {
+  if (!S.line.available) return;
+  void proTakeLink().then((code) => {
+    if (!code) return;
+    openSettingsAt('st-tab-pro');
+    if (S.line.pro.state === 'licensed' || proBusy) return;
+    showStControl(proCodeIn);
+    proCodeIn.value = code;
+    paintProErr();
+    activatePro();
+  }, () => {});
+}
+proActBtn.addEventListener('click', activatePro);
+proOffBtn.addEventListener('click', () => void deactivatePro());
+proBuyBtn.addEventListener('click', () => void proBuy().catch((err: AppError) => paintProErr(err.message)));
+
+// 晾衣绳样式选择器只在带 pro/ 的构建里有；没有时 glob 为空，这一项一直隐藏。
+// 类型在这里写一份，不引用 pro/ 里的文件：公开源码里没有它，tsc 也得过
+type StylePicker = { set(value: LineStyle, locked: boolean): void };
+const stylePickerMods = import.meta.glob<{
+  mountStylePicker(el: HTMLElement, value: LineStyle, locked: boolean, onChange: (v: LineStyle) => void): StylePicker;
+}>('../pro/web/style/picker.ts');
+// 草稿只在保存时写回，取消丢弃；试用结束时选择器锁住
+let draftLineStyle: LineStyle, stylePicker: StylePicker | undefined, stylePickerLoading = false;
+const lineLocked = () => S.line.pro.state === 'expired';
+/** 打开设置时调：第一次载入选择器挂上去，之后把草稿和锁定状态交给它 */
+function paintLineStyle() {
+  if (stylePicker) return stylePicker.set(draftLineStyle, lineLocked());
+  const load = Object.values(stylePickerMods)[0];
+  if (!load || stylePickerLoading) return;
+  stylePickerLoading = true;
+  void load().then((m) => {
+    const el = $('#lineStyleField');
+    stylePicker = m.mountStylePicker(el, draftLineStyle, lineLocked(), (v) => void (draftLineStyle = v));
+    el.hidden = false;
+  }, (e: Error) => void info(`载入晾衣绳样式选择器失败：${e.message}`));
+}
+// 晾衣绳总开关与位置：草稿只在保存时写回，取消丢弃；开关关着时位置和样式两项变淡，仍可改
+const lineOnIn = $<HTMLInputElement>('#lineOn'), linePinIn = $<HTMLInputElement>('#linePin'), lineSideEl = $('#lineSide'), lineSideHintEl = $('#lineSideHint');
+const lineSideIns = [...lineSideEl.querySelectorAll<HTMLInputElement>('input')];
+const LINE_SIDE_HELP: Record<LineSide, string> = { top: '鼠标碰到屏幕顶端放下', left: '鼠标碰到屏幕左侧边缘放下', right: '鼠标碰到屏幕右侧边缘放下' };
+let draftLineEnabled = true, draftLineSide: LineSide = 'top', draftLinePinned = false, lineHintSeq = 0;
+function paintLineOn() {
+  lineOnIn.checked = draftLineEnabled;
+  $('#lineOnHelp').textContent = draftLineEnabled ? '鼠标碰到屏幕边缘、按快捷键时放下晾衣绳'
+    : '已关闭：碰边缘不放下，快捷键和面板上的挂钩按钮都不起作用；挂着的便签和提醒都留着，打开后恢复';
+  for (const f of ['#lineSideField', '#linePinField', '#lineStyleField']) $(f).classList.toggle('line-off', !draftLineEnabled);
+}
+/** 位置说明下面是程序坞提示：后端按当前屏幕算，为空不显示；连点几下只认最后一次的结果 */
+function paintLineSide() {
+  for (const i of lineSideIns) i.checked = i.value === draftLineSide;
+  $('#lineSideHelp').textContent = LINE_SIDE_HELP[draftLineSide];
+  // 先藏起上一个位置的提示，读到新的再显示；读不到就一直不显示
+  lineSideHintEl.hidden = true;
+  const seq = ++lineHintSeq;
+  void lineSideHint(draftLineSide).then((t) => {
+    if (seq !== lineHintSeq) return;
+    lineSideHintEl.textContent = t;
+    lineSideHintEl.hidden = !t;
+  }, (e: AppError) => void info(`读取程序坞提示失败 kind=${e.kind}`));
+}
+lineOnIn.addEventListener('change', () => {
+  draftLineEnabled = lineOnIn.checked;
+  paintLineOn();
+});
+linePinIn.addEventListener('change', () => void (draftLinePinned = linePinIn.checked));
+lineSideEl.addEventListener('change', (e) => {
+  draftLineSide = (e.target as HTMLInputElement).value as LineSide;
+  paintLineSide();
+});
+// 在输入框里按 Enter 是激活，不是保存设置
+proCodeIn.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' || e.isComposing) return;
+  e.preventDefault();
+  activatePro();
+});
+proCodeIn.addEventListener('input', () => paintProErr());
 
 // 截图、录屏文件夹：设置里存空字符串表示默认文件夹，输入框只显示默认路径的写法。
 // 取消选择不改；选好的路径只在保存时写回。失败写在这一行下方（提示条会被设置框盖住）
@@ -2310,6 +2510,28 @@ function openSettings() {
   shotKey.reset(st.shotHotkey);
   recKey.reset(st.recHotkey);
   trKey.reset(st.translateHotkey);
+  lineKey.reset(st.lineHotkey);
+  paintProStatus();
+  draftLineStyle = st.lineStyle;
+  paintLineStyle();
+  draftLineEnabled = st.lineEnabled;
+  paintLineOn();
+  draftLineSide = st.lineSide;
+  linePinIn.checked = draftLinePinned = st.linePinned;
+  if (S.line.available) paintLineSide();
+  // 试用可能在面板开着时到期（没有广播），打开设置时重新取一次
+  if (S.line.available)
+    void proStatus().then((p) => {
+      S.line.pro = p;
+      paintProStatus();
+      stylePicker?.set(draftLineStyle, lineLocked());
+    }, () => {});
+  // 激活进行中（激活链接拉起时设置可能已经开着）不清输入框
+  if (!proBusy) {
+    proCodeIn.value = '';
+    paintProErr();
+  }
+  paintProOffErr();
   // 启动时被其他应用占用、没注册上的快捷键：只发过系统通知（可能被关掉），这里在录制框下标红、标签上出红点
   void hotkeyStatus().then((h) => {
     const taken = (name: string) => `${name}快捷键被其他应用占用，没有生效，请换一个`;
@@ -2317,6 +2539,7 @@ function openSettings() {
     if (h.shot) shotKey.setHelp(taken('截图'), true);
     if (h.rec && S.platform.os === 'macos') recKey.setHelp(taken('录屏'), true);
     if (h.translate) trKey.setHelp(taken('翻译'), true);
+    if (h.line && S.line.available) lineKey.setHelp(taken('便签'), true);
   }, (e: AppError) => void info(`读取快捷键状态失败 kind=${e.kind}`));
   shotDir.pending = st.shotDir;
   shotDir.paint();
@@ -2445,15 +2668,27 @@ async function submitSettings() {
     moveToTop: moveTopIn.checked, launchAtLogin: autostartIn.checked, updateCheck: updCheckIn.checked, ocrEnabled: ocrOnIn.checked, ocrBackfill: ocrBackfillIn.checked, searchFileText: fileTextIn.checked,
     shotHotkey: shotKey.pending, shotDir: shotDir.pending, shotSaveCopy: shotSaveCopyIn.checked, longAutoScroll: longAutoIn.checked,
     recHotkey: recKey.pending, recDir: recDir.pending, recSystemAudio: recSystemAudioIn.checked, recMicrophone: recMicIn.checked, recCopy: recCopyIn.checked,
-    recQuality: recQualityIn.value, recFps: recFpsIn.value, panelStyle: draftStyle,
+    recQuality: recQualityIn.value, recFps: recFpsIn.value, panelStyle: draftStyle, lineHotkey: lineKey.pending,
   });
-  // 翻译字段不经 SettingsForm；末尾的 / 由后端去掉。engine 没动过就原样写回（可能是空串）
+  // 翻译字段和晾衣绳的样式、开关、位置不经 SettingsForm；末尾的 / 由后端去掉。engine 没动过就原样写回（可能是空串）
   Object.assign(s, {
     translateEngine: trSave(), translateBaseUrl: trBaseIn.value.trim(), translateApiKey: trKeyIn.value, translateModel: trModelIn.value.trim(), translateLang: trLangIn.value,
-    translateHotkey: trKey.pending,
+    translateHotkey: trKey.pending, lineStyle: draftLineStyle, lineEnabled: draftLineEnabled, lineSide: draftLineSide, linePinned: draftLinePinned,
   });
   saving = true;
   try {
+    // 设置开着时试用可能到期：保存前再取一次 Pro 状态，到期了锁住选择器，样式不改，其余照常保存
+    let styleKept = false;
+    if (S.line.available) {
+      S.line.pro = await proStatus().catch(() => S.line.pro);
+      paintProStatus();
+      const old = S.settings.lineStyle;
+      if (lineLocked() && (Object.keys(old) as (keyof LineStyle)[]).some((k) => s.lineStyle[k] !== old[k])) {
+        s.lineStyle = draftLineStyle = S.settings.lineStyle;
+        styleKept = true;
+      }
+      stylePicker?.set(draftLineStyle, lineLocked());
+    }
     // 新的保留时长 / 条数上限会立即清理记录：先告诉用户删几条（设计 §5.5）
     if (s.retentionDays !== S.settings.retentionDays || s.maxRecords !== S.settings.maxRecords) {
       const n = await prunePreview(s.retentionDays, s.maxRecords);
@@ -2473,7 +2708,7 @@ async function submitSettings() {
     }
     closeSettings();
     if (styleChanged) applyStyle(s.panelStyle);
-    toast('设置已保存');
+    toast(styleKept ? '设置已保存；试用已结束，晾衣绳样式没有改' : '设置已保存');
   } catch (e) {
     const err = e as AppError;
     // 快捷键被占用或校验不过（与唤起相同等）写在对应录制框下方；先聚焦再写错误：focus 处理器会改帮助文字
@@ -2482,7 +2717,7 @@ async function submitSettings() {
       showStControl(hotkeyIn);
       setHotkeyHelp(err.message, true);
     } else if (at) {
-      const f = { shotHotkey: shotKey, recHotkey: recKey, trHotkey: trKey }[at];
+      const f = { shotHotkey: shotKey, recHotkey: recKey, trHotkey: trKey, lineHotkey: lineKey }[at];
       showStControl(f.input);
       f.setHelp(err.message, true);
     } else toast(err.message);
@@ -2948,7 +3183,16 @@ await onPausedChanged((p) => handlers.paused(p));
 // 录屏遮罩的声音开关写回了设置（M24）：换掉手里的副本，之后保存设置或界面状态才不会把它改回去
 await onSettingsChanged((s) => void (S.settings = s));
 // 托盘“设置…”：后端已先唤起面板
-await onOpenSettings((tab) => (tab === 'translate' ? openTrSettings() : openSettings()));
+// 晾衣绳“试用已结束”提示条上的“输入授权码”：载荷 pro，切到“Pro”标签
+// 设置已开着也切过去，并聚焦授权码输入框
+await onOpenSettings((tab) => {
+  if (tab === 'translate') return openTrSettings();
+  if (tab !== 'pro' || !S.line.available) return openSettings();
+  openSettingsAt('st-tab-pro');
+  showStControl(proActField.hidden ? proOffBtn : proCodeIn);
+});
+// 官网付款成功页用 xpaste://activate?code=… 拉起：后端已唤起面板
+await onProLink(activateFromLink);
 // 设置对话框开着时提示条被它盖住，结果同样写进“历史记录”行内：先切到“记录”标签，
 // 如同点了行内的“清空历史…”（确认框关闭后焦点回到这个按钮）
 await onConfirmClear(() => {
@@ -2968,25 +3212,43 @@ await onShotNeedPermission(({ pane, mode }) =>
 // 设置对话框打开时按唤起快捷键：面板同样不隐藏；录制框有焦点就当作按下了当前快捷键（网页收不到被全局注册拦下的按键）
 // 截图、录屏、翻译快捷键同理：对话框开着且面板有焦点时后端先发到这里（role = shot / rec / translate），
 // 焦点不在录制框里时截图、录屏照常开始，翻译照常弹卡片（M15 交互规则 4、M26 规则 18；在录制框里时写入，不翻译）
+// 只认面板有焦点时的按键：失焦时后端不发到这里，这里再防一道
+const hkOn = (el: Element) => document.activeElement === el && document.hasFocus();
+const hkOpts = [[shotKey, '截图', 'shot'], [recKey, '录屏', 'rec'], [trKey, '翻译', 'translate'], [lineKey, '便签', 'line']] as const;
 await onHotkeyPressed((role) => {
   // 被自己的全局快捷键拦下的组合也算收到了主键，松开修饰键时不报“没收到组合键”
   hotkeyGot = true;
-  // 只认面板有焦点时的按键：失焦时后端不发到这里，这里再防一道
-  const on = (el: Element) => document.activeElement === el && document.hasFocus();
-  const opts = [[shotKey, '截图', 'shot'], [recKey, '录屏', 'rec'], [trKey, '翻译', 'translate']] as const;
   if (role !== 'panel') {
-    const [self, name] = opts.find((o) => o[2] === role)!;
-    const other = opts.find(([f]) => f !== self && on(f.input));
+    const [self, name] = hkOpts.find((o) => o[2] === role)!;
+    const other = hkOpts.find(([f]) => f !== self && hkOn(f.input));
     const pressed = { shot: S.settings.shotHotkey, rec: S.settings.recHotkey, translate: S.settings.translateHotkey }[role];
-    if (on(self.input)) self.record(pressed);
-    else if (on(hotkeyIn)) setHotkeyHelp(`不能与${name}快捷键相同`, true);
+    if (hkOn(self.input)) self.record(pressed);
+    else if (hkOn(hotkeyIn)) setHotkeyHelp(`不能与${name}快捷键相同`, true);
     else if (other) other[0].setHelp(`${other[1]}快捷键不能与${name}快捷键相同`, true);
     else void (role === 'translate' ? trcardPress() : overlayBegin(role === 'rec')).catch((err: AppError) => toast(err.message));
     return;
   }
-  if (on(hotkeyIn)) return recordHotkey(S.settings.hotkey);
-  for (const [f, name] of opts) if (on(f.input)) return f.setHelp(`${name}快捷键不能与唤起快捷键相同`, true);
+  if (hkOn(hotkeyIn)) return recordHotkey(S.settings.hotkey);
+  for (const [f, name] of hkOpts) if (hkOn(f.input)) return f.setHelp(`${name}快捷键不能与唤起快捷键相同`, true);
   if (obStep === 'hotkey' && obDlg.open) obSucceed();
+});
+// 面板可见时按了便签快捷键（后端只发给面板）：焦点在便签录制框里就写入，在别的录制框里提示冲突，
+// 否则挂选中的那条（没有选中挂最新一条）
+await onLineHangSelected(() => {
+  // 同 onHotkeyPressed：便签快捷键被自己的全局注册拦下，也算收到了主键
+  hotkeyGot = true;
+  if (hkOn(lineKey.input)) return lineKey.record(S.settings.lineHotkey);
+  if (hkOn(hotkeyIn)) return setHotkeyHelp('不能与便签快捷键相同', true);
+  const other = hkOpts.find(([f]) => f !== lineKey && hkOn(f.input));
+  if (other) return other[0].setHelp(`${other[1]}快捷键不能与便签快捷键相同`, true);
+  hangRecord(S.sel);
+});
+// 便签或 Pro 状态变了：重画已挂刻线，设置开着时“Pro”状态行跟着变
+await onLineChanged((v) => {
+  S.line = v;
+  paintRows();
+  paintProStatus();
+  stylePicker?.set(draftLineStyle, lineLocked());
 });
 
 // 页面重载时对话框都已关闭：先复位后端标志（重载前若有对话框开着，它会停在 true；读取失败也照样复位）
@@ -2995,6 +3257,8 @@ const b = await bootstrap().catch((e: AppError) => {
   // 之后的每次 renderList 都显示这条，不被空列表文案覆盖
   bootError = e?.message || String(e);
   renderList();
+  // 错误页已经画好：照样放行面板显示，否则快捷键、托盘都唤不出面板，看上去是应用没反应
+  void frontendReady().catch(() => {});
   throw e;
 });
 S.settings = b.settings;
@@ -3002,6 +3266,9 @@ savedAppearance = b.settings.appearance;
 paintSpCollapsed(b.settings.spectrumCollapsed);
 S.platform = b.platform;
 S.paused = b.paused;
+// 订阅后到达的 line-changed 比快照新，快照不覆盖它
+if (!S.line.available) S.line = b.line;
+$('#st-tab-pro').hidden = $('#st-pro').hidden = !S.line.available;
 paintPause();
 // 订阅后到达的事件比快照新，快照不覆盖已有条目
 // ponytail: 快照之后、返回之前被删除的记录会被快照带回，下次 records-removed 或重启时消失
@@ -3130,6 +3397,7 @@ list.addEventListener('click', (e) => {
   if (qa === 'copy') copyRecord(id);
   if (qa === 'pin') togglePin(id, true);
   if (qa === 'edit') void openSnippet('edit', id);
+  if (qa === 'hang') hangRecord(id);
 });
 // 吸顶栏在列表外，上面的列表委托收不到它的点击（空列表里的同名按钮仍走上面）
 $('#newSnipBtn').addEventListener('click', () => openSnippet('new'));
@@ -3148,6 +3416,71 @@ list.addEventListener('contextmenu', (e) => {
   }
   if (!S.multi.size) select(id, { indDur: 180, pan: 'smooth' });
   openMenu(id, e.clientX, e.clientY, false);
+});
+
+// 晾衣绳带在这个构建里、且用户开着：行上才有挂钩按钮、已挂刻线，才能拖行去挂
+function lineOn() {
+  return S.line.available && S.line.on;
+}
+// 挂到晾衣绳：绳子放下亮一下；没挂成（重复、挂满、试用结束）的提示在晾衣绳上
+function hangRecord(id: number | null) {
+  void lineHangFromPanel(id).catch((err: AppError) => toast(err.message));
+}
+// 把行拖出面板朝绳子那一侧的边（顶部往上，左右两侧往左、往右）：绳子放下，松手挂在落点（落点由晾衣绳页面算）。
+// 移动超过 4 px 才算拖动，此时才在列表上捕获指针（行会随重绘换掉）；不拖时点击、双击、右键照旧。
+// 指针在那条边之外时每帧最多报一次位置。松手时不在边外不挂；绳子已为这次拖动放下过就让它收起
+let lineDrag: { id: number; x: number; y: number; on: boolean; sx: number; sy: number; raf: number; hovered: boolean } | null = null;
+const pastLineEdge = (e: PointerEvent) =>
+  S.line.side === 'left' ? e.clientX < 0 : S.line.side === 'right' ? e.clientX > innerWidth : e.clientY < 0;
+const hoverLine = (d: { id: number; hovered: boolean }, x: number, y: number) => {
+  d.hovered = true;
+  const r = S.records.get(d.id);
+  // 带上记录的样子，晾衣绳上画一张跟手的影子便签；标题只取开头，每帧都发
+  const item = { id: d.id, kind: r?.kind ?? 'text', title: (r?.title ?? '').slice(0, 200), thumbUrl: r?.thumb ?? null };
+  return lineDragHover(x, y, item).catch((err: AppError) => void info(`拖到晾衣绳失败 kind=${err.kind}`));
+};
+list.addEventListener('pointerdown', (e) => {
+  const id = itemOf(e), t = e.target as Element;
+  lineDrag = lineOn() && e.button === 0 && id !== null && t.closest('.row') && !t.closest('[data-qa]')
+    ? { id, x: e.clientX, y: e.clientY, on: false, sx: 0, sy: 0, raf: 0, hovered: false } : null;
+});
+list.addEventListener('pointermove', (e) => {
+  const d = lineDrag;
+  if (!d || !(e.buttons & 1)) return;
+  if (!d.on) {
+    if (Math.hypot(e.clientX - d.x, e.clientY - d.y) <= 4) return;
+    d.on = true;
+    list.setPointerCapture(e.pointerId);
+  }
+  if (!pastLineEdge(e)) return;
+  d.sx = e.screenX;
+  d.sy = e.screenY;
+  d.raf ||= requestAnimationFrame(() => {
+    d.raf = 0;
+    if (lineDrag === d) void hoverLine(d, d.sx, d.sy);
+  });
+});
+// 在文档上收尾：指针在列表外松开（没捕获时）也要清掉。同一帧里刚出边就松手时先补一次位置，绳子才会放下
+function endLineDrag(e: PointerEvent) {
+  const d = lineDrag;
+  lineDrag = null;
+  if (!d) return;
+  cancelAnimationFrame(d.raf);
+  if (e.type === 'pointerup' && d.on && pastLineEdge(e)) {
+    void (d.hovered ? Promise.resolve() : hoverLine(d, e.screenX, e.screenY))
+      .then(() => lineDragDrop(d.id, e.screenX, e.screenY))
+      .catch((err: AppError) => toast(err.message));
+  } else if (d.hovered) void lineHide().catch((err: AppError) => void info(`收起晾衣绳失败 kind=${err.kind}`));
+}
+document.addEventListener('pointerup', endLineDrag);
+document.addEventListener('pointercancel', endLineDrag);
+// 拖到一半面板被收起（Esc、快捷键、失焦）：松手事件不会再送到这里，绳子带着影子便签一直不收。这里按取消收尾
+void onPanelHidden(() => {
+  const d = lineDrag;
+  lineDrag = null;
+  if (!d) return;
+  cancelAnimationFrame(d.raf);
+  if (d.hovered) void lineHide().catch((err: AppError) => void info(`收起晾衣绳失败 kind=${err.kind}`));
 });
 
 pinBtn.addEventListener('click', (e) => S.sel !== null && togglePin(S.sel, e.detail !== 0));
@@ -3343,6 +3676,8 @@ for (const a of document.getAnimations()) if (a instanceof CSSTransition) a.fini
 // 列表已渲染好，后端这时才允许面板上屏：启动后网页就绪前按的快捷键 / 托盘 / 首次启动在这里补显示，
 // 用户看到的第一帧就是完整列表，不会先空白再出现
 void frontendReady().catch((e: AppError) => info(`frontend_ready 失败：${e?.message || e}`));
+// 应用是被激活链接拉起来的：那时面板还没订阅事件，这里补取一次
+activateFromLink();
 void document.fonts?.ready.then(() => {
   renderTabs(true);
   moveInd({ instant: true });
