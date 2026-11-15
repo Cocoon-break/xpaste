@@ -1,4 +1,5 @@
 mod assets;
+mod belt;
 mod clipboard;
 mod clock;
 mod commands;
@@ -108,12 +109,13 @@ pub fn run() {
                 Store::open(&data_dir).inspect_err(|e| log::error!("打开数据库失败：{e}"))?;
             let first_run = matches!(store.kv_get("onboarded"), Ok(None));
             let settings = store.load_settings();
-            let (hotkey, shot_hotkey, rec_hotkey, tr_hotkey, line_hotkey, appearance) = (
+            let (hotkey, shot_hotkey, rec_hotkey, tr_hotkey, line_hotkey, belt_hotkey, appearance) = (
                 settings.hotkey.clone(),
                 settings.shot_hotkey.clone(),
                 settings.rec_hotkey.clone(),
                 settings.translate_hotkey.clone(),
                 settings.effective_line_hotkey().to_owned(),
+                settings.effective_belt_hotkey().to_owned(),
                 settings.appearance,
             );
             line::configure(
@@ -149,6 +151,7 @@ pub fn run() {
                 &rec_hotkey,
                 &tr_hotkey,
                 &line_hotkey,
+                &belt_hotkey,
             ) {
                 log::warn!("快捷键注册失败：{e}");
                 // register 只报第一个失败，截图、录屏、翻译、便签是否注册上另查；它们失败只提示，不标记托盘
@@ -221,7 +224,7 @@ pub fn run() {
                     if longshot::key(shortcut) {
                         return;
                     }
-                    let (p, s, r, t, l) = {
+                    let (p, s, r, t, l, b) = {
                         let st = app.state::<AppState>();
                         let s = st.settings();
                         (
@@ -230,9 +233,10 @@ pub fn run() {
                             s.rec_hotkey.clone(),
                             s.translate_hotkey.clone(),
                             s.effective_line_hotkey().to_owned(),
+                            s.effective_belt_hotkey().to_owned(),
                         )
                     };
-                    match hotkey::role_of(shortcut, &p, &s, &r, &t, &l) {
+                    match hotkey::role_of(shortcut, &p, &s, &r, &t, &l, &b) {
                         Some(hotkey::Role::Panel) => {
                             panel::toggle(app, timing.then(now_unix_ms), panel::Trigger::Hotkey)
                         }
@@ -240,6 +244,7 @@ pub fn run() {
                         Some(hotkey::Role::Rec) => hotkey::rec_pressed(app),
                         Some(hotkey::Role::Translate) => hotkey::translate_pressed(app),
                         Some(hotkey::Role::Line) => line::hotkey_pressed(app),
+                        Some(hotkey::Role::Belt) => belt::hotkey_pressed(app),
                         None => {}
                     }
                 })

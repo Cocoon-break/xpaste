@@ -50,6 +50,7 @@ export const settings: Settings = {
   lineEnabled: true,
   lineSide: 'top',
   linePinned: false,
+  beltEnabled: true, beltAuto: false, beltHotkey: 'Alt+Shift+B', beltBackHotkey: 'Alt+Shift+Z',
 };
 
 const byId = (id: number) => RECORDS.find((r) => r.id === id);

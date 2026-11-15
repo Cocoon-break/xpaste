@@ -2669,6 +2669,8 @@ async function submitSettings() {
     shotHotkey: shotKey.pending, shotDir: shotDir.pending, shotSaveCopy: shotSaveCopyIn.checked, longAutoScroll: longAutoIn.checked,
     recHotkey: recKey.pending, recDir: recDir.pending, recSystemAudio: recSystemAudioIn.checked, recMicrophone: recMicIn.checked, recCopy: recCopyIn.checked,
     recQuality: recQualityIn.value, recFps: recFpsIn.value, panelStyle: draftStyle, lineHotkey: lineKey.pending,
+    // 传送带的设置项还没有界面：原样写回
+    beltEnabled: S.settings.beltEnabled, beltAuto: S.settings.beltAuto, beltHotkey: S.settings.beltHotkey, beltBackHotkey: S.settings.beltBackHotkey,
   });
   // 翻译字段和晾衣绳的样式、开关、位置不经 SettingsForm；末尾的 / 由后端去掉。engine 没动过就原样写回（可能是空串）
   Object.assign(s, {

@@ -60,6 +60,7 @@ test('formToSettings 只改表单字段，其余（含外观：点选即保存�
     lineEnabled: true,
     lineSide: 'top',
     linePinned: false,
+    beltEnabled: true, beltAuto: false, beltHotkey: 'Alt+Shift+B', beltBackHotkey: 'Alt+Shift+Z',
   };
   assert.deepEqual(
     formToSettings(base, {
@@ -68,6 +69,7 @@ test('formToSettings 只改表单字段，其余（含外观：点选即保存�
       shotHotkey: 'Alt+Shift+S', shotDir: '/x', shotSaveCopy: false, longAutoScroll: true,
       recHotkey: 'Alt+Shift+T', recDir: '/y', recSystemAudio: true, recMicrophone: true, recCopy: false,
       recQuality: 'small', recFps: '60', panelStyle: 'compact', lineHotkey: 'Alt+Shift+L',
+      beltEnabled: false, beltAuto: true, beltHotkey: 'Alt+Shift+J', beltBackHotkey: 'Alt+Shift+K',
     }),
     {
       hotkey: 'CommandOrControl+Alt+C', retentionDays: null, maxRecords: 1000, ignoredApps: ['a', 'b'], skipSensitive: false,
@@ -83,6 +85,7 @@ test('formToSettings 只改表单字段，其余（含外观：点选即保存�
       lineEnabled: true,
       lineSide: 'top',
       linePinned: false,
+      beltEnabled: false, beltAuto: true, beltHotkey: 'Alt+Shift+J', beltBackHotkey: 'Alt+Shift+K',
     },
   );
 });

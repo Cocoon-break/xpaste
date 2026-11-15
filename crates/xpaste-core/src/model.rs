@@ -175,6 +175,14 @@ pub struct Settings {
     pub line_side: LineSide,
     /// 一直显示晾衣绳：总开关开着时绳子和便签一直留在屏幕上，空白处点击穿透
     pub line_pinned: bool,
+    /// 传送带总开关；关掉后传送带快捷键不注册，队列里的内容留着
+    pub belt_enabled: bool,
+    /// 复制的内容自动放上传送带（否则只在手动放上时入队）
+    pub belt_auto: bool,
+    /// 放上传送带的全局快捷键；空字符串表示不启用
+    pub belt_hotkey: String,
+    /// 退回上一条的全局快捷键；空字符串表示不启用
+    pub belt_back_hotkey: String,
 }
 
 /// 晾衣绳挂的位置
@@ -194,6 +202,15 @@ fn tolerant_line_side<'de, D: serde::Deserializer<'de>>(d: D) -> Result<LineSide
 }
 
 impl Settings {
+    /// 实际该注册的传送带快捷键：总开关关着时为空串（不注册）
+    pub fn effective_belt_hotkey(&self) -> &str {
+        if self.belt_enabled {
+            &self.belt_hotkey
+        } else {
+            ""
+        }
+    }
+
     /// 实际该注册的便签快捷键：总开关关着时为空串（不注册）
     pub fn effective_line_hotkey(&self) -> &str {
         if self.line_enabled {
@@ -283,6 +300,10 @@ impl Default for Settings {
             line_enabled: true,
             line_side: LineSide::Top,
             line_pinned: false,
+            belt_enabled: true,
+            belt_auto: false,
+            belt_hotkey: "Alt+Shift+B".into(),
+            belt_back_hotkey: "Alt+Shift+Z".into(),
         }
     }
 }
@@ -391,6 +412,7 @@ impl Settings {
         }
         // 便签快捷键同理：升级前别的快捷键已用了 Alt+Shift+N 的，读出为不启用
         self.yield_line_hotkey();
+        self.yield_belt_hotkeys();
     }
 
     /// 便签快捷键与别的快捷键冲突时停用它（读出设置时用；不含晾衣绳的版本保存设置时也用，用户看不到这一项）。
@@ -398,6 +420,45 @@ impl Settings {
         if self.line_hotkey_clash().is_some() {
             self.line_hotkey.clear();
         }
+    }
+
+    /// 传送带的两个快捷键与别的快捷键（含便签、彼此）冲突时停用冲突的那个（读出设置时用）。
+    pub fn yield_belt_hotkeys(&mut self) {
+        if self.belt_hotkey_clash(&self.belt_hotkey, false).is_some() {
+            self.belt_hotkey.clear();
+        }
+        if self
+            .belt_hotkey_clash(&self.belt_back_hotkey, true)
+            .is_some()
+        {
+            self.belt_back_hotkey.clear();
+        }
+    }
+
+    /// 传送带的某个快捷键与哪个快捷键是同一组合；`back` 为退回键时还要比放上键，放上键不比退回键（让退回键先让出）。
+    fn belt_hotkey_clash(&self, k: &str, back: bool) -> Option<&'static str> {
+        if k.is_empty() {
+            return None;
+        }
+        let key = hotkey_key(k);
+        [
+            ("唤起", self.hotkey.as_str()),
+            ("截图", self.shot_hotkey.as_str()),
+            (
+                "录屏",
+                if cfg!(target_os = "macos") {
+                    self.rec_hotkey.as_str()
+                } else {
+                    ""
+                },
+            ),
+            ("翻译", self.translate_hotkey.as_str()),
+            ("便签", self.line_hotkey.as_str()),
+            ("传送带", if back { self.belt_hotkey.as_str() } else { "" }),
+        ]
+        .into_iter()
+        .find(|(_, c)| !c.is_empty() && hotkey_key(c) == key)
+        .map(|(name, _)| name)
     }
 
     /// 便签快捷键与哪个快捷键是同一组合（按唤起、截图、录屏、翻译的顺序）；录屏只在 macOS 上比。
@@ -498,6 +559,17 @@ impl Settings {
         }
         if let Some(name) = self.line_hotkey_clash() {
             return fail(&format!("便签快捷键不能与{name}快捷键相同"));
+        }
+        for (label, k, back) in [
+            ("传送带", &self.belt_hotkey, false),
+            ("退回", &self.belt_back_hotkey, true),
+        ] {
+            if !k.is_empty() && !has_modifier(k) {
+                return fail(&format!("{label}快捷键至少需要包含 Mod 或 Alt"));
+            }
+            if let Some(name) = self.belt_hotkey_clash(k, back) {
+                return fail(&format!("{label}快捷键不能与{name}快捷键相同"));
+            }
         }
         if !matches!(self.translate_engine.as_str(), "" | "system" | "openai") {
             return fail("翻译引擎只能是系统翻译或 OpenAI 兼容接口");
@@ -1342,6 +1414,55 @@ mod tests {
             ("Alt+Shift+N", "")
         );
         assert!(dropped.is_empty(), "{dropped:?}");
+    }
+
+    #[test]
+    fn belt_defaults() {
+        let s: Settings = serde_json::from_str(r#"{"maxRecords":1000}"#).unwrap();
+        assert!(s.belt_enabled);
+        assert!(!s.belt_auto);
+        assert_eq!(s.belt_hotkey, "Alt+Shift+B");
+        assert_eq!(s.belt_back_hotkey, "Alt+Shift+Z");
+    }
+
+    #[test]
+    fn belt_hotkey_clash_yields() {
+        let mut s = Settings {
+            belt_hotkey: "Alt+Shift+N".into(),
+            ..Default::default()
+        };
+        s.yield_belt_hotkeys();
+        assert_eq!(s.belt_hotkey, "");
+        assert_eq!(s.belt_back_hotkey, "Alt+Shift+Z");
+        let mut s = Settings {
+            belt_back_hotkey: "Alt+Shift+B".into(),
+            ..Default::default()
+        };
+        s.yield_belt_hotkeys();
+        assert_eq!(s.belt_back_hotkey, "");
+        assert_eq!(s.belt_hotkey, "Alt+Shift+B");
+    }
+
+    #[test]
+    fn belt_back_needs_modifier() {
+        let s = Settings {
+            belt_back_hotkey: "Z".into(),
+            ..Default::default()
+        };
+        assert_eq!(invalid(&s), "退回快捷键至少需要包含 Mod 或 Alt");
+        let s = Settings {
+            belt_hotkey: "B".into(),
+            ..Default::default()
+        };
+        assert_eq!(invalid(&s), "传送带快捷键至少需要包含 Mod 或 Alt");
+    }
+
+    #[test]
+    fn effective_belt_hotkey_off() {
+        let mut s = Settings::default();
+        assert_eq!(s.effective_belt_hotkey(), "Alt+Shift+B");
+        s.belt_enabled = false;
+        assert_eq!(s.effective_belt_hotkey(), "");
     }
 
     #[test]

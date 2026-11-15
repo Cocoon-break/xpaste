@@ -63,6 +63,14 @@ export interface Settings {
   lineSide: LineSide;
   /** 一直显示晾衣绳：空白处点击穿透 */
   linePinned: boolean;
+  /** 传送带总开关 */
+  beltEnabled: boolean;
+  /** 复制的内容自动放上传送带 */
+  beltAuto: boolean;
+  /** 放上传送带的全局快捷键；'' 表示不启用 */
+  beltHotkey: string;
+  /** 退回上一条的全局快捷键；'' 表示不启用 */
+  beltBackHotkey: string;
 }
 
 export type LineSide = 'top' | 'left' | 'right';
@@ -176,6 +184,7 @@ export interface AppError {
     | 'recHotkeyTaken'
     | 'translateHotkeyTaken'
     | 'lineHotkeyTaken'
+    | 'beltHotkeyTaken'
     | 'invalidSettings'
     | 'invalid'
     | 'internal'

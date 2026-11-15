@@ -66,6 +66,10 @@ export type SettingsForm = {
   recFps: string;
   panelStyle: PanelStyle;
   lineHotkey: string;
+  beltEnabled: boolean;
+  beltAuto: boolean;
+  beltHotkey: string;
+  beltBackHotkey: string;
 };
 
 export const formToSettings = (base: Settings, f: SettingsForm): Settings => ({
@@ -95,6 +99,10 @@ export const formToSettings = (base: Settings, f: SettingsForm): Settings => ({
   recFps: Number(f.recFps),
   panelStyle: f.panelStyle,
   lineHotkey: f.lineHotkey,
+  beltEnabled: f.beltEnabled,
+  beltAuto: f.beltAuto,
+  beltHotkey: f.beltHotkey,
+  beltBackHotkey: f.beltBackHotkey,
 });
 
 /** 翻译接口地址（M26 规则 6）：空视为未填；否则必须以 http:// 或 https:// 开头。 */
