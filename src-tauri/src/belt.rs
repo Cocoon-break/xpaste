@@ -192,7 +192,7 @@ fn back_key() -> MutexGuard<'static, Option<String>> {
 }
 
 /// 页面报来的可点区域（窗口内逻辑像素），点击穿透用
-static HITS: Mutex<Vec<Rect>> = Mutex::new(Vec::new());
+pub(crate) static HITS: Mutex<Vec<Rect>> = Mutex::new(Vec::new());
 
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -349,29 +349,20 @@ fn with(app: &AppHandle, f: impl FnOnce(&AppState, &Pro, &mut Runtime, &mut Fx))
     apply(app, fx);
 }
 
-/// 显示带子窗口，不拿键盘（用户在表单里的光标不动）。窗口还没建好时什么也不做。
+/// 显示带子窗口（不拿键盘），收起；窗口的事见 `belt_window`。
 pub fn show(app: &AppHandle) {
-    on_main(app, |app| {
-        if let Some(w) = app.get_webview_window(LABEL)
-            && let Err(e) = crate::trcard::front(app, &w, false)
-        {
-            log::warn!("显示传送带失败：{e}");
-        }
-    });
+    crate::belt_window::show(app);
 }
 
 pub fn hide(app: &AppHandle) {
-    on_main(app, |app| {
-        if let Some(w) = app.get_webview_window(LABEL)
-            && let Err(e) = w.hide()
-        {
-            log::warn!("收起传送带失败：{e}");
-        }
-    });
+    crate::belt_window::hide(app);
 }
 
-/// 启动时调用（只在带 Pro 的构建里）。窗口在第一次显示前由窗口那部分建好；这里目前只记一条日志。
-pub fn start(_app: &AppHandle) {
+/// 启动时调用（只在带 Pro 的构建里）：预建隐藏的窗口。
+pub fn start(app: &AppHandle) {
+    if enabled() {
+        crate::belt_window::prewarm(app);
+    }
     log::info!("传送带就绪");
 }
 

@@ -1575,7 +1575,7 @@ fn take_down(w: &WebviewWindow) {
 /// macOS：`aux` 为 false 时去掉 FullScreenAuxiliary，窗口照样出现在每个普通桌面上，但不进别的应用的全屏空间
 /// （常驻时不盖在全屏视频、演示上面）；平时放下和临时露出来时带上。其余同 `shot::to_overlay_panel`。主线程调用。
 #[allow(deprecated)] // cocoa 已弃用，但 tauri-nspanel 公开的就是它的类型
-fn spaces(app: &AppHandle, aux: bool) {
+pub(crate) fn spaces(app: &AppHandle, aux: bool) {
     #[cfg(target_os = "macos")]
     {
         use tauri_nspanel::ManagerExt;

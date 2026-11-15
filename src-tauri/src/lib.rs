@@ -1,5 +1,6 @@
 mod assets;
 mod belt;
+mod belt_window;
 mod clipboard;
 mod clock;
 mod commands;
