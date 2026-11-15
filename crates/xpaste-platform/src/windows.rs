@@ -1679,7 +1679,7 @@ pub fn accessibility_trusted() -> bool {
 
 thread_local! {
     /// `PasteKeyWatch` 钩子线程上的回调和按键配对状态（只在钩子线程里设置、读写）。
-    static PASTE_CB: OnceCell<Box<dyn Fn()>> = const { OnceCell::new() };
+    static PASTE_CB: OnceCell<Box<dyn Fn(u64)>> = const { OnceCell::new() };
     /// 配对状态，以及 V 是否按着（同一个键连着收到按下、中间没有松开，算连发）
     static PASTE_ARM: Cell<(crate::PasteArm, bool)> = Cell::new(Default::default());
 }
@@ -1690,9 +1690,10 @@ pub struct PasteKeyWatch {
 }
 
 /// 松开 V 时调 `on_paste`，前提是按下 V 那一刻是 Ctrl+V（不带别的修饰键、不是连发），
-/// 而且前台窗口不是 xPaste 自己的。回调在钩子线程上来，要很快返回。钩子装不上时返回 None。
+/// 而且前台窗口不是 xPaste 自己的。参数是按下 V 那一刻的剪切板序号（`change_count`）：
+/// 目标应用按下时就读剪切板，贴出去的是那时的内容。回调在钩子线程上来，要很快返回。钩子装不上时返回 None。
 /// 只判断是不是 Ctrl+V，不记录任何按键。
-pub fn watch_paste_key(on_paste: impl Fn() + Send + Sync + 'static) -> Option<PasteKeyWatch> {
+pub fn watch_paste_key(on_paste: impl Fn(u64) + Send + Sync + 'static) -> Option<PasteKeyWatch> {
     let (ready_tx, ready) = mpsc::channel();
     let thread = thread::Builder::new()
         .name("xpaste-paste-key".into())
@@ -1734,7 +1735,7 @@ extern "system" fn paste_key_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> 
         let info = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
         let is_v = info.vkCode == u32::from(VK_V.0);
         let (mut arm, mut v_held) = PASTE_ARM.get();
-        let mut fired = false;
+        let mut fired = None;
         match wparam.0 as u32 {
             WM_KEYDOWN | WM_SYSKEYDOWN => {
                 let repeat = is_v && v_held;
@@ -1749,7 +1750,7 @@ extern "system" fn paste_key_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> 
                 };
                 // 落在 xPaste 自己窗口里的 V 当作别的键
                 let v = is_v && !repeat && !foreground_is_own();
-                arm.key_down(m, v, repeat, false);
+                arm.key_down(m, v, repeat, false, change_count);
             }
             WM_KEYUP | WM_SYSKEYUP => {
                 v_held &= !is_v;
@@ -1758,10 +1759,10 @@ extern "system" fn paste_key_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> 
             _ => {}
         }
         PASTE_ARM.set((arm, v_held));
-        if fired {
+        if let Some(seq) = fired {
             PASTE_CB.with(|c| {
                 if let Some(f) = c.get() {
-                    f();
+                    f(seq);
                 }
             });
         }

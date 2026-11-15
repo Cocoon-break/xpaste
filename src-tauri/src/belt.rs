@@ -46,7 +46,7 @@ pub enum PasteAction {
     Yielded,
 }
 
-/// 松开粘贴键那一刻的剪切板序号还是写“下一件”时的那个，就算贴出了“下一件”。
+/// 按下粘贴键那一刻的剪切板序号还是写“下一件”时的那个，就算贴出了“下一件”。
 pub fn paste_action(current_seq: u64, belt_seq: u64) -> PasteAction {
     if current_seq == belt_seq {
         PasteAction::Advance
@@ -723,24 +723,23 @@ fn peek_timer(app: &AppHandle, g: u64) {
     });
 }
 
-/// 按键监听的回调（macOS 在主线程，Windows 在钩子线程）：记下松开那一刻的剪切板序号（贴出去的就是它），
-/// 起线程等目标应用读完剪切板再换下一件。
-fn on_paste(app: &AppHandle) {
-    let at_release = xpaste_platform::change_count();
+/// 按键监听的回调（macOS 在主线程，Windows 在钩子线程），松开 V 时来：`at_press` 是按下 V 那一刻的
+/// 剪切板序号（目标应用按下时就读剪切板，贴出去的是它）。只起线程，等目标应用读完剪切板再换下一件。
+fn on_paste(app: &AppHandle, at_press: u64) {
     spawn(app, "belt-paste", move |app| {
         std::thread::sleep(Duration::from_millis(SWAP_MS));
-        pasted(app, at_release);
+        pasted(app, at_press);
     });
 }
 
-fn pasted(app: &AppHandle, at_release: u64) {
+fn pasted(app: &AppHandle, at_press: u64) {
     with(app, |state, _, rt, fx| {
         if !rt.open || rt.belt.items().is_empty() {
             return;
         }
         // 在 RT 里读：读到的变化要么已经 `captured` 过（seen 跟上了），要么之后才 `captured`、会看到 reclaim
         let now = xpaste_platform::change_count();
-        let action = paste_action(at_release, rt.belt_seq);
+        let action = paste_action(at_press, rt.belt_seq);
         let rw = rewrite(&action, now, rt.belt_seq, rt.seen);
         if action == PasteAction::Advance {
             let Some(item) = rt.belt.take_next() else {
@@ -846,7 +845,7 @@ fn sync_watch(app: &AppHandle) {
             }
         }
         let a = app.clone();
-        let watch = xpaste_platform::watch_paste_key(move || on_paste(&a));
+        let watch = xpaste_platform::watch_paste_key(move |seq| on_paste(&a, seq));
         let grant = {
             let mut rt = rt();
             match watch {
@@ -1105,6 +1104,13 @@ mod tests {
         assert_eq!(paste_action(1, 2), PasteAction::Yielded);
         // 剪切板里已经是新的“下一件”，不用重写
         assert_eq!(rewrite(&PasteAction::Yielded, 2, 2, 1), Rewrite::Skip);
+    }
+
+    #[test]
+    fn press_before_swap_released_after_yields() {
+        // 第二次在换件前按下（序号 1）、换件后（belt_seq 成了 2）才松开：目标贴的是第一件，不消耗第二件
+        assert_eq!(paste_action(1, 2), PasteAction::Yielded);
+        assert_eq!(rewrite(&PasteAction::Yielded, 2, 2, 2), Rewrite::Skip);
     }
 
     #[test]

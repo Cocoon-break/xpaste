@@ -209,23 +209,32 @@ pub fn is_paste_chord(m: Mods, key_is_v: bool, repeat: bool, mac: bool) -> bool 
     key_is_v && !repeat && primary && !m.shift && !m.alt
 }
 
-/// 按下与松开的配对：按下 V 那一刻是粘贴组合就记下，松开 V 时算贴出一次。
-/// 中间按了别的键就作废（比如漏掉了松开），连发的按下不改状态。只记一个布尔，不记是哪个键。
+/// 按下与松开的配对：按下 V 那一刻是粘贴组合就记下当时的剪切板序号（目标应用按下时就读剪切板），
+/// 松开 V 时算贴出一次、交出这个序号。中间按了别的键就作废（比如漏掉了松开），连发的按下不改状态。
+/// 只记序号，不记是哪个键。
 #[derive(Clone, Copy, Default)]
 pub(crate) struct PasteArm {
-    armed: bool,
+    armed: Option<u64>,
 }
 
 impl PasteArm {
-    pub(crate) fn key_down(&mut self, m: Mods, key_is_v: bool, repeat: bool, mac: bool) {
+    /// `seq` 只在按下的是粘贴组合时才调，取此刻的剪切板序号。
+    pub(crate) fn key_down(
+        &mut self,
+        m: Mods,
+        key_is_v: bool,
+        repeat: bool,
+        mac: bool,
+        seq: impl FnOnce() -> u64,
+    ) {
         if !repeat {
-            self.armed = is_paste_chord(m, key_is_v, repeat, mac);
+            self.armed = is_paste_chord(m, key_is_v, repeat, mac).then(seq);
         }
     }
 
-    /// 返回这次松开算不算贴出一次。
-    pub(crate) fn key_up(&mut self, key_is_v: bool) -> bool {
-        key_is_v && std::mem::take(&mut self.armed)
+    /// 这次松开算贴出一次时，返回按下那一刻的剪切板序号。
+    pub(crate) fn key_up(&mut self, key_is_v: bool) -> Option<u64> {
+        if key_is_v { self.armed.take() } else { None }
     }
 }
 
@@ -419,17 +428,19 @@ mod tests {
     fn paste_arm_fires_once_on_release_of_v() {
         let cmd = mods(true, false, false, false);
         let mut a = super::PasteArm::default();
-        a.key_down(cmd, true, false, true);
-        // 按住连发不改状态，松开别的键不算
-        a.key_down(cmd, true, true, true);
-        assert!(!a.key_up(false));
-        assert!(a.key_up(true));
-        assert!(!a.key_up(true));
-        // 按下的不是粘贴组合、或中间按了别的键，都作废
-        a.key_down(mods(true, false, true, false), true, false, true);
-        assert!(!a.key_up(true));
-        a.key_down(cmd, true, false, true);
-        a.key_down(cmd, false, false, true);
-        assert!(!a.key_up(true));
+        a.key_down(cmd, true, false, true, || 7);
+        // 按住连发不改状态（序号仍是按下时的 7），松开别的键不算
+        a.key_down(cmd, true, true, true, || 9);
+        assert_eq!(a.key_up(false), None);
+        assert_eq!(a.key_up(true), Some(7));
+        assert_eq!(a.key_up(true), None);
+        // 按下的不是粘贴组合、或中间按了别的键，都作废；不是粘贴组合时不取序号
+        a.key_down(mods(true, false, true, false), true, false, true, || {
+            panic!("不该取序号")
+        });
+        assert_eq!(a.key_up(true), None);
+        a.key_down(cmd, true, false, true, || 7);
+        a.key_down(cmd, false, false, true, || 8);
+        assert_eq!(a.key_up(true), None);
     }
 }

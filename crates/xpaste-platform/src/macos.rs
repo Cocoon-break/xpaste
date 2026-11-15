@@ -1323,10 +1323,11 @@ impl Drop for PasteKeyWatch {
 }
 
 /// 松开 V 时调 `on_paste`，前提是按下 V 那一刻是 ⌘V（不带别的修饰键、不是连发）。
+/// 参数是按下 V 那一刻的剪切板序号（`change_count`）：目标应用按下时就读剪切板，贴出去的是那时的内容。
 /// 全局监听收不到发给 xPaste 自己窗口的事件，所以在 xPaste 里按 ⌘V 不算。
 /// 必须在主线程调，回调也在主线程上来；没有辅助功能权限或不在主线程时返回 None。
 /// 只判断是不是 ⌘V，不记录任何按键。
-pub fn watch_paste_key(on_paste: impl Fn() + Send + Sync + 'static) -> Option<PasteKeyWatch> {
+pub fn watch_paste_key(on_paste: impl Fn(u64) + Send + Sync + 'static) -> Option<PasteKeyWatch> {
     use objc2_app_kit::{NSEvent, NSEventMask, NSEventModifierFlags, NSEventType};
     objc2::MainThreadMarker::new()?;
     if !accessibility_trusted() {
@@ -1346,14 +1347,15 @@ pub fn watch_paste_key(on_paste: impl Fn() + Send + Sync + 'static) -> Option<Pa
                     shift: f.contains(NSEventModifierFlags::Shift),
                     alt: f.contains(NSEventModifierFlags::Option),
                 };
-                arm.borrow_mut().key_down(m, is_v, event.isARepeat(), true);
-                false
+                arm.borrow_mut()
+                    .key_down(m, is_v, event.isARepeat(), true, change_count);
+                None
             }
             NSEventType::KeyUp => arm.borrow_mut().key_up(is_v),
-            _ => false,
+            _ => None,
         };
-        if fired {
-            on_paste();
+        if let Some(seq) = fired {
+            on_paste(seq);
         }
     });
     let token = NSEvent::addGlobalMonitorForEventsMatchingMask_handler(
