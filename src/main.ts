@@ -3260,7 +3260,10 @@ await onLineHangSelected(() => {
 await onBeltPutSelected(() => {
   hotkeyGot = true;
   if (hkOn(beltKey.input)) return beltKey.record(S.settings.beltHotkey);
-  if (hkOn(beltBackKey.input)) return beltBackKey.record(S.settings.beltBackHotkey);
+  if (hkOn(beltBackKey.input)) return beltBackKey.setHelp('退回快捷键不能与传送带快捷键相同', true);
+  if (hkOn(hotkeyIn)) return setHotkeyHelp('不能与传送带快捷键相同', true);
+  const other = hkOpts.find(([f]) => f !== beltKey && hkOn(f.input));
+  if (other) return other[0].setHelp(`${other[1]}快捷键不能与传送带快捷键相同`, true);
   putOnBelt(S.sel);
 });
 // 便签或 Pro 状态变了：重画已挂刻线，设置开着时“Pro”状态行跟着变
@@ -3449,7 +3452,7 @@ function beltOn() {
 }
 // 放上传送带：有多选放多选（按选中的先后），否则放 id（没有就放当前选中的）；面板不收起
 function putOnBelt(id: number | null) {
-  const ids = putOrder(id ?? S.sel, S.multi.size >= 2 ? [...S.multi] : []);
+  const ids = putOrder(id ?? S.sel, [...S.multi]);
   if (ids.length) void beltPut(ids).catch((err: AppError) => toast(err.message));
 }
 // 挂到晾衣绳：绳子放下亮一下；没挂成（重复、挂满、试用结束）的提示在晾衣绳上
