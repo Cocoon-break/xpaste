@@ -35,8 +35,8 @@ const PEEK_CAP: usize = 20;
 const PEEK_HOLD_MS: u64 = 8000;
 /// 贴完以后还能退回的时长
 const GRACE_MS: u64 = 4000;
-/// 贴完以后过这么久收起
-const FINISH_HIDE_MS: u64 = 700;
+/// 贴完以后由页面播完抖动、提示和收起再放手；过了宽限期又过这么久还没放手，后端自己收起
+const FINISH_SAFETY_MS: u64 = 2500;
 
 #[derive(Debug, PartialEq)]
 pub enum PasteAction {
@@ -138,7 +138,7 @@ struct Runtime {
     copies: Vec<(i64, i64)>,
     /// 贴完以后可以退回的截止时刻
     grace_until: Option<Instant>,
-    /// 贴完了、还没收起（`FINISH_HIDE_MS` 之内）
+    /// 贴完了、页面还没放手（`release`）：带子在页面上已经沉下去，后端仍算开着，宽限期里能退回
     finishing: bool,
     /// 收起计时、探出计时的代数：期间又有变化时旧的计时作废
     round: u64,
@@ -266,6 +266,9 @@ struct Fx {
     finished: Option<u32>,
     toasts: Vec<Toast>,
     show: bool,
+    /// 收起：页面播完收起、等提示条消失后放手（`release`）才藏窗口，超时自己藏
+    linger: bool,
+    /// 马上藏窗口
     hide: bool,
     timer: Option<Timer>,
 }
@@ -308,7 +311,12 @@ fn snapshot(
 }
 
 /// 放锁后做 `fx` 里攒下的事，再让按键监听和退回快捷键跟上带子此刻的状态。不要在持有 `RT` 时调用。
-fn apply(app: &AppHandle, fx: Fx) {
+fn apply(app: &AppHandle, mut fx: Fx) {
+    // 带子收着时的提示条（试用结束、已清空）：先把窗口显示出来，提示消失后页面放手
+    if !fx.toasts.is_empty() && !fx.hide && closed() {
+        fx.show = true;
+        fx.linger = true;
+    }
     for t in fx.toasts {
         emit(app, BELT_TOAST, t);
     }
@@ -320,6 +328,8 @@ fn apply(app: &AppHandle, fx: Fx) {
     }
     if fx.hide {
         hide(app);
+    } else if fx.linger {
+        crate::belt_window::linger(app);
     }
     match fx.timer {
         Some(Timer::Finish(g)) => spawn(app, "belt-finish", move |app| finish_timer(app, g)),
@@ -356,6 +366,51 @@ pub fn show(app: &AppHandle) {
 
 pub fn hide(app: &AppHandle) {
     crate::belt_window::hide(app);
+}
+
+/// 带子收着、也没探出：窗口该藏起来了
+pub fn closed() -> bool {
+    let rt = rt();
+    !rt.open && !rt.peek
+}
+
+/// 页面放手时怎么办
+#[derive(Debug, PartialEq)]
+enum Release {
+    /// 带子开着或探出着（收起途中又打开了）：不理
+    Ignore,
+    Hide,
+    /// 贴完的带子页面已经沉下去：这时才算收起，再藏窗口
+    Collapse,
+}
+
+fn release_action(open: bool, peek: bool, finishing: bool) -> Release {
+    if finishing {
+        Release::Collapse
+    } else if open || peek {
+        Release::Ignore
+    } else {
+        Release::Hide
+    }
+}
+
+/// 页面播完收起、提示条也消失了：带子仍收着就藏窗口。
+pub fn release(app: &AppHandle) {
+    with(app, |_, _, rt, fx| {
+        match release_action(rt.open, rt.peek, rt.finishing) {
+            Release::Ignore => return,
+            Release::Collapse => collapse(rt, fx),
+            Release::Hide => {}
+        }
+        fx.hide = true;
+    });
+}
+
+/// 贴完以后收起：剪切板留着最后贴出的那件，宽限期还没过的话退回快捷键还在。
+fn collapse(rt: &mut Runtime, fx: &mut Fx) {
+    rt.finishing = false;
+    rt.open = false;
+    fx.changed(Cause::Other, None);
 }
 
 /// 启动时调用（只在带 Pro 的构建里）：预建隐藏的窗口。
@@ -474,7 +529,7 @@ fn close(rt: &mut Runtime, fx: &mut Fx, undo: bool) {
     rt.written = None;
     rt.removed = None;
     rt.round += 1;
-    fx.hide = true;
+    fx.linger = true;
     fx.changed(Cause::Clear, None);
     log::info!("传送带 收起 清空 {n} 件");
 }
@@ -707,7 +762,7 @@ fn peek_timer(app: &AppHandle, g: u64) {
             rt.peek = false;
             rt.peek_count = 0;
             rt.copies.clear();
-            fx.hide = true;
+            fx.linger = true;
             fx.changed(Cause::Other, None);
             log::info!("传送带 探出没理会，缩回");
         }
@@ -754,7 +809,8 @@ fn pasted(app: &AppHandle, at_press: u64) {
     });
 }
 
-/// 贴完最后一件：剪切板留着它，提示可以退回，过一会儿收起；宽限期里退回快捷键还在。
+/// 贴完最后一件：剪切板留着它，提示可以退回；页面抖一下、提示、沉下去以后放手（`release`）才算收起。
+/// 宽限期里退回快捷键还在。
 fn finish(rt: &mut Runtime, fx: &mut Fx) {
     rt.finishing = true;
     rt.round += 1;
@@ -766,22 +822,22 @@ fn finish(rt: &mut Runtime, fx: &mut Fx) {
     log::info!("传送带 贴完 {} 件", rt.pasted);
 }
 
+/// 宽限期过了忘掉退回栈；再过一会儿页面还没放手（页面卡住了），后端自己收起。
 fn finish_timer(app: &AppHandle, g: u64) {
-    std::thread::sleep(Duration::from_millis(FINISH_HIDE_MS));
+    std::thread::sleep(Duration::from_millis(GRACE_MS));
     with(app, |_, _, rt, fx| {
-        if rt.finishing && rt.round == g {
-            rt.finishing = false;
-            rt.open = false;
-            fx.hide = true;
-            fx.changed(Cause::Other, None);
-        }
-    });
-    std::thread::sleep(Duration::from_millis(GRACE_MS - FINISH_HIDE_MS));
-    with(app, |_, _, rt, fx| {
-        if !rt.open && rt.grace_until.is_some_and(|t| Instant::now() >= t) {
+        if (!rt.open || rt.finishing) && rt.grace_until.is_some_and(|t| Instant::now() >= t) {
             rt.grace_until = None;
             rt.belt.forget_done();
             fx.changed(Cause::Other, None);
+        }
+    });
+    std::thread::sleep(Duration::from_millis(FINISH_SAFETY_MS));
+    with(app, |_, _, rt, fx| {
+        if rt.finishing && rt.round == g {
+            log::info!("传送带 页面没放手，后端收起");
+            collapse(rt, fx);
+            fx.hide = true;
         }
     });
 }
@@ -910,7 +966,11 @@ pub fn ready(app: &AppHandle) {
     emit(app, BELT_CHANGED, state_now(app));
 }
 
+/// 窗口藏着时不收：藏起以后才到的旧报告不能把点击区域放回去（显示后页面会重报）
 pub fn set_hits(rects: Vec<Rect>) {
+    if !crate::belt_window::shown() {
+        return;
+    }
     *HITS.lock().unwrap_or_else(PoisonError::into_inner) = rects;
 }
 
@@ -1065,6 +1125,15 @@ mod tests {
     fn yields_after_foreign_write() {
         // 面板 Enter、截图复制、复制密码以后
         assert_eq!(paste_action(8, 7), PasteAction::Yielded);
+    }
+
+    #[test]
+    fn release_ignored_while_open_or_peeking() {
+        assert_eq!(release_action(true, false, false), Release::Ignore);
+        assert_eq!(release_action(false, true, false), Release::Ignore);
+        assert_eq!(release_action(false, false, false), Release::Hide);
+        // 贴完以后后端还算开着，页面放手时才收起
+        assert_eq!(release_action(true, false, true), Release::Collapse);
     }
 
     #[test]

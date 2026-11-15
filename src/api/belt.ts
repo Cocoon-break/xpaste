@@ -2,6 +2,7 @@
 // 面板用 beltPut；其余命令和 belt-* 事件给传送带页面用。
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import type { Pro } from './line';
 import type { Kind } from './types';
 
@@ -57,9 +58,15 @@ export const beltClose = () => invoke<void>('belt_close');
 export const beltUndoClear = () => invoke<void>('belt_undo_clear');
 /** 探出时点了“开始” */
 export const beltStart = () => invoke<void>('belt_start');
+/** 收起的动效播完、提示条也消失了：带子仍收着时后端藏窗口，又打开了就不理。不调的话后端过 5 s 自己藏 */
+export const beltRelease = () => invoke<void>('belt_release');
 
 /** 广播：面板也要知道 */
 export const onBeltChanged = (cb: (s: BeltState) => void): Promise<UnlistenFn> =>
   listen<BeltState>('belt-changed', (e) => cb(e.payload));
+/** 带子收着时也会发：后端先显示窗口，提示消失后页面调 beltRelease */
 export const onBeltToast = (cb: (t: BeltToast) => void): Promise<UnlistenFn> =>
   listen<BeltToast>('belt-toast', (e) => cb(e.payload));
+/** 窗口刚显示出来（只发给传送带窗口）：藏起时后端清掉了点击区域，要重报 */
+export const onBeltShown = (cb: () => void): Promise<UnlistenFn> =>
+  listen('belt-shown', () => cb(), { target: getCurrentWindow().label });

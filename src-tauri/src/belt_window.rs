@@ -7,6 +7,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use crate::belt::{HITS, LABEL};
+use crate::events::{BELT_SHOWN, emit_to};
 use crate::line::{hit_test, pass_through};
 use crate::panel::{Rect, on_main};
 
@@ -19,6 +20,8 @@ pub const TOP_ROOM: f64 = 96.0;
 /// 带身底边离工作区底边
 const BOTTOM_GAP: f64 = 16.0;
 const TICK: Duration = Duration::from_millis(16);
+/// 要收起以后等页面放手（`belt_release`）最多这么久，过了就自己藏
+const RELEASE_SAFETY: Duration = Duration::from_secs(5);
 
 /// 窗口矩形（逻辑像素）：工作区里水平居中，宽 min(800, 工作区宽 × 0.84)，带身底边在工作区底边上方 16 px。
 pub fn belt_rect(work: Rect) -> Rect {
@@ -37,6 +40,8 @@ static SHOWN: AtomicBool = AtomicBool::new(false);
 static RUNNING: AtomicBool = AtomicBool::new(false);
 /// 每次显示加一：指针线程发现变了就忘掉上次设下的点击穿透，按光标重新设
 static GEN: AtomicU64 = AtomicU64::new(0);
+/// 每次要收起加一：超时藏窗口前看一眼，之后又要收起过的话这次作废
+static LINGER: AtomicU64 = AtomicU64::new(0);
 /// 窗口左上角和换成逻辑像素要除的系数，都在 `pointer_position` 的坐标空间里
 /// （macOS 是点，系数 1；Windows 是物理像素，系数为所在屏缩放）
 static FRAME: Mutex<((f64, f64), f64)> = Mutex::new(((0.0, 0.0), 1.0));
@@ -116,7 +121,34 @@ pub fn show(app: &AppHandle) {
         if !RUNNING.swap(true, Ordering::SeqCst) {
             spawn_pointer(app);
         }
+        // 藏起时清掉了点击区域，让页面重报
+        emit_to(app, LABEL, BELT_SHOWN, ());
     });
+}
+
+/// 带子窗口在屏上（含收起后等页面放手的那一会儿）
+pub fn shown() -> bool {
+    SHOWN.load(Ordering::SeqCst)
+}
+
+/// 带子要收起：窗口先留着，让页面播完收起、等提示条消失后放手（`belt::release`）再藏。
+/// 页面一直不放手时过 `RELEASE_SAFETY` 自己藏，那时又打开、探出了就不藏。
+pub fn linger(app: &AppHandle) {
+    let g = LINGER.fetch_add(1, Ordering::SeqCst) + 1;
+    let a = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("belt-linger".into())
+        .spawn(move || {
+            std::thread::sleep(RELEASE_SAFETY);
+            if LINGER.load(Ordering::SeqCst) == g && crate::belt::closed() && shown() {
+                log::info!("传送带 页面没放手，超时收起窗口");
+                hide(&a);
+            }
+        });
+    if let Err(e) = spawned {
+        log::warn!("传送带收起计时线程启动失败：{e}");
+        hide(app);
+    }
 }
 
 pub fn hide(app: &AppHandle) {

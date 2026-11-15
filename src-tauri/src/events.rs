@@ -52,10 +52,12 @@ pub const LINE_REMIND: &str = "line-remind";
 
 /// 传送带的状态变了，载荷是完整的 `belt::BeltState`（`cause` 说明是哪种变化，页面据此挑动效）。广播：面板也要知道。
 pub const BELT_CHANGED: &str = "belt-changed";
-/// 传送带的提示条，载荷 `belt::Toast`：`{ text, actions, id? }`。广播：带子收着时面板也能显示。
+/// 传送带的提示条，载荷 `belt::Toast`：`{ text, actions, id? }`。广播。带子收着时后端先显示窗口，提示消失后页面放手再藏。
 pub const BELT_TOAST: &str = "belt-toast";
 /// 传送带快捷键按下时面板在屏上且拿着键盘：只发给 `panel`，面板把选中的记录放上带子。
 pub const BELT_PUT_SELECTED: &str = "belt-put-selected";
+/// 传送带窗口刚显示出来，只发给 `belt`：无载荷。藏起时点击区域清掉了，页面据此重报。
+pub const BELT_SHOWN: &str = "belt-shown";
 
 /// 冻结完成，发给每块屏的遮罩 `shot-<i>`（载荷见 `shot::BeginPayload`）。
 pub const SHOT_BEGIN: &str = "shot-begin";

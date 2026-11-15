@@ -446,7 +446,8 @@ pub fn run() {
             commands::belt::belt_back,
             commands::belt::belt_close,
             commands::belt::belt_undo_clear,
-            commands::belt::belt_start
+            commands::belt::belt_start,
+            commands::belt::belt_release
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

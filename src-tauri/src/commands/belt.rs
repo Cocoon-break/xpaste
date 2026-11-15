@@ -68,6 +68,12 @@ pub fn belt_undo_clear(app: AppHandle) {
     belt::undo_clear(&app);
 }
 
+/// 页面播完收起、提示条也消失了：带子仍收着就藏窗口
+#[tauri::command(async)]
+pub fn belt_release(app: AppHandle) {
+    belt::release(&app);
+}
+
 /// 探出时点了“开始”
 #[tauri::command(async)]
 pub fn belt_start(app: AppHandle) {
