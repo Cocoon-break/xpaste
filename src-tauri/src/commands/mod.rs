@@ -1,3 +1,4 @@
+pub mod belt;
 pub mod line;
 pub mod panel;
 pub mod records;

@@ -50,6 +50,13 @@ pub const LINE_POINTER: &str = "line-pointer";
 /// 便签的提醒到了，只发给 `line`：`{ id }`，每张到期的发一次，同时放下绳子（`line-show { how: "remind" }`，经主线程发出，通常比它晚到，先后不保证，页面不依赖顺序）；页面让那张高亮。
 pub const LINE_REMIND: &str = "line-remind";
 
+/// 传送带的状态变了，载荷是完整的 `belt::BeltState`（`cause` 说明是哪种变化，页面据此挑动效）。广播：面板也要知道。
+pub const BELT_CHANGED: &str = "belt-changed";
+/// 传送带的提示条，载荷 `belt::Toast`：`{ text, actions, id? }`。广播：带子收着时面板也能显示。
+pub const BELT_TOAST: &str = "belt-toast";
+/// 传送带快捷键按下时面板在屏上且拿着键盘：只发给 `panel`，面板把选中的记录放上带子。
+pub const BELT_PUT_SELECTED: &str = "belt-put-selected";
+
 /// 冻结完成，发给每块屏的遮罩 `shot-<i>`（载荷见 `shot::BeginPayload`）。
 pub const SHOT_BEGIN: &str = "shot-begin";
 /// 截图已结束，发给每块屏的遮罩；载荷是结束的那一次的代数，遮罩据此放掉冻结帧（M23 规则 11）。

@@ -109,7 +109,7 @@ pub fn setup_windows(app: &tauri::App) {
 }
 
 /// 逻辑像素的矩形区域。
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize)]
 pub struct Rect {
     pub x: f64,
     pub y: f64,

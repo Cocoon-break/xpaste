@@ -712,8 +712,8 @@ pub fn set_downloading(app: &AppHandle, on: bool) {
 }
 
 /// 复制译文：按普通写入写纯文本，进历史（同截图卡片，M26 规则 19）。
-pub fn copy(text: &str) -> Result<(), AppError> {
-    crate::clipboard::write_text(text, "trcard 译文")?;
+pub fn copy(state: &AppState, text: &str) -> Result<(), AppError> {
+    crate::clipboard::write_text(state, text, "trcard 译文")?;
     log::info!("trcard 复制译文 {} 字", text.chars().count());
     Ok(())
 }

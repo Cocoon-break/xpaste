@@ -589,8 +589,8 @@ pub async fn trcard_translate(
 
 /// 划词卡片“复制译文”：普通写入剪切板，进历史。
 #[tauri::command(async)]
-pub fn trcard_copy(text: String) -> Result<(), AppError> {
-    crate::trcard::copy(&text)
+pub fn trcard_copy(state: tauri::State<'_, AppState>, text: String) -> Result<(), AppError> {
+    crate::trcard::copy(&state, &text)
 }
 
 /// 关闭划词卡片（Esc、复制后、提示到时）：中止进行中的请求，键盘交还原处。不是当前的 `seq` 时忽略。

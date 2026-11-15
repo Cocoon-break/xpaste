@@ -123,6 +123,7 @@ pub fn run() {
                 settings.line_side,
                 settings.line_pinned,
             );
+            let (belt_on, belt_auto) = (settings.belt_enabled, settings.belt_auto);
             let enrich = enrich::start(app.handle().clone());
             let ocr = ocr::start(app.handle().clone());
             app.manage(AppState::new(
@@ -154,21 +155,24 @@ pub fn run() {
                 &belt_hotkey,
             ) {
                 log::warn!("快捷键注册失败：{e}");
-                // register 只报第一个失败，截图、录屏、翻译、便签是否注册上另查；它们失败只提示，不标记托盘
+                // register 只报第一个失败，截图、录屏、翻译、便签、传送带是否注册上另查；它们失败只提示，不标记托盘
                 let panel_failed = matches!(e, error::AppError::HotkeyTaken);
-                let (shot_failed, rec_failed, tr_failed, line_failed) = hotkey::unregistered(
-                    app.handle(),
-                    &shot_hotkey,
-                    &rec_hotkey,
-                    &tr_hotkey,
-                    &line_hotkey,
-                );
+                let (shot_failed, rec_failed, tr_failed, line_failed, belt_failed) =
+                    hotkey::unregistered(
+                        app.handle(),
+                        &shot_hotkey,
+                        &rec_hotkey,
+                        &tr_hotkey,
+                        &line_hotkey,
+                        &belt_hotkey,
+                    );
                 if let Some(body) = hotkey::failure_notice(
                     panel_failed,
                     shot_failed,
                     rec_failed,
                     tr_failed,
                     line_failed,
+                    belt_failed,
                 ) {
                     notify(app.handle(), &body);
                 }
@@ -179,6 +183,10 @@ pub fn run() {
             clipboard::start(app.handle().clone());
             shot::prewarm(app.handle());
             trcard::prewarm(app.handle());
+            belt::configure(app.handle(), belt_on, belt_auto);
+            if crate::belt::enabled() {
+                belt::start(app.handle());
+            }
             if crate::line::enabled() {
                 line::start(app.handle());
                 #[cfg(debug_assertions)]
@@ -222,6 +230,10 @@ pub fn run() {
                     }
                     // 长截图期间临时注册的回车、Esc（M23 规则 13）
                     if longshot::key(shortcut) {
+                        return;
+                    }
+                    // 传送带开着或刚贴完时临时注册的退回快捷键
+                    if belt::back_pressed(app, shortcut) {
                         return;
                     }
                     let (p, s, r, t, l, b) = {
@@ -420,7 +432,20 @@ pub fn run() {
             commands::line::pro_unbind,
             commands::line::pro_deactivate,
             commands::line::pro_buy,
-            commands::line::pro_take_link
+            commands::line::pro_take_link,
+            commands::belt::belt_state,
+            commands::belt::belt_ready,
+            commands::belt::belt_hits,
+            commands::belt::belt_put,
+            commands::belt::belt_pick,
+            commands::belt::belt_reorder,
+            commands::belt::belt_remove,
+            commands::belt::belt_undo_remove,
+            commands::belt::belt_split,
+            commands::belt::belt_back,
+            commands::belt::belt_close,
+            commands::belt::belt_undo_clear,
+            commands::belt::belt_start
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

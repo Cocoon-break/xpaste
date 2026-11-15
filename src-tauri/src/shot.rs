@@ -1120,7 +1120,7 @@ fn run_action(
 ) -> Result<ShotOutcome, AppError> {
     Ok(match action {
         Action::Copy => {
-            copy_png(png)?;
+            copy_png(app, png)?;
             ShotOutcome {
                 action: "copy",
                 chars: None,
@@ -1150,14 +1150,9 @@ fn run_action(
 }
 
 /// 写 PNG 到剪切板，不标记为自身写入：监听器照常把它作为图片记录入库（M23 规则 7、M01 规则 5）。
-pub(crate) fn copy_png(png: Vec<u8>) -> Result<(), AppError> {
-    let bytes = png.len();
-    xpaste_platform::write(&xpaste_platform::png_flavors(png))
-        .map(drop)
-        .map_err(|e| {
-            log::warn!("截图写剪切板失败 {bytes} 字节：{e}");
-            AppError::ClipboardWrite
-        })
+pub(crate) fn copy_png(app: &AppHandle, png: Vec<u8>) -> Result<(), AppError> {
+    let state = app.state::<AppState>();
+    crate::clipboard::write_own(&state, &xpaste_platform::png_flavors(png), "截图")
 }
 
 /// 保存到截图文件夹；“保存截图时同时复制”开着时也写剪切板。截图与贴图共用。
@@ -1178,7 +1173,7 @@ fn save(app: &AppHandle, png: Vec<u8>) -> Result<ShotOutcome, AppError> {
     let stamp = xpaste_core::capture::local_stamp(crate::clock::now_ms());
     let name = write_unique(&dir, &stamp, &png)?;
     // 文件已存好，复制失败不算整次失败（已记日志），提示条按“已保存”显示
-    let copied = also_copy && copy_png(png).is_ok();
+    let copied = also_copy && copy_png(app, png).is_ok();
     Ok(ShotOutcome {
         action: "save",
         chars: None,
@@ -1223,7 +1218,7 @@ fn ocr(app: &AppHandle, generation: u64, png: Vec<u8>) -> Result<ShotOutcome, Ap
     }
     if let Some(text) = &text {
         // 不经过 write_marked：同“复制截图”，要进历史
-        crate::clipboard::write_text(text, "识别文字")?;
+        crate::clipboard::write_text(&app.state::<AppState>(), text, "识别文字")?;
     }
     Ok(ShotOutcome {
         action: "ocr",
@@ -1336,7 +1331,7 @@ pub fn copy_text(app: &AppHandle, generation: u64, text: &str) -> Result<(), App
     if !session(app).is_current(generation) {
         return Err(AppError::Invalid("截图已结束".into()));
     }
-    crate::clipboard::write_text(text, "译文")?;
+    crate::clipboard::write_text(&app.state::<AppState>(), text, "译文")?;
     log::info!("shot 复制译文 {} 字", text.chars().count());
     enter_toast(app, generation);
     Ok(())
@@ -1557,7 +1552,7 @@ fn pin_shrink(side: f64, scale: f64) -> f64 {
 
 /// 贴图右键“复制”：原图写剪切板，进入历史（同截图的复制）。
 pub fn pin_copy(app: &AppHandle, w: &WebviewWindow) -> Result<ShotOutcome, AppError> {
-    copy_png(std::fs::read(pin_path(app, pin_n(w)?))?)?;
+    copy_png(app, std::fs::read(pin_path(app, pin_n(w)?))?)?;
     Ok(ShotOutcome {
         action: "copy",
         chars: None,

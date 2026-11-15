@@ -294,6 +294,8 @@ pub fn commit_settings(
     };
     // 只打开了开关、便签快捷键没改：它被占用时前四个都已注册上（按顺序取第一个失败），照样保存，走“没注册上”的提示
     let line_switch_only = changed.contains(&"lineEnabled") && !changed.contains(&"lineHotkey");
+    // 传送带同理：它排在最后，被占用时前面的都已注册上
+    let belt_switch_only = changed.contains(&"beltEnabled") && !changed.contains(&"beltHotkey");
     if hotkey_changed
         && let Err(e) = register(
             &settings.hotkey,
@@ -304,6 +306,7 @@ pub fn commit_settings(
             settings.effective_belt_hotkey(),
         )
         && !(line_switch_only && matches!(e, AppError::LineHotkeyTaken))
+        && !(belt_switch_only && matches!(e, AppError::BeltHotkeyTaken))
     {
         restore(&mut register);
         return Err(e);
@@ -331,6 +334,10 @@ pub fn save_settings(
         settings.effective_line_hotkey().to_owned(),
         settings.effective_belt_hotkey().to_owned(),
     );
+    let (belt_on, belt_auto) = {
+        let s = state.settings();
+        (s.belt_enabled, s.belt_auto)
+    };
     let (appearance, launch, ocr_on, upd_on) = (
         settings.appearance,
         settings.launch_at_login,
@@ -339,14 +346,23 @@ pub fn save_settings(
     );
     let changed = commit_settings(&state, settings, |p, s, r, t, l, b| {
         crate::hotkey::register(&app, p, s, r, t, l, b)
-    })?;
+    })
+    // 注册失败时 register 恢复了旧的快捷键，传送带开着的话把退回快捷键也补回来
+    .inspect_err(|_| crate::belt::configure(&app, belt_on, belt_auto))?;
     // 快捷键改了必为 Register，与 commit_settings 内一致；没改时只决定是否尽力重试
-    let (shot_missing, rec_missing, tr_missing, line_missing) =
-        crate::hotkey::unregistered(&app, &shot_hotkey, &rec_hotkey, &tr_hotkey, &line_hotkey);
+    let (shot_missing, rec_missing, tr_missing, line_missing, belt_missing) =
+        crate::hotkey::unregistered(
+            &app,
+            &shot_hotkey,
+            &rec_hotkey,
+            &tr_hotkey,
+            &line_hotkey,
+            &belt_hotkey,
+        );
     let action = hotkey_action(
         hotkeys_changed(&changed),
         crate::tray::hotkey_failed(),
-        shot_missing || rec_missing || tr_missing || line_missing,
+        shot_missing || rec_missing || tr_missing || line_missing || belt_missing,
     );
     log::info!("设置已保存 changed=[{}]", changed.join(", "));
     // 设置已持久化并生效：以下步骤失败不回滚、不算保存失败（都只记日志）
@@ -378,6 +394,14 @@ pub fn save_settings(
             }
         }
         HotkeyAction::None => {}
+    }
+    // 传送带：总开关关掉时直接清空收起；register 注销过全部快捷键时补回退回快捷键
+    {
+        let (on, auto) = {
+            let s = state.settings();
+            (s.belt_enabled, s.belt_auto)
+        };
+        crate::belt::configure(&app, on, auto);
     }
     // 开关、位置与一直显示先生效，再收起或唤醒；设置锁只在取值时短暂持有
     // 改位置、改一直显示后的放下或收起：等页面拿到新的位置和 pinned 之后再做
@@ -943,25 +967,29 @@ pub struct HotkeyStatus {
     rec: bool,
     translate: bool,
     line: bool,
+    belt: bool,
 }
 
 #[tauri::command]
 pub fn hotkey_status(app: AppHandle, state: State<'_, AppState>) -> HotkeyStatus {
-    let (shot, rec, tr, line) = {
+    let (shot, rec, tr, line, belt) = {
         let s = state.settings();
         (
             s.shot_hotkey.clone(),
             s.rec_hotkey.clone(),
             s.translate_hotkey.clone(),
             s.effective_line_hotkey().to_owned(),
+            s.effective_belt_hotkey().to_owned(),
         )
     };
-    let (shot, rec, translate, line) = crate::hotkey::unregistered(&app, &shot, &rec, &tr, &line);
+    let (shot, rec, translate, line, belt) =
+        crate::hotkey::unregistered(&app, &shot, &rec, &tr, &line, &belt);
     HotkeyStatus {
         panel: crate::tray::hotkey_failed(),
         shot,
         rec,
         translate,
         line,
+        belt,
     }
 }

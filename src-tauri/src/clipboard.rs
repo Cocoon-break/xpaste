@@ -6,10 +6,11 @@ use std::sync::atomic::Ordering;
 
 use tauri::{AppHandle, Manager};
 use xpaste_core::capture::{self, Outcome};
-use xpaste_core::{Kind, Snapshot, detect};
+use xpaste_core::{Flavor, Kind, Snapshot, detect};
 
 use crate::clock::now_ms;
 use crate::enrich::{Job, icon_path};
+use crate::error::AppError;
 use crate::events::{RECORD_ADDED, RECORD_UPDATED, emit_removed, emit_summary};
 use crate::state::AppState;
 
@@ -22,6 +23,8 @@ pub fn is_self_write(seq: u64, last_write: u64, writing: bool) -> bool {
 
 pub fn start(app: AppHandle) {
     xpaste_platform::watch(move |seq| {
+        // 传送带要看到每一次变化（含自身写入、不进历史的复制），带子没开时立即返回
+        crate::belt::on_change(&app, seq);
         let state = app.state::<AppState>();
         if is_self_write(
             seq,
@@ -57,7 +60,7 @@ pub fn start(app: AppHandle) {
                     s.sensitive,
                     source
                 );
-                ingest(&app, s);
+                ingest(&app, s, seq);
             }
         }
     });
@@ -81,7 +84,8 @@ fn pdf_texts(paths: &[std::path::PathBuf]) -> Vec<String> {
     out
 }
 
-fn ingest(app: &AppHandle, mut snap: Snapshot) {
+/// `seq`：这次变化的剪切板序号，传送带据此认出 xPaste 自己按普通写入写的内容。
+fn ingest(app: &AppHandle, mut snap: Snapshot, seq: u64) {
     let state = app.state::<AppState>();
     // process 会消耗快照，先记下补全任务要用的信息
     let kind = detect::kind(&snap);
@@ -110,6 +114,7 @@ fn ingest(app: &AppHandle, mut snap: Snapshot) {
             log::info!("记录更新 id={id}");
             emit_summary(app, RECORD_UPDATED, id);
             emit_removed(app, &removed);
+            crate::belt::on_recorded(app, id, kind, seq);
             // 再次复制还没识别的图片（例如补识别关着）：插队识别，已识别的由识别线程丢弃
             if kind == Kind::Image || ocr_files {
                 state.ocr.push_front(id);
@@ -119,6 +124,7 @@ fn ingest(app: &AppHandle, mut snap: Snapshot) {
             log::info!("记录新增 id={id}");
             emit_summary(app, RECORD_ADDED, id);
             emit_removed(app, &removed);
+            crate::belt::on_recorded(app, id, kind, seq);
             enqueue_followups(app, id, kind, first_path, ocr_files);
             if let Some(app_id) = source
                 && !icon_path(&state.data_dir, &app_id).exists()
@@ -163,19 +169,38 @@ pub fn enqueue_followups(
     }
 }
 
-/// 按普通写入写纯文本（不打自身写入标记），监听器把它作为一条文本记录收进历史：截图识别文字、复制译文用。
-/// 失败时日志只记 `what` 与字数，报“写剪切板失败”。
-pub fn write_text(text: &str, what: &str) -> Result<(), crate::error::AppError> {
-    xpaste_platform::write(&[xpaste_core::text_flavor(text)]).map_err(|e| {
-        log::warn!("{what}写剪切板失败 {} 字：{e}", text.chars().count());
-        crate::error::AppError::ClipboardWrite
+/// 按普通写入写纯文本：截图识别文字、复制译文用，见 `write_own`。
+pub fn write_text(state: &AppState, text: &str, what: &str) -> Result<(), AppError> {
+    write_own(state, &[xpaste_core::text_flavor(text)], what)
+}
+
+/// 按普通写入写剪切板（不打自身写入标记）：监听器照常把它收进历史（截图复制、识别文字、译文、录屏复制）。
+/// 写入后的序号记进 `own_write_seq`，传送带据此不把它收上带子、只让出一次。
+/// 失败时日志只记 `what` 与字节数，报“写剪切板失败”。
+pub fn write_own(state: &AppState, flavors: &[Flavor], what: &str) -> Result<(), AppError> {
+    write_own_via(state, flavors, what, xpaste_platform::write)
+}
+
+fn write_own_via(
+    state: &AppState,
+    flavors: &[Flavor],
+    what: &str,
+    write: impl FnOnce(&[Flavor]) -> Result<u64, xpaste_platform::PlatformError>,
+) -> Result<(), AppError> {
+    let bytes: usize = flavors.iter().map(|f| f.data.len()).sum();
+    let seq = write(flavors).map_err(|e| {
+        log::warn!("{what}写剪切板失败 {bytes} 字节：{e}");
+        AppError::ClipboardWrite
     })?;
+    state.own_write_seq.store(seq, Ordering::SeqCst);
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::is_self_write;
+    use super::{is_self_write, write_own_via};
+    use crate::state::AppState;
+    use std::sync::atomic::Ordering;
 
     #[test]
     fn skips_while_writing_or_on_matching_seq() {
@@ -187,5 +212,19 @@ mod tests {
     fn never_written_sentinel_does_not_match_seq_zero() {
         assert!(!is_self_write(0, u64::MAX, false));
         assert!(!is_self_write(8, 7, false));
+    }
+
+    #[test]
+    fn write_own_records_seq() {
+        let state = AppState::for_test();
+        write_own_via(
+            &state,
+            &[xpaste_core::text_flavor("译文")],
+            "测试",
+            |_| Ok(11),
+        )
+        .unwrap();
+        assert_eq!(state.own_write_seq.load(Ordering::SeqCst), 11);
+        assert_eq!(state.last_write_seq.load(Ordering::SeqCst), u64::MAX);
     }
 }

@@ -503,7 +503,7 @@ fn run(
     let t = Instant::now();
     let (notice, ok) = match encode(w, h, rgba).and_then(|png| {
         let n = png.len();
-        shot::copy_png(png).map(|()| n)
+        shot::copy_png(app, png).map(|()| n)
     }) {
         Ok(bytes) => {
             log::info!(
