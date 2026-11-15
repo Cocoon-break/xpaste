@@ -46,12 +46,39 @@ pub enum PasteAction {
     Yielded,
 }
 
-/// 松开粘贴键后剪切板序号还是写“下一件”时的那个，就算贴出了“下一件”。
+/// 松开粘贴键那一刻的剪切板序号还是写“下一件”时的那个，就算贴出了“下一件”。
 pub fn paste_action(current_seq: u64, belt_seq: u64) -> PasteAction {
     if current_seq == belt_seq {
         PasteAction::Advance
     } else {
         PasteAction::Yielded
+    }
+}
+
+/// 这次粘贴之后剪切板怎么处理
+#[derive(Debug, PartialEq)]
+pub enum Rewrite {
+    /// 剪切板里已经是“下一件”
+    Skip,
+    /// 马上写“下一件”
+    Now,
+    /// 剪切板里是采集线程还没读的新内容：等它读完（`captured`）再写，不然这次复制进不了历史
+    AfterCapture,
+}
+
+/// 贴出（或让出）之后要不要写“下一件”。`now`：此刻的剪切板序号；`seen`：采集线程读完的最后一个序号。
+/// 剪切板还是自己写的、或者采集线程已经读过它，才能马上覆盖。
+pub fn rewrite(action: &PasteAction, now: u64, belt_seq: u64, seen: u64) -> Rewrite {
+    if now == belt_seq {
+        // 让出时剪切板还是写“下一件”时的那次：不用重写（比如连按两次，第一次已经换好了）
+        match action {
+            PasteAction::Advance => Rewrite::Now,
+            PasteAction::Yielded => Rewrite::Skip,
+        }
+    } else if now == seen {
+        Rewrite::Now
+    } else {
+        Rewrite::AfterCapture
     }
 }
 
@@ -99,8 +126,12 @@ struct Runtime {
     peek_count: usize,
     /// 剪切板被别的写入改掉了，下一次粘贴先让给它
     yielding: bool,
-    /// 写“下一件”之后的剪切板序号
+    /// 写“下一件”之后的剪切板序号；写失败时为 `u64::MAX`，下一次粘贴按让出处理、重写
     belt_seq: u64,
+    /// 采集线程读完的最后一个序号（含跳过的）
+    seen: u64,
+    /// 粘贴后该写“下一件”，但剪切板里的新内容采集线程还没读：读完后（`captured`）再写
+    reclaim: bool,
     /// 最近一次写进剪切板的件；“下一件”换了才重写
     written: Option<u64>,
     /// 自动模式统计用：（复制时刻毫秒，记录 id），最多 `PEEK_CAP` 条
@@ -132,6 +163,8 @@ static RT: LazyLock<Mutex<Runtime>> = LazyLock::new(|| {
         peek_count: 0,
         yielding: false,
         belt_seq: u64::MAX,
+        seen: u64::MAX,
+        reclaim: false,
         written: None,
         copies: Vec::new(),
         grace_until: None,
@@ -418,6 +451,7 @@ fn open(rt: &mut Runtime, fx: &mut Fx) {
     rt.grace_until = None;
     rt.finishing = false;
     rt.yielding = false;
+    rt.reclaim = false;
     rt.written = None;
     rt.removed = None;
     rt.cleared = None;
@@ -445,6 +479,7 @@ fn close(rt: &mut Runtime, fx: &mut Fx, undo: bool) {
     rt.copies.clear();
     rt.finishing = false;
     rt.yielding = false;
+    rt.reclaim = false;
     rt.written = None;
     rt.removed = None;
     rt.round += 1;
@@ -565,15 +600,24 @@ fn write_next(state: &AppState, rt: &mut Runtime, fx: &mut Fx, force: bool) {
                 rt.belt_seq = state.last_write_seq.load(Ordering::SeqCst);
                 rt.written = Some(id);
                 rt.yielding = false;
+                rt.reclaim = false;
                 log::info!("传送带 换下一件 id={id}");
             }
-            Err(e) => log::warn!("传送带 写下一件失败 id={id}：{e}"),
+            Err(e) => {
+                // 剪切板里不是“下一件”：下一次粘贴按让出处理，再重写
+                rt.belt_seq = u64::MAX;
+                rt.written = None;
+                log::warn!("传送带 写下一件失败 id={id}：{e}");
+            }
         }
         break;
     }
     if skipped {
         fx.toasts.push(toast("原记录已删除，跳过了一件", &[], None));
-        fx.changed(Cause::Remove, None);
+        // 贴出途中跳过的保留“贴出”这个原因，页面照常播贴出
+        if fx.changed.is_none() {
+            fx.changed(Cause::Remove, None);
+        }
     }
 }
 
@@ -593,6 +637,29 @@ pub fn on_change(app: &AppHandle, seq: u64) {
         rt.yielding = true;
     }
     emit(app, BELT_CHANGED, snapshot(app, Cause::Other, None, None));
+}
+
+/// 采集线程读完一次变化（记进历史或跳过）之后：粘贴时留着没写的“下一件”这时写回去。
+/// 每次变化都调，没有要写的时候拿一下锁就返回。
+pub fn captured(app: &AppHandle, seq: u64) {
+    {
+        let mut rt = rt();
+        rt.seen = seq;
+        if !rt.reclaim {
+            return;
+        }
+    }
+    with(app, |state, _, rt, fx| {
+        // 又有更新的变化没读：留给它读完以后
+        if !rt.reclaim || xpaste_platform::change_count() != seq {
+            return;
+        }
+        rt.reclaim = false;
+        if rt.open && !rt.belt.items().is_empty() {
+            write_next(state, rt, fx, true);
+            fx.changed(Cause::Other, None);
+        }
+    });
 }
 
 /// 一次复制记进了历史（新增或合并）之后：带子开着就放上去，没开着、自动模式下数一数要不要探出。
@@ -656,39 +723,43 @@ fn peek_timer(app: &AppHandle, g: u64) {
     });
 }
 
-/// 按键监听的回调（macOS 在主线程，Windows 在钩子线程）：只起线程，等目标应用读完剪切板再换下一件。
+/// 按键监听的回调（macOS 在主线程，Windows 在钩子线程）：记下松开那一刻的剪切板序号（贴出去的就是它），
+/// 起线程等目标应用读完剪切板再换下一件。
 fn on_paste(app: &AppHandle) {
-    spawn(app, "belt-paste", |app| {
+    let at_release = xpaste_platform::change_count();
+    spawn(app, "belt-paste", move |app| {
         std::thread::sleep(Duration::from_millis(SWAP_MS));
-        pasted(app);
+        pasted(app, at_release);
     });
 }
 
-fn pasted(app: &AppHandle) {
-    let current = xpaste_platform::change_count();
+fn pasted(app: &AppHandle, at_release: u64) {
     with(app, |state, _, rt, fx| {
         if !rt.open || rt.belt.items().is_empty() {
             return;
         }
-        match paste_action(current, rt.belt_seq) {
-            PasteAction::Advance => {
-                let Some(item) = rt.belt.take_next() else {
-                    return;
-                };
-                rt.pasted += 1;
-                log::info!("传送带 贴出 1 件 id={}", item.id);
-                fx.changed(Cause::Paste, Some(item.id));
-                if rt.belt.items().is_empty() {
-                    finish(rt, fx);
-                } else {
-                    write_next(state, rt, fx, false);
-                }
+        // 在 RT 里读：读到的变化要么已经 `captured` 过（seen 跟上了），要么之后才 `captured`、会看到 reclaim
+        let now = xpaste_platform::change_count();
+        let action = paste_action(at_release, rt.belt_seq);
+        let rw = rewrite(&action, now, rt.belt_seq, rt.seen);
+        if action == PasteAction::Advance {
+            let Some(item) = rt.belt.take_next() else {
+                return;
+            };
+            rt.pasted += 1;
+            log::info!("传送带 贴出 1 件 id={}", item.id);
+            fx.changed(Cause::Paste, Some(item.id));
+            if rt.belt.items().is_empty() {
+                return finish(rt, fx);
             }
-            PasteAction::Yielded => {
-                log::info!("传送带 让出一次");
-                write_next(state, rt, fx, true);
-                fx.changed(Cause::Other, None);
-            }
+        } else {
+            log::info!("传送带 让出一次");
+            fx.changed(Cause::Other, None);
+        }
+        match rw {
+            Rewrite::Skip => rt.yielding = false,
+            Rewrite::Now => write_next(state, rt, fx, true),
+            Rewrite::AfterCapture => rt.reclaim = true,
         }
     });
 }
@@ -1024,6 +1095,40 @@ mod tests {
         assert!(!can_open(&expired, false));
         assert!(can_open(&expired, true));
         assert!(can_open(&Pro::Trial { days_left: 3 }, false));
+    }
+
+    #[test]
+    fn two_presses_within_swap_second_yields() {
+        // 两次都在换件之前松开，看到的都是 1；第一次换好后 belt_seq 成了 2
+        assert_eq!(paste_action(1, 1), PasteAction::Advance);
+        assert_eq!(rewrite(&PasteAction::Advance, 1, 1, 1), Rewrite::Now);
+        assert_eq!(paste_action(1, 2), PasteAction::Yielded);
+        // 剪切板里已经是新的“下一件”，不用重写
+        assert_eq!(rewrite(&PasteAction::Yielded, 2, 2, 1), Rewrite::Skip);
+    }
+
+    #[test]
+    fn fresh_copy_not_overwritten_until_captured() {
+        // 复制了 6 马上贴：采集线程还停在 5
+        assert_eq!(paste_action(6, 5), PasteAction::Yielded);
+        assert_eq!(
+            rewrite(&PasteAction::Yielded, 6, 5, 5),
+            Rewrite::AfterCapture
+        );
+        // 读完 6 以后再贴可以马上写
+        assert_eq!(rewrite(&PasteAction::Yielded, 6, 5, 6), Rewrite::Now);
+        // 贴出“下一件”后、换件前又复制了一次：也等采集读完
+        assert_eq!(
+            rewrite(&PasteAction::Advance, 6, 5, 5),
+            Rewrite::AfterCapture
+        );
+    }
+
+    #[test]
+    fn failed_write_makes_next_paste_yield() {
+        // 写失败后 belt_seq 为 u64::MAX
+        assert_eq!(paste_action(7, u64::MAX), PasteAction::Yielded);
+        assert_eq!(rewrite(&PasteAction::Yielded, 7, u64::MAX, 7), Rewrite::Now);
     }
 
     #[test]

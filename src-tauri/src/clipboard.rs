@@ -25,45 +25,51 @@ pub fn start(app: AppHandle) {
     xpaste_platform::watch(move |seq| {
         // 传送带要看到每一次变化（含自身写入、不进历史的复制），带子没开时立即返回
         crate::belt::on_change(&app, seq);
-        let state = app.state::<AppState>();
-        if is_self_write(
-            seq,
-            state.last_write_seq.load(Ordering::SeqCst),
-            state.writing.load(Ordering::SeqCst),
-        ) {
-            log::info!("跳过自身写入 seq={seq}");
-            return;
-        }
-        // 暂停或忽略的应用：连剪切板都不读（process 里仍有同样的检查兜底）
-        if state.paused.load(Ordering::SeqCst) {
-            log::info!("跳过 Paused");
-            return;
-        }
-        let (ignored, skip_sensitive) = {
-            let s = state.settings();
-            (s.ignored_apps.clone(), s.skip_sensitive)
-        };
-        if xpaste_platform::frontmost_app()
-            .is_some_and(|a| capture::is_ignored_app(&a.name, &ignored))
-        {
-            log::info!("跳过 IgnoredApp");
-            return;
-        }
-        match xpaste_platform::read_snapshot(skip_sensitive) {
-            Err(e) => log::warn!("读取剪切板失败：{e}"),
-            Ok(None) => log::debug!("剪切板为空"),
-            Ok(Some(s)) => {
-                let source = s.source.as_ref().map(|a| a.name.as_str());
-                log::info!(
-                    "剪切板变化 bytes={} sensitive={} source={:?}",
-                    s.text_bytes(),
-                    s.sensitive,
-                    source
-                );
-                ingest(&app, s, seq);
-            }
-        }
+        handle_change(&app, seq);
+        // 不论记没记进历史，这次变化都读完了：传送带这时才能把剪切板换回“下一件”
+        crate::belt::captured(&app, seq);
     });
+}
+
+/// 处理一次剪切板变化：跳过自身写入、暂停、忽略的应用，否则读快照入库。
+fn handle_change(app: &AppHandle, seq: u64) {
+    let state = app.state::<AppState>();
+    if is_self_write(
+        seq,
+        state.last_write_seq.load(Ordering::SeqCst),
+        state.writing.load(Ordering::SeqCst),
+    ) {
+        log::info!("跳过自身写入 seq={seq}");
+        return;
+    }
+    // 暂停或忽略的应用：连剪切板都不读（process 里仍有同样的检查兜底）
+    if state.paused.load(Ordering::SeqCst) {
+        log::info!("跳过 Paused");
+        return;
+    }
+    let (ignored, skip_sensitive) = {
+        let s = state.settings();
+        (s.ignored_apps.clone(), s.skip_sensitive)
+    };
+    if xpaste_platform::frontmost_app().is_some_and(|a| capture::is_ignored_app(&a.name, &ignored))
+    {
+        log::info!("跳过 IgnoredApp");
+        return;
+    }
+    match xpaste_platform::read_snapshot(skip_sensitive) {
+        Err(e) => log::warn!("读取剪切板失败：{e}"),
+        Ok(None) => log::debug!("剪切板为空"),
+        Ok(Some(s)) => {
+            let source = s.source.as_ref().map(|a| a.name.as_str());
+            log::info!(
+                "剪切板变化 bytes={} sensitive={} source={:?}",
+                s.text_bytes(),
+                s.sensitive,
+                source
+            );
+            ingest(app, s, seq);
+        }
+    }
 }
 
 /// 文件记录里各 PDF 的文字，按顺序读到预算用完（M05 规则 2；只有 macOS 读得出）。
