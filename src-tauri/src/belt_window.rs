@@ -1,6 +1,6 @@
 //! 传送带窗口：贴在光标所在屏工作区的底边、水平居中，不拿键盘，透明处点击穿透。
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
@@ -35,6 +35,8 @@ pub fn belt_rect(work: Rect) -> Rect {
 /// 带子窗口正在显示（打开或探出），指针线程只在这期间跑
 static SHOWN: AtomicBool = AtomicBool::new(false);
 static RUNNING: AtomicBool = AtomicBool::new(false);
+/// 每次显示加一：指针线程发现变了就忘掉上次设下的点击穿透，按光标重新设
+static GEN: AtomicU64 = AtomicU64::new(0);
 /// 窗口左上角和换成逻辑像素要除的系数，都在 `pointer_position` 的坐标空间里
 /// （macOS 是点，系数 1；Windows 是物理像素，系数为所在屏缩放）
 static FRAME: Mutex<((f64, f64), f64)> = Mutex::new(((0.0, 0.0), 1.0));
@@ -59,12 +61,11 @@ pub fn prewarm(app: &AppHandle) {
         .build();
     match built {
         #[cfg(target_os = "macos")]
-        Ok(w) => on_main(app, move |app| {
-            // 同晾衣绳的层级，比面板低一层；在全屏空间里也显示
+        Ok(w) => on_main(app, move |_| {
+            // 同晾衣绳的层级，比面板低一层；全屏空间里也显示（to_overlay_panel 已带上）
             if let Err(e) = crate::shot::to_overlay_panel(&w, 2) {
                 log::warn!("传送带窗口转换 NSPanel 失败：{e}");
             }
-            crate::line::spaces(app, true);
         }),
         #[cfg(windows)]
         Ok(w) => on_main(app, move |_| match w.hwnd() {
@@ -105,13 +106,13 @@ pub fn show(app: &AppHandle) {
         }
         let shown = place(app, &w)
             .and_then(|()| w.set_ignore_cursor_events(true))
-            .and_then(|()| {
-                crate::line::spaces(app, true);
-                crate::trcard::front(app, &w, false)
-            });
+            .and_then(|()| crate::trcard::front(app, &w, false));
         if let Err(e) = shown {
             log::warn!("显示传送带失败：{e}");
+            SHOWN.store(false, Ordering::SeqCst);
+            return;
         }
+        GEN.fetch_add(1, Ordering::SeqCst);
         if !RUNNING.swap(true, Ordering::SeqCst) {
             spawn_pointer(app);
         }
@@ -119,8 +120,10 @@ pub fn show(app: &AppHandle) {
 }
 
 pub fn hide(app: &AppHandle) {
-    SHOWN.store(false, Ordering::SeqCst);
+    // 显示、收起都在主线程上依次做，SHOWN 才不会和窗口实际状态错开
     on_main(app, |app| {
+        SHOWN.store(false, Ordering::SeqCst);
+        HITS.lock().unwrap_or_else(PoisonError::into_inner).clear();
         if let Some(w) = app.get_webview_window(LABEL)
             && let Err(e) = w.hide()
         {
@@ -136,6 +139,7 @@ fn spawn_pointer(app: &AppHandle) {
         .name("belt-pointer".into())
         .spawn(move || {
             let mut prev: Option<bool> = None;
+            let mut seen = GEN.load(Ordering::SeqCst);
             loop {
                 std::thread::sleep(TICK);
                 if !SHOWN.load(Ordering::SeqCst) {
@@ -145,6 +149,11 @@ fn spawn_pointer(app: &AppHandle) {
                         continue;
                     }
                     return;
+                }
+                let g = GEN.load(Ordering::SeqCst);
+                if g != seen {
+                    seen = g;
+                    prev = None;
                 }
                 let Some((x, y)) = xpaste_platform::pointer_position() else {
                     continue;
