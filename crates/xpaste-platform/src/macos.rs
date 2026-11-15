@@ -1293,6 +1293,90 @@ pub fn can_auto_scroll() -> bool {
     can_paste(None) == PasteBlock::None
 }
 
+/// 有没有辅助功能权限（监听 ⌘V、模拟粘贴都要它）。
+pub fn accessibility_trusted() -> bool {
+    can_paste(None) == PasteBlock::None
+}
+
+/// 监听别的应用里的 ⌘V，丢弃时卸掉。卸监听要在主线程，在别的线程丢弃时转到主线程去卸。
+pub struct PasteKeyWatch(Retained<AnyObject>);
+
+// SAFETY: 里面只是监听的句柄，本身不在别的线程上用；卸掉监听（Drop）总在主线程执行
+unsafe impl Send for PasteKeyWatch {}
+
+impl Drop for PasteKeyWatch {
+    fn drop(&mut self) {
+        struct Token(Retained<AnyObject>);
+        // SAFETY: 同 PasteKeyWatch，句柄只在主线程上交给 removeMonitor
+        unsafe impl Send for Token {}
+        fn remove(t: Token) {
+            // SAFETY: t.0 是 addGlobalMonitorForEventsMatchingMask:handler: 返回的句柄，只卸一次，在主线程上
+            unsafe { objc2_app_kit::NSEvent::removeMonitor(&t.0) };
+        }
+        let token = Token(self.0.clone());
+        if objc2::MainThreadMarker::new().is_some() {
+            remove(token);
+        } else {
+            dispatch2::DispatchQueue::main().exec_async(move || remove(token));
+        }
+    }
+}
+
+/// 松开 V 时调 `on_paste`，前提是按下 V 那一刻是 ⌘V（不带别的修饰键、不是连发）。
+/// 全局监听收不到发给 xPaste 自己窗口的事件，所以在 xPaste 里按 ⌘V 不算。
+/// 必须在主线程调，回调也在主线程上来；没有辅助功能权限或不在主线程时返回 None。
+/// 只判断是不是 ⌘V，不记录任何按键。
+pub fn watch_paste_key(on_paste: impl Fn() + Send + Sync + 'static) -> Option<PasteKeyWatch> {
+    use objc2_app_kit::{NSEvent, NSEventMask, NSEventModifierFlags, NSEventType};
+    objc2::MainThreadMarker::new()?;
+    if !accessibility_trusted() {
+        return None;
+    }
+    let arm = std::cell::RefCell::new(crate::PasteArm::default());
+    let handler = block2::RcBlock::new(move |event: NonNull<NSEvent>| {
+        // SAFETY: AppKit 传来的事件在回调期间有效
+        let event = unsafe { event.as_ref() };
+        let is_v = is_v_key(event);
+        let fired = match event.r#type() {
+            NSEventType::KeyDown => {
+                let f = event.modifierFlags();
+                let m = crate::Mods {
+                    cmd: f.contains(NSEventModifierFlags::Command),
+                    ctrl: f.contains(NSEventModifierFlags::Control),
+                    shift: f.contains(NSEventModifierFlags::Shift),
+                    alt: f.contains(NSEventModifierFlags::Option),
+                };
+                arm.borrow_mut().key_down(m, is_v, event.isARepeat(), true);
+                false
+            }
+            NSEventType::KeyUp => arm.borrow_mut().key_up(is_v),
+            _ => false,
+        };
+        if fired {
+            on_paste();
+        }
+    });
+    let token = NSEvent::addGlobalMonitorForEventsMatchingMask_handler(
+        NSEventMask::KeyDown | NSEventMask::KeyUp,
+        &handler,
+    );
+    if token.is_none() {
+        log::warn!("粘贴键监听安装失败");
+    }
+    token.map(PasteKeyWatch)
+}
+
+/// 按字符认 V（Dvorak 等布局里 V 不在 QWERTY 的位置）；字符不是拉丁字母时（俄文等布局）
+/// 按 QWERTY 的 V 键位（`kVK_ANSI_V` = 9）认，系统在这些布局里匹配 ⌘V 也是这样。
+fn is_v_key(event: &objc2_app_kit::NSEvent) -> bool {
+    const KVK_ANSI_V: u16 = 9;
+    let Some(chars) = event.charactersIgnoringModifiers() else {
+        return false;
+    };
+    let chars = chars.to_string();
+    chars.eq_ignore_ascii_case("v") || (!chars.is_ascii() && event.keyCode() == KVK_ANSI_V)
+}
+
 /// 未授权时先请求系统授权对话框（无 TCC 记录时弹出并把本应用加入列表），再打开系统设置的
 /// 辅助功能页：拒绝过或在设置里撤销过时对话框通常不再弹出，只靠前者按钮会没反应。
 /// 已授权时无操作。须在主线程调用。
