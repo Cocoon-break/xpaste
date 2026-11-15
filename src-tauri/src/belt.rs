@@ -35,8 +35,8 @@ const PEEK_CAP: usize = 20;
 const PEEK_HOLD_MS: u64 = 8000;
 /// 贴完以后还能退回的时长
 const GRACE_MS: u64 = 4000;
-/// 贴完以后由页面播完抖动、提示和收起再放手；过了宽限期又过这么久还没放手，后端自己收起
-const FINISH_SAFETY_MS: u64 = 2500;
+/// 贴完以后过这么久收起（页面播完收起、提示消失后才藏窗口）
+const FINISH_HIDE_MS: u64 = 700;
 
 #[derive(Debug, PartialEq)]
 pub enum PasteAction {
@@ -138,7 +138,7 @@ struct Runtime {
     copies: Vec<(i64, i64)>,
     /// 贴完以后可以退回的截止时刻
     grace_until: Option<Instant>,
-    /// 贴完了、页面还没放手（`release`）：带子在页面上已经沉下去，后端仍算开着，宽限期里能退回
+    /// 贴完了、还没收起（`FINISH_HIDE_MS` 之内）
     finishing: bool,
     /// 收起计时、探出计时的代数：期间又有变化时旧的计时作废
     round: u64,
@@ -374,42 +374,24 @@ pub fn closed() -> bool {
     !rt.open && !rt.peek
 }
 
-/// 页面放手时怎么办
-#[derive(Debug, PartialEq)]
-enum Release {
-    /// 带子开着或探出着（收起途中又打开了）：不理
-    Ignore,
-    Hide,
-    /// 贴完的带子页面已经沉下去：这时才算收起，再藏窗口
-    Collapse,
+/// 页面放手时藏不藏窗口：带子开着或探出着（收起途中又打开了）就不藏
+fn release_hides(open: bool, peek: bool) -> bool {
+    !open && !peek
 }
 
-fn release_action(open: bool, peek: bool, finishing: bool) -> Release {
-    if finishing {
-        Release::Collapse
-    } else if open || peek {
-        Release::Ignore
-    } else {
-        Release::Hide
-    }
-}
-
-/// 页面播完收起、提示条也消失了：带子仍收着就藏窗口。
+/// 页面播完收起、提示条也消失了：带子仍收着就藏窗口。只管窗口，不改带子的状态。
 pub fn release(app: &AppHandle) {
     with(app, |_, _, rt, fx| {
-        match release_action(rt.open, rt.peek, rt.finishing) {
-            Release::Ignore => return,
-            Release::Collapse => collapse(rt, fx),
-            Release::Hide => {}
-        }
-        fx.hide = true;
+        fx.hide = release_hides(rt.open, rt.peek);
     });
 }
 
-/// 贴完以后收起：剪切板留着最后贴出的那件，宽限期还没过的话退回快捷键还在。
+/// 贴完 0.7 s 后的收起：不再收东西、不再监听粘贴键；剪切板留着最后贴出的那件，宽限期里还能退回（会重新打开）。
+/// 窗口等页面播完、提示消失后放手再藏。
 fn collapse(rt: &mut Runtime, fx: &mut Fx) {
     rt.finishing = false;
     rt.open = false;
+    fx.linger = true;
     fx.changed(Cause::Other, None);
 }
 
@@ -809,8 +791,7 @@ fn pasted(app: &AppHandle, at_press: u64) {
     });
 }
 
-/// 贴完最后一件：剪切板留着它，提示可以退回；页面抖一下、提示、沉下去以后放手（`release`）才算收起。
-/// 宽限期里退回快捷键还在。
+/// 贴完最后一件：剪切板留着它，提示可以退回，0.7 s 后收起；宽限期里退回快捷键还在。
 fn finish(rt: &mut Runtime, fx: &mut Fx) {
     rt.finishing = true;
     rt.round += 1;
@@ -822,24 +803,26 @@ fn finish(rt: &mut Runtime, fx: &mut Fx) {
     log::info!("传送带 贴完 {} 件", rt.pasted);
 }
 
-/// 宽限期过了忘掉退回栈；再过一会儿页面还没放手（页面卡住了），后端自己收起。
 fn finish_timer(app: &AppHandle, g: u64) {
-    std::thread::sleep(Duration::from_millis(GRACE_MS));
+    std::thread::sleep(Duration::from_millis(FINISH_HIDE_MS));
     with(app, |_, _, rt, fx| {
-        if (!rt.open || rt.finishing) && rt.grace_until.is_some_and(|t| Instant::now() >= t) {
+        if finish_due(rt.finishing, rt.round, g) {
+            collapse(rt, fx);
+        }
+    });
+    std::thread::sleep(Duration::from_millis(GRACE_MS - FINISH_HIDE_MS));
+    with(app, |_, _, rt, fx| {
+        if !rt.open && rt.grace_until.is_some_and(|t| Instant::now() >= t) {
             rt.grace_until = None;
             rt.belt.forget_done();
             fx.changed(Cause::Other, None);
         }
     });
-    std::thread::sleep(Duration::from_millis(FINISH_SAFETY_MS));
-    with(app, |_, _, rt, fx| {
-        if rt.finishing && rt.round == g {
-            log::info!("传送带 页面没放手，后端收起");
-            collapse(rt, fx);
-            fx.hide = true;
-        }
-    });
+}
+
+/// 贴完的收起计时到了时还该不该收起：期间退回了、又放上了（`finishing` 清掉、`round` 变了）就不收
+fn finish_due(finishing: bool, round: u64, g: u64) -> bool {
+    finishing && round == g
 }
 
 /// 退回刚贴出的一件，它重新当“下一件”；贴完收起后的宽限期里会重新打开带子。
@@ -1129,11 +1112,17 @@ mod tests {
 
     #[test]
     fn release_ignored_while_open_or_peeking() {
-        assert_eq!(release_action(true, false, false), Release::Ignore);
-        assert_eq!(release_action(false, true, false), Release::Ignore);
-        assert_eq!(release_action(false, false, false), Release::Hide);
-        // 贴完以后后端还算开着，页面放手时才收起
-        assert_eq!(release_action(true, false, true), Release::Collapse);
+        assert!(!release_hides(true, false));
+        assert!(!release_hides(false, true));
+        assert!(release_hides(false, false));
+    }
+
+    #[test]
+    fn finish_collapses_unless_backed_or_refilled() {
+        assert!(finish_due(true, 5, 5));
+        // 退回、又放上东西：finishing 清掉；退回重开还会让 round 变
+        assert!(!finish_due(false, 5, 5));
+        assert!(!finish_due(true, 6, 5));
     }
 
     #[test]
