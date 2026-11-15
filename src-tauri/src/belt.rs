@@ -18,7 +18,7 @@ use xpaste_core::Kind;
 use xpaste_pro::{BELT_MAX, Belt, BeltError, BeltItem, Cleared, Pro, Removed, split_offer};
 
 use crate::commands::records::{precheck, write_marked, write_text_plain};
-use crate::events::{BELT_CHANGED, BELT_PUT_SELECTED, BELT_TOAST, emit, emit_to};
+use crate::events::{BELT_CHANGED, BELT_PUT_SELECTED, BELT_TOAST, emit_to};
 use crate::panel::{Rect, on_main};
 use crate::state::AppState;
 
@@ -33,10 +33,15 @@ const PEEK_MIN: usize = 3;
 const PEEK_CAP: usize = 20;
 /// 探出后这么久没理会就缩回、计数清零
 const PEEK_HOLD_MS: u64 = 8000;
-/// 贴完以后还能退回的时长
-const GRACE_MS: u64 = 4000;
-/// 贴完以后过这么久收起（页面播完收起、提示消失后才藏窗口）
-const FINISH_HIDE_MS: u64 = 700;
+/// 贴完以后页面过这么久才抖一下、出“贴了 N 件［退回］”
+const SHAKE_DELAY_MS: u64 = 420;
+/// 带按钮的提示条在页面上停留的时长
+const ACTION_TOAST_MS: u64 = 4000;
+/// 贴完以后还能退回的时长：到“贴了 N 件［退回］”消失为止
+const GRACE_MS: u64 = SHAKE_DELAY_MS + ACTION_TOAST_MS;
+/// 贴完以后过这么久收起：开始抖以后再等 0.7 s（页面播完收起、提示消失后才藏窗口）
+const FINISH_HIDE_MS: u64 = SHAKE_DELAY_MS + 700;
+const _: () = assert!(GRACE_MS > FINISH_HIDE_MS);
 
 #[derive(Debug, PartialEq)]
 pub enum PasteAction {
@@ -252,6 +257,19 @@ fn split_toast(n: usize, cells: bool, id: u64) -> Toast {
     toast(text, &["split", "keepWhole"], Some(id))
 }
 
+fn full_toast() -> Toast {
+    toast(
+        format!("传送带满了（{BELT_MAX} 件），先贴掉一些"),
+        &[],
+        None,
+    )
+}
+
+/// 带子上已有 `len` 件时，拆开一件最多能拆成几件（拆掉的那件让出一个位置）
+fn room(len: usize) -> usize {
+    (BELT_MAX + 1).saturating_sub(len)
+}
+
 enum Timer {
     /// 贴完：过一会儿收起，宽限期过了忘掉退回栈
     Finish(u64),
@@ -318,10 +336,15 @@ fn apply(app: &AppHandle, mut fx: Fx) {
         fx.linger = true;
     }
     for t in fx.toasts {
-        emit(app, BELT_TOAST, t);
+        emit_to(app, LABEL, BELT_TOAST, t);
     }
     if let Some((cause, id)) = fx.changed {
-        emit(app, BELT_CHANGED, snapshot(app, cause, id, fx.finished));
+        emit_to(
+            app,
+            LABEL,
+            BELT_CHANGED,
+            snapshot(app, cause, id, fx.finished),
+        );
     }
     if fx.show {
         show(app);
@@ -386,7 +409,7 @@ pub fn release(app: &AppHandle) {
     });
 }
 
-/// 贴完 0.7 s 后的收起：不再收东西、不再监听粘贴键；剪切板留着最后贴出的那件，宽限期里还能退回（会重新打开）。
+/// 贴完、抖一下再过 0.7 s 后的收起：不再收东西、不再监听粘贴键；剪切板留着最后贴出的那件，宽限期里还能退回（会重新打开）。
 /// 窗口等页面播完、提示消失后放手再藏。
 fn collapse(rt: &mut Runtime, fx: &mut Fx) {
     rt.finishing = false;
@@ -578,18 +601,14 @@ fn put_record(
             rt.cleared = None;
             if offer
                 && let Some(t) = whole
-                && let Some(s) = split_offer(&t, BELT_MAX - rt.belt.items().len() + 1)
+                && let Some(s) = split_offer(&t, room(rt.belt.items().len()))
             {
                 fx.toasts.push(split_toast(s.parts.len(), s.cells, item));
             }
             Some(item)
         }
         Err(BeltError::Full) => {
-            fx.toasts.push(toast(
-                format!("传送带满了（{BELT_MAX} 件），先贴掉一些"),
-                &[],
-                None,
-            ));
+            fx.toasts.push(full_toast());
             None
         }
         Err(BeltError::NotFound) => None,
@@ -664,7 +683,12 @@ pub fn on_change(app: &AppHandle, seq: u64) {
         }
         rt.yielding = true;
     }
-    emit(app, BELT_CHANGED, snapshot(app, Cause::Other, None, None));
+    emit_to(
+        app,
+        LABEL,
+        BELT_CHANGED,
+        snapshot(app, Cause::Other, None, None),
+    );
 }
 
 /// 采集线程读完一次变化（记进历史或跳过）之后：粘贴时留着没写的“下一件”这时写回去。
@@ -791,7 +815,7 @@ fn pasted(app: &AppHandle, at_press: u64) {
     });
 }
 
-/// 贴完最后一件：剪切板留着它，提示可以退回，0.7 s 后收起；宽限期里退回快捷键还在。
+/// 贴完最后一件：剪切板留着它，提示可以退回，抖一下再过 0.7 s 后收起；宽限期（到提示消失为止）里退回快捷键还在。
 fn finish(rt: &mut Runtime, fx: &mut Fx) {
     rt.finishing = true;
     rt.round += 1;
@@ -896,8 +920,9 @@ fn sync_watch(app: &AppHandle) {
             }
         };
         if grant {
-            emit(
+            emit_to(
                 app,
+                LABEL,
                 BELT_TOAST,
                 toast("按顺序贴需要辅助功能权限", &["grant"], None),
             );
@@ -946,7 +971,7 @@ pub fn state_now(app: &AppHandle) -> BeltState {
 }
 
 pub fn ready(app: &AppHandle) {
-    emit(app, BELT_CHANGED, state_now(app));
+    emit_to(app, LABEL, BELT_CHANGED, state_now(app));
 }
 
 /// 窗口藏着时不收：藏起以后才到的旧报告不能把点击区域放回去（显示后页面会重报）
@@ -1025,9 +1050,14 @@ pub fn undo_remove(app: &AppHandle) {
             return;
         }
         if let Some(r) = rt.removed.take() {
-            rt.belt.restore(r);
-            log::info!("传送带 撤销拿掉");
-            write_next(state, rt, fx, false);
+            match rt.belt.restore(r) {
+                Ok(()) => {
+                    log::info!("传送带 撤销拿掉");
+                    write_next(state, rt, fx, false);
+                }
+                Err(BeltError::Full) => fx.toasts.push(full_toast()),
+                Err(BeltError::NotFound) => {}
+            }
         }
         fx.changed(Cause::Put, None);
     });
@@ -1039,14 +1069,13 @@ pub fn split(app: &AppHandle, id: u64, accept: bool) {
         if !accept {
             return;
         }
-        let room = BELT_MAX - rt.belt.items().len() + 1;
         let parts = rt
             .belt
             .items()
             .iter()
             .find(|i| i.id == id)
             .and_then(|i| i.text.as_deref())
-            .and_then(|t| split_offer(t, room));
+            .and_then(|t| split_offer(t, room(rt.belt.items().len())));
         if let Some(s) = parts {
             let n = s.parts.len();
             if rt.belt.split(id, s.parts).is_ok() {
@@ -1184,6 +1213,13 @@ mod tests {
         // 写失败后 belt_seq 为 u64::MAX
         assert_eq!(paste_action(7, u64::MAX), PasteAction::Yielded);
         assert_eq!(rewrite(&PasteAction::Yielded, 7, u64::MAX, 7), Rewrite::Now);
+    }
+
+    #[test]
+    fn room_never_underflows() {
+        assert_eq!(room(0), BELT_MAX + 1);
+        assert_eq!(room(BELT_MAX), 1);
+        assert_eq!(room(BELT_MAX + 5), 0);
     }
 
     #[test]

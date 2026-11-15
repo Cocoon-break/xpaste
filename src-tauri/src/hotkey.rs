@@ -40,7 +40,7 @@ pub fn register(
     first_failure(panel_ok, shot_ok, rec_ok, tr_ok, line_ok, belt_ok)
 }
 
-/// 按唤起、截图、录屏、翻译、便签的顺序取第一个没注册上的。
+/// 按唤起、截图、录屏、翻译、便签、传送带的顺序取第一个没注册上的。
 fn first_failure(
     panel: bool,
     shot: bool,

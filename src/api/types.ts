@@ -65,9 +65,9 @@ export interface Settings {
   linePinned: boolean;
   /** 传送带总开关 */
   beltEnabled: boolean;
-  /** 复制的内容自动放上传送带 */
+  /** 开启方式为自动：30 秒内复制满 3 次时带子探出一截，问要不要按顺序贴 */
   beltAuto: boolean;
-  /** 放上传送带的全局快捷键；'' 表示不启用 */
+  /** 打开或关闭传送带的全局快捷键（面板开着时放上选中的）；'' 表示不启用 */
   beltHotkey: string;
   /** 退回上一条的全局快捷键；'' 表示不启用 */
   beltBackHotkey: string;

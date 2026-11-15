@@ -154,6 +154,10 @@ pub fn linger(app: &AppHandle) {
 pub fn hide(app: &AppHandle) {
     // 显示、收起都在主线程上依次做，SHOWN 才不会和窗口实际状态错开
     on_main(app, |app| {
+        // 决定藏起到这里之间又打开、探出了（显示也排在主线程上）：不藏
+        if !crate::belt::closed() {
+            return;
+        }
         SHOWN.store(false, Ordering::SeqCst);
         HITS.lock().unwrap_or_else(PoisonError::into_inner).clear();
         if let Some(w) = app.get_webview_window(LABEL)

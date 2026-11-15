@@ -1925,7 +1925,7 @@ function recordKeys(input: HTMLInputElement, help: (msg: string) => void, record
 const shotKey = optHotkey('shotHotkey'), recKey = optHotkey('recHotkey');
 const trKey = optHotkey('trHotkey', '在任何应用里选中文字后按下，译文显示在鼠标旁');
 const lineKey = optHotkey('lineHotkey', '把最近复制的一条挂到晾衣绳上；面板开着时挂选中的那条');
-const beltKey = optHotkey('beltHotkey', '把最近复制的一条放上传送带；面板开着时放选中的（多选则按选中的先后）');
+const beltKey = optHotkey('beltHotkey', '打开或关闭传送带；面板开着时，把选中的记录放上去（多选则按选中的先后）');
 const beltBackKey = optHotkey('beltBackHotkey', '退回上一件：带子往回走一格');
 
 // “Pro”标签（只在含晾衣绳的版本里显示）：状态行、联网激活、设备满员时解绑、购买入口、在本机停用。
@@ -2730,7 +2730,7 @@ async function submitSettings() {
       showStControl(hotkeyIn);
       setHotkeyHelp(err.message, true);
     } else if (at) {
-      const f = { shotHotkey: shotKey, recHotkey: recKey, trHotkey: trKey, lineHotkey: lineKey, beltHotkey: beltKey }[at];
+      const f = { shotHotkey: shotKey, recHotkey: recKey, trHotkey: trKey, lineHotkey: lineKey, beltHotkey: beltKey, beltBackHotkey: beltBackKey }[at];
       showStControl(f.input);
       f.setHelp(err.message, true);
     } else toast(err.message);
@@ -3409,6 +3409,8 @@ list.addEventListener('click', (e) => {
   const qa = t.closest<HTMLElement>('[data-qa]')?.dataset.qa;
   const mod = S.platform.os === 'macos' ? e.metaKey : e.ctrlKey;
   if (!qa && (mod || e.shiftKey)) return multiTo(id, e.shiftKey);
+  // 点的是多选里某一行的“放上传送带”：整组按选中的先后放上去，退出多选前先记下
+  const group = qa === 'belt' && S.multi.has(id) ? [...S.multi] : [];
   // 不带修饰键的单击退出多选（M25 规则 6）
   if (S.multi.size) {
     S.multi.clear();
@@ -3421,7 +3423,7 @@ list.addEventListener('click', (e) => {
   if (qa === 'pin') togglePin(id, true);
   if (qa === 'edit') void openSnippet('edit', id);
   if (qa === 'hang') hangRecord(id);
-  if (qa === 'belt') putOnBelt(id);
+  if (qa === 'belt') putOnBelt(id, group);
 });
 // 吸顶栏在列表外，上面的列表委托收不到它的点击（空列表里的同名按钮仍走上面）
 $('#newSnipBtn').addEventListener('click', () => openSnippet('new'));
@@ -3451,8 +3453,8 @@ function beltOn() {
   return S.line.available && S.settings.beltEnabled;
 }
 // 放上传送带：有多选放多选（按选中的先后），否则放 id（没有就放当前选中的）；面板不收起
-function putOnBelt(id: number | null) {
-  const ids = putOrder(id ?? S.sel, [...S.multi]);
+function putOnBelt(id: number | null, multi = [...S.multi]) {
+  const ids = putOrder(id ?? S.sel, multi);
   if (ids.length) void beltPut(ids).catch((err: AppError) => toast(err.message));
 }
 // 挂到晾衣绳：绳子放下亮一下；没挂成（重复、挂满、试用结束）的提示在晾衣绳上

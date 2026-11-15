@@ -66,4 +66,6 @@ test('保存失败的快捷键错误落到对应录制框（出错标签跟着�
 
 test('errorControl：传送带快捷键冲突', () => {
   assert.equal(errorControl('beltHotkeyTaken', '传送带快捷键已被其他应用占用，请换一个'), 'beltHotkey');
+  assert.equal(errorControl('invalidSettings', '退回快捷键至少需要包含 Mod 或 Alt'), 'beltBackHotkey');
+  assert.equal(errorControl('invalidSettings', '退回快捷键不能与传送带快捷键相同'), 'beltBackHotkey');
 });

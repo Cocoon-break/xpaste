@@ -168,7 +168,9 @@ impl Belt {
         Err(BeltError::NotFound)
     }
 
-    pub fn restore(&mut self, _r: Removed) {}
+    pub fn restore(&mut self, _r: Removed) -> Result<(), BeltError> {
+        Err(BeltError::NotFound)
+    }
 
     pub fn take_next(&mut self) -> Option<BeltItem> {
         None
