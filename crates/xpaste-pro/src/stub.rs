@@ -121,6 +121,79 @@ impl Line {
     }
 }
 
+/// 空实现的传送带：放不上任何东西
+#[derive(Default)]
+pub struct Belt;
+
+impl Belt {
+    pub fn new() -> Belt {
+        Belt
+    }
+
+    pub fn items(&self) -> &[BeltItem] {
+        &[]
+    }
+
+    pub fn next(&self) -> Option<&BeltItem> {
+        None
+    }
+
+    pub fn can_back(&self) -> bool {
+        false
+    }
+
+    pub fn push(
+        &mut self,
+        _kind: Kind,
+        _title: String,
+        _record_id: Option<i64>,
+        _text: Option<String>,
+    ) -> Result<u64, BeltError> {
+        Err(BeltError::NotFound)
+    }
+
+    pub fn split(&mut self, _id: u64, _parts: Vec<String>) -> Result<(), BeltError> {
+        Err(BeltError::NotFound)
+    }
+
+    pub fn pick(&mut self, _id: u64) -> Result<(), BeltError> {
+        Err(BeltError::NotFound)
+    }
+
+    pub fn reorder(&mut self, _ids: &[u64]) -> Result<(), BeltError> {
+        Err(BeltError::NotFound)
+    }
+
+    pub fn remove(&mut self, _id: u64) -> Result<Removed, BeltError> {
+        Err(BeltError::NotFound)
+    }
+
+    pub fn restore(&mut self, _r: Removed) {}
+
+    pub fn take_next(&mut self) -> Option<BeltItem> {
+        None
+    }
+
+    pub fn back(&mut self) -> Option<u64> {
+        None
+    }
+
+    pub fn clear(&mut self) -> Cleared {
+        Cleared {
+            items: Vec::new(),
+            next: None,
+        }
+    }
+
+    pub fn unclear(&mut self, _c: Cleared) {}
+
+    pub fn forget_done(&mut self) {}
+}
+
+pub fn split_offer(_text: &str, _room: usize) -> Option<Split> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

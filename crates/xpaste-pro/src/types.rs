@@ -185,3 +185,48 @@ mod tests {
         }
     }
 }
+
+/// 传送带上最多放这么多件
+pub const BELT_MAX: usize = 100;
+
+/// 带子上的一件。不派生 `Debug`：里面有正文。
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BeltItem {
+    pub id: u64,
+    pub kind: Kind,
+    pub title: String,
+    pub record_id: Option<i64>,
+    /// 文字、链接、代码和拆出来的件放全文；图片、文件、视频为 None，只记 `record_id`
+    #[serde(skip)]
+    pub text: Option<String>,
+}
+
+/// 一段文字拆开的结果；`cells` 为 true 表示按制表符分的格，否则按行
+pub struct Split {
+    pub parts: Vec<String>,
+    pub cells: bool,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum BeltError {
+    Full,
+    NotFound,
+}
+
+/// 拿掉的一件和它的位置，撤销时放回去
+// 空实现不读这些字段
+#[cfg_attr(not(pro), allow(dead_code))]
+pub struct Removed {
+    pub(crate) item: BeltItem,
+    pub(crate) at: usize,
+    pub(crate) was_next: bool,
+}
+
+/// 清空前的全部件，撤销时放回去
+// 空实现不读这些字段
+#[cfg_attr(not(pro), allow(dead_code))]
+pub struct Cleared {
+    pub(crate) items: Vec<BeltItem>,
+    pub(crate) next: Option<u64>,
+}
