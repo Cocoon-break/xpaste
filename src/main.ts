@@ -22,6 +22,7 @@ import {
   onTranslateDelta,
 } from './api/events';
 import { lineDragDrop, lineDragHover, lineHangFromPanel, lineHide, lineSideHint, onLineChanged, onLineHangSelected, onProLink, proActivate, proBuy, proDeactivate, proStatus, proTakeLink, proUnbind, type LineView } from './api/line';
+import { beltPut, onBeltPutSelected } from './api/belt';
 import { deviceLine, proControls, proLine } from './pro-status';
 import type { AppError, Appearance, BoundDevice, Engines, FileEntry, LineSide, LineStyle, PanelStyle, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
 import { appCounts, bestApp, freshSug, fromApp, type Sug } from './source';
@@ -47,7 +48,7 @@ import { addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFre
 import { composing, justComposed } from './ime';
 import { errorControl, revealsFocus, shownTabTarget } from './settings-tabs';
 import {
-  armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, isTextKind, extendRange, mergeable, nextSelection, pruneMulti, snippetTextChange, UNDO_MS, visible, type UndoState,
+  armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, isTextKind, extendRange, mergeable, nextSelection, pruneMulti, putOrder, snippetTextChange, UNDO_MS, visible, type UndoState,
 } from './view';
 import { layout, range, ROW_H, scrollTo, topOf, type Cell } from './virtual-list';
 
@@ -88,6 +89,8 @@ const I = {
   translate: '<path d="M3 5h7M6.5 3.5V5M8.7 5c-.7 3-2.5 5.2-5.2 6.5M5.2 7.6c.9 1.7 2.3 2.9 4 3.6"/><path d="m10.5 16.5 3-7.5 3 7.5M11.6 14h3.8"/>',
   // 挂到晾衣绳：衣架
   hang: '<path d="M8 5.5a2 2 0 1 1 2 2V9"/><path d="M10 9 3 14.5h14z"/>',
+  // 放上传送带：向下的箭头落在底线上
+  put: '<path d="M3 15.5h14"/><path d="M10 3.5v8M6.8 8.5 10 11.7l3.2-3.2"/>',
 };
 const svg = (n: keyof typeof I, cls = '') =>
   `<svg class="ic ${cls}" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n]}</svg>`;
@@ -237,6 +240,7 @@ const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id ===
               ${isSnip(r) ? `<button type="button" tabindex="-1" data-qa="edit" title="编辑片段">${svg('pencil')}</button>`
                 : `<button type="button" tabindex="-1" data-qa="pin" title="${r.pinned ? '取消置顶' : '置顶'}">${svg(r.pinned ? 'pinFill' : 'pin')}</button>`}
               ${lineOn() ? `<button type="button" tabindex="-1" data-qa="hang" title="挂到晾衣绳">${svg('hang')}</button>` : ''}
+              ${beltOn() ? `<button type="button" tabindex="-1" data-qa="belt" title="放上传送带">${svg('put')}</button>` : ''}
               <button type="button" tabindex="-1" data-qa="copy" title="${copyVerb(S.canPaste)}">${svg('copy')}</button>
             </span>
           </div>
@@ -1921,6 +1925,8 @@ function recordKeys(input: HTMLInputElement, help: (msg: string) => void, record
 const shotKey = optHotkey('shotHotkey'), recKey = optHotkey('recHotkey');
 const trKey = optHotkey('trHotkey', '在任何应用里选中文字后按下，译文显示在鼠标旁');
 const lineKey = optHotkey('lineHotkey', '把最近复制的一条挂到晾衣绳上；面板开着时挂选中的那条');
+const beltKey = optHotkey('beltHotkey', '把最近复制的一条放上传送带；面板开着时放选中的（多选则按选中的先后）');
+const beltBackKey = optHotkey('beltBackHotkey', '退回上一件：带子往回走一格');
 
 // “Pro”标签（只在含晾衣绳的版本里显示）：状态行、联网激活、设备满员时解绑、购买入口、在本机停用。
 // 出错写在输入框下方（提示条会被设置框盖住）
@@ -2073,6 +2079,7 @@ function paintLineStyle() {
   }, (e: Error) => void info(`载入晾衣绳样式选择器失败：${e.message}`));
 }
 // 晾衣绳总开关与位置：草稿只在保存时写回，取消丢弃；开关关着时位置和样式两项变淡，仍可改
+const beltOnIn = $<HTMLInputElement>('#beltOn'), beltAutoIn = $<HTMLSelectElement>('#beltAuto');
 const lineOnIn = $<HTMLInputElement>('#lineOn'), linePinIn = $<HTMLInputElement>('#linePin'), lineSideEl = $('#lineSide'), lineSideHintEl = $('#lineSideHint');
 const lineSideIns = [...lineSideEl.querySelectorAll<HTMLInputElement>('input')];
 const LINE_SIDE_HELP: Record<LineSide, string> = { top: '鼠标碰到屏幕顶端放下', left: '鼠标碰到屏幕左侧边缘放下', right: '鼠标碰到屏幕右侧边缘放下' };
@@ -2511,6 +2518,10 @@ function openSettings() {
   recKey.reset(st.recHotkey);
   trKey.reset(st.translateHotkey);
   lineKey.reset(st.lineHotkey);
+  beltKey.reset(st.beltHotkey);
+  beltBackKey.reset(st.beltBackHotkey);
+  beltOnIn.checked = st.beltEnabled;
+  beltAutoIn.value = st.beltAuto ? 'auto' : 'manual';
   paintProStatus();
   draftLineStyle = st.lineStyle;
   paintLineStyle();
@@ -2540,6 +2551,7 @@ function openSettings() {
     if (h.rec && S.platform.os === 'macos') recKey.setHelp(taken('录屏'), true);
     if (h.translate) trKey.setHelp(taken('翻译'), true);
     if (h.line && S.line.available) lineKey.setHelp(taken('便签'), true);
+    if (h.belt && S.line.available) beltKey.setHelp(taken('传送带'), true);
   }, (e: AppError) => void info(`读取快捷键状态失败 kind=${e.kind}`));
   shotDir.pending = st.shotDir;
   shotDir.paint();
@@ -2669,8 +2681,7 @@ async function submitSettings() {
     shotHotkey: shotKey.pending, shotDir: shotDir.pending, shotSaveCopy: shotSaveCopyIn.checked, longAutoScroll: longAutoIn.checked,
     recHotkey: recKey.pending, recDir: recDir.pending, recSystemAudio: recSystemAudioIn.checked, recMicrophone: recMicIn.checked, recCopy: recCopyIn.checked,
     recQuality: recQualityIn.value, recFps: recFpsIn.value, panelStyle: draftStyle, lineHotkey: lineKey.pending,
-    // 传送带的设置项还没有界面：原样写回
-    beltEnabled: S.settings.beltEnabled, beltAuto: S.settings.beltAuto, beltHotkey: S.settings.beltHotkey, beltBackHotkey: S.settings.beltBackHotkey,
+    beltEnabled: beltOnIn.checked, beltAuto: beltAutoIn.value === 'auto', beltHotkey: beltKey.pending, beltBackHotkey: beltBackKey.pending,
   });
   // 翻译字段和晾衣绳的样式、开关、位置不经 SettingsForm；末尾的 / 由后端去掉。engine 没动过就原样写回（可能是空串）
   Object.assign(s, {
@@ -2719,7 +2730,7 @@ async function submitSettings() {
       showStControl(hotkeyIn);
       setHotkeyHelp(err.message, true);
     } else if (at) {
-      const f = { shotHotkey: shotKey, recHotkey: recKey, trHotkey: trKey, lineHotkey: lineKey }[at];
+      const f = { shotHotkey: shotKey, recHotkey: recKey, trHotkey: trKey, lineHotkey: lineKey, beltHotkey: beltKey }[at];
       showStControl(f.input);
       f.setHelp(err.message, true);
     } else toast(err.message);
@@ -3216,7 +3227,7 @@ await onShotNeedPermission(({ pane, mode }) =>
 // 焦点不在录制框里时截图、录屏照常开始，翻译照常弹卡片（M15 交互规则 4、M26 规则 18；在录制框里时写入，不翻译）
 // 只认面板有焦点时的按键：失焦时后端不发到这里，这里再防一道
 const hkOn = (el: Element) => document.activeElement === el && document.hasFocus();
-const hkOpts = [[shotKey, '截图', 'shot'], [recKey, '录屏', 'rec'], [trKey, '翻译', 'translate'], [lineKey, '便签', 'line']] as const;
+const hkOpts = [[shotKey, '截图', 'shot'], [recKey, '录屏', 'rec'], [trKey, '翻译', 'translate'], [lineKey, '便签', 'line'], [beltKey, '传送带', 'belt']] as const;
 await onHotkeyPressed((role) => {
   // 被自己的全局快捷键拦下的组合也算收到了主键，松开修饰键时不报“没收到组合键”
   hotkeyGot = true;
@@ -3244,6 +3255,13 @@ await onLineHangSelected(() => {
   const other = hkOpts.find(([f]) => f !== lineKey && hkOn(f.input));
   if (other) return other[0].setHelp(`${other[1]}快捷键不能与便签快捷键相同`, true);
   hangRecord(S.sel);
+});
+// 面板可见时按了传送带的“放上”快捷键：焦点在传送带快捷键录制框里就写入，否则放选中的（或多选的）
+await onBeltPutSelected(() => {
+  hotkeyGot = true;
+  if (hkOn(beltKey.input)) return beltKey.record(S.settings.beltHotkey);
+  if (hkOn(beltBackKey.input)) return beltBackKey.record(S.settings.beltBackHotkey);
+  putOnBelt(S.sel);
 });
 // 便签或 Pro 状态变了：重画已挂刻线，设置开着时“Pro”状态行跟着变
 await onLineChanged((v) => {
@@ -3400,6 +3418,7 @@ list.addEventListener('click', (e) => {
   if (qa === 'pin') togglePin(id, true);
   if (qa === 'edit') void openSnippet('edit', id);
   if (qa === 'hang') hangRecord(id);
+  if (qa === 'belt') putOnBelt(id);
 });
 // 吸顶栏在列表外，上面的列表委托收不到它的点击（空列表里的同名按钮仍走上面）
 $('#newSnipBtn').addEventListener('click', () => openSnippet('new'));
@@ -3423,6 +3442,15 @@ list.addEventListener('contextmenu', (e) => {
 // 晾衣绳带在这个构建里、且用户开着：行上才有挂钩按钮、已挂刻线，才能拖行去挂
 function lineOn() {
   return S.line.available && S.line.on;
+}
+// 传送带在这个构建里、且用户开着：行上才有放上带子的按钮
+function beltOn() {
+  return S.line.available && S.settings.beltEnabled;
+}
+// 放上传送带：有多选放多选（按选中的先后），否则放 id（没有就放当前选中的）；面板不收起
+function putOnBelt(id: number | null) {
+  const ids = putOrder(id ?? S.sel, S.multi.size >= 2 ? [...S.multi] : []);
+  if (ids.length) void beltPut(ids).catch((err: AppError) => toast(err.message));
 }
 // 挂到晾衣绳：绳子放下亮一下；没挂成（重复、挂满、试用结束）的提示在晾衣绳上
 function hangRecord(id: number | null) {

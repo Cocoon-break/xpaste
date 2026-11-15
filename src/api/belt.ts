@@ -67,6 +67,8 @@ export const onBeltChanged = (cb: (s: BeltState) => void): Promise<UnlistenFn> =
 /** 带子收着时也会发：后端先显示窗口，提示消失后页面调 beltRelease */
 export const onBeltToast = (cb: (t: BeltToast) => void): Promise<UnlistenFn> =>
   listen<BeltToast>('belt-toast', (e) => cb(e.payload));
+/** 面板可见且有键盘时按了“放上”快捷键（后端只发给面板） */
+export const onBeltPutSelected = (cb: () => void): Promise<UnlistenFn> => listen('belt-put-selected', () => cb());
 /** 窗口刚显示出来（只发给传送带窗口）：藏起时后端清掉了点击区域，要重报 */
 export const onBeltShown = (cb: () => void): Promise<UnlistenFn> =>
   listen('belt-shown', () => cb(), { target: getCurrentWindow().label });

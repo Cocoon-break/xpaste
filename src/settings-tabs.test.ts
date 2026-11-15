@@ -63,3 +63,7 @@ test('保存失败的快捷键错误落到对应录制框（出错标签跟着�
   assert.equal(errorControl('invalidSettings', '请输入 2 到 99 之间的整数'), null);
   assert.equal(errorControl('internal', '录屏快捷键'), null);
 });
+
+test('errorControl：传送带快捷键冲突', () => {
+  assert.equal(errorControl('beltHotkeyTaken', '传送带快捷键已被其他应用占用，请换一个'), 'beltHotkey');
+});

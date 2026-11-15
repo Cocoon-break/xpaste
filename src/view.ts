@@ -95,6 +95,10 @@ export const pruneMulti = (multi: Set<number>, records: Map<number, RecordSummar
   return kept.size < 2 ? new Set() : kept;
 };
 
+/** 放上传送带的顺序：有多选按选中的先后，否则只放当前选中的；都没有返回空。 */
+export const putOrder = (sel: number | null, multi: number[]): number[] =>
+  multi.length ? multi : sel === null ? [] : [sel];
+
 /** Shift 点击连选：`from`、`to` 在 `vis` 中的闭区间，与方向无关；找不到端点时返回空。 */
 export const rangeIds = (vis: RecordSummary[], from: number, to: number): number[] => {
   const a = vis.findIndex((r) => r.id === from), b = vis.findIndex((r) => r.id === to);

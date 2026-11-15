@@ -383,6 +383,23 @@
               <label class="switch"><span><b>一直显示晾衣绳</b><small>绳子和便签一直留在屏幕上，空白处可以点穿</small></span><input type="checkbox" id="linePin"></label>
             </div>
             <div class="field" id="lineStyleField" style="--i:6" hidden></div>
+            <div class="switches" style="--i:7">
+              <label class="switch"><span><b>传送带</b><small>把几件内容排成一队，在别的应用里按 Ctrl/⌘ V 逐件贴出去</small></span><input type="checkbox" id="beltOn"></label>
+            </div>
+            <div class="line" style="--i:8">
+              <span><label for="beltAuto"><b>开启方式</b></label><small>手动：按快捷键放上第一件时才出现；自动：连续复制几次后自己出现</small></span>
+              <select id="beltAuto"><option value="manual">手动</option><option value="auto">自动</option></select>
+            </div>
+            <div class="field" style="--i:9">
+              <label for="beltHotkey">传送带快捷键</label>
+              <input id="beltHotkey" readonly autocomplete="off" spellcheck="false" placeholder="未启用" aria-describedby="beltHotkeyHelp">
+              <p class="help" id="beltHotkeyHelp"></p>
+            </div>
+            <div class="field" style="--i:10">
+              <label for="beltBackHotkey">退回快捷键</label>
+              <input id="beltBackHotkey" readonly autocomplete="off" spellcheck="false" placeholder="未启用" aria-describedby="beltBackHotkeyHelp">
+              <p class="help" id="beltBackHotkeyHelp"></p>
+            </div>
           </section>
         </div>
         <footer class="dlg-foot">
