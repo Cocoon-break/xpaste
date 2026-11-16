@@ -3317,7 +3317,8 @@ await onShotNeedPermission(({ pane, mode }) =>
 // 焦点不在录制框里时截图、录屏照常开始，翻译照常弹卡片（M15 交互规则 4、M26 规则 18；在录制框里时写入，不翻译）
 // 只认面板有焦点时的按键：失焦时后端不发到这里，这里再防一道
 const hkOn = (el: Element) => document.activeElement === el && document.hasFocus();
-const hkOpts = [[shotKey, '截图', 'shot'], [recKey, '录屏', 'rec'], [trKey, '翻译', 'translate'], [lineKey, '便签', 'line'], [beltKey, '传送带', 'belt']] as const;
+const hkOpts = [[shotKey, '截图', 'shot'], [recKey, '录屏', 'rec'], [trKey, '翻译', 'translate'], [lineKey, '便签', 'line'], [beltKey, '传送带', 'belt'],
+  [beltBackKey, '退回', 'beltBack']] as const;
 await onHotkeyPressed((role) => {
   // 被自己的全局快捷键拦下的组合也算收到了主键，松开修饰键时不报“没收到组合键”
   hotkeyGot = true;
@@ -3350,7 +3351,6 @@ await onLineHangSelected(() => {
 await onBeltPutSelected(() => {
   hotkeyGot = true;
   if (hkOn(beltKey.input)) return beltKey.record(S.settings.beltHotkey);
-  if (hkOn(beltBackKey.input)) return beltBackKey.setHelp('退回快捷键不能与传送带快捷键相同', true);
   if (hkOn(hotkeyIn)) return setHotkeyHelp('不能与传送带快捷键相同', true);
   const other = hkOpts.find(([f]) => f !== beltKey && hkOn(f.input));
   if (other) return other[0].setHelp(`${other[1]}快捷键不能与传送带快捷键相同`, true);
