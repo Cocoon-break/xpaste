@@ -61,6 +61,8 @@ pub const BELT_SHOWN: &str = "belt-shown";
 
 /// 搅拌机的状态变了，载荷是完整的 `mixer::MixerState`（`cause` 说明是哪种变化）。只发给 `mixer`。
 pub const MIXER_CHANGED: &str = "mixer-changed";
+/// 搅拌中的增量（约 50 ms 一段），载荷 `{ gen, text }`：gen 和 `MixerState.gen` 不同的丢掉。只发给 `mixer`。
+pub const MIXER_DELTA: &str = "mixer-delta";
 /// 搅拌机的提示条，载荷 `mixer::Toast`：`{ text, actions, name? }`。只发给 `mixer`。
 pub const MIXER_TOAST: &str = "mixer-toast";
 /// 搅拌机快捷键按下时面板在屏上且拿着键盘：只发给 `panel`，面板把选中的记录放进杯子。

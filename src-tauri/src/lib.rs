@@ -482,7 +482,17 @@ pub fn run() {
             commands::mixer::mixer_undo_remove,
             commands::mixer::mixer_close,
             commands::mixer::mixer_undo_clear,
-            commands::mixer::mixer_release
+            commands::mixer::mixer_release,
+            commands::mixer::mixer_defaults,
+            commands::mixer::mixer_blend,
+            commands::mixer::mixer_stop,
+            commands::mixer::mixer_reblend,
+            commands::mixer::mixer_retry,
+            commands::mixer::mixer_dump,
+            commands::mixer::mixer_put_back,
+            commands::mixer::mixer_again,
+            commands::mixer::mixer_save_recipe,
+            commands::mixer::mixer_settings
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
