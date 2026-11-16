@@ -1,7 +1,7 @@
 //! 搅拌机窗口：立在光标所在屏工作区的右下角，平时不拿键盘，透明处点击穿透；补一句展开时才拿键盘，收起时交还。
 //!
-//! ponytail: 照 `belt_window.rs` 复制改写（不激活的浮层、摆屏、点击穿透线程、收起兜底），没抽公共模块；
-//! 出现第三个这样的浮层时再把三处合并成一个。
+//! ponytail: 照 `belt_window.rs` 复制改写（不激活的浮层、摆屏、点击穿透线程、收起兜底），其中拖动换位置已抽到 `float_drag`，其余（浮层窗口、摆屏、点击穿透线程、收起兜底）仍是复制的；
+//! 出现第三个这样的浮层时再把这些合并成一个。
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
