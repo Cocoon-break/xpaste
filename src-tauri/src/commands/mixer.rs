@@ -44,6 +44,12 @@ pub fn mixer_close(app: AppHandle) {
     mixer::close_now(&app);
 }
 
+/// 收成角标或展开
+#[tauri::command(async)]
+pub fn mixer_mini(app: AppHandle, on: bool) {
+    mixer::mini(&app, on);
+}
+
 #[tauri::command(async)]
 pub fn mixer_undo_clear(app: AppHandle) {
     mixer::undo_clear(&app);

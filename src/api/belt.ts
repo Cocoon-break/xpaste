@@ -15,6 +15,8 @@ export type BeltCause = 'put' | 'paste' | 'remove' | 'split' | 'back' | 'pick' |
 /** `belt-changed` 的载荷，也是 beltState 的结果 */
 export interface BeltState {
   open: boolean;
+  /** 收成了角标 */
+  mini: boolean;
   /** 自动模式下从底边探出了一截，还没正式开始 */
   peek: boolean;
   peekCount: number;
@@ -59,6 +61,8 @@ export const beltUndoRemove = () => invoke<void>('belt_undo_remove');
 export const beltSplit = (id: number, accept: boolean) => invoke<void>('belt_split', { id, accept });
 export const beltBack = () => invoke<void>('belt_back');
 export const beltClose = () => invoke<void>('belt_close');
+/** 收成角标或展开 */
+export const beltMini = (on: boolean) => invoke<void>('belt_mini', { on });
 export const beltUndoClear = () => invoke<void>('belt_undo_clear');
 /** 探出时点了“开始” */
 export const beltStart = () => invoke<void>('belt_start');

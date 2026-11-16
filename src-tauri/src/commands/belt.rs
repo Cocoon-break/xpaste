@@ -75,6 +75,12 @@ pub fn belt_back(app: AppHandle) {
     belt::back(&app);
 }
 
+/// 收成角标或展开
+#[tauri::command(async)]
+pub fn belt_mini(app: AppHandle, on: bool) {
+    belt::mini(&app, on);
+}
+
 #[tauri::command(async)]
 pub fn belt_close(app: AppHandle) {
     belt::close_now(&app);

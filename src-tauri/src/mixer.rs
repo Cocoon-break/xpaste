@@ -20,7 +20,7 @@ use xpaste_pro::{
     RECIPES_MAX, Taken,
 };
 
-use crate::collect::{self, Taker};
+use crate::collect::{self, Taker, Toggle};
 use crate::error::AppError;
 use crate::events::{MIXER_CHANGED, MIXER_DELTA, MIXER_PUT_SELECTED, MIXER_TOAST, emit_to};
 use crate::panel::Rect;
@@ -79,6 +79,8 @@ struct Runtime {
     /// 设置里的总开关
     on: bool,
     open: bool,
+    /// 收成了角标：内容和进行中的事都照旧
+    mini: bool,
     /// 打开时取的戳：和传送带同开时，新复制归后打开的那个
     opened: u64,
     cup: Cup,
@@ -112,6 +114,7 @@ static RT: LazyLock<Mutex<Runtime>> = LazyLock::new(|| {
     Mutex::new(Runtime {
         on: false,
         open: false,
+        mini: false,
         opened: 0,
         cup: Cup::new(),
         phase: Phase::Idle,
@@ -145,6 +148,7 @@ pub(crate) static HITS: Mutex<Vec<Rect>> = Mutex::new(Vec::new());
 #[serde(rename_all = "camelCase")]
 pub struct MixerState {
     open: bool,
+    mini: bool,
     phase: Phase,
     /// 当前这一次的序号：`mixer-delta` 带的 gen 和它不同时是旧请求的，丢掉
     #[serde(rename = "gen")]
@@ -266,6 +270,7 @@ fn snapshot(app: &AppHandle, cause: Cause, cause_id: Option<u64>, shake: bool) -
     let rt = rt();
     MixerState {
         open: rt.open,
+        mini: rt.mini,
         phase: rt.phase,
         round: rt.round,
         items: rt.cup.items().to_vec(),
@@ -375,19 +380,55 @@ fn toggle(app: &AppHandle) {
         if !rt.on {
             return;
         }
-        if rt.open {
-            close(rt, fx, true);
-        } else if accepts_new(pro) {
-            open(rt, fx);
-            fx.changed(Cause::Other, None);
-        } else {
-            fx.toasts.push(expired_toast());
+        match collect::toggle(rt.open, rt.mini, !rt.cup.items().is_empty()) {
+            Toggle::Open if accepts_new(pro) => {
+                open(rt, fx);
+                fx.changed(Cause::Other, None);
+            }
+            Toggle::Open => fx.toasts.push(expired_toast()),
+            Toggle::Expand => set_mini(rt, fx, false),
+            Toggle::Mini => set_mini(rt, fx, true),
+            Toggle::Close => close(rt, fx, true),
         }
     });
 }
 
+fn set_mini(rt: &mut Runtime, fx: &mut Fx, on: bool) {
+    if rt.mini == on {
+        return;
+    }
+    rt.mini = on;
+    fx.changed(Cause::Other, None);
+    log::info!("搅拌机 {}", if on { "收成角标" } else { "展开" });
+}
+
+/// 收成角标或展开（只在开着时生效）
+pub fn mini(app: &AppHandle, on: bool) {
+    with(app, |_, rt, fx| {
+        if rt.open {
+            set_mini(rt, fx, on);
+        }
+    });
+}
+
+#[derive(Debug, PartialEq)]
+enum AfterPaste {
+    Close,
+    ShakeThenClose,
+}
+
+/// 贴出结果之后：角标时直接消失，展开时抖一下、提示，再收起
+fn after_paste(mini: bool) -> AfterPaste {
+    if mini {
+        AfterPaste::Close
+    } else {
+        AfterPaste::ShakeThenClose
+    }
+}
+
 fn open(rt: &mut Runtime, fx: &mut Fx) {
     rt.open = true;
+    rt.mini = false;
     fx.show = true;
     rt.opened = collect::stamp();
     rt.taken = None;
@@ -406,6 +447,7 @@ fn close(rt: &mut Runtime, fx: &mut Fx, undo: bool) {
             .push(toast(format!("已倒掉 {n} 样"), &["undoClear"]));
     }
     rt.open = false;
+    rt.mini = false;
     fx.linger = true;
     cancel(rt);
     reset_result(rt);
@@ -1388,9 +1430,13 @@ fn pasted(app: &AppHandle, at_press: u64) {
         reset_result(rt);
         rt.taken = None;
         rt.cleared = None;
+        log::info!("搅拌机 贴出");
+        if after_paste(rt.mini) == AfterPaste::Close {
+            close(rt, fx, false);
+            return;
+        }
         round = Some(rt.round);
         fx.changed(Cause::Paste, None);
-        log::info!("搅拌机 贴出");
     });
     let Some(g) = round else {
         return;
@@ -1423,6 +1469,12 @@ fn pasted(app: &AppHandle, at_press: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paste_closes_when_mini() {
+        assert_eq!(after_paste(true), AfterPaste::Close);
+        assert_eq!(after_paste(false), AfterPaste::ShakeThenClose);
+    }
 
     #[test]
     fn late_result_is_dropped() {

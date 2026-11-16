@@ -19,6 +19,8 @@ export type MixerCause = 'put' | 'remove' | 'clear' | 'blend' | 'stop' | 'ready'
 /** `mixer-changed` 的载荷，也是 mixerState 的结果 */
 export interface MixerState {
   open: boolean;
+  /** 收成了角标 */
+  mini: boolean;
   phase: MixerPhase;
   /** 当前这一次的序号：`mixer-delta` 带的 gen 和它不同时是旧请求的，丢掉 */
   gen: number;
@@ -61,6 +63,8 @@ export const mixerPut = (ids: number[]) => invoke<void>('mixer_put', { ids });
 export const mixerRemove = (id: number) => invoke<void>('mixer_remove', { id });
 export const mixerUndoRemove = () => invoke<void>('mixer_undo_remove');
 export const mixerClose = () => invoke<void>('mixer_close');
+/** 收成角标或展开 */
+export const mixerMini = (on: boolean) => invoke<void>('mixer_mini', { on });
 export const mixerUndoClear = () => invoke<void>('mixer_undo_clear');
 /** 收起的动效播完、提示条也消失了：仍收着时后端藏窗口。不调的话后端过 5 s 自己藏 */
 export const mixerRelease = () => invoke<void>('mixer_release');

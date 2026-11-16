@@ -17,7 +17,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 use xpaste_core::Kind;
 use xpaste_pro::{BELT_MAX, Belt, BeltError, BeltItem, Cleared, Pro, Removed, split_offer};
 
-use crate::collect::Taker;
+use crate::collect::{self, Taker, Toggle};
 use crate::commands::records::{precheck, write_marked, write_text_plain};
 use crate::events::{BELT_CHANGED, BELT_PUT_SELECTED, BELT_TOAST, emit_to};
 use crate::panel::Rect;
@@ -120,6 +120,8 @@ struct Runtime {
     auto: bool,
     belt: Belt,
     open: bool,
+    /// 收成了角标：内容和进行中的事都照旧
+    mini: bool,
     /// 打开时取的戳：和搅拌机同开时，新复制归后打开的那个
     opened: u64,
     /// 自动模式下探出了一截，还没正式开始
@@ -163,6 +165,7 @@ static RT: LazyLock<Mutex<Runtime>> = LazyLock::new(|| {
         auto: false,
         belt: Belt::new(),
         open: false,
+        mini: false,
         opened: 0,
         peek: false,
         peek_count: 0,
@@ -219,6 +222,7 @@ pub enum Cause {
 #[serde(rename_all = "camelCase")]
 pub struct BeltState {
     open: bool,
+    mini: bool,
     peek: bool,
     peek_count: usize,
     yielding: bool,
@@ -316,6 +320,7 @@ fn snapshot(
     let rt = rt();
     BeltState {
         open: rt.open,
+        mini: rt.mini,
         peek: rt.peek,
         peek_count: rt.peek_count,
         yielding: rt.yielding,
@@ -469,15 +474,52 @@ fn toggle(app: &AppHandle) {
         }
         if rt.peek {
             begin(state, pro, rt, fx);
-        } else if rt.open {
-            close(rt, fx, true);
-        } else if accepts_new(pro) {
-            open(rt, fx);
-            fx.changed(Cause::Other, None);
         } else {
-            fx.toasts.push(expired_toast());
+            match collect::toggle(rt.open, rt.mini, !rt.belt.items().is_empty()) {
+                Toggle::Open if accepts_new(pro) => {
+                    open(rt, fx);
+                    fx.changed(Cause::Other, None);
+                }
+                Toggle::Open => fx.toasts.push(expired_toast()),
+                Toggle::Expand => set_mini(rt, fx, false),
+                Toggle::Mini => set_mini(rt, fx, true),
+                Toggle::Close => close(rt, fx, true),
+            }
         }
     });
+}
+
+fn set_mini(rt: &mut Runtime, fx: &mut Fx, on: bool) {
+    if rt.mini == on {
+        return;
+    }
+    rt.mini = on;
+    fx.changed(Cause::Other, None);
+    log::info!("传送带 {}", if on { "收成角标" } else { "展开" });
+}
+
+/// 收成角标或展开（只在正式开着时生效，探出不算）
+pub fn mini(app: &AppHandle, on: bool) {
+    with(app, |_, _, rt, fx| {
+        if rt.open {
+            set_mini(rt, fx, on);
+        }
+    });
+}
+
+#[derive(Debug, PartialEq)]
+enum AfterFinish {
+    Close,
+    Grace,
+}
+
+/// 贴完最后一件之后：角标时直接消失，展开时提示可以退回、过一会儿收起
+fn after_finish(mini: bool) -> AfterFinish {
+    if mini {
+        AfterFinish::Close
+    } else {
+        AfterFinish::Grace
+    }
 }
 
 fn expired_toast() -> Toast {
@@ -497,6 +539,7 @@ pub fn back_pressed(app: &AppHandle, pressed: &Shortcut) -> bool {
 
 fn open(rt: &mut Runtime, fx: &mut Fx) {
     rt.open = true;
+    rt.mini = false;
     rt.opened = crate::collect::stamp();
     rt.peek = false;
     rt.peek_count = 0;
@@ -529,6 +572,7 @@ fn close(rt: &mut Runtime, fx: &mut Fx, undo: bool) {
         }
     }
     rt.open = false;
+    rt.mini = false;
     rt.peek = false;
     rt.peek_count = 0;
     rt.copies.clear();
@@ -833,6 +877,12 @@ fn pasted(app: &AppHandle, at_press: u64) {
 
 /// 贴完最后一件：剪切板留着它，提示可以退回，抖一下再过 0.7 s 后收起；宽限期（到提示消失为止）里退回快捷键还在。
 fn finish(rt: &mut Runtime, fx: &mut Fx) {
+    if after_finish(rt.mini) == AfterFinish::Close {
+        log::info!("传送带 贴完 {} 件", rt.pasted);
+        rt.belt.forget_done();
+        close(rt, fx, false);
+        return;
+    }
     rt.finishing = true;
     rt.round += 1;
     rt.grace_until = Some(Instant::now() + Duration::from_millis(GRACE_MS));
@@ -1157,6 +1207,12 @@ pub fn begin_now(app: &AppHandle) {
 mod tests {
     use super::*;
     use xpaste_pro::Pro;
+
+    #[test]
+    fn finish_closes_when_mini() {
+        assert_eq!(after_finish(true), AfterFinish::Close);
+        assert_eq!(after_finish(false), AfterFinish::Grace);
+    }
 
     #[test]
     fn advance_when_clipboard_is_ours() {
