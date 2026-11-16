@@ -42,6 +42,36 @@ pub fn placed(work: Rect, default: Rect, offset: Option<(f64, f64)>) -> Rect {
     Rect { x, y, ..default }
 }
 
+/// 拖的是哪一端
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Side {
+    Left,
+    Right,
+}
+
+/// 拖一端调宽：`dx` 是光标自按下起的横向位移；返回新的左上角和宽。
+/// 居中（没拖过位置）时两端对称伸缩，否则按住的那端动、另一端不动；宽限在 `[min, max]`。
+pub fn resized(
+    origin: (f64, f64),
+    w0: f64,
+    dx: f64,
+    side: Side,
+    centered: bool,
+    min: f64,
+    max: f64,
+) -> ((f64, f64), f64) {
+    let grow = if side == Side::Right { dx } else { -dx };
+    let w = (w0 + grow * if centered { 2.0 } else { 1.0 })
+        .min(max)
+        .max(min);
+    let x = match (centered, side) {
+        (true, _) => origin.0 + (w0 - w) / 2.0,
+        (false, Side::Left) => origin.0 + w0 - w,
+        (false, Side::Right) => origin.0,
+    };
+    ((x, origin.1), w)
+}
+
 /// 窗口左上角离工作区右下角的距离
 fn offset_of(origin: (f64, f64), work: Rect) -> (f64, f64) {
     (work.x + work.w - origin.0, work.y + work.h - origin.1)
@@ -154,7 +184,7 @@ fn move_to(app: &AppHandle, label: &str, frame: &Frame, target: (f64, f64), size
 }
 
 /// 拖完：记下离光标所在屏工作区右下角的距离。主线程调用。
-fn save(app: &AppHandle, label: &str, frame: &Frame) {
+pub fn save(app: &AppHandle, label: &str, frame: &Frame) {
     let ((x, y), k) = *frame.lock().unwrap_or_else(PoisonError::into_inner);
     let Ok(Some((work, _))) = cursor_work(app) else {
         return;
@@ -207,6 +237,46 @@ mod tests {
         };
         let r = placed(small, d, Some((2000.0, 50.0)));
         assert_eq!((r.x, r.y), (0.0, 25.0));
+    }
+
+    #[test]
+    fn resize_centered_and_anchored() {
+        // 居中：右边往外拖 50，宽 +100、左边往左 50
+        assert_eq!(
+            resized((100.0, 0.0), 600.0, 50.0, Side::Right, true, 360.0, 1400.0),
+            ((50.0, 0.0), 700.0)
+        );
+        // 拖过位置：右边往外拖 50，左边不动
+        assert_eq!(
+            resized((100.0, 0.0), 600.0, 50.0, Side::Right, false, 360.0, 1400.0),
+            ((100.0, 0.0), 650.0)
+        );
+        // 左边往里拖 400：宽到下限 360，右边不动
+        assert_eq!(
+            resized((100.0, 0.0), 600.0, 400.0, Side::Left, false, 360.0, 1400.0),
+            ((340.0, 0.0), 360.0)
+        );
+    }
+
+    #[test]
+    fn placed_on_negative_screen() {
+        let work = Rect {
+            x: -1920.0,
+            y: -62.0,
+            w: 1920.0,
+            h: 1080.0,
+        };
+        let d = Rect {
+            x: -1000.0,
+            y: 0.0,
+            w: 380.0,
+            h: 600.0,
+        };
+        let r = placed(work, d, Some((396.0, 616.0)));
+        assert_eq!((r.x, r.y), (-396.0, 402.0));
+        // 距离大到超出：贴工作区左上
+        let r = placed(work, d, Some((5000.0, 5000.0)));
+        assert_eq!((r.x, r.y), (-1920.0, -62.0));
     }
 
     #[test]

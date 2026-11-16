@@ -28,6 +28,17 @@ pub fn belt_drag() {
     crate::belt_window::drag();
 }
 
+/// 两端的边按下：开始拖动调长度（"left" 或 "right"）
+#[tauri::command(async)]
+pub fn belt_resize(app: AppHandle, side: String) {
+    let side = if side == "left" {
+        crate::float_drag::Side::Left
+    } else {
+        crate::float_drag::Side::Right
+    };
+    crate::belt_window::resize(&app, side);
+}
+
 /// 面板里放上几条记录，按给的顺序排在末尾
 #[tauri::command(async)]
 pub fn belt_put(app: AppHandle, ids: Vec<i64>) {

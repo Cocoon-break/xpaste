@@ -8,9 +8,10 @@ use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder}
 
 use crate::belt::{HITS, LABEL};
 use crate::events::{BELT_SHOWN, emit_to};
-use crate::float_drag;
+use crate::float_drag::{self, Side};
 use crate::line::{hit_test, pass_through};
 use crate::panel::{Rect, on_main};
+use crate::state::AppState;
 
 pub const PAGE: &str = "pro/web/belt.html";
 
@@ -23,6 +24,11 @@ const BOTTOM_GAP: f64 = 16.0;
 const TICK: Duration = Duration::from_millis(16);
 /// 要收起以后等页面放手（`belt_release`）最多这么久，过了就自己藏
 const RELEASE_SAFETY: Duration = Duration::from_secs(5);
+
+/// 带子最短长度（逻辑像素）
+pub const MIN_LEN: f64 = 360.0;
+/// 记下的带子长度（逻辑像素，整数字符串）
+const LEN_KEY: &str = "belt_len";
 
 /// 窗口矩形（逻辑像素）：工作区里水平居中，宽 min(800, 工作区宽 × 0.84)，带身底边在工作区底边上方 16 px。
 pub fn belt_rect(work: Rect) -> Rect {
@@ -48,6 +54,16 @@ static LINGER: AtomicU64 = AtomicU64::new(0);
 static FRAME: float_drag::Frame = Mutex::new(((0.0, 0.0), 1.0));
 /// 正在拖动换位置和这次窗口的逻辑大小（宽随屏）
 static DRAG: float_drag::Dragging = Mutex::new(None);
+/// 正在拖一端调长度：按下时的状态，`last` 为上次投出去的光标横坐标
+struct Resize {
+    side: Side,
+    cursor_x: f64,
+    origin: (f64, f64),
+    w0: f64,
+    centered: bool,
+    last: Option<f64>,
+}
+static RESIZE: Mutex<Option<Resize>> = Mutex::new(None);
 static SIZE: Mutex<(f64, f64)> = Mutex::new((800.0, BODY_H + TOP_ROOM));
 
 /// 建好隐藏的窗口，免得第一次显示时现建 webview。参数同晾衣绳。
@@ -92,10 +108,116 @@ fn place(app: &AppHandle, w: &WebviewWindow) -> tauri::Result<()> {
     let Some((work, k)) = float_drag::cursor_work(app)? else {
         return Ok(());
     };
-    let r = float_drag::placed(work, belt_rect(work), float_drag::saved(app, LABEL));
+    let mut d = belt_rect(work);
+    if let Some(len) = saved_len(app) {
+        d.w = len.clamp(MIN_LEN, work.w.max(MIN_LEN));
+        d.x = work.x + (work.w - d.w) / 2.0;
+    }
+    let r = float_drag::placed(work, d, float_drag::saved(app, LABEL));
     *FRAME.lock().unwrap_or_else(PoisonError::into_inner) = ((r.x * k, r.y * k), k);
     *SIZE.lock().unwrap_or_else(PoisonError::into_inner) = (r.w, r.h);
     crate::shot::place(w, (r.x * k, r.y * k), (r.w * k, r.h * k))
+}
+
+fn saved_len(app: &AppHandle) -> Option<f64> {
+    let v = app.state::<AppState>().store().kv_get(LEN_KEY).ok()??;
+    v.parse().ok()
+}
+
+/// 页面在某一端的边上按下：开始拖动调长度
+pub fn resize(app: &AppHandle, side: Side) {
+    if !shown() {
+        return;
+    }
+    let Some(cursor) = xpaste_platform::pointer_position() else {
+        return;
+    };
+    let (origin, _) = *FRAME.lock().unwrap_or_else(PoisonError::into_inner);
+    let w0 = SIZE.lock().unwrap_or_else(PoisonError::into_inner).0;
+    *RESIZE.lock().unwrap_or_else(PoisonError::into_inner) = Some(Resize {
+        side,
+        cursor_x: cursor.0,
+        origin,
+        w0,
+        centered: float_drag::saved(app, LABEL).is_none(),
+        last: None,
+    });
+}
+
+/// 指针线程每次采样调用：按着键时把新宽度投到主线程；松开时结束并记下长度
+fn resize_tick(app: &AppHandle, cursor_x: f64, button: bool) {
+    let mut g = RESIZE.lock().unwrap_or_else(PoisonError::into_inner);
+    let Some(r) = g.as_mut() else {
+        return;
+    };
+    if !button {
+        let (moved, centered) = (r.last.is_some(), r.centered);
+        *g = None;
+        drop(g);
+        if moved {
+            on_main(app, move |app| finish_resize(app, centered));
+        }
+        return;
+    }
+    if r.last == Some(cursor_x) {
+        return;
+    }
+    r.last = Some(cursor_x);
+    let (side, dx_px, origin, w0, centered) =
+        (r.side, cursor_x - r.cursor_x, r.origin, r.w0, r.centered);
+    drop(g);
+    on_main(app, move |app| {
+        apply_resize(app, side, dx_px, origin, w0, centered)
+    });
+}
+
+/// 按光标位移算新矩形，限在光标所在屏工作区里并更新 `FRAME`、`SIZE`。主线程调用。
+fn apply_resize(
+    app: &AppHandle,
+    side: Side,
+    dx_px: f64,
+    origin: (f64, f64),
+    w0: f64,
+    centered: bool,
+) {
+    let Some(w) = app.get_webview_window(LABEL) else {
+        return;
+    };
+    let done = float_drag::cursor_work(app).and_then(|cw| {
+        let Some((work, k)) = cw else { return Ok(()) };
+        let h = SIZE.lock().unwrap_or_else(PoisonError::into_inner).1;
+        let (o, nw) = float_drag::resized(
+            (origin.0 / k, origin.1 / k),
+            w0,
+            dx_px / k,
+            side,
+            centered,
+            MIN_LEN.min(work.w),
+            work.w,
+        );
+        let o = float_drag::clamp(o, (nw, h), work);
+        *FRAME.lock().unwrap_or_else(PoisonError::into_inner) = ((o.0 * k, o.1 * k), k);
+        *SIZE.lock().unwrap_or_else(PoisonError::into_inner) = (nw, h);
+        crate::shot::place(&w, (o.0 * k, o.1 * k), (nw * k, h * k))
+    });
+    if let Err(e) = done {
+        log::warn!("传送带调长度失败：{e}");
+    }
+}
+
+/// 松手：记下长度；位置拖过的话把角也重新记下（居中的保持自动居中）。主线程调用。
+fn finish_resize(app: &AppHandle, centered: bool) {
+    let len = SIZE.lock().unwrap_or_else(PoisonError::into_inner).0;
+    if let Err(e) = app
+        .state::<AppState>()
+        .store()
+        .kv_set(LEN_KEY, &format!("{len:.0}"))
+    {
+        log::warn!("传送带记下长度失败：{e}");
+    }
+    if !centered {
+        float_drag::save(app, LABEL, &FRAME);
+    }
 }
 
 /// 页面在左端把手上按下：开始拖动换位置
@@ -212,6 +334,7 @@ fn spawn_pointer(app: &AppHandle) {
                 let hit = hit_test(local, &HITS.lock().unwrap_or_else(PoisonError::into_inner));
                 let button = xpaste_platform::mouse_button_down();
                 float_drag::tick(&app, LABEL, &DRAG, &FRAME, (x, y), button);
+                resize_tick(&app, x, button);
                 let want = pass_through(hit, button, false, prev);
                 if prev != Some(want) {
                     prev = Some(want);

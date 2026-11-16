@@ -469,6 +469,7 @@ pub fn run() {
             commands::belt::belt_ready,
             commands::belt::belt_hits,
             commands::belt::belt_drag,
+            commands::belt::belt_resize,
             commands::belt::belt_put,
             commands::belt::belt_pick,
             commands::belt::belt_reorder,
