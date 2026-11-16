@@ -10,6 +10,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 log.workspace = true
 sha2.workspace = true
+encoding_rs.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 rusqlite = { workspace = true, optional = true }
 pinyin = { version = "0.10", default-features = false, features = ["plain", "heteronym"] }

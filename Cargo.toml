@@ -22,6 +22,7 @@ xpaste-platform = { path = "crates/xpaste-platform" }
 xpaste-pro = { path = "crates/xpaste-pro" }
 ed25519-dalek = "2"
 base64 = "0.22"
+encoding_rs = "0.8"
 
 # 开发构建只留行号表、依赖不带调试信息：target 从约 4.3 GB 降到约 2.2 GB，panic 回溯仍有文件与行号
 [profile.dev]

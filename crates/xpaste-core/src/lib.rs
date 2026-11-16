@@ -9,6 +9,7 @@ pub mod pinyin;
 pub mod stitch;
 #[cfg(feature = "store")]
 pub mod store;
+pub mod textfile;
 pub mod translate;
 
 pub use error::CoreError;
