@@ -885,7 +885,8 @@ fn sync_watch(app: &AppHandle) {
     }
     if !want {
         // 放锁后再丢；Windows 上要等钩子线程退出（最多 500 ms），在别的线程丢，不卡调用方（可能是主线程）
-        if let Some(old) = rt().watch.take() {
+        let old = rt().watch.take();
+        if let Some(old) = old {
             spawn(app, "belt-unwatch", move |_| drop(old));
             log::info!("传送带 停止监听粘贴键");
         }
