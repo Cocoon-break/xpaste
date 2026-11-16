@@ -275,9 +275,12 @@ pub fn commit_settings(
     if !crate::belt::enabled() {
         settings.yield_belt_hotkeys();
     }
-    // 搅拌机还没有设置页入口：撞上了让出，不报用户看不到的错
+    // 不含晾衣绳的版本里设置页没有搅拌机快捷键：撞上了同样让出；含的版本整理一下配方列表
     if !crate::mixer::enabled() {
         settings.yield_mixer_hotkey();
+    } else {
+        settings.mixer_recipes =
+            xpaste_pro::normalize_recipes(std::mem::take(&mut settings.mixer_recipes));
     }
     settings.validate()?;
     let old = state.settings().clone();
@@ -307,6 +310,8 @@ pub fn commit_settings(
     let line_switch_only = changed.contains(&"lineEnabled") && !changed.contains(&"lineHotkey");
     // 传送带同理：它排在最后，被占用时前面的都已注册上
     let belt_switch_only = changed.contains(&"beltEnabled") && !changed.contains(&"beltHotkey");
+    // 搅拌机同理
+    let mixer_switch_only = changed.contains(&"mixerEnabled") && !changed.contains(&"mixerHotkey");
     if hotkey_changed
         && let Err(e) = register(
             &settings.hotkey,
@@ -319,6 +324,7 @@ pub fn commit_settings(
         )
         && !(line_switch_only && matches!(e, AppError::LineHotkeyTaken))
         && !(belt_switch_only && matches!(e, AppError::BeltHotkeyTaken))
+        && !(mixer_switch_only && matches!(e, AppError::MixerHotkeyTaken))
     {
         restore(&mut register);
         return Err(e);
@@ -363,7 +369,7 @@ pub fn save_settings(
     // 注册失败时 register 恢复了旧的快捷键，传送带开着的话把退回快捷键也补回来
     .inspect_err(|_| crate::belt::configure(&app, belt_on, belt_auto))?;
     // 快捷键改了必为 Register，与 commit_settings 内一致；没改时只决定是否尽力重试
-    let (shot_missing, rec_missing, tr_missing, line_missing, belt_missing) =
+    let (shot_missing, rec_missing, tr_missing, line_missing, belt_missing, mixer_missing) =
         crate::hotkey::unregistered(
             &app,
             &shot_hotkey,
@@ -371,11 +377,12 @@ pub fn save_settings(
             &tr_hotkey,
             &line_hotkey,
             &belt_hotkey,
+            &mixer_hotkey,
         );
     let action = hotkey_action(
         hotkeys_changed(&changed),
         crate::tray::hotkey_failed(),
-        shot_missing || rec_missing || tr_missing || line_missing || belt_missing,
+        shot_missing || rec_missing || tr_missing || line_missing || belt_missing || mixer_missing,
     );
     log::info!("设置已保存 changed=[{}]", changed.join(", "));
     // 设置已持久化并生效：以下步骤失败不回滚、不算保存失败（都只记日志）
@@ -416,6 +423,11 @@ pub fn save_settings(
             (s.belt_enabled, s.belt_auto)
         };
         crate::belt::configure(&app, on, auto);
+    }
+    // 搅拌机：总开关关掉时直接倒掉收起
+    {
+        let on = state.settings().mixer_enabled;
+        crate::mixer::configure(&app, on);
     }
     // 开关、位置与一直显示先生效，再收起或唤醒；设置锁只在取值时短暂持有
     // 改位置、改一直显示后的放下或收起：等页面拿到新的位置和 pinned 之后再做
@@ -982,11 +994,12 @@ pub struct HotkeyStatus {
     translate: bool,
     line: bool,
     belt: bool,
+    mixer: bool,
 }
 
 #[tauri::command]
 pub fn hotkey_status(app: AppHandle, state: State<'_, AppState>) -> HotkeyStatus {
-    let (shot, rec, tr, line, belt) = {
+    let (shot, rec, tr, line, belt, mixer) = {
         let s = state.settings();
         (
             s.shot_hotkey.clone(),
@@ -994,10 +1007,11 @@ pub fn hotkey_status(app: AppHandle, state: State<'_, AppState>) -> HotkeyStatus
             s.translate_hotkey.clone(),
             s.effective_line_hotkey().to_owned(),
             s.effective_belt_hotkey().to_owned(),
+            s.effective_mixer_hotkey().to_owned(),
         )
     };
-    let (shot, rec, translate, line, belt) =
-        crate::hotkey::unregistered(&app, &shot, &rec, &tr, &line, &belt);
+    let (shot, rec, translate, line, belt, mixer) =
+        crate::hotkey::unregistered(&app, &shot, &rec, &tr, &line, &belt, &mixer);
     HotkeyStatus {
         panel: crate::tray::hotkey_failed(),
         shot,
@@ -1005,5 +1019,6 @@ pub fn hotkey_status(app: AppHandle, state: State<'_, AppState>) -> HotkeyStatus
         translate,
         line,
         belt,
+        mixer,
     }
 }

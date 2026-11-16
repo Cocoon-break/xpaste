@@ -1152,7 +1152,7 @@ fn run_action(
 /// 写 PNG 到剪切板，不标记为自身写入：监听器照常把它作为图片记录入库（M23 规则 7、M01 规则 5）。
 pub(crate) fn copy_png(app: &AppHandle, png: Vec<u8>) -> Result<(), AppError> {
     let state = app.state::<AppState>();
-    crate::clipboard::write_own(&state, &xpaste_platform::png_flavors(png), "截图")
+    crate::clipboard::write_own(&state, &xpaste_platform::png_flavors(png), "截图").map(drop)
 }
 
 /// 保存到截图文件夹；“保存截图时同时复制”开着时也写剪切板。截图与贴图共用。

@@ -25,6 +25,7 @@ pub fn start(app: AppHandle) {
     xpaste_platform::watch(move |seq| {
         // 传送带要看到每一次变化（含自身写入、不进历史的复制），带子没开时立即返回
         crate::belt::on_change(&app, seq);
+        crate::mixer::on_change(&app, seq);
         handle_change(&app, seq);
         // 不论记没记进历史，这次变化都读完了：传送带这时才能把剪切板换回“下一件”
         crate::belt::captured(&app, seq);
@@ -121,6 +122,7 @@ fn ingest(app: &AppHandle, mut snap: Snapshot, seq: u64) {
             emit_summary(app, RECORD_UPDATED, id);
             emit_removed(app, &removed);
             crate::belt::on_recorded(app, id, kind, seq);
+            crate::mixer::on_recorded(app, id, kind, seq);
             // 再次复制还没识别的图片（例如补识别关着）：插队识别，已识别的由识别线程丢弃
             if kind == Kind::Image || ocr_files {
                 state.ocr.push_front(id);
@@ -131,6 +133,7 @@ fn ingest(app: &AppHandle, mut snap: Snapshot, seq: u64) {
             emit_summary(app, RECORD_ADDED, id);
             emit_removed(app, &removed);
             crate::belt::on_recorded(app, id, kind, seq);
+            crate::mixer::on_recorded(app, id, kind, seq);
             enqueue_followups(app, id, kind, first_path, ocr_files);
             if let Some(app_id) = source
                 && !icon_path(&state.data_dir, &app_id).exists()
@@ -177,13 +180,13 @@ pub fn enqueue_followups(
 
 /// 按普通写入写纯文本：截图识别文字、复制译文用，见 `write_own`。
 pub fn write_text(state: &AppState, text: &str, what: &str) -> Result<(), AppError> {
-    write_own(state, &[xpaste_core::text_flavor(text)], what)
+    write_own(state, &[xpaste_core::text_flavor(text)], what).map(drop)
 }
 
 /// 按普通写入写剪切板（不打自身写入标记）：监听器照常把它收进历史（截图复制、识别文字、译文、录屏复制）。
 /// 写入期间置 `own_writing`，写入后的序号记进 `own_write_seq`（先记序号再清标志），传送带据此不把它收上带子、只让出一次。
-/// 失败时日志只记 `what` 与字节数，报“写剪切板失败”。
-pub fn write_own(state: &AppState, flavors: &[Flavor], what: &str) -> Result<(), AppError> {
+/// 返回这次写入的序号。失败时日志只记 `what` 与字节数，报“写剪切板失败”。
+pub fn write_own(state: &AppState, flavors: &[Flavor], what: &str) -> Result<u64, AppError> {
     write_own_via(state, flavors, what, xpaste_platform::write)
 }
 
@@ -192,7 +195,7 @@ fn write_own_via(
     flavors: &[Flavor],
     what: &str,
     write: impl FnOnce(&[Flavor]) -> Result<u64, xpaste_platform::PlatformError>,
-) -> Result<(), AppError> {
+) -> Result<u64, AppError> {
     let bytes: usize = flavors.iter().map(|f| f.data.len()).sum();
     state.own_writing.store(true, Ordering::SeqCst);
     let written = write(flavors);
@@ -200,7 +203,7 @@ fn write_own_via(
         state.own_write_seq.store(seq, Ordering::SeqCst);
     }
     state.own_writing.store(false, Ordering::SeqCst);
-    written.map(drop).map_err(|e| {
+    written.map_err(|e| {
         log::warn!("{what}写剪切板失败 {bytes} 字节：{e}");
         AppError::ClipboardWrite
     })
@@ -227,7 +230,7 @@ mod tests {
     #[test]
     fn write_own_records_seq() {
         let state = AppState::for_test();
-        write_own_via(
+        let seq = write_own_via(
             &state,
             &[xpaste_core::text_flavor("译文")],
             "测试",
@@ -238,6 +241,7 @@ mod tests {
             },
         )
         .unwrap();
+        assert_eq!(seq, 11);
         assert_eq!(state.own_write_seq.load(Ordering::SeqCst), 11);
         assert!(!state.own_writing.load(Ordering::SeqCst));
         assert_eq!(state.last_write_seq.load(Ordering::SeqCst), u64::MAX);

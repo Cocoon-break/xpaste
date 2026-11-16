@@ -17,6 +17,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 use xpaste_core::Kind;
 use xpaste_pro::{BELT_MAX, Belt, BeltError, BeltItem, Cleared, Pro, Removed, split_offer};
 
+use crate::collect::Taker;
 use crate::commands::records::{precheck, write_marked, write_text_plain};
 use crate::events::{BELT_CHANGED, BELT_PUT_SELECTED, BELT_TOAST, emit_to};
 use crate::panel::Rect;
@@ -119,6 +120,8 @@ struct Runtime {
     auto: bool,
     belt: Belt,
     open: bool,
+    /// 打开时取的戳：和搅拌机同开时，新复制归后打开的那个
+    opened: u64,
     /// 自动模式下探出了一截，还没正式开始
     peek: bool,
     peek_count: usize,
@@ -160,6 +163,7 @@ static RT: LazyLock<Mutex<Runtime>> = LazyLock::new(|| {
         auto: false,
         belt: Belt::new(),
         open: false,
+        opened: 0,
         peek: false,
         peek_count: 0,
         yielding: false,
@@ -388,6 +392,12 @@ pub fn hide(app: &AppHandle) {
     crate::belt_window::hide(app);
 }
 
+/// 开着时返回打开时的戳
+pub fn open_stamp() -> Option<u64> {
+    let rt = rt();
+    rt.open.then_some(rt.opened)
+}
+
 /// 带子收着、也没探出：窗口该藏起来了
 pub fn closed() -> bool {
     let rt = rt();
@@ -487,6 +497,7 @@ pub fn back_pressed(app: &AppHandle, pressed: &Shortcut) -> bool {
 
 fn open(rt: &mut Runtime, fx: &mut Fx) {
     rt.open = true;
+    rt.opened = crate::collect::stamp();
     rt.peek = false;
     rt.peek_count = 0;
     rt.copies.clear();
@@ -714,6 +725,10 @@ pub fn on_recorded(app: &AppHandle, id: i64, kind: Kind, seq: u64) {
     // 先读标志再读序号：标志已清时序号一定已经记好
     let writing = state.own_writing.load(Ordering::SeqCst);
     if !take_on_belt(seq, state.own_write_seq.load(Ordering::SeqCst), writing) {
+        return;
+    }
+    // 搅拌机后打开：这次复制归它，带子按没收的复制让出一次。两边的锁各拿各的、一次只拿一个
+    if crate::collect::taker(open_stamp(), crate::mixer::open_stamp()) == Some(Taker::Mixer) {
         return;
     }
     with(app, |state, pro, rt, fx| {

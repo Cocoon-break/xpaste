@@ -67,8 +67,8 @@ fn first_failure(
     }
 }
 
-/// 截图、录屏、翻译、便签、传送带快捷键各自是否该注册却没注册上（空串不启用；Windows 上录屏从不注册，
-/// 不含晾衣绳的版本不注册便签和传送带，不算）。
+/// 截图、录屏、翻译、便签、传送带、搅拌机快捷键各自是否该注册却没注册上（空串不启用；Windows 上录屏从不注册，
+/// 不含晾衣绳的版本不注册便签、传送带和搅拌机，不算）。
 pub fn unregistered(
     app: &AppHandle,
     shot: &str,
@@ -76,7 +76,8 @@ pub fn unregistered(
     translate: &str,
     line: &str,
     belt: &str,
-) -> (bool, bool, bool, bool, bool) {
+    mixer: &str,
+) -> (bool, bool, bool, bool, bool, bool) {
     let gs = app.global_shortcut();
     let missing = |s: &str| !s.is_empty() && !gs.is_registered(s);
     (
@@ -85,6 +86,7 @@ pub fn unregistered(
         missing(translate),
         crate::line::enabled() && missing(line),
         crate::belt::enabled() && missing(belt),
+        crate::mixer::enabled() && missing(mixer),
     )
 }
 
@@ -216,6 +218,7 @@ pub fn failure_notice(
     translate_failed: bool,
     line_failed: bool,
     belt_failed: bool,
+    mixer_failed: bool,
 ) -> Option<String> {
     let names: Vec<_> = [
         (panel_failed, "唤起"),
@@ -224,6 +227,7 @@ pub fn failure_notice(
         (translate_failed, "翻译"),
         (line_failed, "便签"),
         (belt_failed, "传送带"),
+        (mixer_failed, "搅拌机"),
     ]
     .into_iter()
     .filter_map(|(failed, name)| failed.then_some(name))
@@ -297,7 +301,7 @@ mod tests {
     #[test]
     fn failure_notice_names_every_taken_hotkey() {
         let tail = "快捷键被其他应用占用，请在设置中更换";
-        let n = |p, s, r| failure_notice(p, s, r, false, false, false);
+        let n = |p, s, r| failure_notice(p, s, r, false, false, false, false);
         assert_eq!(n(false, false, false), None);
         for (flags, names) in [
             ((true, false, false), "唤起"),
@@ -311,28 +315,32 @@ mod tests {
             assert_eq!(n(flags.0, flags.1, flags.2), Some(format!("{names}{tail}")));
         }
         assert_eq!(
-            failure_notice(false, false, false, true, false, false),
+            failure_notice(false, false, false, true, false, false, false),
             Some(format!("翻译{tail}"))
         );
         assert_eq!(
-            failure_notice(true, true, true, true, false, false),
+            failure_notice(true, true, true, true, false, false, false),
             Some(format!("唤起、截图、录屏与翻译{tail}"))
         );
         assert_eq!(
-            failure_notice(false, false, false, false, true, false),
+            failure_notice(false, false, false, false, true, false, false),
             Some(format!("便签{tail}"))
         );
         assert_eq!(
-            failure_notice(true, true, true, true, true, false),
+            failure_notice(true, true, true, true, true, false, false),
             Some(format!("唤起、截图、录屏、翻译与便签{tail}"))
         );
         assert_eq!(
-            failure_notice(false, false, false, false, false, true),
+            failure_notice(false, false, false, false, false, true, false),
             Some(format!("传送带{tail}"))
         );
         assert_eq!(
-            failure_notice(false, false, false, false, true, true),
+            failure_notice(false, false, false, false, true, true, false),
             Some(format!("便签与传送带{tail}"))
+        );
+        assert_eq!(
+            failure_notice(false, false, false, false, false, true, true),
+            Some(format!("传送带与搅拌机{tail}"))
         );
     }
 
@@ -410,6 +418,22 @@ mod tests {
         assert_eq!(
             role_of(&key, p, s, r, t, "", "alt+shift+b", ""),
             crate::belt::enabled().then_some(Role::Belt)
+        );
+        assert_eq!(role_of(&key, p, s, r, t, "", "", ""), None);
+    }
+
+    #[test]
+    fn role_of_mixer() {
+        let key = "Alt+Shift+M".parse().unwrap();
+        let (p, s, r, t) = (
+            "CommandOrControl+Shift+V",
+            "Alt+Shift+A",
+            "Alt+Shift+R",
+            "Alt+Shift+T",
+        );
+        assert_eq!(
+            role_of(&key, p, s, r, t, "", "", "alt+shift+m"),
+            crate::mixer::enabled().then_some(Role::Mixer)
         );
         assert_eq!(role_of(&key, p, s, r, t, "", "", ""), None);
     }

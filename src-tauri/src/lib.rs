@@ -3,6 +3,7 @@ mod belt;
 mod belt_window;
 mod clipboard;
 mod clock;
+mod collect;
 mod commands;
 mod diag;
 mod enrich;
@@ -110,7 +111,11 @@ pub fn run() {
             let store =
                 Store::open(&data_dir).inspect_err(|e| log::error!("打开数据库失败：{e}"))?;
             let first_run = matches!(store.kv_get("onboarded"), Ok(None));
-            let settings = store.load_settings();
+            let mut settings = store.load_settings();
+            if mixer::enabled() {
+                settings.mixer_recipes =
+                    xpaste_pro::normalize_recipes(std::mem::take(&mut settings.mixer_recipes));
+            }
             let (
                 hotkey,
                 shot_hotkey,
@@ -136,6 +141,7 @@ pub fn run() {
                 settings.line_pinned,
             );
             let (belt_on, belt_auto) = (settings.belt_enabled, settings.belt_auto);
+            let mixer_on = settings.mixer_enabled;
             let enrich = enrich::start(app.handle().clone());
             let ocr = ocr::start(app.handle().clone());
             app.manage(AppState::new(
@@ -168,9 +174,9 @@ pub fn run() {
                 &mixer_hotkey,
             ) {
                 log::warn!("快捷键注册失败：{e}");
-                // register 只报第一个失败，截图、录屏、翻译、便签、传送带是否注册上另查；它们失败只提示，不标记托盘
+                // register 只报第一个失败，截图、录屏、翻译、便签、传送带、搅拌机是否注册上另查；它们失败只提示，不标记托盘
                 let panel_failed = matches!(e, error::AppError::HotkeyTaken);
-                let (shot_failed, rec_failed, tr_failed, line_failed, belt_failed) =
+                let (shot_failed, rec_failed, tr_failed, line_failed, belt_failed, mixer_failed) =
                     hotkey::unregistered(
                         app.handle(),
                         &shot_hotkey,
@@ -178,6 +184,7 @@ pub fn run() {
                         &tr_hotkey,
                         &line_hotkey,
                         &belt_hotkey,
+                        &mixer_hotkey,
                     );
                 if let Some(body) = hotkey::failure_notice(
                     panel_failed,
@@ -186,6 +193,7 @@ pub fn run() {
                     tr_failed,
                     line_failed,
                     belt_failed,
+                    mixer_failed,
                 ) {
                     notify(app.handle(), &body);
                 }
@@ -199,6 +207,10 @@ pub fn run() {
             belt::configure(app.handle(), belt_on, belt_auto);
             if crate::belt::enabled() {
                 belt::start(app.handle());
+            }
+            mixer::configure(app.handle(), mixer_on);
+            if mixer::enabled() {
+                mixer::start(app.handle());
             }
             if crate::line::enabled() {
                 line::start(app.handle());
@@ -271,8 +283,7 @@ pub fn run() {
                         Some(hotkey::Role::Translate) => hotkey::translate_pressed(app),
                         Some(hotkey::Role::Line) => line::hotkey_pressed(app),
                         Some(hotkey::Role::Belt) => belt::hotkey_pressed(app),
-                        // 搅拌机的按键处理后面再接，现在先忽略
-                        Some(hotkey::Role::Mixer) => {}
+                        Some(hotkey::Role::Mixer) => mixer::hotkey_pressed(app),
                         None => {}
                     }
                 })
@@ -462,7 +473,16 @@ pub fn run() {
             commands::belt::belt_close,
             commands::belt::belt_undo_clear,
             commands::belt::belt_start,
-            commands::belt::belt_release
+            commands::belt::belt_release,
+            commands::mixer::mixer_state,
+            commands::mixer::mixer_ready,
+            commands::mixer::mixer_hits,
+            commands::mixer::mixer_put,
+            commands::mixer::mixer_remove,
+            commands::mixer::mixer_undo_remove,
+            commands::mixer::mixer_close,
+            commands::mixer::mixer_undo_clear,
+            commands::mixer::mixer_release
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

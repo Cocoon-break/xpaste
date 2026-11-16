@@ -59,6 +59,13 @@ pub const BELT_PUT_SELECTED: &str = "belt-put-selected";
 /// 传送带窗口刚显示出来，只发给 `belt`：无载荷。藏起时点击区域清掉了，页面据此重报。
 pub const BELT_SHOWN: &str = "belt-shown";
 
+/// 搅拌机的状态变了，载荷是完整的 `mixer::MixerState`（`cause` 说明是哪种变化）。只发给 `mixer`。
+pub const MIXER_CHANGED: &str = "mixer-changed";
+/// 搅拌机的提示条，载荷 `mixer::Toast`：`{ text, actions, name? }`。只发给 `mixer`。
+pub const MIXER_TOAST: &str = "mixer-toast";
+/// 搅拌机快捷键按下时面板在屏上且拿着键盘：只发给 `panel`，面板把选中的记录放进杯子。
+pub const MIXER_PUT_SELECTED: &str = "mixer-put-selected";
+
 /// 冻结完成，发给每块屏的遮罩 `shot-<i>`（载荷见 `shot::BeginPayload`）。
 pub const SHOT_BEGIN: &str = "shot-begin";
 /// 截图已结束，发给每块屏的遮罩；载荷是结束的那一次的代数，遮罩据此放掉冻结帧（M23 规则 11）。
