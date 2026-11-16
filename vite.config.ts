@@ -29,13 +29,14 @@ export default defineConfig(() => ({
   // 1. prevent Vite from obscuring rust errors
   clearScreen: false,
   plugins: [proSymlink],
-  // 面板、截图遮罩（每屏一个）、贴图、录屏边框、划词卡片各一个页面；带 pro/ 时再加晾衣绳、传送带页面
+  // 面板、截图遮罩（每屏一个）、贴图、录屏边框、划词卡片各一个页面；带 pro/ 时再加晾衣绳、传送带、搅拌机页面
   build: {
     rollupOptions: {
       input: {
         main: "index.html", shot: "shot.html", pin: "pin.html", recFrame: "rec-frame.html", card: "card.html",
         ...(fs.existsSync("pro/web/line.html") ? { line: "pro/web/line.html" } : {}),
         ...(fs.existsSync("pro/web/belt.html") ? { belt: "pro/web/belt.html" } : {}),
+        ...(fs.existsSync("pro/web/mixer.html") ? { mixer: "pro/web/mixer.html" } : {}),
       },
     },
   },
