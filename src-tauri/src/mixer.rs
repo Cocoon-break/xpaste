@@ -3,6 +3,7 @@
 //! 锁顺序同传送带：`RT` 在最外层，持有它时可以短暂去拿 `settings`、`line`，反过来不行；持有 `RT` 时不发事件、不读文件，
 //! 要发的事件攒进 `Fx`，放锁后由 `apply` 发。传送带的 `RT` 和这里的 `RT` 从不同时持有。
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 
@@ -540,13 +541,18 @@ fn read_file(record_id: i64, path: &Path) -> Piece {
     {
         return Err(Refuse::Unsupported);
     }
+    // 先只读开头 8 KB 看是不是二进制：大的压缩包、文档也该按“这种文件”拒，不按“太长”
+    let mut head = Vec::new();
+    std::fs::File::open(path)
+        .and_then(|f| f.take(8192).read_to_end(&mut head))
+        .map_err(|_| Refuse::Missing)?;
+    if looks_binary(&head) {
+        return Err(Refuse::Unsupported);
+    }
     if meta.len() > TEXT_FILE_MAX_BYTES {
         return Err(Refuse::TooLong(None));
     }
     let bytes = std::fs::read(path).map_err(|_| Refuse::Missing)?;
-    if looks_binary(&bytes) {
-        return Err(Refuse::Unsupported);
-    }
     let text = decode_text(&bytes).ok_or(Refuse::Unsupported)?;
     let n = text.chars().count();
     if n > MAX_CHARS {
@@ -677,6 +683,15 @@ mod tests {
         std::fs::write(p("d.txt"), "字".repeat(30_000)).unwrap();
         image::RgbaImage::new(1, 1).save(p("e.png")).unwrap();
         std::fs::write(p("f.txt"), vec![b'a'; 1_048_577]).unwrap();
+        let utf16: Vec<u8> = [0xFF, 0xFE]
+            .into_iter()
+            .chain("log 中文".encode_utf16().flat_map(u16::to_le_bytes))
+            .collect();
+        std::fs::write(p("g.txt"), utf16).unwrap();
+        // 大于 1 MB 的二进制：按“这种文件”拒，不按“太长”
+        let mut big = b"PK\x03\x04\x00\x00".to_vec();
+        big.resize(1_048_577, 0x41);
+        std::fs::write(p("h.docx"), big).unwrap();
 
         assert_eq!(
             text_of(read_file(1, &p("a.log"))),
@@ -692,6 +707,11 @@ mod tests {
             Some(Refuse::TooLong(Some(30_000)))
         );
         assert_eq!(read_file(1, &p("f.txt")).err(), Some(Refuse::TooLong(None)));
+        assert_eq!(
+            text_of(read_file(1, &p("g.txt"))),
+            ("g.txt".into(), "log 中文".into())
+        );
+        assert_eq!(read_file(1, &p("h.docx")).err(), Some(Refuse::Unsupported));
         assert_eq!(read_file(1, &dir).err(), Some(Refuse::Unsupported));
         assert_eq!(read_file(1, &p("gone.txt")).err(), Some(Refuse::Missing));
         match read_file(7, &p("e.png")) {

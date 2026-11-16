@@ -3,8 +3,11 @@
 /// 文件大于它就不读。
 pub const TEXT_FILE_MAX_BYTES: u64 = 1_048_576;
 
-/// 前 8 KB 里有 NUL 字节就算二进制。
+/// 前 8 KB 里有 NUL 字节就算二进制；带 BOM 的 UTF-16 不算（ASCII 字符里本来就有 0x00）。
 pub fn looks_binary(bytes: &[u8]) -> bool {
+    if bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]) {
+        return false;
+    }
     bytes[..bytes.len().min(8192)].contains(&0)
 }
 
@@ -71,6 +74,17 @@ mod tests {
         let mut late = vec![b'a'; 10_000];
         late[9000] = 0;
         assert!(!looks_binary(&late));
+        // 带 BOM 的 UTF-16 里的 ASCII 字符有 0x00，不算二进制
+        let le: Vec<u8> = [0xFF, 0xFE]
+            .into_iter()
+            .chain("log ok".encode_utf16().flat_map(u16::to_le_bytes))
+            .collect();
+        let be: Vec<u8> = [0xFE, 0xFF]
+            .into_iter()
+            .chain("log ok".encode_utf16().flat_map(u16::to_be_bytes))
+            .collect();
+        assert!(!looks_binary(&le));
+        assert!(!looks_binary(&be));
     }
 
     #[test]
