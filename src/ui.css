@@ -25,6 +25,8 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
 /* 下拉（select-pop.ts）：按钮同输入框的底色和描边，弹层同面板的右键菜单 */
 .sel-btn { flex: none; display: inline-flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 112px; height: 32px; padding: 0 8px 0 12px; border: 1px solid var(--line-2); border-radius: 7px; background: var(--well); color: var(--fg); font: inherit; font-size: 13px; cursor: pointer; transition: border-color 160ms ease, box-shadow 160ms ease; }
 .field .sel-btn { width: 100%; height: 38px; padding: 0 10px 0 12px; }
+/* 说明在左、下拉在右的一行（录屏清晰度、帧率等）：同原生下拉的 112 px，不撑满把说明挤成窄条 */
+.field .line .sel-btn { width: 112px; height: 32px; padding: 0 8px 0 12px; }
 .sel-btn .chev { width: 14px; height: 14px; flex: none; fill: none; stroke: var(--faint); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; transition: transform 160ms var(--ease-enter); }
 .sel-btn[aria-expanded="true"], .sel-btn:focus-visible { outline: none; border-color: var(--beam); box-shadow: 0 0 0 3px color-mix(in srgb, var(--beam) 18%, transparent); }
 .sel-btn[aria-expanded="true"] .chev { transform: rotate(180deg); }
