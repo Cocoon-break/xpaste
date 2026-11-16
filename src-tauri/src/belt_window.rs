@@ -78,6 +78,8 @@ struct Resize {
     origin: (f64, f64),
     w0: f64,
     centered: bool,
+    /// 最长：居中的让着搅拌机（`belt_room`），拖过位置的到工作区宽
+    max: f64,
     /// 按下时光标所在屏的工作区（逻辑像素）和换算系数：拖过屏也按这块算
     work: Rect,
     k: f64,
@@ -95,8 +97,12 @@ static WORK: Mutex<(Rect, f64)> = Mutex::new((
     },
     1.0,
 ));
-/// 每次重新摆加一：滑到一半又要重新摆时旧的那次停下
+/// 每次重新摆加一：滑到一半又要重新摆、显示、藏起、开始拖动或调长度时旧的那次停下
 static SLIDE: AtomicU64 = AtomicU64::new(0);
+
+fn stop_slide() {
+    SLIDE.fetch_add(1, Ordering::SeqCst);
+}
 const SLIDE_STEPS: u32 = 12;
 
 /// 建好隐藏的窗口，免得第一次显示时现建 webview。参数同晾衣绳。
@@ -177,6 +183,10 @@ pub fn relayout(app: &AppHandle) {
             return;
         }
         let (work, k) = *WORK.lock().unwrap_or_else(PoisonError::into_inner);
+        // 这次显示时没摆成（没取到光标所在屏）
+        if work.w <= 0.0 {
+            return;
+        }
         let to = belt_room(work, crate::mixer_window::body_left(), saved_len(app));
         let ((ox, oy), _) = *FRAME.lock().unwrap_or_else(PoisonError::into_inner);
         let (fw, fh) = *SIZE.lock().unwrap_or_else(PoisonError::into_inner);
@@ -216,7 +226,11 @@ pub fn relayout(app: &AppHandle) {
                         h: lerp(from.h, to.h),
                     };
                     on_main(&a, move |app| {
-                        if SLIDE.load(Ordering::SeqCst) != g || !shown() || busy() {
+                        if SLIDE.load(Ordering::SeqCst) != g {
+                            return;
+                        }
+                        if !shown() || busy() {
+                            stop_slide();
                             return;
                         }
                         if let Some(w) = app.get_webview_window(LABEL)
@@ -250,6 +264,7 @@ pub fn resize(app: &AppHandle, side: Side) {
     {
         return;
     }
+    stop_slide();
     let (tx, rx) = std::sync::mpsc::channel();
     on_main(app, move |app| {
         let _ = tx.send(float_drag::cursor_work(app).ok().flatten());
@@ -262,12 +277,19 @@ pub fn resize(app: &AppHandle, side: Side) {
     };
     let (origin, _) = *FRAME.lock().unwrap_or_else(PoisonError::into_inner);
     let w0 = SIZE.lock().unwrap_or_else(PoisonError::into_inner).0;
+    let centered = float_drag::saved(app, LABEL).is_none();
+    let max = if centered {
+        belt_room(work, crate::mixer_window::body_left(), Some(work.w)).w
+    } else {
+        work.w
+    };
     *RESIZE.lock().unwrap_or_else(PoisonError::into_inner) = Some(Resize {
         side,
         cursor_x: cursor.0,
         origin,
         w0,
-        centered: float_drag::saved(app, LABEL).is_none(),
+        centered,
+        max,
         work,
         k,
         last: None,
@@ -293,7 +315,14 @@ fn resize_tick(app: &AppHandle, cursor_x: f64, button: bool) {
         return;
     }
     r.last = Some(cursor_x);
-    let st = (r.side, cursor_x - r.cursor_x, r.origin, r.w0, r.centered);
+    let st = (
+        r.side,
+        cursor_x - r.cursor_x,
+        r.origin,
+        r.w0,
+        r.centered,
+        r.max,
+    );
     let (work, k) = (r.work, r.k);
     drop(g);
     on_main(app, move |app| apply_resize(app, st, work, k));
@@ -302,7 +331,7 @@ fn resize_tick(app: &AppHandle, cursor_x: f64, button: bool) {
 /// 按光标位移算新矩形，限在按下时所在屏的工作区里并更新 `FRAME`、`SIZE`。主线程调用。
 fn apply_resize(
     app: &AppHandle,
-    (side, dx_px, origin, w0, centered): (Side, f64, (f64, f64), f64, bool),
+    (side, dx_px, origin, w0, centered, max): (Side, f64, (f64, f64), f64, bool, f64),
     work: Rect,
     k: f64,
 ) {
@@ -317,7 +346,7 @@ fn apply_resize(
         side,
         centered,
         MIN_LEN.min(work.w),
-        work.w,
+        max,
     );
     let o = float_drag::clamp(o, (nw, h), work);
     *FRAME.lock().unwrap_or_else(PoisonError::into_inner) = ((o.0 * k, o.1 * k), k);
@@ -337,7 +366,10 @@ fn finish_resize(app: &AppHandle, centered: bool, work: Rect) {
     {
         log::warn!("传送带记下长度失败：{e}");
     }
-    if !centered {
+    if centered {
+        // 调的时候搅拌机开了、关了：松手后补上这次没做的让开
+        relayout(app);
+    } else {
         float_drag::save_in(app, LABEL, &FRAME, work);
     }
 }
@@ -350,6 +382,7 @@ pub fn drag() {
             .unwrap_or_else(PoisonError::into_inner)
             .is_none()
     {
+        stop_slide();
         let size = *SIZE.lock().unwrap_or_else(PoisonError::into_inner);
         float_drag::start(&DRAG, &FRAME, size);
     }
@@ -364,6 +397,7 @@ pub fn show(app: &AppHandle) {
         if SHOWN.swap(true, Ordering::SeqCst) {
             return;
         }
+        stop_slide();
         let shown = place(app, &w)
             .and_then(|()| w.set_ignore_cursor_events(true))
             .and_then(|()| crate::trcard::front(app, &w, false));
@@ -414,6 +448,7 @@ pub fn hide(app: &AppHandle) {
             return;
         }
         SHOWN.store(false, Ordering::SeqCst);
+        stop_slide();
         HITS.lock().unwrap_or_else(PoisonError::into_inner).clear();
         let Some(w) = app.get_webview_window(LABEL) else {
             return;

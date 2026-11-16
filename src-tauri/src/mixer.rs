@@ -506,9 +506,9 @@ pub fn on_recorded(app: &AppHandle, id: i64, kind: Kind, seq: u64) {
     if !takes_copy(seq, rt().result_seq) {
         return;
     }
-    crate::belt::missed(app);
     // 读库、读文件都不持锁
     let pieces = gather(&app.state::<AppState>(), &[id]);
+    let mut took = false;
     with(app, |pro, rt, fx| {
         if !rt.open || !takes_copy(seq, rt.result_seq) {
             return;
@@ -524,18 +524,25 @@ pub fn on_recorded(app: &AppHandle, id: i64, kind: Kind, seq: u64) {
             return;
         }
         let (n, last) = place(rt, fx, pieces);
+        took = n > 0;
         log::info!("搅拌机 放进 {n} 样 id={id} kind={kind:?}");
         fx.changed(Cause::Put, last);
     });
+    if took {
+        crate::belt::missed(app, seq);
+    }
 }
 
-/// 传送带开着、这次新复制归了传送带：这次打开以来第一次时提示一下。
-pub fn missed(app: &AppHandle) {
+/// 传送带收下了这次新复制：搅拌机开着、本来也会放进这条时，这次打开以来第一次提示一下。
+pub fn missed(app: &AppHandle, seq: u64) {
     if open_stamp().is_none() {
         return;
     }
     with(app, |_, rt, fx| {
-        if rt.open && !std::mem::replace(&mut rt.warned_other, true) {
+        if rt.open
+            && takes_copy(seq, rt.result_seq)
+            && !std::mem::replace(&mut rt.warned_other, true)
+        {
             fx.toasts.push(toast("新复制排上了传送带", &[]));
         }
     });

@@ -113,10 +113,20 @@ pub fn cursor_work(app: &AppHandle) -> tauri::Result<Option<(Rect, f64)>> {
 /// 页面上按下：把这个浮层提到另一个上面，不拿键盘。`shown` 在主线程上再看一次，已藏起的不再显示出来
 pub fn front(app: &AppHandle, label: &'static str, shown: fn() -> bool) {
     on_main(app, move |app| {
-        if shown()
-            && let Some(w) = app.get_webview_window(label)
-            && let Err(e) = crate::trcard::front(app, &w, false)
-        {
+        if !shown() {
+            return;
+        }
+        let Some(w) = app.get_webview_window(label) else {
+            return;
+        };
+        // macOS：orderFrontRegardless；Windows：SW_SHOWNOACTIVATE 不改已显示窗口的上下顺序，另用 SetWindowPos
+        #[cfg(windows)]
+        let r = w
+            .hwnd()
+            .map(|h| xpaste_platform::raise_no_activate(h.0 as isize));
+        #[cfg(not(windows))]
+        let r = crate::trcard::front(app, &w, false);
+        if let Err(e) = r {
             log::warn!("{label} 提到最上失败：{e}");
         }
     });

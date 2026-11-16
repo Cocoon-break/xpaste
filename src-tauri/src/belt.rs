@@ -783,7 +783,7 @@ pub fn on_recorded(app: &AppHandle, id: i64, kind: Kind, seq: u64) {
     if crate::collect::taker(open_stamp(), crate::mixer::open_stamp()) == Some(Taker::Mixer) {
         return;
     }
-    crate::mixer::missed(app);
+    let mut took = false;
     with(app, |state, pro, rt, fx| {
         if !rt.on {
             return;
@@ -798,6 +798,7 @@ pub fn on_recorded(app: &AppHandle, id: i64, kind: Kind, seq: u64) {
             }
             // 没放上（满了）时剪切板留着刚复制的，让出一次
             if let Some(item) = put_record(state, rt, fx, id, true) {
+                took = true;
                 log::info!("传送带 放上 1 件 id={id} kind={kind:?}");
                 write_next(state, rt, fx, true);
                 fx.changed(Cause::Put, Some(item));
@@ -823,11 +824,18 @@ pub fn on_recorded(app: &AppHandle, id: i64, kind: Kind, seq: u64) {
             }
         }
     });
+    if took {
+        crate::mixer::missed(app, seq);
+    }
 }
 
-/// 搅拌机开着、这次新复制归了搅拌机：这次打开以来第一次时提示一下。
-pub fn missed(app: &AppHandle) {
-    if open_stamp().is_none() {
+/// 搅拌机收下了这次新复制：带子开着、本来也会放上这条时，这次打开以来第一次提示一下。
+pub fn missed(app: &AppHandle, seq: u64) {
+    let state = app.state::<AppState>();
+    let writing = state.own_writing.load(Ordering::SeqCst);
+    if open_stamp().is_none()
+        || !take_on_belt(seq, state.own_write_seq.load(Ordering::SeqCst), writing)
+    {
         return;
     }
     with(app, |_, _, rt, fx| {

@@ -697,6 +697,26 @@ pub fn hide_window(hwnd: isize) {
     }
 }
 
+/// 把已经显示着的窗口提到同一层（置顶窗口在置顶的那些里）最上面，不激活、不动位置尺寸。
+/// `ShowWindow(SW_SHOWNOACTIVATE)` 不改已显示窗口的上下顺序。hwnd 失效时什么也不做。
+pub fn raise_no_activate(hwnd: isize) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos,
+    };
+    // SAFETY: hwnd 失效时调用失败而不会崩溃
+    unsafe {
+        let _ = SetWindowPos(
+            HWND(hwnd as *mut _),
+            Some(HWND_TOP),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
+}
+
 /// 一次设好窗口的位置和尺寸（物理像素），不分两步：贴着屏幕右边的窗口改宽时右边缘不跳。不激活、不改层级。
 /// 只用于同一块屏里改尺寸（跨不同 DPI 的屏要先移过去再定尺寸）。hwnd 失效时什么也不做。
 pub fn set_window_rect(hwnd: isize, x: i32, y: i32, w: i32, h: i32) {
