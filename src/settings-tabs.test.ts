@@ -55,6 +55,8 @@ test('保存失败的快捷键错误落到对应录制框（出错标签跟着�
   assert.equal(errorControl('invalidSettings', '录屏快捷键不能与截图快捷键相同'), 'recHotkey');
   assert.equal(errorControl('invalidSettings', '录屏快捷键至少需要包含 Mod 或 Alt'), 'recHotkey');
   assert.equal(errorControl('translateHotkeyTaken', '翻译快捷键已被其他应用占用，请换一个'), 'trHotkey');
+  assert.equal(errorControl('mixerHotkeyTaken', '搅拌机快捷键已被其他应用占用，请换一个'), 'mixerHotkey');
+  assert.equal(errorControl('invalidSettings', '搅拌机快捷键不能与传送带快捷键相同'), 'mixerHotkey');
   assert.equal(errorControl('invalidSettings', '翻译快捷键不能与录屏快捷键相同'), 'trHotkey');
   assert.equal(errorControl('invalidSettings', '翻译快捷键至少需要包含 Mod 或 Alt'), 'trHotkey');
   assert.equal(errorControl('lineHotkeyTaken', '便签快捷键已被其他应用占用，请换一个'), 'lineHotkey');

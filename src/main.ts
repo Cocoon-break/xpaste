@@ -23,10 +23,12 @@ import {
 } from './api/events';
 import { lineDragDrop, lineDragHover, lineHangFromPanel, lineHide, lineSideHint, onLineChanged, onLineHangSelected, onProLink, proActivate, proBuy, proDeactivate, proStatus, proTakeLink, proUnbind, type LineView } from './api/line';
 import { beltPut, onBeltPutSelected } from './api/belt';
+import { mixerDefaults, mixerPut, onMixerPutSelected } from './api/mixer';
+import { mountRecipes } from './recipes';
 import { deviceLine, proCard, proControls, proLine } from './pro-status';
 import { popSelect } from './select-pop';
 import { installTips } from './tip';
-import type { AppError, Appearance, BoundDevice, Engines, FileEntry, LineSide, LineStyle, PanelStyle, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
+import type { AppError, Appearance, BoundDevice, Engines, FileEntry, LineSide, LineStyle, PanelStyle, PlatformInfo, Recipe, RecordDetail, RecordSummary, Settings } from './api/types';
 import { appCounts, bestApp, freshSug, fromApp, type Sug } from './source';
 import { COMPACT, compactGroups, compactHeadH, rowParts } from './compact';
 import { copyToast, needsAccessibility } from './copy-status';
@@ -93,6 +95,8 @@ const I = {
   hang: '<path d="M8 5.5a2 2 0 1 1 2 2V9"/><path d="M10 9 3 14.5h14z"/>',
   // 放上传送带：向下的箭头落在底线上
   put: '<path d="M3 15.5h14"/><path d="M10 3.5v8M6.8 8.5 10 11.7l3.2-3.2"/>',
+  // 放进搅拌机：量杯
+  cup: '<path d="M5.5 4h9l-1.2 8.5H6.7z"/><path d="M6.7 12.5h6.6l.7 3.5H6z"/><path d="M8 8.5h4"/>',
 };
 const svg = (n: keyof typeof I, cls = '') =>
   `<svg class="ic ${cls}" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n]}</svg>`;
@@ -244,6 +248,7 @@ const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id ===
                 : `<button type="button" tabindex="-1" data-qa="pin" title="${r.pinned ? '取消置顶' : '置顶'}">${svg(r.pinned ? 'pinFill' : 'pin')}</button>`}
               ${lineOn() ? `<button type="button" tabindex="-1" data-qa="hang" title="挂到晾衣绳">${svg('hang')}</button>` : ''}
               ${beltOn() ? `<button type="button" tabindex="-1" data-qa="belt" title="放上传送带">${svg('put')}</button>` : ''}
+              ${mixerOn() && r.kind !== 'video' ? `<button type="button" tabindex="-1" data-qa="mixer" data-tip="放进搅拌机">${svg('cup')}</button>` : ''}
               <button type="button" tabindex="-1" data-qa="copy" title="${copyVerb(S.canPaste)}">${svg('copy')}</button>
             </span>
           </div>
@@ -1938,6 +1943,7 @@ const trKey = optHotkey('trHotkey', '在任何应用里选中文字后按下，�
 const lineKey = optHotkey('lineHotkey', '把最近复制的一条挂到晾衣绳上；面板开着时挂选中的那条');
 const beltKey = optHotkey('beltHotkey', '打开或关闭传送带；面板开着时，把选中的记录放上去（多选则按选中的先后）');
 const beltBackKey = optHotkey('beltBackHotkey', '退回上一件：带子往回走一格');
+const mixerKey = optHotkey('mixerHotkey', '打开或关闭搅拌机；面板开着时，把选中的记录放进去');
 
 // “Pro”标签（只在含晾衣绳的版本里显示）：状态行、联网激活、设备满员时解绑、购买入口、在本机停用。
 // 出错写在输入框下方（提示条会被设置框盖住）
@@ -2130,6 +2136,27 @@ lineSideEl.addEventListener('change', (e) => {
 const proPages = [...document.querySelectorAll<HTMLElement>('#st-pro .pro-page')];
 const proLicEl = $('#proLic'), proLicBuy = $<HTMLButtonElement>('#proLicBuy'), proLicCode = $<HTMLButtonElement>('#proLicCode'), proLicManage = $<HTMLButtonElement>('#proLicManage');
 const lineOnQuick = $<HTMLInputElement>('#lineOnQuick'), beltOnQuick = $<HTMLInputElement>('#beltOnQuick');
+// 搅拌机：总开关、快捷键与配方列表都是草稿，保存时写回。自带配方的默认值第一次打开设置时取
+const mixerOnIn = $<HTMLInputElement>('#mixerOn'), mixerOnQuick = $<HTMLInputElement>('#mixerOnQuick');
+let draftRecipes: Recipe[] = [];
+const mixerDefs: Recipe[] = [];
+const recipes = mountRecipes($('#mixerRecipes'), {
+  get: () => draftRecipes,
+  set: (l) => {
+    draftRecipes = l;
+    paintMixerSum();
+  },
+  defaults: mixerDefs,
+  composing,
+});
+// 编辑框里 Esc 只收起编辑（recipes.ts 已拦下）；旧 WebKit 仍会触发对话框的 cancel，按此标记拦下（同应用列表）
+$('#mixerRecipes').addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || !e.defaultPrevented) return;
+  escClosedList = true;
+  setTimeout(() => (escClosedList = false));
+});
+// 摘要里的配方数是打开的那几个
+const paintMixerSum = () => featSummary($('#proSumMixer'), mixerOnIn.checked, mixerKey.pending, `${draftRecipes.filter((r) => r.show).length} 个配方`);
 const LINE_SIDE_NAME: Record<LineSide, string> = { top: '顶部', left: '左侧', right: '右侧' };
 let proPage = 'proHome';
 function proGo(id: string, focus?: HTMLElement | null, animate = true) {
@@ -2170,10 +2197,18 @@ function paintProHome() {
   beltOnQuick.checked = beltOnIn.checked;
   featSummary($('#proSumLine'), draftLineEnabled, lineKey.pending, LINE_SIDE_NAME[draftLineSide] + (draftLinePinned ? ' · 一直显示' : ''));
   featSummary($('#proSumBelt'), beltOnIn.checked, beltKey.pending, beltAutoIn.value === 'auto' ? '自动开启' : '手动开启');
+  mixerOnQuick.checked = mixerOnIn.checked;
+  paintMixerSum();
   $('#proFeatLine').classList.toggle('off', !draftLineEnabled);
   $('#proFeatBelt').classList.toggle('off', !beltOnIn.checked);
+  $('#proFeatMixer').classList.toggle('off', !mixerOnIn.checked);
   // 传送带关着时下面几项变淡，仍可改（同晾衣绳）
   for (const el of document.querySelectorAll('#proBeltPage > .line, #proBeltPage > .field')) el.classList.toggle('line-off', !beltOnIn.checked);
+  // 搅拌机关着时下面几项变淡、不可操作
+  for (const el of document.querySelectorAll<HTMLElement>('#proMixerPage > .line, #proMixerPage > .field, #proMixerPage > .recipes')) {
+    el.classList.toggle('line-off', !mixerOnIn.checked);
+    el.inert = !mixerOnIn.checked;
+  }
 }
 $('#st-pro').addEventListener('click', (e) => {
   const t = e.target as Element, go = t.closest<HTMLElement>('[data-pro-go]');
@@ -2191,6 +2226,12 @@ beltOnQuick.addEventListener('change', () => {
 });
 lineOnIn.addEventListener('change', paintProHome);
 beltOnIn.addEventListener('change', paintProHome);
+mixerOnQuick.addEventListener('change', () => {
+  mixerOnIn.checked = mixerOnQuick.checked;
+  paintProHome();
+});
+mixerOnIn.addEventListener('change', paintProHome);
+$('#mixerTrGo').addEventListener('click', () => showStControl(trBaseIn));
 proLicCode.addEventListener('click', () => proGo('proLicPage', proCodeIn));
 proLicManage.addEventListener('click', () => proGo('proLicPage'));
 proLicBuy.addEventListener('click', () => void proBuy().catch((err: AppError) => {
@@ -2607,6 +2648,15 @@ function openSettings() {
   beltBackKey.reset(st.beltBackHotkey);
   beltOnIn.checked = st.beltEnabled;
   beltAutoIn.value = st.beltAuto ? 'auto' : 'manual';
+  mixerKey.reset(st.mixerHotkey);
+  mixerOnIn.checked = st.mixerEnabled;
+  draftRecipes = st.mixerRecipes;
+  recipes.reset();
+  if (S.line.available && !mixerDefs.length)
+    void mixerDefaults().then((d) => {
+      mixerDefs.push(...d);
+      recipes.render();
+    }, (e: AppError) => void info(`读取自带配方失败 kind=${e.kind}`));
   paintProStatus();
   draftLineStyle = st.lineStyle;
   paintLineStyle();
@@ -2639,6 +2689,7 @@ function openSettings() {
     if (h.translate) trKey.setHelp(taken('翻译'), true);
     if (h.line && S.line.available) lineKey.setHelp(taken('便签'), true);
     if (h.belt && S.line.available) beltKey.setHelp(taken('传送带'), true);
+    if (h.mixer && S.line.available) mixerKey.setHelp(taken('搅拌机'), true);
   }, (e: AppError) => void info(`读取快捷键状态失败 kind=${e.kind}`));
   shotDir.pending = st.shotDir;
   shotDir.paint();
@@ -2772,8 +2823,7 @@ async function submitSettings() {
     recHotkey: recKey.pending, recDir: recDir.pending, recSystemAudio: recSystemAudioIn.checked, recMicrophone: recMicIn.checked, recCopy: recCopyIn.checked,
     recQuality: recQualityIn.value, recFps: recFpsIn.value, panelStyle: draftStyle, lineHotkey: lineKey.pending,
     beltEnabled: beltOnIn.checked, beltAuto: beltAutoIn.value === 'auto', beltHotkey: beltKey.pending, beltBackHotkey: beltBackKey.pending,
-    // 搅拌机还没有设置页：原样带回已读到的值，保存时不丢
-    mixerEnabled: S.settings.mixerEnabled, mixerHotkey: S.settings.mixerHotkey, mixerRecipes: S.settings.mixerRecipes,
+    mixerEnabled: mixerOnIn.checked, mixerHotkey: mixerKey.pending, mixerRecipes: draftRecipes,
   });
   // 翻译字段和晾衣绳的样式、开关、位置不经 SettingsForm；末尾的 / 由后端去掉。engine 没动过就原样写回（可能是空串）
   Object.assign(s, {
@@ -2822,7 +2872,7 @@ async function submitSettings() {
       showStControl(hotkeyIn);
       setHotkeyHelp(err.message, true);
     } else if (at) {
-      const f = { shotHotkey: shotKey, recHotkey: recKey, trHotkey: trKey, lineHotkey: lineKey, beltHotkey: beltKey, beltBackHotkey: beltBackKey }[at];
+      const f = { shotHotkey: shotKey, recHotkey: recKey, trHotkey: trKey, lineHotkey: lineKey, beltHotkey: beltKey, beltBackHotkey: beltBackKey, mixerHotkey: mixerKey }[at];
       showStControl(f.input);
       f.setHelp(err.message, true);
     } else toast(err.message);
@@ -3286,12 +3336,33 @@ await onTranslateDelta(({ id, lang, engine, text }) => {
 });
 await onPausedChanged((p) => handlers.paused(p));
 // 录屏遮罩的声音开关写回了设置（M24）：换掉手里的副本，之后保存设置或界面状态才不会把它改回去
-await onSettingsChanged((s) => void (S.settings = s));
+// 搅拌机“存成配方”也走这里：设置开着时把新加的配方接到正在改的列表末尾，别的没保存的改动不动
+await onSettingsChanged((s) => {
+  if (dlg.open) {
+    const had = (r: Recipe) => S.settings.mixerRecipes.some((x) => x.name === r.name) || draftRecipes.some((x) => x.name === r.name);
+    const add = s.mixerRecipes.filter((r) => !had(r));
+    if (add.length) {
+      draftRecipes = [...draftRecipes, ...add];
+      recipes.render();
+      paintMixerSum();
+    }
+  }
+  S.settings = s;
+});
 // 托盘“设置…”：后端已先唤起面板
 // 晾衣绳“试用已结束”提示条上的“输入授权码”：载荷 pro，切到“Pro”标签
 // 设置已开着也切过去，并聚焦授权码输入框
+// 搅拌机 ⋯ 菜单的“编辑配方…”（mixer）、存成配方后的“改名字”（mixer:<名字>）：进 Pro → 搅拌机页，后者展开那个配方
 await onOpenSettings((tab) => {
   if (tab === 'translate') return openTrSettings();
+  if (tab?.startsWith('mixer') && S.line.available) {
+    openSettingsAt('st-tab-pro');
+    if (!dlg.open) return;
+    selectStTab(stTabs.findIndex((t) => t.id === 'st-tab-pro'), false);
+    proGo('proMixerPage', tab === 'mixer' ? undefined : null);
+    if (tab !== 'mixer') recipes.edit(tab.slice('mixer:'.length));
+    return;
+  }
   if (tab !== 'pro' || !S.line.available) return openSettings();
   openSettingsAt('st-tab-pro');
   showStControl(proActField.hidden ? proOffBtn : proCodeIn);
@@ -3320,7 +3391,7 @@ await onShotNeedPermission(({ pane, mode }) =>
 // 只认面板有焦点时的按键：失焦时后端不发到这里，这里再防一道
 const hkOn = (el: Element) => document.activeElement === el && document.hasFocus();
 const hkOpts = [[shotKey, '截图', 'shot'], [recKey, '录屏', 'rec'], [trKey, '翻译', 'translate'], [lineKey, '便签', 'line'], [beltKey, '传送带', 'belt'],
-  [beltBackKey, '退回', 'beltBack']] as const;
+  [beltBackKey, '退回', 'beltBack'], [mixerKey, '搅拌机', 'mixer']] as const;
 await onHotkeyPressed((role) => {
   // 被自己的全局快捷键拦下的组合也算收到了主键，松开修饰键时不报“没收到组合键”
   hotkeyGot = true;
@@ -3357,6 +3428,15 @@ await onBeltPutSelected(() => {
   const other = hkOpts.find(([f]) => f !== beltKey && hkOn(f.input));
   if (other) return other[0].setHelp(`${other[1]}快捷键不能与传送带快捷键相同`, true);
   putOnBelt(S.sel);
+});
+// 面板可见时按了搅拌机快捷键：同传送带，焦点在它的录制框里就写入，否则放选中的（或多选的）进杯子
+await onMixerPutSelected(() => {
+  hotkeyGot = true;
+  if (hkOn(mixerKey.input)) return mixerKey.record(S.settings.mixerHotkey);
+  if (hkOn(hotkeyIn)) return setHotkeyHelp('不能与搅拌机快捷键相同', true);
+  const other = hkOpts.find(([f]) => f !== mixerKey && hkOn(f.input));
+  if (other) return other[0].setHelp(`${other[1]}快捷键不能与搅拌机快捷键相同`, true);
+  putInMixer(S.sel);
 });
 // 便签或 Pro 状态变了：重画已挂刻线，设置开着时“Pro”状态行跟着变
 await onLineChanged((v) => {
@@ -3501,8 +3581,8 @@ list.addEventListener('click', (e) => {
   const qa = t.closest<HTMLElement>('[data-qa]')?.dataset.qa;
   const mod = S.platform.os === 'macos' ? e.metaKey : e.ctrlKey;
   if (!qa && (mod || e.shiftKey)) return multiTo(id, e.shiftKey);
-  // 点的是多选里某一行的“放上传送带”：整组按选中的先后放上去，退出多选前先记下
-  const group = qa === 'belt' && S.multi.has(id) ? [...S.multi] : [];
+  // 点的是多选里某一行的“放上传送带”“放进搅拌机”：整组按选中的先后放进去，退出多选前先记下
+  const group = (qa === 'belt' || qa === 'mixer') && S.multi.has(id) ? [...S.multi] : [];
   // 不带修饰键的单击退出多选（M25 规则 6）
   if (S.multi.size) {
     S.multi.clear();
@@ -3516,6 +3596,7 @@ list.addEventListener('click', (e) => {
   if (qa === 'edit') void openSnippet('edit', id);
   if (qa === 'hang') hangRecord(id);
   if (qa === 'belt') putOnBelt(id, group);
+  if (qa === 'mixer') putInMixer(id, group);
 });
 // 吸顶栏在列表外，上面的列表委托收不到它的点击（空列表里的同名按钮仍走上面）
 $('#newSnipBtn').addEventListener('click', () => openSnippet('new'));
@@ -3548,6 +3629,15 @@ function beltOn() {
 function putOnBelt(id: number | null, multi = [...S.multi]) {
   const ids = putOrder(id ?? S.sel, multi);
   if (ids.length) void beltPut(ids).catch((err: AppError) => toast(err.message));
+}
+// 搅拌机在这个构建里、且用户开着：行上才有放进杯子的按钮
+function mixerOn() {
+  return S.line.available && S.settings.mixerEnabled;
+}
+// 放进搅拌机：同 putOnBelt；放不下的由搅拌机自己提示，搅拌机没开就顺便打开
+function putInMixer(id: number | null, multi = [...S.multi]) {
+  const ids = putOrder(id ?? S.sel, multi);
+  if (ids.length) void mixerPut(ids).catch((err: AppError) => toast(err.message));
 }
 // 挂到晾衣绳：绳子放下亮一下；没挂成（重复、挂满、试用结束）的提示在晾衣绳上
 function hangRecord(id: number | null) {

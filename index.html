@@ -367,6 +367,10 @@
                   <button type="button" data-pro-go="proBeltPage" aria-describedby="proSumBelt"><span class="ic2" aria-hidden="true"><svg viewBox="0 0 20 20"><rect x="2" y="11" width="16" height="4.5" rx="2.25"/><rect x="4" y="6" width="4" height="4" rx="1"/><rect x="9.5" y="6" width="4" height="4" rx="1"/></svg></span><span class="t"><b>传送带</b><small id="proSumBelt"></small></span><svg class="chev" viewBox="0 0 20 20" aria-hidden="true"><path d="m8 5 5 5-5 5"/></svg></button>
                   <label class="switch"><input type="checkbox" id="beltOnQuick" aria-label="传送带"></label>
                 </div>
+                <div class="pro-feat" id="proFeatMixer">
+                  <button type="button" data-pro-go="proMixerPage" aria-describedby="proSumMixer"><span class="ic2" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M5.5 4h9l-1.2 8.5H6.7z"/><path d="M6.7 12.5h6.6l.7 3.5H6z"/><path d="M8 8.5h4"/></svg></span><span class="t"><b>搅拌机</b><small id="proSumMixer"></small></span><svg class="chev" viewBox="0 0 20 20" aria-hidden="true"><path d="m8 5 5 5-5 5"/></svg></button>
+                  <label class="switch"><input type="checkbox" id="mixerOnQuick" aria-label="搅拌机"></label>
+                </div>
               </div>
             </div>
             <div class="pro-page" id="proLicPage" style="--i:0" aria-label="授权" hidden>
@@ -426,6 +430,26 @@
               <label for="beltBackHotkey">退回快捷键</label>
               <input id="beltBackHotkey" readonly autocomplete="off" spellcheck="false" placeholder="未启用" aria-describedby="beltBackHotkeyHelp">
               <p class="help" id="beltBackHotkeyHelp"></p>
+            </div>
+            </div>
+            <div class="pro-page" id="proMixerPage" style="--i:0" aria-label="搅拌机" hidden>
+              <button type="button" class="pro-back" data-pro-back><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m12 5-5 5 5 5"/></svg>Pro</button>
+            <div class="switches">
+              <label class="switch"><span><b>搅拌机</b><small>把几条复制的内容丢进杯子，按配方让 AI 合成一条</small></span><input type="checkbox" id="mixerOn"></label>
+            </div>
+            <div class="field">
+              <label for="mixerHotkey">搅拌机快捷键</label>
+              <input id="mixerHotkey" readonly autocomplete="off" spellcheck="false" placeholder="未启用" aria-describedby="mixerHotkeyHelp">
+              <p class="help" id="mixerHotkeyHelp"></p>
+            </div>
+            <div class="line">
+              <span><b>AI 接口</b><small>用“翻译”里配置的 OpenAI 兼容接口（地址、Key、模型）；杯里有图片时，模型要能看图</small></span>
+              <button class="btn sm" type="button" id="mixerTrGo">去翻译设置</button>
+            </div>
+            <div class="recipes">
+              <span class="lbl">配方</span>
+              <p class="help">打开的配方按这个顺序出现在搅拌机上：前三个是底座上的按键，其余在 ⋯ 里。拖左边的把手调整顺序</p>
+              <div id="mixerRecipes"></div>
             </div>
             </div>
           </section>

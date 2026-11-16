@@ -702,6 +702,36 @@ dialog > form { display: contents; }
 .pro-back svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .pro-back:focus-visible { outline: 2px solid var(--beam); }
 @media (hover: hover) and (pointer: fine) { .pro-back:hover { background: var(--glass-3); color: var(--fg); } }
+/* 搅拌机的配方列表：把手、名字与提示词、显示开关、编辑、恢复默认或删除；拖动时别的行用 transform 让位 */
+.recipes { display: grid; gap: 7px; min-width: 0; }
+.recipes > .lbl { font-size: 13px; font-weight: 500; }
+.rl { margin-top: 3px; border-top: 1px solid var(--line); }
+.rr { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto auto auto; gap: 8px; align-items: center; padding: 8px 4px 8px 0; border-bottom: 1px solid var(--line); position: relative; transition: transform 160ms var(--ease-enter); }
+.rr.lift { z-index: 2; transition: none; background: var(--pop-solid); border-radius: 8px; box-shadow: var(--shadow-pop); }
+.rr .grip { width: 22px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--faint); display: grid; place-items: center; cursor: grab; touch-action: none; }
+.rr .grip:disabled { visibility: hidden; }
+.rr.lift .grip { cursor: grabbing; }
+.rr .nm { min-width: 0; }
+.rr .nm b { font-weight: 500; font-size: 13px; }
+.rr .nm small { display: block; font-size: 12px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rr.off .nm { opacity: .5; }
+.rr .tag { font-size: 11px; color: var(--faint); border: 1px solid var(--line-2); border-radius: 4px; padding: 0 4px; margin-left: 6px; }
+.rr .tag.key { color: var(--cursor); border-color: currentColor; }
+.rr .switch { padding: 0; border: 0; }
+.rr .ib { width: 28px; height: 28px; padding: 0; border: 0; border-radius: 7px; background: none; color: var(--muted); display: grid; place-items: center; cursor: pointer; }
+.rr .ib.ph { visibility: hidden; }
+.rr .ic { width: 16px; height: 16px; }
+@media (hover: hover) and (pointer: fine) { .rr .grip:hover, .rr .ib:hover { background: var(--hover); color: var(--fg); } }
+.ed { grid-column: 2 / -1; display: grid; gap: 8px; padding: 4px 0; }
+.ed input, .ed textarea { font: 12.5px var(--font-ui); color: var(--fg); background: var(--well); border: 1px solid var(--line-2); border-radius: 7px; padding: 6px 8px; resize: none; min-width: 0; transition: border-color 160ms ease, box-shadow 160ms ease; }
+.ed textarea { min-height: 72px; line-height: 1.55; }
+.ed input:focus-visible, .ed textarea:focus-visible { outline: none; border-color: var(--beam); box-shadow: 0 0 0 3px color-mix(in srgb, var(--beam) 18%, transparent); }
+.ed .acts { display: flex; gap: 8px; align-items: center; }
+.ed .sp { flex: 1; }
+.ed .err { font-size: 12px; color: var(--danger); }
+.rl-foot { display: flex; align-items: center; gap: 12px; margin-top: 3px; }
+.rl-log { min-height: 18px; display: flex; gap: 10px; align-items: center; font-size: 12px; color: var(--faint); }
+.rl-log button { font: inherit; color: var(--cursor); background: none; border: 0; padding: 0; cursor: pointer; }
 .st-group h3 { margin: 0; font-size: 13px; font-weight: 600; }
 .st-group > .help { margin: -6px 0 0; }
 /* 组里的开关列表：紧跟小标题时不画顶线；在组末尾时去掉最后一个显示着的行的底线（Windows 上权限行隐藏），由下一组的分隔线隔开，不叠成两道 */
