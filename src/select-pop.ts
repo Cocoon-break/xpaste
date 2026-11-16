@@ -17,9 +17,10 @@ const CHEVRON = '<svg class="chev" viewBox="0 0 20 20" aria-hidden="true"><path 
 const CHECK = '<svg class="ck" viewBox="0 0 20 20" aria-hidden="true"><path d="m5 10.5 3.2 3L15 7"/></svg>';
 
 /** 换掉 sel 的外观。代码里直接给 sel.value 赋值、改选项时按钮上的字自己跟着变。
- *  room：窗口贴着内容大小的页面（划词卡片）用，弹层要伸出 host 底部时告诉它还差多少像素，收起时给 0 */
-export function popSelect(sel: HTMLSelectElement, host: HTMLElement, room?: (px: number) => void): { sync(): void } {
-  if (sel.dataset.pop) return { sync() {} };
+ *  room：窗口贴着内容大小的页面（划词卡片）用，弹层要伸出 host 底部时告诉它还差多少像素，收起时给 0。
+ *  destroy：页面要整块重画、扔掉这个 select 时调，摘掉挂在 document 上的监听和弹层，展开着的话先按收起处理 */
+export function popSelect(sel: HTMLSelectElement, host: HTMLElement, room?: (px: number) => void): { sync(): void; destroy(): void } {
+  if (sel.dataset.pop) return { sync() {}, destroy() {} };
   sel.dataset.pop = '1';
   const btn = document.createElement('button');
   btn.type = 'button';
@@ -120,8 +121,9 @@ export function popSelect(sel: HTMLSelectElement, host: HTMLElement, room?: (px:
       close(true);
     } else if (e.key === 'Tab') close(false);
   });
-  // 设置窗关掉时列表跟着收起
-  host.addEventListener('close', () => close(false));
+  // 设置窗（<dialog>）关掉时列表跟着收起；别的 host 不发 close，不挂
+  const onClose = () => close(false);
+  if (host instanceof HTMLDialogElement) host.addEventListener('close', onClose);
   sel.addEventListener('change', sync);
   // 代码里给 value 赋值不发 change：在这个元素上包一层 setter，赋完值顺手刷新按钮；选项被换掉时也刷新
   const value = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!;
@@ -130,7 +132,16 @@ export function popSelect(sel: HTMLSelectElement, host: HTMLElement, room?: (px:
     get() { return value.get!.call(sel); },
     set(v: string) { value.set!.call(sel, v); sync(); },
   });
-  new MutationObserver(sync).observe(sel, { childList: true, subtree: true, attributes: true, attributeFilter: ['selected', 'disabled'] });
+  const mo = new MutationObserver(sync);
+  mo.observe(sel, { childList: true, subtree: true, attributes: true, attributeFilter: ['selected', 'disabled'] });
   sync();
-  return { sync };
+  return {
+    sync,
+    destroy() {
+      close(false);
+      mo.disconnect();
+      host.removeEventListener('close', onClose);
+      menu.remove();
+    },
+  };
 }

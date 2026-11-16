@@ -66,6 +66,8 @@ const bodies = () => [...root.querySelectorAll<HTMLElement>('.c-body')];
 
 /** 目标语言下拉展开时卡片下面还要留出的高度 */
 let menuRoom = 0;
+/** 当前这张卡片上的目标语言下拉；每次重画先拆掉旧的 */
+let langPop: ReturnType<typeof popSelect> | null = null;
 
 function render(pop = false) {
   const s = tr();
@@ -78,9 +80,12 @@ function render(pop = false) {
   const tops = new Map(bodies().map((b) => [b.classList.contains('c-orig'), b.scrollTop]));
   const ta = src(), caret = ta && [ta.selectionStart, ta.selectionEnd];
   root.innerHTML = cardHTML(view, wide, MOD);
+  // 旧下拉随整块重画一起没了：拆掉它的监听；展开着的话 menuRoom 归零（下面的 fit 按新卡片量高度）
+  langPop?.destroy();
+  langPop = null;
   // 目标语言换成应用样式的下拉；弹层伸出卡片底部时窗口临时加高，收起后还原
   const lang = root.querySelector<HTMLSelectElement>('select[data-act="lang"]');
-  if (lang) popSelect(lang, root, (px) => {
+  if (lang) langPop = popSelect(lang, root, (px) => {
     menuRoom = px;
     fit();
   });
