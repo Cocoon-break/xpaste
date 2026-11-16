@@ -230,3 +230,71 @@ pub struct Cleared {
     pub(crate) items: Vec<BeltItem>,
     pub(crate) next: Option<u64>,
 }
+
+/// 杯子最多放这么多样
+pub const CUP_MAX: usize = 8;
+/// 文字原料加补一句的总字数上限
+pub const MAX_CHARS: usize = 20_000;
+/// 配方个数上限
+pub const RECIPES_MAX: usize = 30;
+
+#[derive(Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IngredientKind {
+    Text,
+    Link,
+    Code,
+    Image,
+    File,
+}
+
+/// 原料的内容：文字类存全文；图片只记记录 id，图片文件另记路径（开搅时才读）
+#[derive(Clone)]
+pub enum Body {
+    Text(String),
+    Image {
+        record_id: i64,
+        path: Option<PathBuf>,
+    },
+}
+
+/// 杯子里的一样。不派生 `Debug`：里面有正文。
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Ingredient {
+    pub id: u64,
+    pub kind: IngredientKind,
+    pub title: String,
+    pub record_id: Option<i64>,
+    /// 悬停提示用：文字类的前三行（最多 200 字），图片为空串
+    pub preview: String,
+    #[serde(skip)]
+    pub body: Body,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum CupError {
+    Full,
+    NotFound,
+}
+
+/// 拿掉的一样和它的位置，撤销时放回去。不派生 `Debug`：里面有正文。
+// 空实现不读这些字段
+#[cfg_attr(not(pro), allow(dead_code))]
+pub struct Taken {
+    pub(crate) item: Ingredient,
+    pub(crate) at: usize,
+}
+
+/// 请求里的一段材料。不派生 `Debug`：里面有正文。
+pub enum Material {
+    /// `label` 是括号里的类别：“文字”“链接”“代码”“文件 名字”
+    Text {
+        label: String,
+        text: String,
+        code: bool,
+    },
+    Image {
+        data_url: String,
+    },
+}

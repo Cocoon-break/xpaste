@@ -2,6 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
+use xpaste_core::model::Recipe;
+
 use crate::types::*;
 
 pub const AVAILABLE: bool = false;
@@ -194,6 +196,71 @@ impl Belt {
 
 pub fn split_offer(_text: &str, _room: usize) -> Option<Split> {
     None
+}
+
+/// 空实现的杯子：放不进任何东西
+#[derive(Default)]
+pub struct Cup;
+
+impl Cup {
+    pub fn new() -> Cup {
+        Cup
+    }
+
+    pub fn items(&self) -> &[Ingredient] {
+        &[]
+    }
+
+    pub fn push(
+        &mut self,
+        _kind: IngredientKind,
+        _title: String,
+        _record_id: Option<i64>,
+        _body: Body,
+    ) -> Result<u64, CupError> {
+        Err(CupError::NotFound)
+    }
+
+    pub fn room(&self) -> usize {
+        0
+    }
+
+    pub fn remove(&mut self, _id: u64) -> Result<Taken, CupError> {
+        Err(CupError::NotFound)
+    }
+
+    pub fn restore(&mut self, _t: Taken) {}
+
+    pub fn clear(&mut self) -> Vec<Ingredient> {
+        Vec::new()
+    }
+
+    pub fn refill(&mut self, _items: Vec<Ingredient>) {}
+
+    pub fn text_chars(&self) -> usize {
+        0
+    }
+}
+
+pub fn default_recipes() -> Vec<Recipe> {
+    Vec::new()
+}
+
+pub fn normalize_recipes(_list: Vec<Recipe>) -> Vec<Recipe> {
+    Vec::new()
+}
+
+pub fn saved_name(_text: &str, _list: &[Recipe]) -> String {
+    String::new()
+}
+
+pub fn chat_body(
+    _model: &str,
+    _prompt: Option<&str>,
+    _extra: &str,
+    _materials: &[Material],
+) -> serde_json::Value {
+    serde_json::Value::Null
 }
 
 #[cfg(test)]
