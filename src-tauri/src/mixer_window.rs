@@ -10,6 +10,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use crate::events::{MIXER_SHOWN, emit_to};
+use crate::float_drag;
 use crate::line::{hit_test, pass_through};
 use crate::mixer::{HITS, LABEL};
 use crate::panel::{Rect, on_main};
@@ -24,7 +25,7 @@ const TICK: Duration = Duration::from_millis(16);
 /// 要收起以后等页面放手（`mixer_release`）最多这么久，过了就自己藏
 const RELEASE_SAFETY: Duration = Duration::from_secs(5);
 
-/// 窗口矩形（逻辑像素）：工作区右下角，离右边、下边各 16 px。
+/// 默认的窗口矩形（逻辑像素）：工作区右下角，离右边、下边各 16 px。拖过的照记下的位置摆（`float_drag`）
 pub fn mixer_rect(work: Rect) -> Rect {
     Rect {
         x: work.x + work.w - GAP - WIN_W,
@@ -43,7 +44,9 @@ static GEN: AtomicU64 = AtomicU64::new(0);
 static LINGER: AtomicU64 = AtomicU64::new(0);
 /// 窗口左上角和换成逻辑像素要除的系数，都在 `pointer_position` 的坐标空间里
 /// （macOS 是点，系数 1；Windows 是物理像素，系数为所在屏缩放）
-static FRAME: Mutex<((f64, f64), f64)> = Mutex::new(((0.0, 0.0), 1.0));
+static FRAME: float_drag::Frame = Mutex::new(((0.0, 0.0), 1.0));
+/// 正在拖动换位置
+static DRAG: float_drag::Dragging = Mutex::new(None);
 /// 补一句拿着键盘，和拿键盘前的前台窗口（只有 Windows 有）
 static KEYBOARD: Mutex<(bool, Option<isize>)> = Mutex::new((false, None));
 
@@ -84,21 +87,21 @@ pub fn prewarm(app: &AppHandle) {
     }
 }
 
-/// 摆到光标所在屏。主线程调用。
+/// 摆到光标所在屏：拖过的照记下的位置，没拖过放右下角。主线程调用。
 fn place(app: &AppHandle, w: &WebviewWindow) -> tauri::Result<()> {
-    let Some(m) = crate::panel::cursor_monitor(app)? else {
+    let Some((work, k)) = float_drag::cursor_work(app)? else {
         return Ok(());
     };
-    let (sf, wa) = (m.scale_factor(), m.work_area());
-    let r = mixer_rect(Rect {
-        x: wa.position.x as f64 / sf,
-        y: wa.position.y as f64 / sf,
-        w: wa.size.width as f64 / sf,
-        h: wa.size.height as f64 / sf,
-    });
-    let k = if cfg!(target_os = "macos") { 1.0 } else { sf };
+    let r = float_drag::placed(work, mixer_rect(work), float_drag::saved(app, LABEL));
     *FRAME.lock().unwrap_or_else(PoisonError::into_inner) = ((r.x * k, r.y * k), k);
     crate::shot::place(w, (r.x * k, r.y * k), (r.w * k, r.h * k))
+}
+
+/// 页面在底座空白处按下：开始拖动换位置
+pub fn drag() {
+    if shown() {
+        float_drag::start(&DRAG, &FRAME, (WIN_W, WIN_H));
+    }
 }
 
 /// 显示搅拌机，不拿键盘。已经显示着就不动，关闭之前不跟着光标换屏。
@@ -197,16 +200,18 @@ pub fn keyboard(app: &AppHandle, on: bool) {
             }
         }
         on_main(app, |app| {
-            if let Some(w) = app.get_webview_window(LABEL)
-                && let Err(e) = crate::trcard::front(app, &w, true)
-            {
-                log::warn!("搅拌机取得焦点失败：{e}");
+            if let Some(w) = app.get_webview_window(LABEL) {
+                if let Err(e) = crate::trcard::front(app, &w, true) {
+                    log::warn!("搅拌机取得焦点失败：{e}");
+                }
+                log::info!("搅拌机 拿键盘 focused={}", w.is_focused().unwrap_or(false));
             }
         });
         return;
     }
     let (held, back) =
         std::mem::take(&mut *KEYBOARD.lock().unwrap_or_else(PoisonError::into_inner));
+    log::info!("搅拌机 交还键盘 held={held} back={}", back.is_some());
     if !held {
         return;
     }
@@ -262,9 +267,14 @@ fn spawn_pointer(app: &AppHandle) {
                 let local = ((x - ox) / k, (y - oy) / k);
                 let hit = hit_test(local, &HITS.lock().unwrap_or_else(PoisonError::into_inner));
                 let button = xpaste_platform::mouse_button_down();
+                // 拖着时窗口一直接收（按着键时 pass_through 本来就保持按下那一刻的状态）
+                float_drag::tick(&app, LABEL, &DRAG, &FRAME, (x, y), button);
                 let want = pass_through(hit, button, false, prev);
                 if prev != Some(want) {
                     prev = Some(want);
+                    if KEYBOARD.lock().unwrap_or_else(PoisonError::into_inner).0 {
+                        log::info!("搅拌机 拿着键盘时点击穿透 {want}");
+                    }
                     on_main(&app, move |app| {
                         if let Some(w) = app.get_webview_window(LABEL)
                             && let Err(e) = w.set_ignore_cursor_events(want)

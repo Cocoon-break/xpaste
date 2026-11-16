@@ -61,6 +61,12 @@ pub fn mixer_keyboard(app: AppHandle, on: bool) {
     mixer::keyboard(&app, on);
 }
 
+/// 底座空白处按下：开始拖动换位置
+#[tauri::command(async)]
+pub fn mixer_drag() {
+    crate::mixer_window::drag();
+}
+
 /// 设置页“恢复默认”用的自带配方
 #[tauri::command(async)]
 pub fn mixer_defaults() -> Vec<xpaste_core::model::Recipe> {

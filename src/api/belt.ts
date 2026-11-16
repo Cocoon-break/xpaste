@@ -45,6 +45,8 @@ export const beltReady = () => invoke<void>('belt_ready');
 /** 能点的地方，其余透明区域点击穿透；收起时后端清掉，每次显示后要重报 */
 export const beltHits = (rects: HitRect[]) => invoke<void>('belt_hits', { rects });
 /** 面板里放上几条记录，按给的顺序排在末尾，带子没开就顺便打开 */
+/** 左端把手按下：开始拖动换位置，松手后后端记下位置 */
+export const beltDrag = () => invoke<void>('belt_drag');
 export const beltPut = (ids: number[]) => invoke<void>('belt_put', { ids });
 export const beltPick = (id: number) => invoke<void>('belt_pick', { id });
 /** 必须是带子上现有 id 的一个排列，对不上时后端按现状重发 */

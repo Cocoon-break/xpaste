@@ -23,6 +23,12 @@ pub fn belt_hits(rects: Vec<Rect>) {
 }
 
 /// 面板里放上几条记录，按给的顺序排在末尾
+/// 左端把手按下：开始拖动换位置
+#[tauri::command(async)]
+pub fn belt_drag() {
+    crate::belt_window::drag();
+}
+
 #[tauri::command(async)]
 pub fn belt_put(app: AppHandle, ids: Vec<i64>) {
     belt::put(&app, &ids);

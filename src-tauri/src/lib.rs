@@ -9,6 +9,7 @@ mod diag;
 mod enrich;
 pub mod error;
 mod events;
+mod float_drag;
 #[cfg(debug_assertions)]
 mod focus_check;
 mod hotkey;
@@ -315,7 +316,9 @@ pub fn run() {
                 }
             }
             // 排查“面板挂完便签后点外面、按 Esc 都不收起”：记下面板与晾衣绳的焦点变化（只有窗口名）
-            if (window.label() == "panel" || window.label() == line::LABEL)
+            if (window.label() == "panel"
+                || window.label() == line::LABEL
+                || window.label() == mixer::LABEL)
                 && let WindowEvent::Focused(f) = event
             {
                 log::info!(
@@ -465,6 +468,7 @@ pub fn run() {
             commands::belt::belt_state,
             commands::belt::belt_ready,
             commands::belt::belt_hits,
+            commands::belt::belt_drag,
             commands::belt::belt_put,
             commands::belt::belt_pick,
             commands::belt::belt_reorder,
@@ -486,6 +490,7 @@ pub fn run() {
             commands::mixer::mixer_undo_clear,
             commands::mixer::mixer_release,
             commands::mixer::mixer_keyboard,
+            commands::mixer::mixer_drag,
             commands::mixer::mixer_defaults,
             commands::mixer::mixer_blend,
             commands::mixer::mixer_stop,

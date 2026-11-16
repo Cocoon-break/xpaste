@@ -66,6 +66,8 @@ export const mixerUndoClear = () => invoke<void>('mixer_undo_clear');
 export const mixerRelease = () => invoke<void>('mixer_release');
 /** 补一句展开时拿键盘（true），收起时交还（false） */
 export const mixerKeyboard = (on: boolean) => invoke<void>('mixer_keyboard', { on });
+/** 底座空白处按下：开始拖动换位置，松手后后端记下位置 */
+export const mixerDrag = () => invoke<void>('mixer_drag');
 /** 自带配方的默认名字和提示词（设置页“恢复默认”用） */
 export const mixerDefaults = () => invoke<Recipe[]>('mixer_defaults');
 /** 按配方开搅；`recipe` 为 null 时只按补的那句 */

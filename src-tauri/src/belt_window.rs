@@ -8,6 +8,7 @@ use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder}
 
 use crate::belt::{HITS, LABEL};
 use crate::events::{BELT_SHOWN, emit_to};
+use crate::float_drag;
 use crate::line::{hit_test, pass_through};
 use crate::panel::{Rect, on_main};
 
@@ -44,7 +45,10 @@ static GEN: AtomicU64 = AtomicU64::new(0);
 static LINGER: AtomicU64 = AtomicU64::new(0);
 /// 窗口左上角和换成逻辑像素要除的系数，都在 `pointer_position` 的坐标空间里
 /// （macOS 是点，系数 1；Windows 是物理像素，系数为所在屏缩放）
-static FRAME: Mutex<((f64, f64), f64)> = Mutex::new(((0.0, 0.0), 1.0));
+static FRAME: float_drag::Frame = Mutex::new(((0.0, 0.0), 1.0));
+/// 正在拖动换位置和这次窗口的逻辑大小（宽随屏）
+static DRAG: float_drag::Dragging = Mutex::new(None);
+static SIZE: Mutex<(f64, f64)> = Mutex::new((800.0, BODY_H + TOP_ROOM));
 
 /// 建好隐藏的窗口，免得第一次显示时现建 webview。参数同晾衣绳。
 pub fn prewarm(app: &AppHandle) {
@@ -83,21 +87,23 @@ pub fn prewarm(app: &AppHandle) {
     }
 }
 
-/// 摆到光标所在屏。主线程调用。
+/// 摆到光标所在屏：拖过的照记下的位置，没拖过放底边居中。主线程调用。
 fn place(app: &AppHandle, w: &WebviewWindow) -> tauri::Result<()> {
-    let Some(m) = crate::panel::cursor_monitor(app)? else {
+    let Some((work, k)) = float_drag::cursor_work(app)? else {
         return Ok(());
     };
-    let (sf, wa) = (m.scale_factor(), m.work_area());
-    let r = belt_rect(Rect {
-        x: wa.position.x as f64 / sf,
-        y: wa.position.y as f64 / sf,
-        w: wa.size.width as f64 / sf,
-        h: wa.size.height as f64 / sf,
-    });
-    let k = if cfg!(target_os = "macos") { 1.0 } else { sf };
+    let r = float_drag::placed(work, belt_rect(work), float_drag::saved(app, LABEL));
     *FRAME.lock().unwrap_or_else(PoisonError::into_inner) = ((r.x * k, r.y * k), k);
+    *SIZE.lock().unwrap_or_else(PoisonError::into_inner) = (r.w, r.h);
     crate::shot::place(w, (r.x * k, r.y * k), (r.w * k, r.h * k))
+}
+
+/// 页面在左端把手上按下：开始拖动换位置
+pub fn drag() {
+    if shown() {
+        let size = *SIZE.lock().unwrap_or_else(PoisonError::into_inner);
+        float_drag::start(&DRAG, &FRAME, size);
+    }
 }
 
 /// 显示带子，不拿键盘。已经显示着就不动，关闭之前不跟着光标换屏。
@@ -205,6 +211,7 @@ fn spawn_pointer(app: &AppHandle) {
                 let local = ((x - ox) / k, (y - oy) / k);
                 let hit = hit_test(local, &HITS.lock().unwrap_or_else(PoisonError::into_inner));
                 let button = xpaste_platform::mouse_button_down();
+                float_drag::tick(&app, LABEL, &DRAG, &FRAME, (x, y), button);
                 let want = pass_through(hit, button, false, prev);
                 if prev != Some(want) {
                     prev = Some(want);
