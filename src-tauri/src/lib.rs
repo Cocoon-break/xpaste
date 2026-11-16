@@ -344,9 +344,11 @@ pub fn run() {
             if window.label() == line::LABEL && matches!(event, WindowEvent::Focused(false)) {
                 line::blur();
             }
-            // 搅拌机失焦（点了别的应用）：补一句收起时不再把键盘切回拿键盘前的窗口
+            // 搅拌机失焦（点了别的应用、本应用别的窗口拿走了键盘）：补一句收起时不再把键盘切回拿键盘前的窗口；
+            // 页面把展开着的补一句收起，写了一半的字留着
             if window.label() == mixer::LABEL && matches!(event, WindowEvent::Focused(false)) {
                 mixer_window::blur();
+                events::emit_to(window.app_handle(), mixer::LABEL, events::MIXER_BLUR, ());
             }
             // 截图遮罩（shot-*）与贴图（pin-*）失焦不处理
             if window.label() != "panel" {
@@ -469,6 +471,7 @@ pub fn run() {
             commands::belt::belt_ready,
             commands::belt::belt_hits,
             commands::belt::belt_drag,
+            commands::belt::belt_front,
             commands::belt::belt_resize,
             commands::belt::belt_put,
             commands::belt::belt_pick,
@@ -494,6 +497,7 @@ pub fn run() {
             commands::mixer::mixer_release,
             commands::mixer::mixer_keyboard,
             commands::mixer::mixer_drag,
+            commands::mixer::mixer_front,
             commands::mixer::mixer_defaults,
             commands::mixer::mixer_blend,
             commands::mixer::mixer_stop,

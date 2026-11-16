@@ -28,6 +28,12 @@ pub fn belt_drag() {
     crate::belt_window::drag();
 }
 
+/// 页面上任何地方按下：提到搅拌机上面，不拿键盘
+#[tauri::command(async)]
+pub fn belt_front(app: AppHandle) {
+    crate::float_drag::front(&app, belt::LABEL, crate::belt_window::shown);
+}
+
 /// 两端的边按下：开始拖动调长度（"left" 或 "right"）
 #[tauri::command(async)]
 pub fn belt_resize(app: AppHandle, side: String) {

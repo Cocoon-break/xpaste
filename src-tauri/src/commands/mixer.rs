@@ -73,6 +73,12 @@ pub fn mixer_drag() {
     crate::mixer_window::drag();
 }
 
+/// 页面上任何地方按下：提到传送带上面，不拿键盘
+#[tauri::command(async)]
+pub fn mixer_front(app: AppHandle) {
+    crate::float_drag::front(&app, mixer::LABEL, crate::mixer_window::shown);
+}
+
 /// 设置页“恢复默认”用的自带配方
 #[tauri::command(async)]
 pub fn mixer_defaults() -> Vec<xpaste_core::model::Recipe> {

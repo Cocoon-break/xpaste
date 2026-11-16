@@ -288,7 +288,7 @@ fn animate_alpha(_: &WebviewWindow, _: f64, _: f64) -> tauri::Result<()> {
 /// 系统设置“减弱动态效果”（与网页的 prefers-reduced-motion 同源）。只在主线程调用。
 #[cfg(target_os = "macos")]
 #[allow(deprecated, unexpected_cfgs)] // 同 animate_alpha
-fn reduce_motion() -> bool {
+pub(crate) fn reduce_motion() -> bool {
     use tauri_nspanel::cocoa::base::{BOOL, YES, id};
     use tauri_nspanel::objc::{class, msg_send, sel, sel_impl};
     unsafe {
@@ -299,7 +299,7 @@ fn reduce_motion() -> bool {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn reduce_motion() -> bool {
+pub(crate) fn reduce_motion() -> bool {
     false
 }
 

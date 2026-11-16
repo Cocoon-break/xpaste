@@ -72,6 +72,8 @@ export const mixerRelease = () => invoke<void>('mixer_release');
 export const mixerKeyboard = (on: boolean) => invoke<void>('mixer_keyboard', { on });
 /** 底座空白处按下：开始拖动换位置，松手后后端记下位置 */
 export const mixerDrag = () => invoke<void>('mixer_drag');
+/** 页面上任何地方按下：提到传送带上面，不拿键盘 */
+export const mixerFront = () => invoke<void>('mixer_front');
 /** 自带配方的默认名字和提示词（设置页“恢复默认”用） */
 export const mixerDefaults = () => invoke<Recipe[]>('mixer_defaults');
 /** 按配方开搅；`recipe` 为 null 时只按补的那句 */
@@ -103,3 +105,6 @@ export const onMixerPutSelected = (cb: () => void): Promise<UnlistenFn> => liste
 /** 窗口刚显示出来（只发给搅拌机窗口）：藏起时后端清掉了点击区域，要重报 */
 export const onMixerShown = (cb: () => void): Promise<UnlistenFn> =>
   listen('mixer-shown', () => cb(), { target: getCurrentWindow().label });
+/** 窗口失去键盘（只发给搅拌机窗口）：展开着的补一句收起，字留着 */
+export const onMixerBlur = (cb: () => void): Promise<UnlistenFn> =>
+  listen('mixer-blur', () => cb(), { target: getCurrentWindow().label });

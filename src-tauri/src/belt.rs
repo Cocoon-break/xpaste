@@ -155,6 +155,8 @@ struct Runtime {
     warned_expired: bool,
     /// 这次打开以来粘贴键监听装不上时已经提示（或记过警告）
     warned_watch: bool,
+    /// 这次打开以来已经提示过新复制进了搅拌机
+    warned_other: bool,
     /// 有线程正在装粘贴键监听（装的时候不持锁），别的不再重复装
     installing: bool,
 }
@@ -185,6 +187,7 @@ static RT: LazyLock<Mutex<Runtime>> = LazyLock::new(|| {
         cleared: None,
         warned_expired: false,
         warned_watch: false,
+        warned_other: false,
         installing: false,
     })
 });
@@ -559,6 +562,7 @@ fn open(rt: &mut Runtime, fx: &mut Fx) {
     rt.cleared = None;
     rt.warned_expired = false;
     rt.warned_watch = false;
+    rt.warned_other = false;
     rt.round += 1;
     fx.show = true;
     log::info!("传送带 打开");
@@ -779,6 +783,7 @@ pub fn on_recorded(app: &AppHandle, id: i64, kind: Kind, seq: u64) {
     if crate::collect::taker(open_stamp(), crate::mixer::open_stamp()) == Some(Taker::Mixer) {
         return;
     }
+    crate::mixer::missed(app);
     with(app, |state, pro, rt, fx| {
         if !rt.on {
             return;
@@ -816,6 +821,18 @@ pub fn on_recorded(app: &AppHandle, id: i64, kind: Kind, seq: u64) {
                 fx.timer = Some(Timer::Peek(rt.peek_gen));
                 fx.changed(Cause::Other, None);
             }
+        }
+    });
+}
+
+/// 搅拌机开着、这次新复制归了搅拌机：这次打开以来第一次时提示一下。
+pub fn missed(app: &AppHandle) {
+    if open_stamp().is_none() {
+        return;
+    }
+    with(app, |_, _, rt, fx| {
+        if rt.open && !std::mem::replace(&mut rt.warned_other, true) {
+            fx.toasts.push(toast("新复制进了搅拌机", &[], None));
         }
     });
 }

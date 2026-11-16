@@ -35,6 +35,19 @@ pub fn mixer_rect(work: Rect) -> Rect {
     }
 }
 
+/// 搅拌机本身（窗口里靠右下的 260 宽那块）离窗口右边
+const BODY_RIGHT: f64 = 8.0;
+const BODY_W: f64 = 260.0;
+
+/// 搅拌机展开在屏上时它本身的左边（逻辑像素，同 `float_drag::cursor_work` 的工作区）；收成角标或关着为 None
+pub fn body_left() -> Option<f64> {
+    if !shown() || !crate::mixer::expanded() {
+        return None;
+    }
+    let ((x, _), k) = *FRAME.lock().unwrap_or_else(PoisonError::into_inner);
+    Some(x / k + WIN_W - BODY_RIGHT - BODY_W)
+}
+
 /// 窗口在屏上（含收起后等页面放手的那一会儿），指针线程只在这期间跑
 static SHOWN: AtomicBool = AtomicBool::new(false);
 static RUNNING: AtomicBool = AtomicBool::new(false);

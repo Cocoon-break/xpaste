@@ -69,6 +69,8 @@ pub const MIXER_TOAST: &str = "mixer-toast";
 pub const MIXER_PUT_SELECTED: &str = "mixer-put-selected";
 /// 搅拌机窗口刚显示出来，只发给 `mixer`：无载荷。藏起时点击区域清掉了，页面据此重报。
 pub const MIXER_SHOWN: &str = "mixer-shown";
+/// 搅拌机窗口失去键盘，只发给 `mixer`：无载荷。展开着的补一句收起，字留着。
+pub const MIXER_BLUR: &str = "mixer-blur";
 
 /// 冻结完成，发给每块屏的遮罩 `shot-<i>`（载荷见 `shot::BeginPayload`）。
 pub const SHOT_BEGIN: &str = "shot-begin";

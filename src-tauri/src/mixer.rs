@@ -108,6 +108,8 @@ struct Runtime {
     taken: Option<Taken>,
     cleared: Option<Vec<Ingredient>>,
     warned_expired: bool,
+    /// 这次打开以来已经提示过新复制排上了传送带
+    warned_other: bool,
 }
 
 static RT: LazyLock<Mutex<Runtime>> = LazyLock::new(|| {
@@ -133,6 +135,7 @@ static RT: LazyLock<Mutex<Runtime>> = LazyLock::new(|| {
         taken: None,
         cleared: None,
         warned_expired: false,
+        warned_other: false,
     })
 });
 
@@ -240,6 +243,8 @@ struct Fx {
     show: bool,
     linger: bool,
     hide: bool,
+    /// 打开、关掉、收成角标、展开了：没拖过的传送带跟着让开或放宽
+    relayout: bool,
 }
 
 impl Fx {
@@ -314,6 +319,10 @@ fn apply(app: &AppHandle, mut fx: Fx) {
     } else if fx.linger {
         crate::mixer_window::linger(app);
     }
+    // 排在显示之后：主线程上先摆好搅拌机，再按它的位置摆带子
+    if fx.relayout {
+        crate::belt_window::relayout(app);
+    }
     sync_watch(app);
 }
 
@@ -334,6 +343,12 @@ pub fn open_stamp() -> Option<u64> {
 /// 收着：窗口该藏起来了
 pub fn closed() -> bool {
     !rt().open
+}
+
+/// 开着且没收成角标
+pub fn expanded() -> bool {
+    let rt = rt();
+    rt.open && !rt.mini
 }
 
 /// 启动时调用（调用方先看过 `enabled`）：预建隐藏的窗口。
@@ -398,6 +413,7 @@ fn set_mini(rt: &mut Runtime, fx: &mut Fx, on: bool) {
         return;
     }
     rt.mini = on;
+    fx.relayout = true;
     fx.changed(Cause::Other, None);
     log::info!("搅拌机 {}", if on { "收成角标" } else { "展开" });
 }
@@ -434,6 +450,8 @@ fn open(rt: &mut Runtime, fx: &mut Fx) {
     rt.taken = None;
     rt.cleared = None;
     rt.warned_expired = false;
+    rt.warned_other = false;
+    fx.relayout = true;
     log::info!("搅拌机 打开");
 }
 
@@ -450,6 +468,7 @@ fn close(rt: &mut Runtime, fx: &mut Fx, undo: bool) {
     rt.open = false;
     rt.mini = false;
     fx.linger = true;
+    fx.relayout = true;
     cancel(rt);
     reset_result(rt);
     rt.taken = None;
@@ -487,6 +506,7 @@ pub fn on_recorded(app: &AppHandle, id: i64, kind: Kind, seq: u64) {
     if !takes_copy(seq, rt().result_seq) {
         return;
     }
+    crate::belt::missed(app);
     // 读库、读文件都不持锁
     let pieces = gather(&app.state::<AppState>(), &[id]);
     with(app, |pro, rt, fx| {
@@ -506,6 +526,18 @@ pub fn on_recorded(app: &AppHandle, id: i64, kind: Kind, seq: u64) {
         let (n, last) = place(rt, fx, pieces);
         log::info!("搅拌机 放进 {n} 样 id={id} kind={kind:?}");
         fx.changed(Cause::Put, last);
+    });
+}
+
+/// 传送带开着、这次新复制归了传送带：这次打开以来第一次时提示一下。
+pub fn missed(app: &AppHandle) {
+    if open_stamp().is_none() {
+        return;
+    }
+    with(app, |_, rt, fx| {
+        if rt.open && !std::mem::replace(&mut rt.warned_other, true) {
+            fx.toasts.push(toast("新复制排上了传送带", &[]));
+        }
     });
 }
 
@@ -1466,6 +1498,7 @@ fn pasted(app: &AppHandle, at_press: u64) {
         rt.open = false;
         rt.mini = false;
         fx.linger = true;
+        fx.relayout = true;
         fx.changed(Cause::Other, None);
         log::info!("搅拌机 贴出后收起");
     });

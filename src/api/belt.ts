@@ -48,6 +48,8 @@ export const beltReady = () => invoke<void>('belt_ready');
 export const beltHits = (rects: HitRect[]) => invoke<void>('belt_hits', { rects });
 /** 左端把手按下：开始拖动换位置，松手后后端记下位置 */
 export const beltDrag = () => invoke<void>('belt_drag');
+/** 页面上任何地方按下：提到搅拌机上面，不拿键盘 */
+export const beltFront = () => invoke<void>('belt_front');
 /** 两端的边按下：开始拖动调长度，松手后后端记下长度 */
 export const beltResize = (side: 'left' | 'right') => invoke<void>('belt_resize', { side });
 /** 面板里放上几条记录，按给的顺序排在末尾，带子没开就顺便打开 */

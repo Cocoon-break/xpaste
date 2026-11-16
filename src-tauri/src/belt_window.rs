@@ -42,6 +42,23 @@ pub fn belt_rect(work: Rect) -> Rect {
     }
 }
 
+/// 没拖过位置时的窗口矩形：右边界让到搅拌机本身左边再留 16 px（`mixer_left` 为 None 时到工作区右边），
+/// 在剩下的宽里居中；调过的长度 `len` 是上限，让着搅拌机放不下时临时缩到可用宽 − 32（不小于 `MIN_LEN`）。
+/// 搅拌机左边放不下最短的带子（拖到了左半边、在别的屏上）时不让。
+pub fn belt_room(work: Rect, mixer_left: Option<f64>, len: Option<f64>) -> Rect {
+    let right = mixer_left
+        .map(|l| l - 16.0)
+        .filter(|r| *r <= work.x + work.w && *r - work.x - 32.0 >= MIN_LEN);
+    let avail = right.map_or(work.w, |r| r - work.x);
+    let mut d = belt_rect(Rect { w: avail, ..work });
+    if let Some(len) = len {
+        let cap = if right.is_some() { avail - 32.0 } else { avail };
+        d.w = len.min(cap).max(MIN_LEN);
+        d.x = work.x + (avail - d.w) / 2.0;
+    }
+    d
+}
+
 /// 带子窗口正在显示（打开或探出），指针线程只在这期间跑
 static SHOWN: AtomicBool = AtomicBool::new(false);
 static RUNNING: AtomicBool = AtomicBool::new(false);
@@ -68,6 +85,19 @@ struct Resize {
 }
 static RESIZE: Mutex<Option<Resize>> = Mutex::new(None);
 static SIZE: Mutex<(f64, f64)> = Mutex::new((800.0, BODY_H + TOP_ROOM));
+/// 这次显示所在屏的工作区（逻辑像素）和换算系数：重新摆时按这块算，不跟着光标换屏
+static WORK: Mutex<(Rect, f64)> = Mutex::new((
+    Rect {
+        x: 0.0,
+        y: 0.0,
+        w: 0.0,
+        h: 0.0,
+    },
+    1.0,
+));
+/// 每次重新摆加一：滑到一半又要重新摆时旧的那次停下
+static SLIDE: AtomicU64 = AtomicU64::new(0);
+const SLIDE_STEPS: u32 = 12;
 
 /// 建好隐藏的窗口，免得第一次显示时现建 webview。参数同晾衣绳。
 pub fn prewarm(app: &AppHandle) {
@@ -106,20 +136,101 @@ pub fn prewarm(app: &AppHandle) {
     }
 }
 
-/// 摆到光标所在屏：拖过的照记下的位置，没拖过放底边居中。主线程调用。
+/// 摆到光标所在屏：拖过的照记下的位置和长度，没拖过放底边、让开搅拌机居中（`belt_room`）。主线程调用。
 fn place(app: &AppHandle, w: &WebviewWindow) -> tauri::Result<()> {
     let Some((work, k)) = float_drag::cursor_work(app)? else {
         return Ok(());
     };
-    let mut d = belt_rect(work);
-    if let Some(len) = saved_len(app) {
-        d.w = len.clamp(MIN_LEN, work.w.max(MIN_LEN));
-        d.x = work.x + (work.w - d.w) / 2.0;
-    }
-    let r = float_drag::placed(work, d, float_drag::saved(app, LABEL));
+    *WORK.lock().unwrap_or_else(PoisonError::into_inner) = (work, k);
+    let offset = float_drag::saved(app, LABEL);
+    let mixer = offset
+        .is_none()
+        .then(crate::mixer_window::body_left)
+        .flatten();
+    let r = float_drag::placed(work, belt_room(work, mixer, saved_len(app)), offset);
+    set_rect(w, r, k)
+}
+
+/// 窗口摆到 `r`（逻辑像素）并更新 `FRAME`、`SIZE`。主线程调用。
+fn set_rect(w: &WebviewWindow, r: Rect, k: f64) -> tauri::Result<()> {
     *FRAME.lock().unwrap_or_else(PoisonError::into_inner) = ((r.x * k, r.y * k), k);
     *SIZE.lock().unwrap_or_else(PoisonError::into_inner) = (r.w, r.h);
     crate::shot::place(w, (r.x * k, r.y * k), (r.w * k, r.h * k))
+}
+
+/// 拖着换位置或调长度
+fn busy() -> bool {
+    DRAG.lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .is_some()
+        || RESIZE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
+}
+
+/// 搅拌机打开、关掉、收成角标、展开之后：带子在屏上、没拖过位置时按 `belt_room` 重新摆，
+/// 12 步、每步 16 ms 滑过去（减少动态效果时一步到位）；拖过的、正拖着的不动。
+pub fn relayout(app: &AppHandle) {
+    on_main(app, |app| {
+        if !shown() || busy() || float_drag::saved(app, LABEL).is_some() {
+            return;
+        }
+        let (work, k) = *WORK.lock().unwrap_or_else(PoisonError::into_inner);
+        let to = belt_room(work, crate::mixer_window::body_left(), saved_len(app));
+        let ((ox, oy), _) = *FRAME.lock().unwrap_or_else(PoisonError::into_inner);
+        let (fw, fh) = *SIZE.lock().unwrap_or_else(PoisonError::into_inner);
+        let from = Rect {
+            x: ox / k,
+            y: oy / k,
+            w: fw,
+            h: fh,
+        };
+        if from == to {
+            return;
+        }
+        let steps = if crate::panel::reduce_motion() {
+            1
+        } else {
+            SLIDE_STEPS
+        };
+        let g = SLIDE.fetch_add(1, Ordering::SeqCst) + 1;
+        let a = app.clone();
+        let spawned = std::thread::Builder::new()
+            .name("belt-slide".into())
+            .spawn(move || {
+                for i in 1..=steps {
+                    if i > 1 {
+                        std::thread::sleep(TICK);
+                    }
+                    if SLIDE.load(Ordering::SeqCst) != g {
+                        return;
+                    }
+                    // 先快后慢
+                    let t = 1.0 - (1.0 - f64::from(i) / f64::from(steps)).powi(3);
+                    let lerp = |p: f64, q: f64| p + (q - p) * t;
+                    let r = Rect {
+                        x: lerp(from.x, to.x),
+                        y: lerp(from.y, to.y),
+                        w: lerp(from.w, to.w),
+                        h: lerp(from.h, to.h),
+                    };
+                    on_main(&a, move |app| {
+                        if SLIDE.load(Ordering::SeqCst) != g || !shown() || busy() {
+                            return;
+                        }
+                        if let Some(w) = app.get_webview_window(LABEL)
+                            && let Err(e) = set_rect(&w, r, k)
+                        {
+                            log::warn!("传送带让开搅拌机失败：{e}");
+                        }
+                    });
+                }
+            });
+        if let Err(e) = spawned {
+            log::warn!("传送带重新摆的线程启动失败：{e}");
+        }
+    });
 }
 
 fn saved_len(app: &AppHandle) -> Option<f64> {
@@ -392,5 +503,24 @@ mod tests {
     #[test]
     fn rect_narrow_screen() {
         assert_eq!(belt_rect(Rect { w: 800.0, ..WORK }).w, 672.0);
+    }
+
+    #[test]
+    fn belt_room_yields_to_mixer() {
+        let work = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 1280.0,
+            h: 800.0,
+        };
+        // 没有搅拌机：同 belt_rect
+        assert_eq!(belt_room(work, None, None).x, belt_rect(work).x);
+        // 搅拌机本身左边在 996：带子右边界 980，宽 800，居中在 [0, 980]
+        let r = belt_room(work, Some(996.0), None);
+        assert_eq!((r.x, r.w), (90.0, 800.0));
+        // 调过的长度 1200 放不下：临时缩到 980 − 32
+        assert_eq!(belt_room(work, Some(996.0), Some(1200.0)).w, 948.0);
+        // 调过的长度 300 低于下限：360
+        assert_eq!(belt_room(work, None, Some(300.0)).w, 360.0);
     }
 }

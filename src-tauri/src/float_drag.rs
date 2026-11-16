@@ -110,6 +110,18 @@ pub fn cursor_work(app: &AppHandle) -> tauri::Result<Option<(Rect, f64)>> {
     )))
 }
 
+/// 页面上按下：把这个浮层提到另一个上面，不拿键盘。`shown` 在主线程上再看一次，已藏起的不再显示出来
+pub fn front(app: &AppHandle, label: &'static str, shown: fn() -> bool) {
+    on_main(app, move |app| {
+        if shown()
+            && let Some(w) = app.get_webview_window(label)
+            && let Err(e) = crate::trcard::front(app, &w, false)
+        {
+            log::warn!("{label} 提到最上失败：{e}");
+        }
+    });
+}
+
 /// 页面在把手上按下：从此刻的光标和窗口位置开始拖
 pub fn start(dragging: &Dragging, frame: &Frame, size: (f64, f64)) {
     let Some(cursor) = xpaste_platform::pointer_position() else {
