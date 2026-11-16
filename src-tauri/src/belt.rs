@@ -19,7 +19,7 @@ use xpaste_pro::{BELT_MAX, Belt, BeltError, BeltItem, Cleared, Pro, Removed, spl
 
 use crate::commands::records::{precheck, write_marked, write_text_plain};
 use crate::events::{BELT_CHANGED, BELT_PUT_SELECTED, BELT_TOAST, emit_to};
-use crate::panel::{Rect, on_main};
+use crate::panel::Rect;
 use crate::state::AppState;
 
 pub const LABEL: &str = "belt";
@@ -102,16 +102,8 @@ pub fn take_on_belt(seq: u64, own_write_seq: u64, own_writing: bool) -> bool {
     !own_writing && seq != own_write_seq
 }
 
-/// 试用中、已授权时能打开；试用结束后只有带子上还有东西时才行（把剩下的贴完）。
-pub fn can_open(pro: &Pro, has_items: bool) -> bool {
-    match pro {
-        Pro::Trial { .. } | Pro::Licensed { .. } => true,
-        Pro::Expired { .. } => has_items,
-        Pro::Unavailable => false,
-    }
-}
-
-/// 能不能往带子上放新东西：试用结束后不行。
+/// 能不能打开、往带子上放新东西：试用中、已授权时能；试用结束后不行（开着的带子还能把剩下的贴完）。
+/// 收着的带子总是空的，所以打开和放上用同一个判断。
 fn accepts_new(pro: &Pro) -> bool {
     matches!(pro, Pro::Trial { .. } | Pro::Licensed { .. })
 }
@@ -156,7 +148,10 @@ struct Runtime {
     removed: Option<Removed>,
     cleared: Option<Cleared>,
     warned_expired: bool,
-    warned_grant: bool,
+    /// 这次打开以来粘贴键监听装不上时已经提示（或记过警告）
+    warned_watch: bool,
+    /// 有线程正在装粘贴键监听（装的时候不持锁），别的不再重复装
+    installing: bool,
 }
 
 static RT: LazyLock<Mutex<Runtime>> = LazyLock::new(|| {
@@ -182,7 +177,8 @@ static RT: LazyLock<Mutex<Runtime>> = LazyLock::new(|| {
         removed: None,
         cleared: None,
         warned_expired: false,
-        warned_grant: false,
+        warned_watch: false,
+        installing: false,
     })
 });
 
@@ -398,16 +394,10 @@ pub fn closed() -> bool {
     !rt.open && !rt.peek
 }
 
-/// 页面放手时藏不藏窗口：带子开着或探出着（收起途中又打开了）就不藏
-fn release_hides(open: bool, peek: bool) -> bool {
-    !open && !peek
-}
-
-/// 页面播完收起、提示条也消失了：带子仍收着就藏窗口。只管窗口，不改带子的状态。
+/// 页面播完收起、提示条也消失了：带子仍收着就藏窗口（收起途中又打开、探出了就不藏，`hide` 在主线程上再看一次）。
+/// 只管窗口，不改带子的状态。
 pub fn release(app: &AppHandle) {
-    with(app, |_, _, rt, fx| {
-        fx.hide = release_hides(rt.open, rt.peek);
-    });
+    hide(app);
 }
 
 /// 贴完、抖一下再过 0.7 s 后的收起：不再收东西、不再监听粘贴键；剪切板留着最后贴出的那件，宽限期里还能退回（会重新打开）。
@@ -419,11 +409,9 @@ fn collapse(rt: &mut Runtime, fx: &mut Fx) {
     fx.changed(Cause::Other, None);
 }
 
-/// 启动时调用（只在带 Pro 的构建里）：预建隐藏的窗口。
+/// 启动时调用（调用方先看过 `enabled`）：预建隐藏的窗口。
 pub fn start(app: &AppHandle) {
-    if enabled() {
-        crate::belt_window::prewarm(app);
-    }
+    crate::belt_window::prewarm(app);
     log::info!("传送带就绪");
 }
 
@@ -435,6 +423,10 @@ pub fn configure(app: &AppHandle, on: bool, auto: bool) {
         rt.auto = auto;
         if !rt.auto || !rt.on {
             rt.copies.clear();
+        }
+        // 改成手动：探出着的那截缩回去，不然 8 s 内点“开始”打开的是空带子（总开关关掉时下面的 close 一并处理）
+        if rt.on && !rt.auto && rt.peek {
+            retract(rt, fx);
         }
         if !rt.on {
             if rt.open || rt.peek {
@@ -469,7 +461,7 @@ fn toggle(app: &AppHandle) {
             begin(state, pro, rt, fx);
         } else if rt.open {
             close(rt, fx, true);
-        } else if can_open(pro, false) {
+        } else if accepts_new(pro) {
             open(rt, fx);
             fx.changed(Cause::Other, None);
         } else {
@@ -508,7 +500,7 @@ fn open(rt: &mut Runtime, fx: &mut Fx) {
     rt.removed = None;
     rt.cleared = None;
     rt.warned_expired = false;
-    rt.warned_grant = false;
+    rt.warned_watch = false;
     rt.round += 1;
     fx.show = true;
     log::info!("传送带 打开");
@@ -542,7 +534,7 @@ fn close(rt: &mut Runtime, fx: &mut Fx, undo: bool) {
 
 /// 从探出状态正式开始：时间窗内的复制按先后排上去。
 fn begin(state: &AppState, pro: &Pro, rt: &mut Runtime, fx: &mut Fx) {
-    if !can_open(pro, false) {
+    if !accepts_new(pro) {
         fx.toasts.push(expired_toast());
         return;
     }
@@ -742,7 +734,7 @@ pub fn on_recorded(app: &AppHandle, id: i64, kind: Kind, seq: u64) {
                 write_next(state, rt, fx, true);
                 fx.changed(Cause::Put, Some(item));
             }
-        } else if rt.auto && can_open(pro, false) {
+        } else if rt.auto && accepts_new(pro) {
             let now = crate::clock::now_ms();
             rt.copies.retain(|c| now - c.0 <= PEEK_WINDOW_MS);
             if rt.copies.len() >= PEEK_CAP {
@@ -769,14 +761,19 @@ fn peek_timer(app: &AppHandle, g: u64) {
     std::thread::sleep(Duration::from_millis(PEEK_HOLD_MS));
     with(app, |_, _, rt, fx| {
         if rt.peek && rt.peek_gen == g {
-            rt.peek = false;
-            rt.peek_count = 0;
-            rt.copies.clear();
-            fx.linger = true;
-            fx.changed(Cause::Other, None);
-            log::info!("传送带 探出没理会，缩回");
+            retract(rt, fx);
         }
     });
+}
+
+/// 探出的那截缩回、计数清零；窗口等页面播完再藏。
+fn retract(rt: &mut Runtime, fx: &mut Fx) {
+    rt.peek = false;
+    rt.peek_count = 0;
+    rt.copies.clear();
+    fx.linger = true;
+    fx.changed(Cause::Other, None);
+    log::info!("传送带 探出缩回");
 }
 
 /// 按键监听的回调（macOS 在主线程，Windows 在钩子线程），松开 V 时来：`at_press` 是按下 V 那一刻的
@@ -879,59 +876,72 @@ pub fn back(app: &AppHandle) {
 /// 按键监听跟上带子：打开且非空时装上，其余时候卸掉。装不上（macOS 没有辅助功能权限）时每次打开提示一次；
 /// 下次放上、打开时再试（权限可能已经给了）。
 fn sync_watch(app: &AppHandle) {
-    let wanted = |rt: &Runtime| rt.open && !rt.belt.items().is_empty();
     let (want, has) = {
         let rt = rt();
-        (wanted(&rt), rt.watch.is_some())
+        (watch_wanted(&rt), rt.watch.is_some())
     };
     if want == has {
         return;
     }
     if !want {
-        // 放锁后再丢：Windows 上要等钩子线程退出
-        let old = rt().watch.take();
-        drop(old);
-        log::info!("传送带 停止监听粘贴键");
+        // 放锁后再丢；Windows 上要等钩子线程退出（最多 500 ms），在别的线程丢，不卡调用方（可能是主线程）
+        if let Some(old) = rt().watch.take() {
+            spawn(app, "belt-unwatch", move |_| drop(old));
+            log::info!("传送带 停止监听粘贴键");
+        }
         return;
     }
-    // macOS 必须在主线程装
-    on_main(app, move |app| {
-        {
-            let rt = rt();
-            if !wanted(&rt) || rt.watch.is_some() {
-                return;
+    // macOS 必须在主线程装；Windows 装的时候要等钩子线程就绪（最多 500 ms），在别的线程装
+    #[cfg(target_os = "macos")]
+    crate::panel::on_main(app, install_watch);
+    #[cfg(not(target_os = "macos"))]
+    spawn(app, "belt-watch", install_watch);
+}
+
+fn watch_wanted(rt: &Runtime) -> bool {
+    rt.open && !rt.belt.items().is_empty()
+}
+
+fn install_watch(app: &AppHandle) {
+    {
+        let mut rt = rt();
+        if !watch_wanted(&rt) || rt.watch.is_some() || rt.installing {
+            return;
+        }
+        rt.installing = true;
+    }
+    let a = app.clone();
+    let watch = xpaste_platform::watch_paste_key(move |seq| on_paste(&a, seq));
+    let grant = {
+        let mut rt = rt();
+        rt.installing = false;
+        match watch {
+            Some(w) if watch_wanted(&rt) => {
+                rt.watch = Some(w);
+                log::info!("传送带 开始监听粘贴键");
+                false
+            }
+            // 装的这会儿带子收了：放锁后随 `watch` 丢掉
+            Some(_) => false,
+            None => {
+                // 每次打开只提示、只记一次警告：装不上时每次变化都会再试
+                let first = !std::mem::replace(&mut rt.warned_watch, true);
+                let need = !xpaste_platform::accessibility_trusted();
+                if !need && first {
+                    log::warn!("传送带 粘贴键监听装不上");
+                }
+                need && first
             }
         }
-        let a = app.clone();
-        let watch = xpaste_platform::watch_paste_key(move |seq| on_paste(&a, seq));
-        let grant = {
-            let mut rt = rt();
-            match watch {
-                Some(w) if wanted(&rt) => {
-                    rt.watch = Some(w);
-                    log::info!("传送带 开始监听粘贴键");
-                    false
-                }
-                // 装的这会儿带子收了：放锁后随 `watch` 丢掉
-                Some(_) => false,
-                None => {
-                    let need = !xpaste_platform::accessibility_trusted();
-                    if !need {
-                        log::warn!("传送带 粘贴键监听装不上");
-                    }
-                    need && !std::mem::replace(&mut rt.warned_grant, true)
-                }
-            }
-        };
-        if grant {
-            emit_to(
-                app,
-                LABEL,
-                BELT_TOAST,
-                toast("按顺序贴需要辅助功能权限", &["grant"], None),
-            );
-        }
-    });
+    };
+    if grant {
+        emit_to(
+            app,
+            LABEL,
+            BELT_TOAST,
+            toast("按顺序贴需要辅助功能权限", &["grant"], None),
+        );
+    }
 }
 
 /// 退回快捷键跟上带子：打开时、贴完的宽限期里注册，其余时候注销，让给别的应用。
@@ -1144,13 +1154,6 @@ mod tests {
     }
 
     #[test]
-    fn release_ignored_while_open_or_peeking() {
-        assert!(!release_hides(true, false));
-        assert!(!release_hides(false, true));
-        assert!(release_hides(false, false));
-    }
-
-    #[test]
     fn finish_collapses_unless_backed_or_refilled() {
         assert!(finish_due(true, 5, 5));
         // 退回、又放上东西：finishing 清掉；退回重开还会让 round 变
@@ -1173,11 +1176,10 @@ mod tests {
     }
 
     #[test]
-    fn expired_opens_only_with_leftovers() {
-        let expired = Pro::Expired { reason: None };
-        assert!(!can_open(&expired, false));
-        assert!(can_open(&expired, true));
-        assert!(can_open(&Pro::Trial { days_left: 3 }, false));
+    fn only_trial_or_license_opens() {
+        assert!(!accepts_new(&Pro::Expired { reason: None }));
+        assert!(!accepts_new(&Pro::Unavailable));
+        assert!(accepts_new(&Pro::Trial { days_left: 3 }));
     }
 
     #[test]
