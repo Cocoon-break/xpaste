@@ -222,6 +222,10 @@ struct Fx {
     changed: Option<(Cause, Option<u64>)>,
     shake: bool,
     toasts: Vec<Toast>,
+    /// 显示窗口；收起后等页面放手再藏；立刻藏（关掉总开关）
+    show: bool,
+    linger: bool,
+    hide: bool,
 }
 
 impl Fx {
@@ -268,8 +272,13 @@ fn snapshot(app: &AppHandle, cause: Cause, cause_id: Option<u64>, shake: bool) -
     }
 }
 
-/// 放锁后发 `fx` 里攒下的事件。不要在持有 `RT` 时调用。
-fn apply(app: &AppHandle, fx: Fx) {
+/// 放锁后做 `fx` 里攒下的事：发事件、显示或收起窗口。不要在持有 `RT` 时调用。
+fn apply(app: &AppHandle, mut fx: Fx) {
+    // 收着时的提示条（试用结束等）：先把窗口显示出来，提示消失后页面放手
+    if !fx.toasts.is_empty() && !fx.hide && closed() {
+        fx.show = true;
+        fx.linger = true;
+    }
     for t in fx.toasts {
         emit_to(app, LABEL, MIXER_TOAST, t);
     }
@@ -280,6 +289,14 @@ fn apply(app: &AppHandle, fx: Fx) {
             MIXER_CHANGED,
             snapshot(app, cause, id, fx.shake),
         );
+    }
+    if fx.show {
+        crate::mixer_window::show(app);
+    }
+    if fx.hide {
+        crate::mixer_window::hide(app);
+    } else if fx.linger {
+        crate::mixer_window::linger(app);
     }
     sync_watch(app);
 }
@@ -298,8 +315,16 @@ pub fn open_stamp() -> Option<u64> {
     rt.open.then_some(rt.opened)
 }
 
-/// 启动时调用（调用方先看过 `enabled`）。窗口还没有，这里先什么都不做。
-pub fn start(_app: &AppHandle) {}
+/// 收着：窗口该藏起来了
+pub fn closed() -> bool {
+    !rt().open
+}
+
+/// 启动时调用（调用方先看过 `enabled`）：预建隐藏的窗口。
+pub fn start(app: &AppHandle) {
+    crate::mixer_window::prewarm(app);
+    log::info!("搅拌机就绪");
+}
 
 /// 启动和保存设置时调用：记下总开关。关掉时直接倒掉、收起，不弹撤销。
 pub fn configure(app: &AppHandle, on: bool) {
@@ -310,6 +335,7 @@ pub fn configure(app: &AppHandle, on: bool) {
             if rt.open {
                 close(rt, fx, false);
             }
+            fx.hide = true;
         }
     });
 }
@@ -338,7 +364,7 @@ fn toggle(app: &AppHandle) {
         if rt.open {
             close(rt, fx, true);
         } else if accepts_new(pro) {
-            open(rt);
+            open(rt, fx);
             fx.changed(Cause::Other, None);
         } else {
             fx.toasts.push(expired_toast());
@@ -346,8 +372,9 @@ fn toggle(app: &AppHandle) {
     });
 }
 
-fn open(rt: &mut Runtime) {
+fn open(rt: &mut Runtime, fx: &mut Fx) {
     rt.open = true;
+    fx.show = true;
     rt.opened = collect::stamp();
     rt.taken = None;
     rt.cleared = None;
@@ -365,6 +392,7 @@ fn close(rt: &mut Runtime, fx: &mut Fx, undo: bool) {
             .push(toast(format!("已倒掉 {n} 样"), &["undoClear"]));
     }
     rt.open = false;
+    fx.linger = true;
     cancel(rt);
     reset_result(rt);
     rt.taken = None;
@@ -444,7 +472,7 @@ pub fn put(app: &AppHandle, ids: &[i64]) {
             return;
         }
         if !rt.open {
-            open(rt);
+            open(rt, fx);
         }
         let (n, last) = place(rt, fx, pieces);
         log::info!("搅拌机 放进 {n} 样");
@@ -605,12 +633,23 @@ pub fn ready(app: &AppHandle) {
     emit_to(app, LABEL, MIXER_CHANGED, state_now(app));
 }
 
+/// 窗口藏着时不收：藏起以后才到的旧报告不能把点击区域放回去（显示后页面会重报）
 pub fn set_hits(rects: Vec<Rect>) {
+    if !crate::mixer_window::shown() {
+        return;
+    }
     *HITS.lock().unwrap_or_else(PoisonError::into_inner) = rects;
 }
 
-/// 页面播完收起、提示条也消失了。窗口还没有，这里先什么都不做。
-pub fn release(_app: &AppHandle) {}
+/// 页面播完收起、提示条也消失了：仍收着就藏窗口（收起途中又打开了就不藏，`hide` 在主线程上再看一次）。
+pub fn release(app: &AppHandle) {
+    crate::mixer_window::hide(app);
+}
+
+/// 补一句展开时拿键盘、收起时交还
+pub fn keyboard(app: &AppHandle, on: bool) {
+    crate::mixer_window::keyboard(app, on);
+}
 
 pub fn remove(app: &AppHandle, id: u64) {
     with(app, |_, rt, fx| {
@@ -654,7 +693,7 @@ pub fn undo_clear(app: &AppHandle) {
             return;
         };
         if !rt.open {
-            open(rt);
+            open(rt, fx);
         }
         rt.cup.refill(c);
         log::info!("搅拌机 撤销倒掉 {} 样", rt.cup.items().len());
@@ -1181,7 +1220,7 @@ pub fn again(app: &AppHandle) {
         // 作废贴出后的收起计时
         cancel(rt);
         if !rt.open {
-            open(rt);
+            open(rt, fx);
         }
         rt.cup.refill(items);
         rt.recipe = recipe;
@@ -1360,6 +1399,7 @@ fn pasted(app: &AppHandle, at_press: u64) {
             return;
         }
         rt.open = false;
+        fx.linger = true;
         fx.changed(Cause::Other, None);
         log::info!("搅拌机 贴出后收起");
     });

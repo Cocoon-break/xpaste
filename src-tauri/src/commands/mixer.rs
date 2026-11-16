@@ -55,6 +55,12 @@ pub fn mixer_release(app: AppHandle) {
     mixer::release(&app);
 }
 
+/// 补一句展开时拿键盘（`on`），收起时交还
+#[tauri::command(async)]
+pub fn mixer_keyboard(app: AppHandle, on: bool) {
+    mixer::keyboard(&app, on);
+}
+
 /// 设置页“恢复默认”用的自带配方
 #[tauri::command(async)]
 pub fn mixer_defaults() -> Vec<xpaste_core::model::Recipe> {

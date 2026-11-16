@@ -17,6 +17,7 @@ mod license;
 mod line;
 mod longshot;
 mod mixer;
+mod mixer_window;
 mod ocr;
 mod panel;
 mod rec;
@@ -343,6 +344,10 @@ pub fn run() {
             if window.label() == line::LABEL && matches!(event, WindowEvent::Focused(false)) {
                 line::blur();
             }
+            // 搅拌机失焦（点了别的应用）：补一句收起时不再把键盘切回拿键盘前的窗口
+            if window.label() == mixer::LABEL && matches!(event, WindowEvent::Focused(false)) {
+                mixer_window::blur();
+            }
             // 截图遮罩（shot-*）与贴图（pin-*）失焦不处理
             if window.label() != "panel" {
                 return;
@@ -483,6 +488,7 @@ pub fn run() {
             commands::mixer::mixer_close,
             commands::mixer::mixer_undo_clear,
             commands::mixer::mixer_release,
+            commands::mixer::mixer_keyboard,
             commands::mixer::mixer_defaults,
             commands::mixer::mixer_blend,
             commands::mixer::mixer_stop,
