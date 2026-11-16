@@ -24,6 +24,7 @@ import {
 import { lineDragDrop, lineDragHover, lineHangFromPanel, lineHide, lineSideHint, onLineChanged, onLineHangSelected, onProLink, proActivate, proBuy, proDeactivate, proStatus, proTakeLink, proUnbind, type LineView } from './api/line';
 import { beltPut, onBeltPutSelected } from './api/belt';
 import { deviceLine, proCard, proControls, proLine } from './pro-status';
+import { popSelect } from './select-pop';
 import type { AppError, Appearance, BoundDevice, Engines, FileEntry, LineSide, LineStyle, PanelStyle, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
 import { appCounts, bestApp, freshSug, fromApp, type Sug } from './source';
 import { COMPACT, compactGroups, compactHeadH, rowParts } from './compact';
@@ -2083,6 +2084,7 @@ function paintLineStyle() {
 }
 // 晾衣绳总开关与位置：草稿只在保存时写回，取消丢弃；开关关着时位置和样式两项变淡，仍可改
 const beltOnIn = $<HTMLInputElement>('#beltOn'), beltAutoIn = $<HTMLSelectElement>('#beltAuto');
+const beltAutoPop = popSelect(beltAutoIn, dlg);
 const lineOnIn = $<HTMLInputElement>('#lineOn'), linePinIn = $<HTMLInputElement>('#linePin'), lineSideEl = $('#lineSide'), lineSideHintEl = $('#lineSideHint');
 const lineSideIns = [...lineSideEl.querySelectorAll<HTMLInputElement>('input')];
 const LINE_SIDE_HELP: Record<LineSide, string> = { top: '鼠标碰到屏幕顶端放下', left: '鼠标碰到屏幕左侧边缘放下', right: '鼠标碰到屏幕右侧边缘放下' };
@@ -2159,6 +2161,7 @@ function paintProHome() {
   lineOnQuick.checked = draftLineEnabled;
   beltOnQuick.checked = beltOnIn.checked;
   featSummary($('#proSumLine'), draftLineEnabled, lineKey.pending, LINE_SIDE_NAME[draftLineSide] + (draftLinePinned ? ' · 一直显示' : ''));
+  beltAutoPop.sync();
   featSummary($('#proSumBelt'), beltOnIn.checked, beltKey.pending, beltAutoIn.value === 'auto' ? '自动开启' : '手动开启');
   $('#proFeatLine').classList.toggle('off', !draftLineEnabled);
   $('#proFeatBelt').classList.toggle('off', !beltOnIn.checked);

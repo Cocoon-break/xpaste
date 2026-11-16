@@ -596,6 +596,18 @@ dialog > form { display: contents; }
 .suffix input { padding-right: 34px; font-variant-numeric: tabular-nums; }
 .line .suffix { flex: none; width: 96px; }
 .line select { flex: none; width: 112px; }
+/* 应用样式的下拉（select-pop.ts）：按钮同输入框的底色和描边，弹层用右键菜单的样子 */
+.sel-btn { flex: none; display: inline-flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 112px; height: 32px; padding: 0 8px 0 12px; border: 1px solid var(--line-2); border-radius: 7px; background: var(--well); color: var(--fg); font: inherit; font-size: 13px; cursor: pointer; transition: border-color 160ms ease, box-shadow 160ms ease; }
+.sel-btn .chev { width: 14px; height: 14px; flex: none; fill: none; stroke: var(--faint); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; transition: transform 160ms var(--ease-enter); }
+.sel-btn[aria-expanded="true"] { border-color: var(--beam); box-shadow: 0 0 0 3px color-mix(in srgb, var(--beam) 18%, transparent); }
+.sel-btn[aria-expanded="true"] .chev { transform: rotate(180deg); }
+.sel-btn:focus-visible { outline: none; border-color: var(--beam); box-shadow: 0 0 0 3px color-mix(in srgb, var(--beam) 18%, transparent); }
+@media (hover: hover) and (pointer: fine) { .sel-btn:hover:not(:disabled) { border-color: var(--tick-base); } }
+.sel-btn:disabled { opacity: .5; cursor: default; }
+.sel-menu { z-index: 8; }
+.sel-menu button { height: 32px; justify-content: space-between; }
+.sel-menu .ck { width: 14px; height: 14px; flex: none; fill: none; stroke: var(--beam); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; opacity: 0; }
+.sel-menu button[aria-selected="true"] .ck { opacity: 1; }
 .switches { display: grid; border-top: 1px solid var(--line); }
 .switch { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
 .switch b, .line b { display: block; font-weight: 500; font-size: 13px; }
