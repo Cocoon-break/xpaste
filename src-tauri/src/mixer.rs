@@ -440,6 +440,7 @@ fn open(rt: &mut Runtime, fx: &mut Fx) {
 /// 收起；杯里还有东西时倒掉，`undo` 时提示可以撤销。
 fn close(rt: &mut Runtime, fx: &mut Fx, undo: bool) {
     let n = rt.cup.items().len();
+    let was_mini = rt.mini;
     let poured = rt.cup.clear();
     rt.cleared = (undo && n > 0).then_some(poured);
     if undo && n > 0 {
@@ -453,8 +454,8 @@ fn close(rt: &mut Runtime, fx: &mut Fx, undo: bool) {
     reset_result(rt);
     rt.taken = None;
     fx.changed(Cause::Clear, None);
-    // 角标时贴出后的收起（不撤销、杯已空）不再记“倒掉 0 样”，“贴出”已记过
-    if undo || n > 0 {
+    // 角标时贴出后的收起（杯已空）不再记“倒掉 0 样”，“贴出”已记过
+    if undo || n > 0 || !was_mini {
         log::info!("搅拌机 收起 倒掉 {n} 样");
     }
 }

@@ -483,6 +483,8 @@ fn toggle(app: &AppHandle) {
                 }
                 Toggle::Open => fx.toasts.push(expired_toast()),
                 Toggle::Expand => set_mini(rt, fx, false),
+                // 贴完提示期间照旧关掉
+                Toggle::Mini if rt.finishing => close(rt, fx, true),
                 Toggle::Mini => set_mini(rt, fx, true),
                 Toggle::Close => close(rt, fx, true),
             }
@@ -491,7 +493,8 @@ fn toggle(app: &AppHandle) {
 }
 
 fn set_mini(rt: &mut Runtime, fx: &mut Fx, on: bool) {
-    if rt.mini == on {
+    // 贴完的提示期间不收成角标
+    if rt.mini == on || (on && rt.finishing) {
         return;
     }
     rt.mini = on;
@@ -502,8 +505,7 @@ fn set_mini(rt: &mut Runtime, fx: &mut Fx, on: bool) {
 /// 收成角标或展开（只在正式开着时生效，探出不算）
 pub fn mini(app: &AppHandle, on: bool) {
     with(app, |_, _, rt, fx| {
-        // 贴完的提示期间不收成角标
-        if rt.open && !rt.finishing {
+        if rt.open {
             set_mini(rt, fx, on);
         }
     });
