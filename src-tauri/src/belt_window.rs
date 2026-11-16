@@ -51,6 +51,11 @@ pub fn belt_room(work: Rect, mixer_left: Option<f64>, len: Option<f64>) -> Rect 
         .filter(|r| *r <= work.x + work.w && *r - work.x - 32.0 >= MIN_LEN);
     let avail = right.map_or(work.w, |r| r - work.x);
     let mut d = belt_rect(Rect { w: avail, ..work });
+    if d.w < MIN_LEN {
+        // 让着搅拌机后默认宽（0.84 × 可用宽）可能低于下限
+        d.w = MIN_LEN.min(avail);
+        d.x = work.x + (avail - d.w) / 2.0;
+    }
     if let Some(len) = len {
         let cap = if right.is_some() { avail - 32.0 } else { avail };
         d.w = len.min(cap).max(MIN_LEN);
@@ -154,14 +159,32 @@ fn place(app: &AppHandle, w: &WebviewWindow) -> tauri::Result<()> {
         .then(crate::mixer_window::body_left)
         .flatten();
     let r = float_drag::placed(work, belt_room(work, mixer, saved_len(app)), offset);
-    set_rect(w, r, k)
+    set_rect(w, r, k, false)
 }
 
 /// 窗口摆到 `r`（逻辑像素）并更新 `FRAME`、`SIZE`。主线程调用。
-fn set_rect(w: &WebviewWindow, r: Rect, k: f64) -> tauri::Result<()> {
+/// `same_screen`：只在同一块屏里挪、改尺寸（滑动、调长度）。Windows 上一次设好位置和大小，右边缘不跳。
+fn set_rect(w: &WebviewWindow, r: Rect, k: f64, same_screen: bool) -> tauri::Result<()> {
     *FRAME.lock().unwrap_or_else(PoisonError::into_inner) = ((r.x * k, r.y * k), k);
     *SIZE.lock().unwrap_or_else(PoisonError::into_inner) = (r.w, r.h);
-    crate::shot::place(w, (r.x * k, r.y * k), (r.w * k, r.h * k))
+    put(w, (r.x * k, r.y * k), (r.w * k, r.h * k), same_screen)
+}
+
+/// 摆窗口（`pointer_position` 坐标空间）；`same_screen` 时 Windows 走一次设好位置和大小
+fn put(w: &WebviewWindow, o: (f64, f64), s: (f64, f64), same_screen: bool) -> tauri::Result<()> {
+    #[cfg(windows)]
+    if same_screen {
+        xpaste_platform::set_window_rect(
+            w.hwnd()?.0 as isize,
+            o.0 as i32,
+            o.1 as i32,
+            s.0 as i32,
+            s.1 as i32,
+        );
+        return Ok(());
+    }
+    let _ = same_screen;
+    crate::shot::place(w, o, s)
 }
 
 /// 拖着换位置或调长度
@@ -234,7 +257,7 @@ pub fn relayout(app: &AppHandle) {
                             return;
                         }
                         if let Some(w) = app.get_webview_window(LABEL)
-                            && let Err(e) = set_rect(&w, r, k)
+                            && let Err(e) = set_rect(&w, r, k, true)
                         {
                             log::warn!("传送带让开搅拌机失败：{e}");
                         }
@@ -351,7 +374,7 @@ fn apply_resize(
     let o = float_drag::clamp(o, (nw, h), work);
     *FRAME.lock().unwrap_or_else(PoisonError::into_inner) = ((o.0 * k, o.1 * k), k);
     *SIZE.lock().unwrap_or_else(PoisonError::into_inner) = (nw, h);
-    if let Err(e) = crate::shot::place(&w, (o.0 * k, o.1 * k), (nw * k, h * k)) {
+    if let Err(e) = put(&w, (o.0 * k, o.1 * k), (nw * k, h * k), true) {
         log::warn!("传送带调长度失败：{e}");
     }
 }
@@ -557,5 +580,8 @@ mod tests {
         assert_eq!(belt_room(work, Some(996.0), Some(1200.0)).w, 948.0);
         // 调过的长度 300 低于下限：360
         assert_eq!(belt_room(work, None, Some(300.0)).w, 360.0);
+        // 默认宽 0.84 × 392 ≈ 329 低于下限：撑到 360 并在可用宽里居中
+        let r = belt_room(work, Some(408.0), None);
+        assert_eq!((r.x, r.w), (16.0, 360.0));
     }
 }

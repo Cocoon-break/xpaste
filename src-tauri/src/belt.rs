@@ -516,14 +516,15 @@ pub fn mini(app: &AppHandle, on: bool) {
 
 #[derive(Debug, PartialEq)]
 enum AfterFinish {
-    Close,
+    /// 角标：不弹提示、不抖，直接收起，宽限期照给
+    Quiet,
     Grace,
 }
 
-/// 贴完最后一件之后：角标时直接消失，展开时提示可以退回、过一会儿收起
+/// 贴完最后一件之后：角标时悄悄收起，展开时提示可以退回、过一会儿收起；两者退回的宽限期都在
 fn after_finish(mini: bool) -> AfterFinish {
     if mini {
-        AfterFinish::Close
+        AfterFinish::Quiet
     } else {
         AfterFinish::Grace
     }
@@ -907,14 +908,15 @@ fn pasted(app: &AppHandle, at_press: u64) {
 /// 贴完最后一件：剪切板留着它，提示可以退回，抖一下再过 0.7 s 后收起；宽限期（到提示消失为止）里退回快捷键还在。
 fn finish(rt: &mut Runtime, fx: &mut Fx) {
     log::info!("传送带 贴完 {} 件", rt.pasted);
-    if after_finish(rt.mini) == AfterFinish::Close {
-        rt.belt.forget_done();
-        close(rt, fx, false);
+    rt.round += 1;
+    rt.grace_until = Some(Instant::now() + Duration::from_millis(GRACE_MS));
+    if after_finish(rt.mini) == AfterFinish::Quiet {
+        // 留着 done，宽限期过后由 finish_timer 清掉
+        collapse(rt, fx);
+        fx.timer = Some(Timer::Finish(rt.round));
         return;
     }
     rt.finishing = true;
-    rt.round += 1;
-    rt.grace_until = Some(Instant::now() + Duration::from_millis(GRACE_MS));
     fx.finished = Some(rt.pasted);
     fx.toasts
         .push(toast(format!("贴了 {} 件", rt.pasted), &["back"], None));
@@ -1238,8 +1240,8 @@ mod tests {
     use xpaste_pro::Pro;
 
     #[test]
-    fn finish_closes_when_mini() {
-        assert_eq!(after_finish(true), AfterFinish::Close);
+    fn finish_is_quiet_when_mini() {
+        assert_eq!(after_finish(true), AfterFinish::Quiet);
         assert_eq!(after_finish(false), AfterFinish::Grace);
     }
 

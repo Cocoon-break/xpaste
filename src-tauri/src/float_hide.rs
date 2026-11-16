@@ -14,8 +14,8 @@ const LABELS: [&str; 3] = [crate::line::LABEL, crate::belt::LABEL, crate::mixer:
 pub struct Hidden {
     app: AppHandle,
     labels: Vec<&'static str>,
-    /// macOS 冻结时设全透明前各窗口的 alpha（与 `labels` 一一对应）；`None` 表示设的是内容保护
-    alpha: Option<Vec<f64>>,
+    /// macOS 冻结时设的是全透明（复原到 1.0）；false 表示设的是内容保护
+    faded: bool,
 }
 
 impl Hidden {
@@ -38,7 +38,7 @@ pub fn hide(app: &AppHandle) -> Hidden {
     Hidden {
         app: app.clone(),
         labels,
-        alpha: None,
+        faded: false,
     }
 }
 
@@ -46,18 +46,18 @@ pub fn hide(app: &AppHandle) -> Hidden {
 pub fn hide_for_freeze(app: &AppHandle) -> Hidden {
     let labels = targets(&windows(app), true);
     #[cfg(target_os = "macos")]
-    let alpha = Some(
-        labels
-            .iter()
-            .map(|l| set_alpha(app, l, None).unwrap_or(1.0))
-            .collect(),
-    );
+    let faded = {
+        for l in &labels {
+            set_alpha(app, l, 0.0);
+        }
+        true
+    };
     #[cfg(not(target_os = "macos"))]
-    let alpha = {
+    let faded = {
         for l in &labels {
             protect(app, l, true);
         }
-        None
+        false
     };
     if !labels.is_empty() {
         log::info!("float 冻结屏幕时藏起 {} 个浮层", labels.len());
@@ -65,30 +65,28 @@ pub fn hide_for_freeze(app: &AppHandle) -> Hidden {
     Hidden {
         app: app.clone(),
         labels,
-        alpha,
+        faded,
     }
 }
 
 impl Drop for Hidden {
-    /// 内容保护逐个 set_content_protected(false)，由 Tauri 转到主线程做；alpha 切到主线程改回原值
+    /// 内容保护逐个 set_content_protected(false)，由 Tauri 转到主线程做；alpha 切到主线程一律改回 1.0
+    /// （两次冻结重叠时后一次读到的是 0，不能“还原”成 0）
     fn drop(&mut self) {
-        match self.alpha.take() {
-            None => {
-                for l in &self.labels {
-                    protect(&self.app, l, false);
+        if !self.faded {
+            for l in &self.labels {
+                protect(&self.app, l, false);
+            }
+            return;
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let labels = std::mem::take(&mut self.labels);
+            crate::panel::on_main(&self.app, move |app| {
+                for l in &labels {
+                    set_alpha(app, l, 1.0);
                 }
-            }
-            #[cfg(target_os = "macos")]
-            Some(alpha) => {
-                let labels = std::mem::take(&mut self.labels);
-                crate::panel::on_main(&self.app, move |app| {
-                    for (l, a) in labels.iter().zip(alpha) {
-                        set_alpha(app, l, Some(a));
-                    }
-                });
-            }
-            #[cfg(not(target_os = "macos"))]
-            Some(_) => {}
+            });
         }
     }
 }
@@ -145,20 +143,22 @@ fn protect(app: &AppHandle, label: &str, on: bool) {
     }
 }
 
-/// 主线程调用：`to` 为 `None` 时设成全透明并返回原来的 alpha，否则改回 `to`。
-/// 这几个浮层自己不动窗口 alpha（只有面板做原生淡入淡出），改回原值不会和别处抢。
+/// 主线程调用：设窗口 alpha。这几个浮层自己不动窗口 alpha（只有面板做原生淡入淡出），所以复原一律用 1.0。
 #[cfg(target_os = "macos")]
 // 同 panel::animate_alpha：cocoa 已弃用；objc 0.2 的 sel! 展开里有 cfg(feature = "cargo-clippy")
 #[allow(deprecated, unexpected_cfgs)]
-fn set_alpha(app: &AppHandle, label: &str, to: Option<f64>) -> Option<f64> {
+fn set_alpha(app: &AppHandle, label: &str, to: f64) {
     use tauri_nspanel::cocoa::base::id;
     use tauri_nspanel::objc::{msg_send, sel, sel_impl};
-    let ns = app.get_webview_window(label)?.ns_window().ok()? as id;
-    // SAFETY: 主线程上读写自己的 NSWindow 的 alphaValue
+    let Some(ns) = app
+        .get_webview_window(label)
+        .and_then(|w| w.ns_window().ok())
+    else {
+        return;
+    };
+    // SAFETY: 主线程上写自己的 NSWindow 的 alphaValue
     unsafe {
-        let old: f64 = msg_send![ns, alphaValue];
-        let _: () = msg_send![ns, setAlphaValue: to.unwrap_or(0.0)];
-        Some(old)
+        let _: () = msg_send![ns as id, setAlphaValue: to];
     }
 }
 
