@@ -1,5 +1,5 @@
 // 和应用一致的下拉选择：原生 <select> 留着当数据源（取值、change 事件、保存设置都照旧），只是藏起来；
-// 外面换成一个按钮，点开是和右键菜单同一套样子的弹出列表。弹层挂在 host（设置窗）里，下面放不下就往上弹。
+// 外面换成一个按钮，点开是和右键菜单同一套样子的弹出列表（样式在 ui.css）。弹层挂在 host（设置窗）里，下面放不下就往上弹。
 
 /** 列表里按键后焦点落在第几项；不是移动键为 null */
 export function moveIndex(i: number, key: string, n: number): number | null {
@@ -16,8 +16,11 @@ export function moveIndex(i: number, key: string, n: number): number | null {
 const CHEVRON = '<svg class="chev" viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4"/></svg>';
 const CHECK = '<svg class="ck" viewBox="0 0 20 20" aria-hidden="true"><path d="m5 10.5 3.2 3L15 7"/></svg>';
 
-/** 换掉 sel 的外观；代码里改了 sel.value 之后调 sync() 刷新按钮上的字 */
-export function popSelect(sel: HTMLSelectElement, host: HTMLElement): { sync(): void } {
+/** 换掉 sel 的外观。代码里直接给 sel.value 赋值、改选项时按钮上的字自己跟着变。
+ *  room：窗口贴着内容大小的页面（划词卡片）用，弹层要伸出 host 底部时告诉它还差多少像素，收起时给 0 */
+export function popSelect(sel: HTMLSelectElement, host: HTMLElement, room?: (px: number) => void): { sync(): void } {
+  if (sel.dataset.pop) return { sync() {} };
+  sel.dataset.pop = '1';
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'sel-btn';
@@ -32,12 +35,13 @@ export function popSelect(sel: HTMLSelectElement, host: HTMLElement): { sync(): 
     label.htmlFor = btn.id;
     label.id ||= `${sel.id}Label`;
   }
+  if (sel.dataset.act) btn.dataset.act = sel.dataset.act;
   sel.hidden = true;
   sel.tabIndex = -1;
   sel.after(btn);
 
   const menu = document.createElement('div');
-  menu.className = 'menu sel-menu';
+  menu.className = 'sel-menu';
   menu.setAttribute('role', 'listbox');
   if (label) menu.setAttribute('aria-labelledby', label.id);
   menu.dataset.open = 'false';
@@ -52,6 +56,7 @@ export function popSelect(sel: HTMLSelectElement, host: HTMLElement): { sync(): 
   function close(refocus: boolean) {
     if (menu.dataset.open !== 'true') return;
     menu.dataset.open = 'false';
+    room?.(0);
     btn.setAttribute('aria-expanded', 'false');
     document.removeEventListener('pointerdown', outside, true);
     if (refocus) btn.focus();
@@ -86,7 +91,8 @@ export function popSelect(sel: HTMLSelectElement, host: HTMLElement): { sync(): 
     const r = btn.getBoundingClientRect(), h = host.getBoundingClientRect();
     const mh = menu.offsetHeight, mw = menu.offsetWidth, gap = 4;
     const below = r.bottom - h.top + gap, above = r.top - h.top - mh - gap;
-    const up = below + mh > host.clientHeight - 8 && above >= 8;
+    const up = !room && below + mh > host.clientHeight - 8 && above >= 8;
+    if (room) room(Math.max(0, below + mh + 8 - host.clientHeight));
     menu.style.top = `${up ? above : below}px`;
     menu.style.left = `${Math.max(8, r.right - h.left - mw)}px`;
     menu.style.transformOrigin = up ? 'bottom right' : 'top right';
@@ -117,6 +123,14 @@ export function popSelect(sel: HTMLSelectElement, host: HTMLElement): { sync(): 
   // 设置窗关掉时列表跟着收起
   host.addEventListener('close', () => close(false));
   sel.addEventListener('change', sync);
+  // 代码里给 value 赋值不发 change：在这个元素上包一层 setter，赋完值顺手刷新按钮；选项被换掉时也刷新
+  const value = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!;
+  Object.defineProperty(sel, 'value', {
+    configurable: true,
+    get() { return value.get!.call(sel); },
+    set(v: string) { value.set!.call(sel, v); sync(); },
+  });
+  new MutationObserver(sync).observe(sel, { childList: true, subtree: true, attributes: true, attributeFilter: ['selected', 'disabled'] });
   sync();
   return { sync };
 }

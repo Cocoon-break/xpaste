@@ -25,6 +25,7 @@ import { lineDragDrop, lineDragHover, lineHangFromPanel, lineHide, lineSideHint,
 import { beltPut, onBeltPutSelected } from './api/belt';
 import { deviceLine, proCard, proControls, proLine } from './pro-status';
 import { popSelect } from './select-pop';
+import { installTips } from './tip';
 import type { AppError, Appearance, BoundDevice, Engines, FileEntry, LineSide, LineStyle, PanelStyle, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
 import { appCounts, bestApp, freshSug, fromApp, type Sug } from './source';
 import { COMPACT, compactGroups, compactHeadH, rowParts } from './compact';
@@ -103,6 +104,7 @@ document.querySelectorAll<HTMLElement>('[data-icon]').forEach((el) => {
 const $ = <T extends HTMLElement = HTMLElement>(s: string) => document.querySelector<T>(s)!;
 const root = document.documentElement;
 const reduced = matchMedia('(prefers-reduced-motion: reduce)');
+installTips();
 const EASE_ENTER = 'cubic-bezier(.22,1,.36,1)', EASE_MOVE = 'cubic-bezier(.25,1,.5,1)', EASE_SPRING = 'cubic-bezier(.34,1.56,.64,1)';
 const fx = (el: Element | null, kf: Keyframe[], opts: KeyframeAnimationOptions) => {
   if (el && !reduced.matches) el.animate(kf, opts);
@@ -1835,6 +1837,12 @@ const themeOpts = [...themeSeg.querySelectorAll<HTMLElement>('[data-theme-opt]')
 const shotSaveCopyIn = $<HTMLInputElement>('#shotSaveCopy'), longAutoIn = $<HTMLInputElement>('#longAutoScroll'), shotPermRow = $('#shotPermRow');
 const recSystemAudioIn = $<HTMLInputElement>('#recSystemAudio'), recMicIn = $<HTMLInputElement>('#recMicrophone'), recCopyIn = $<HTMLInputElement>('#recCopy');
 const recQualityIn = $<HTMLSelectElement>('#recQuality'), recFpsIn = $<HTMLSelectElement>('#recFps');
+// 设置里的下拉都换成应用样式的弹层，不用系统原生的菜单
+function popSel(sel: HTMLSelectElement) {
+  popSelect(sel, dlg);
+  return sel;
+}
+for (const sel of [retainIn, recQualityIn, recFpsIn]) popSelect(sel, dlg);
 const HOTKEY_IDLE = '点击输入框，然后按下新的组合键', OPT_IDLE = '点击输入框后按下新的组合键；按 ⌫ 清空表示不启用';
 let pendingHotkey = '', dlgReturn: HTMLElement | null = null, closeTimer = 0, saving = false;
 
@@ -2084,7 +2092,7 @@ function paintLineStyle() {
 }
 // 晾衣绳总开关与位置：草稿只在保存时写回，取消丢弃；开关关着时位置和样式两项变淡，仍可改
 const beltOnIn = $<HTMLInputElement>('#beltOn'), beltAutoIn = $<HTMLSelectElement>('#beltAuto');
-const beltAutoPop = popSelect(beltAutoIn, dlg);
+popSelect(beltAutoIn, dlg);
 const lineOnIn = $<HTMLInputElement>('#lineOn'), linePinIn = $<HTMLInputElement>('#linePin'), lineSideEl = $('#lineSide'), lineSideHintEl = $('#lineSideHint');
 const lineSideIns = [...lineSideEl.querySelectorAll<HTMLInputElement>('input')];
 const LINE_SIDE_HELP: Record<LineSide, string> = { top: '鼠标碰到屏幕顶端放下', left: '鼠标碰到屏幕左侧边缘放下', right: '鼠标碰到屏幕右侧边缘放下' };
@@ -2161,7 +2169,6 @@ function paintProHome() {
   lineOnQuick.checked = draftLineEnabled;
   beltOnQuick.checked = beltOnIn.checked;
   featSummary($('#proSumLine'), draftLineEnabled, lineKey.pending, LINE_SIDE_NAME[draftLineSide] + (draftLinePinned ? ' · 一直显示' : ''));
-  beltAutoPop.sync();
   featSummary($('#proSumBelt'), beltOnIn.checked, beltKey.pending, beltAutoIn.value === 'auto' ? '自动开启' : '手动开启');
   $('#proFeatLine').classList.toggle('off', !draftLineEnabled);
   $('#proFeatBelt').classList.toggle('off', !beltOnIn.checked);
@@ -2233,7 +2240,7 @@ const recDir = dirField('recDir', () => '~/Movies/xPaste');
 // 两组各自配置、互不隐藏。stored 为空串（未选）时按本机能力显示，用户没动就保存时原样写回
 const trEngineEl = $('#trEngine'), trEngineIns = [...trEngineEl.querySelectorAll<HTMLInputElement>('input')];
 const trBaseIn = $<HTMLInputElement>('#trBaseUrl'), trKeyIn = $<HTMLInputElement>('#trApiKey'), trModelIn = $<HTMLInputElement>('#trModel');
-const trLangIn = $<HTMLSelectElement>('#trLang'), trBaseErr = $('#trBaseUrlErr'), trTestBtn = $<HTMLButtonElement>('#trTestBtn'), trResult = $('#trTestResult');
+const trLangIn = popSel($<HTMLSelectElement>('#trLang')), trBaseErr = $('#trBaseUrlErr'), trTestBtn = $<HTMLButtonElement>('#trTestBtn'), trResult = $('#trTestResult');
 const trPackRow = $('#trPackRow'), trPack = $('#trPack'), trPackBtn = $('#trPackBtn');
 // trKnown：本机能否用系统翻译。第一次查到之前按 macOS 能用先画，免得常见情况（macOS 26+）打开时闪一下接口三项；查到后跨打开保留
 let trKnown: boolean | null = null, trEngine: 'system' | 'openai' = 'openai', trTouched = false, trSeq = 0, trOpenSeq = 0;

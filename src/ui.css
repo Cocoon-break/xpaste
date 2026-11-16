@@ -1,0 +1,52 @@
+/* 各页面共用的控件外观：不用系统原生的样子，整个应用一个风格。各页面的样式表都引入这一份 */
+
+/* 滚动条：平时不显示滑块，鼠标进到能滚动的区域才出现一根细的圆角滑块（同浮层的描边色） */
+::-webkit-scrollbar { width: 10px; height: 10px; background: transparent; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb { border: 3px solid transparent; border-radius: 5px; background: transparent; background-clip: content-box; }
+:hover::-webkit-scrollbar-thumb { background-color: var(--line-2); }
+::-webkit-scrollbar-thumb:hover { background-color: var(--tick-base); }
+
+/* 数字输入框不显示系统的上下箭头，方向键照常加减 */
+input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
+input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+
+/* 悬停提示（tip.ts）：代替系统的 title 小黄条，样子同浮层 */
+.ui-tip {
+  position: fixed; z-index: 2147483000; max-width: 260px; padding: 5px 9px; border-radius: 7px;
+  background: var(--pop); border: 1px solid var(--line-2); box-shadow: var(--shadow-pop); color: var(--fg);
+  font: 12px/1.45 var(--font-ui); white-space: pre-line; pointer-events: none;
+  -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
+  opacity: 0; transform: translateY(-2px); transition: opacity 120ms ease-out, transform 160ms var(--ease-enter);
+}
+.ui-tip[data-show] { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) { .ui-tip { transform: none; transition: opacity 120ms ease-out; } }
+
+/* 下拉（select-pop.ts）：按钮同输入框的底色和描边，弹层同面板的右键菜单 */
+.sel-btn { flex: none; display: inline-flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 112px; height: 32px; padding: 0 8px 0 12px; border: 1px solid var(--line-2); border-radius: 7px; background: var(--well); color: var(--fg); font: inherit; font-size: 13px; cursor: pointer; transition: border-color 160ms ease, box-shadow 160ms ease; }
+.field .sel-btn { width: 100%; height: 38px; padding: 0 10px 0 12px; }
+.sel-btn .chev { width: 14px; height: 14px; flex: none; fill: none; stroke: var(--faint); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; transition: transform 160ms var(--ease-enter); }
+.sel-btn[aria-expanded="true"], .sel-btn:focus-visible { outline: none; border-color: var(--beam); box-shadow: 0 0 0 3px color-mix(in srgb, var(--beam) 18%, transparent); }
+.sel-btn[aria-expanded="true"] .chev { transform: rotate(180deg); }
+@media (hover: hover) and (pointer: fine) { .sel-btn:hover:not(:disabled) { border-color: var(--tick-base); } }
+.sel-btn:disabled { opacity: .5; cursor: default; }
+.sel-menu {
+  position: absolute; z-index: 8; padding: 5px;
+  background: var(--pop); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
+  border: 1px solid var(--line-2); border-radius: 10px; box-shadow: var(--shadow-pop);
+  opacity: 0; transform: scale(.94); visibility: hidden;
+  transition: opacity 120ms ease-out, transform 120ms ease-out, visibility 0s 120ms;
+}
+.sel-menu[data-open="true"] { opacity: 1; transform: none; visibility: visible; transition: opacity 180ms var(--ease-enter), transform 260ms var(--ease-spring), visibility 0s; }
+.sel-menu button {
+  width: 100%; height: 32px; padding: 0 9px; border: 0; border-radius: 8px; background: transparent; color: var(--fg); cursor: pointer;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; font: inherit; font-size: 13px; text-align: left; white-space: nowrap;
+  opacity: 0; transform: translateY(-4px);
+  transition: opacity 140ms ease-out, transform 220ms var(--ease-enter), background-color 100ms ease;
+}
+.sel-menu[data-open="true"] button { opacity: 1; transform: none; transition-delay: calc(var(--i) * 24ms), calc(var(--i) * 24ms), 0ms; }
+.sel-menu button:hover, .sel-menu button:focus-visible { background: color-mix(in srgb, var(--beam) 12%, transparent); }
+.sel-menu button:focus-visible { outline: 2px solid var(--beam); outline-offset: -2px; }
+.sel-menu .ck { width: 14px; height: 14px; flex: none; fill: none; stroke: var(--beam); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; opacity: 0; }
+.sel-menu button[aria-selected="true"] .ck { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .sel-menu, .sel-menu[data-open="true"], .sel-menu button, .sel-menu[data-open="true"] button { transform: none; transition: opacity 120ms ease-out, visibility 0s; } }

@@ -10,6 +10,8 @@ import type { AppError, Engines } from '../api/types';
 import { LANG_LABEL, otherEngine, staleDelta, type Engine } from '../translate';
 import { composing } from '../ime';
 import { cardHTML, type CardState } from './view';
+import { popSelect } from '../select-pop';
+import { installTips } from '../tip';
 
 addEventListener('error', (e) => void logError(`划词卡片页错误：${e.message}`));
 addEventListener('unhandledrejection', (e) => void logError(`划词卡片页未处理的拒绝：${String(e.reason)}`));
@@ -62,6 +64,9 @@ const src = () => root.querySelector<HTMLTextAreaElement>('textarea.c-orig');
 const body = () => root.querySelector<HTMLElement>('.c-body:not(.c-orig)');
 const bodies = () => [...root.querySelectorAll<HTMLElement>('.c-body')];
 
+/** 目标语言下拉展开时卡片下面还要留出的高度 */
+let menuRoom = 0;
+
 function render(pop = false) {
   const s = tr();
   // 另一种能用时就有换用按钮，翻译中也有（M26 规则 16）
@@ -73,8 +78,14 @@ function render(pop = false) {
   const tops = new Map(bodies().map((b) => [b.classList.contains('c-orig'), b.scrollTop]));
   const ta = src(), caret = ta && [ta.selectionStart, ta.selectionEnd];
   root.innerHTML = cardHTML(view, wide, MOD);
+  // 目标语言换成应用样式的下拉；弹层伸出卡片底部时窗口临时加高，收起后还原
+  const lang = root.querySelector<HTMLSelectElement>('select[data-act="lang"]');
+  if (lang) popSelect(lang, root, (px) => {
+    menuRoom = px;
+    fit();
+  });
   if (pop) root.firstElementChild?.classList.add('pop-in');
-  if (focused) root.querySelector<HTMLElement>(`[data-act="${focused}"]`)?.focus();
+  if (focused) root.querySelector<HTMLElement>(`[data-act="${focused}"]:not([hidden])`)?.focus();
   if (caret) src()?.setSelectionRange(caret[0], caret[1]);
   for (const b of bodies()) b.scrollTop = tops.get(b.classList.contains('c-orig')) ?? 0;
   follow();
@@ -102,13 +113,15 @@ function fit() {
   // 两栏整体被压低的部分（栏内框有最小高度）加上框内最多溢出的部分；只量框内会量少，窗口不长高，内容从底部透出来
   const cols = root.querySelector<HTMLElement>('.c-cols');
   const over = (cols ? cols.scrollHeight - cols.clientHeight : 0) + Math.max(0, ...bodies().map((b) => b.scrollHeight - b.clientHeight));
-  const h = Math.ceil(card.offsetHeight + over);
+  const h = Math.ceil(card.offsetHeight + over) + menuRoom;
   if (h !== lastH || wide !== lastWide) {
     lastH = h;
     lastWide = wide;
     void cardResize(seq, h, wide, moved);
   }
 }
+
+installTips();
 
 void onCardShow((p) => {
   clearTimeout(timer);
