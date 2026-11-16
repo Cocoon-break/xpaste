@@ -181,7 +181,7 @@ pub fn write_text(state: &AppState, text: &str, what: &str) -> Result<(), AppErr
 }
 
 /// 按普通写入写剪切板（不打自身写入标记）：监听器照常把它收进历史（截图复制、识别文字、译文、录屏复制）。
-/// 写入后的序号记进 `own_write_seq`，传送带据此不把它收上带子、只让出一次。
+/// 写入期间置 `own_writing`，写入后的序号记进 `own_write_seq`（先记序号再清标志），传送带据此不把它收上带子、只让出一次。
 /// 失败时日志只记 `what` 与字节数，报“写剪切板失败”。
 pub fn write_own(state: &AppState, flavors: &[Flavor], what: &str) -> Result<(), AppError> {
     write_own_via(state, flavors, what, xpaste_platform::write)
@@ -194,12 +194,16 @@ fn write_own_via(
     write: impl FnOnce(&[Flavor]) -> Result<u64, xpaste_platform::PlatformError>,
 ) -> Result<(), AppError> {
     let bytes: usize = flavors.iter().map(|f| f.data.len()).sum();
-    let seq = write(flavors).map_err(|e| {
+    state.own_writing.store(true, Ordering::SeqCst);
+    let written = write(flavors);
+    if let Ok(seq) = written {
+        state.own_write_seq.store(seq, Ordering::SeqCst);
+    }
+    state.own_writing.store(false, Ordering::SeqCst);
+    written.map(drop).map_err(|e| {
         log::warn!("{what}写剪切板失败 {bytes} 字节：{e}");
         AppError::ClipboardWrite
-    })?;
-    state.own_write_seq.store(seq, Ordering::SeqCst);
-    Ok(())
+    })
 }
 
 #[cfg(test)]
@@ -227,10 +231,15 @@ mod tests {
             &state,
             &[xpaste_core::text_flavor("译文")],
             "测试",
-            |_| Ok(11),
+            |_| {
+                // 写入途中到来的变化（Windows 上通知可能先到）也要认得出
+                assert!(state.own_writing.load(Ordering::SeqCst));
+                Ok(11)
+            },
         )
         .unwrap();
         assert_eq!(state.own_write_seq.load(Ordering::SeqCst), 11);
+        assert!(!state.own_writing.load(Ordering::SeqCst));
         assert_eq!(state.last_write_seq.load(Ordering::SeqCst), u64::MAX);
     }
 }

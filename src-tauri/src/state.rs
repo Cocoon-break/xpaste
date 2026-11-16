@@ -22,6 +22,8 @@ pub struct AppState {
     /// 本应用最近一次按普通写入（照常进历史，见 `clipboard::write_own`）写剪切板后的序号：
     /// 传送带据此不把截图复制、识别文字、译文等收上带子；`u64::MAX` 表示从未写过
     pub own_write_seq: AtomicU64,
+    /// 正在按普通写入写剪切板（序号尚未存入 `own_write_seq`）：Windows 上变化通知可能先到，传送带这期间也不收
+    pub own_writing: AtomicBool,
     /// 本应用正在写剪切板（序号尚未存入 `last_write_seq`），监听期间到来的变化一律视为自身写入
     pub writing: AtomicBool,
     /// 唤起面板前的前台窗口（Windows HWND），粘贴时切回；0 表示无（macOS 恒为 0）
@@ -75,6 +77,7 @@ impl AppState {
             paused: AtomicBool::new(paused),
             last_write_seq: AtomicU64::new(u64::MAX),
             own_write_seq: AtomicU64::new(u64::MAX),
+            own_writing: AtomicBool::new(false),
             writing: AtomicBool::new(false),
             previous_window: AtomicIsize::new(0),
             onboarding: AtomicBool::new(false),

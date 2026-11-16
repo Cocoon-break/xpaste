@@ -96,9 +96,10 @@ pub fn peek_count(copies_ms: &[i64], now_ms: i64) -> Option<usize> {
     (n >= PEEK_MIN).then_some(n)
 }
 
-/// 这次入库的复制要不要放上带子：xPaste 自己按普通写入写的（截图复制、识别文字、译文、录屏复制）不放。
-pub fn take_on_belt(seq: u64, own_write_seq: u64) -> bool {
-    seq != own_write_seq
+/// 这次入库的复制要不要放上带子：xPaste 自己按普通写入写的（截图复制、识别文字、译文、录屏复制）不放，
+/// 正在这样写（`own_writing`，序号还没记下）时到来的也不放。
+pub fn take_on_belt(seq: u64, own_write_seq: u64, own_writing: bool) -> bool {
+    !own_writing && seq != own_write_seq
 }
 
 /// 试用中、已授权时能打开；试用结束后只有带子上还有东西时才行（把剩下的贴完）。
@@ -643,8 +644,9 @@ fn write_next(state: &AppState, rt: &mut Runtime, fx: &mut Fx, force: bool) {
             None => write_marked(state, || xpaste_platform::write(&flavors)),
         };
         match written {
-            Ok(()) => {
-                rt.belt_seq = state.last_write_seq.load(Ordering::SeqCst);
+            // 用这次写入自己的序号：`last_write_seq` 可能已经被面板等别处的写入改掉
+            Ok(seq) => {
+                rt.belt_seq = seq;
                 rt.written = Some(id);
                 rt.yielding = false;
                 rt.reclaim = false;
@@ -717,7 +719,9 @@ pub fn captured(app: &AppHandle, seq: u64) {
 /// 一次复制记进了历史（新增或合并）之后：带子开着就放上去，没开着、自动模式下数一数要不要探出。
 pub fn on_recorded(app: &AppHandle, id: i64, kind: Kind, seq: u64) {
     let state = app.state::<AppState>();
-    if !take_on_belt(seq, state.own_write_seq.load(Ordering::SeqCst)) {
+    // 先读标志再读序号：标志已清时序号一定已经记好
+    let writing = state.own_writing.load(Ordering::SeqCst);
+    if !take_on_belt(seq, state.own_write_seq.load(Ordering::SeqCst), writing) {
         return;
     }
     with(app, |state, pro, rt, fx| {
@@ -1162,8 +1166,10 @@ mod tests {
 
     #[test]
     fn own_plain_write_not_taken() {
-        assert!(!take_on_belt(9, 9));
-        assert!(take_on_belt(9, 8));
+        assert!(!take_on_belt(9, 9, false));
+        assert!(take_on_belt(9, 8, false));
+        // 写入还没返回、序号没记下时通知先到
+        assert!(!take_on_belt(9, 8, true));
     }
 
     #[test]
