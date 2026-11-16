@@ -491,7 +491,7 @@ pub fn begin(app: &AppHandle, mode: Mode) {
         warm_ocr();
     }
     // 晾衣绳等浮层不截进冻结图；在主线程上设，立即生效
-    let floats = crate::float_hide::hide(app);
+    let floats = crate::float_hide::hide_for_freeze(app);
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         freeze(&app, generation, hide_panel || stale, mode, floats)
@@ -529,13 +529,13 @@ fn warm_ocr() {
 }
 
 /// `settle`：刚隐藏过窗口（面板或上次的遮罩），冻结前先等它们撤下。
-/// `floats`：冻结期间给浮层设的内容保护，冻结图拿到就复原，浮层照常能用。
+/// `floats`：冻结期间藏起的浮层，冻结图拿到就复原，浮层照常能用。
 fn freeze(app: &AppHandle, generation: u64, settle: bool, mode: Mode, floats: Hidden) {
     if settle {
         // ponytail: 固定等 50 ms 让窗口服务器撤下窗口；冻结图里仍出现面板时改为等隐藏生效的回调
         std::thread::sleep(Duration::from_millis(50));
     } else if !floats.is_empty() {
-        // 内容保护要等下一次合成才生效，等 1 帧
+        // 藏起浮层要等下一次合成才生效，等 1 帧；settle 时上面的 50 ms 已经够了，不再另等
         std::thread::sleep(Duration::from_millis(16));
     }
     let t = Instant::now();
