@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Recipe } from './api/types.ts';
-import { dropIndex, isChanged, moveRecipe, placeOf, recipeError } from './recipes.ts';
+import { dropIndex, isChanged, moveRecipe, placeOf, recipeError, sideOf } from './recipes.ts';
 
 const r = (name: string, show = true, builtin: string | null = null, prompt = 'p'): Recipe => ({ name, prompt, show, builtin });
 
@@ -41,4 +41,12 @@ test('isChanged 只看自带的', () => {
   assert.equal(isChanged(r('问', true, 'ask', '默认'), defs), true);
   assert.equal(isChanged(r('写成提问', false, 'ask', '默认'), defs), false);
   assert.equal(isChanged(r('写成提问', true, null, '改了'), defs), false);
+});
+
+test('sideOf 新配方只占位', () => {
+  const defs = [r('写成提问', true, 'ask', '默认')];
+  assert.equal(sideOf(r('新的'), defs, true), null);
+  assert.equal(sideOf(r('新的'), defs, false), 'del');
+  assert.equal(sideOf(r('写成提问', true, 'ask', '改了'), defs, false), 'restore');
+  assert.equal(sideOf(r('写成提问', true, 'ask', '默认'), defs, false), null);
 });

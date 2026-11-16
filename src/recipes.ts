@@ -36,6 +36,10 @@ export const isChanged = (r: Recipe, defaults: Recipe[]): boolean => {
   return !!d && (d.name !== r.name || d.prompt !== r.prompt);
 };
 
+/** 行尾第二个按钮：自带且改过的“恢复默认”，自己加的“删除”；自带没改过的、还没点“完成”的新配方都只占位 */
+export const sideOf = (r: Recipe, defaults: Recipe[], pending: boolean): 'restore' | 'del' | null =>
+  pending ? null : r.builtin ? (isChanged(r, defaults) ? 'restore' : null) : 'del';
+
 const ic = (body: string, fill = false) =>
   `<svg class="ic" viewBox="0 0 20 20" ${fill ? 'fill="currentColor"' : 'fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"'} aria-hidden="true">${body}</svg>`;
 const IC_GRIP = ic('<circle cx="7.5" cy="5.5" r="1.3"/><circle cx="12.5" cy="5.5" r="1.3"/><circle cx="7.5" cy="10" r="1.3"/><circle cx="12.5" cy="10" r="1.3"/><circle cx="7.5" cy="14.5" r="1.3"/><circle cx="12.5" cy="14.5" r="1.3"/>', true);
@@ -79,8 +83,9 @@ export function mountRecipes(host: HTMLElement, o: Opts): { render(): void; edit
     row.className = `rr${r.show ? '' : ' off'}`;
     row.setAttribute('role', 'listitem');
     const at = i < 0 ? null : placeOf(o.get(), i);
-    const side = r.builtin ? (isChanged(r, o.defaults) ? `<button type="button" class="ib" data-a="restore" aria-label="恢复默认" data-tip="恢复默认">${IC_UNDO}</button>` : '<span class="ib ph"></span>')
-      : `<button type="button" class="ib" data-a="del" aria-label="删除" data-tip="删除">${IC_DEL}</button>`;
+    const sa = sideOf(r, o.defaults, i < 0);
+    const side = sa === 'restore' ? `<button type="button" class="ib" data-a="restore" aria-label="恢复默认" data-tip="恢复默认">${IC_UNDO}</button>`
+      : sa === 'del' ? `<button type="button" class="ib" data-a="del" aria-label="删除" data-tip="删除">${IC_DEL}</button>` : '<span class="ib ph"></span>';
     row.innerHTML = `<button type="button" class="grip" data-a="grip" aria-label="拖动调整顺序，也可以按上下方向键"${i < 0 ? ' disabled' : ''}>${IC_GRIP}</button>
       <div class="nm"><b></b>${at ? `<span class="tag${at === 'key' ? ' key' : ''}">${at === 'key' ? '底座按键' : '⋯ 里'}</span>` : ''}${r.builtin ? '' : '<span class="tag">自己加的</span>'}<small></small></div>
       <label class="switch"><input type="checkbox" data-a="show" aria-label="显示在搅拌机上"${r.show ? ' checked' : ''}${i < 0 ? ' disabled' : ''}></label>
@@ -130,6 +135,8 @@ export function mountRecipes(host: HTMLElement, o: Opts): { render(): void; edit
   function open(r: Recipe | null) {
     if (fresh && r !== fresh) fresh = null;
     editing = r;
+    // 换到别的行（或收起）时丢掉原来那一行编辑框里的字，免得 render() 把它带进新展开的编辑框
+    rl.querySelector('.ed')?.remove();
     render();
     if (!r) return;
     const row = rowsOf().find((x) => x.querySelector('.ed'))!;
