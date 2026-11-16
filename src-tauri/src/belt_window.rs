@@ -160,10 +160,17 @@ pub fn hide(app: &AppHandle) {
         }
         SHOWN.store(false, Ordering::SeqCst);
         HITS.lock().unwrap_or_else(PoisonError::into_inner).clear();
-        if let Some(w) = app.get_webview_window(LABEL)
-            && let Err(e) = w.hide()
-        {
+        let Some(w) = app.get_webview_window(LABEL) else {
+            return;
+        };
+        if let Err(e) = w.hide() {
             log::warn!("收起传送带失败：{e}");
+        }
+        // Windows：经 show_no_activate 上屏时 tao 的标记仍是隐藏，上面的 hide() 不会真的隐藏
+        #[cfg(windows)]
+        match w.hwnd() {
+            Ok(h) => xpaste_platform::hide_window(h.0 as isize),
+            Err(e) => log::warn!("传送带取不到窗口句柄：{e}"),
         }
     });
 }
