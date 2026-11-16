@@ -25,6 +25,8 @@ export interface MixerState {
   items: Ingredient[];
   /** 打开的配方名，按顺序：前三个在底座上，其余在 ⋯ 里 */
   keys: string[];
+  /** 当前或上一次用的配方名（“再搅一次”后也记着）；只按补一句时为 null */
+  recipe: string | null;
   /** 结果卡片的标题：配方名、“配方名 + “那句””或“按你写的：“那句””；没有结果时为 null */
   title: string | null;
   model: string;

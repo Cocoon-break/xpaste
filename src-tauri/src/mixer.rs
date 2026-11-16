@@ -144,6 +144,8 @@ pub struct MixerState {
     items: Vec<Ingredient>,
     /// 打开的配方名，按顺序
     keys: Vec<String>,
+    /// 当前或上一次用的配方名；只按补一句时为 None
+    recipe: Option<String>,
     title: Option<String>,
     model: String,
     text: String,
@@ -260,6 +262,7 @@ fn snapshot(app: &AppHandle, cause: Cause, cause_id: Option<u64>, shake: bool) -
         round: rt.round,
         items: rt.cup.items().to_vec(),
         keys,
+        recipe: rt.recipe.clone(),
         title: rt.title.clone(),
         model,
         text: rt.text.clone(),
@@ -326,16 +329,19 @@ pub fn start(app: &AppHandle) {
     log::info!("搅拌机就绪");
 }
 
-/// 启动和保存设置时调用：记下总开关。关掉时直接倒掉、收起，不弹撤销。
+/// 启动和保存设置时调用：记下总开关。关掉时直接倒掉、收起，不弹撤销；开着时把新的配方、模型发给页面。
 pub fn configure(app: &AppHandle, on: bool) {
     with(app, |_, rt, fx| {
         rt.on = on && enabled();
         if !rt.on {
             rt.again = None;
+            rt.cleared = None;
             if rt.open {
                 close(rt, fx, false);
             }
             fx.hide = true;
+        } else if rt.open {
+            fx.changed(Cause::Other, None);
         }
     });
 }
@@ -685,8 +691,9 @@ pub fn close_now(app: &AppHandle) {
 
 /// 撤销倒掉：按原来的顺序放回；已收起时重新打开。
 pub fn undo_clear(app: &AppHandle) {
-    with(app, |_, rt, fx| {
-        if !rt.cup.items().is_empty() {
+    with(app, |pro, rt, fx| {
+        // 总开关关了、试用结束后不再重新打开
+        if !rt.on || (!rt.open && !accepts_new(pro)) || !rt.cup.items().is_empty() {
             return;
         }
         let Some(c) = rt.cleared.take() else {
