@@ -2772,6 +2772,8 @@ async function submitSettings() {
     recHotkey: recKey.pending, recDir: recDir.pending, recSystemAudio: recSystemAudioIn.checked, recMicrophone: recMicIn.checked, recCopy: recCopyIn.checked,
     recQuality: recQualityIn.value, recFps: recFpsIn.value, panelStyle: draftStyle, lineHotkey: lineKey.pending,
     beltEnabled: beltOnIn.checked, beltAuto: beltAutoIn.value === 'auto', beltHotkey: beltKey.pending, beltBackHotkey: beltBackKey.pending,
+    // 搅拌机还没有设置页：原样带回已读到的值，保存时不丢
+    mixerEnabled: S.settings.mixerEnabled, mixerHotkey: S.settings.mixerHotkey, mixerRecipes: S.settings.mixerRecipes,
   });
   // 翻译字段和晾衣绳的样式、开关、位置不经 SettingsForm；末尾的 / 由后端去掉。engine 没动过就原样写回（可能是空串）
   Object.assign(s, {

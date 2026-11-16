@@ -1,5 +1,5 @@
 // 设置表单 ⇄ Settings：校验与解析。纯函数。
-import type { PanelStyle, RecQuality, Settings } from './api/types';
+import type { PanelStyle, Recipe, RecQuality, Settings } from './api/types';
 
 /** 原型 submit 的校验：非空、50–5000、50 的整数倍。 */
 export function parseLimit(s: string): number | null {
@@ -70,6 +70,9 @@ export type SettingsForm = {
   beltAuto: boolean;
   beltHotkey: string;
   beltBackHotkey: string;
+  mixerEnabled: boolean;
+  mixerHotkey: string;
+  mixerRecipes: Recipe[];
 };
 
 export const formToSettings = (base: Settings, f: SettingsForm): Settings => ({
@@ -103,6 +106,9 @@ export const formToSettings = (base: Settings, f: SettingsForm): Settings => ({
   beltAuto: f.beltAuto,
   beltHotkey: f.beltHotkey,
   beltBackHotkey: f.beltBackHotkey,
+  mixerEnabled: f.mixerEnabled,
+  mixerHotkey: f.mixerHotkey,
+  mixerRecipes: f.mixerRecipes,
 });
 
 /** 翻译接口地址（M26 规则 6）：空视为未填；否则必须以 http:// 或 https:// 开头。 */

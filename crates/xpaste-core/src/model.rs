@@ -183,6 +183,42 @@ pub struct Settings {
     pub belt_hotkey: String,
     /// 退回上一条的全局快捷键；空字符串表示不启用
     pub belt_back_hotkey: String,
+    /// 搅拌机总开关；关掉后搅拌机快捷键不注册
+    pub mixer_enabled: bool,
+    /// 打开或关闭搅拌机的全局快捷键；空字符串表示不启用
+    pub mixer_hotkey: String,
+    /// 配方列表；空表示还没存过，运行时补齐自带配方。解析不了的项逐个丢掉
+    #[serde(deserialize_with = "tolerant_recipes")]
+    pub mixer_recipes: Vec<Recipe>,
+}
+
+/// 搅拌机的配方：名字、提示词、是否在杯口显示；`builtin` 是自带配方的键名，自定义的为空
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Recipe {
+    pub name: String,
+    pub prompt: String,
+    pub show: bool,
+    pub builtin: Option<String>,
+}
+
+// 提示词是用户写的，不能进日志：手写 Debug，不打印内容
+impl fmt::Debug for Recipe {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Recipe(..)")
+    }
+}
+
+/// 数组里解析不了的项逐个丢掉；整段不是数组时为空
+fn tolerant_recipes<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Recipe>, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(match v {
+        serde_json::Value::Array(a) => a
+            .into_iter()
+            .filter_map(|x| serde_json::from_value(x).ok())
+            .collect(),
+        _ => Vec::new(),
+    })
 }
 
 /// 晾衣绳挂的位置
@@ -206,6 +242,15 @@ impl Settings {
     pub fn effective_belt_hotkey(&self) -> &str {
         if self.belt_enabled {
             &self.belt_hotkey
+        } else {
+            ""
+        }
+    }
+
+    /// 实际该注册的搅拌机快捷键：总开关关着时为空串（不注册）
+    pub fn effective_mixer_hotkey(&self) -> &str {
+        if self.mixer_enabled {
+            &self.mixer_hotkey
         } else {
             ""
         }
@@ -304,6 +349,9 @@ impl Default for Settings {
             belt_auto: false,
             belt_hotkey: "Alt+Shift+B".into(),
             belt_back_hotkey: "Alt+Shift+Z".into(),
+            mixer_enabled: true,
+            mixer_hotkey: "Alt+Shift+M".into(),
+            mixer_recipes: Vec::new(),
         }
     }
 }
@@ -413,6 +461,7 @@ impl Settings {
         // 便签快捷键同理：升级前别的快捷键已用了 Alt+Shift+N 的，读出为不启用
         self.yield_line_hotkey();
         self.yield_belt_hotkeys();
+        self.yield_mixer_hotkey();
     }
 
     /// 便签快捷键与别的快捷键冲突时停用它（读出设置时用；不含晾衣绳的版本保存设置时也用，用户看不到这一项）。
@@ -433,6 +482,40 @@ impl Settings {
         {
             self.belt_back_hotkey.clear();
         }
+    }
+
+    /// 搅拌机快捷键与别的快捷键冲突时停用它（读出设置时用）。
+    pub fn yield_mixer_hotkey(&mut self) {
+        if self.mixer_hotkey_clash().is_some() {
+            self.mixer_hotkey.clear();
+        }
+    }
+
+    /// 搅拌机快捷键与哪个快捷键是同一组合（含传送带的两个）；录屏只在 macOS 上比。
+    fn mixer_hotkey_clash(&self) -> Option<&'static str> {
+        if self.mixer_hotkey.is_empty() {
+            return None;
+        }
+        let key = hotkey_key(&self.mixer_hotkey);
+        [
+            ("唤起", self.hotkey.as_str()),
+            ("截图", self.shot_hotkey.as_str()),
+            (
+                "录屏",
+                if cfg!(target_os = "macos") {
+                    self.rec_hotkey.as_str()
+                } else {
+                    ""
+                },
+            ),
+            ("翻译", self.translate_hotkey.as_str()),
+            ("便签", self.line_hotkey.as_str()),
+            ("传送带", self.belt_hotkey.as_str()),
+            ("退回", self.belt_back_hotkey.as_str()),
+        ]
+        .into_iter()
+        .find(|(_, c)| !c.is_empty() && hotkey_key(c) == key)
+        .map(|(name, _)| name)
     }
 
     /// 传送带的某个快捷键与哪个快捷键是同一组合；`back` 为退回键时还要比放上键，放上键不比退回键（让退回键先让出）。
@@ -570,6 +653,12 @@ impl Settings {
             if let Some(name) = self.belt_hotkey_clash(k, back) {
                 return fail(&format!("{label}快捷键不能与{name}快捷键相同"));
             }
+        }
+        if !self.mixer_hotkey.is_empty() && !has_modifier(&self.mixer_hotkey) {
+            return fail("搅拌机快捷键至少需要包含 Mod 或 Alt");
+        }
+        if let Some(name) = self.mixer_hotkey_clash() {
+            return fail(&format!("搅拌机快捷键不能与{name}快捷键相同"));
         }
         if !matches!(self.translate_engine.as_str(), "" | "system" | "openai") {
             return fail("翻译引擎只能是系统翻译或 OpenAI 兼容接口");
@@ -1455,6 +1544,55 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(invalid(&s), "传送带快捷键至少需要包含 Mod 或 Alt");
+    }
+
+    #[test]
+    fn mixer_defaults() {
+        let s: Settings = serde_json::from_str(r#"{"maxRecords":1000}"#).unwrap();
+        assert!(s.mixer_enabled);
+        assert_eq!(s.mixer_hotkey, "Alt+Shift+M");
+        assert!(s.mixer_recipes.is_empty());
+    }
+
+    #[test]
+    fn recipes_tolerant() {
+        let s: Settings = serde_json::from_str(
+            r#"{"mixerRecipes":[{"name":"a","prompt":"p","show":true,"builtin":null},42,{"name":"b"}],"maxRecords":1000}"#,
+        )
+        .unwrap();
+        assert_eq!(s.mixer_recipes.len(), 1);
+        assert_eq!(s.mixer_recipes[0].name, "a");
+        assert_eq!(s.max_records, 1000);
+        let s: Settings = serde_json::from_str(r#"{"mixerRecipes":"x"}"#).unwrap();
+        assert!(s.mixer_recipes.is_empty());
+    }
+
+    #[test]
+    fn mixer_hotkey_clash_yields() {
+        let mut s = Settings {
+            mixer_hotkey: "Alt+Shift+B".into(),
+            ..Default::default()
+        };
+        s.yield_mixer_hotkey();
+        assert_eq!(s.mixer_hotkey, "");
+        assert_eq!(s.belt_hotkey, "Alt+Shift+B");
+    }
+
+    #[test]
+    fn mixer_hotkey_needs_modifier() {
+        let s = Settings {
+            mixer_hotkey: "M".into(),
+            ..Default::default()
+        };
+        assert_eq!(invalid(&s), "搅拌机快捷键至少需要包含 Mod 或 Alt");
+    }
+
+    #[test]
+    fn effective_mixer_hotkey_off() {
+        let mut s = Settings::default();
+        assert_eq!(s.effective_mixer_hotkey(), "Alt+Shift+M");
+        s.mixer_enabled = false;
+        assert_eq!(s.effective_mixer_hotkey(), "");
     }
 
     #[test]

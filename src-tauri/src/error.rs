@@ -21,6 +21,8 @@ pub enum AppError {
     LineHotkeyTaken,
     #[error("传送带快捷键已被其他应用占用，请换一个")]
     BeltHotkeyTaken,
+    #[error("搅拌机快捷键已被其他应用占用，请换一个")]
+    MixerHotkeyTaken,
     /// 参数不合法（非 http 链接、记录不存在等）
     #[error("{0}")]
     Invalid(String),
@@ -77,6 +79,7 @@ impl AppError {
             Self::TranslateHotkeyTaken => "translateHotkeyTaken",
             Self::LineHotkeyTaken => "lineHotkeyTaken",
             Self::BeltHotkeyTaken => "beltHotkeyTaken",
+            Self::MixerHotkeyTaken => "mixerHotkeyTaken",
             Self::Invalid(_) => "invalid",
             Self::TranslateConfig => "translateConfig",
             Self::TranslatePack { .. } => "translatePack",

@@ -9,9 +9,11 @@ use crate::state::AppState;
 /// 录屏只在 macOS 上做（M24）：Windows 上从不注册录屏快捷键。
 const REC_SUPPORTED: bool = cfg!(target_os = "macos");
 
-/// 注销全部后注册唤起、截图、录屏、翻译、便签与传送带快捷键（后五个为空串表示不启用，跳过；不含晾衣绳的版本不注册便签）；任何失败都视为被占用。
-/// 六个都会尝试注册，按唤起、截图、录屏、翻译、便签、传送带的顺序返回第一个失败：
-/// `HotkeyTaken` / `ShotHotkeyTaken` / `RecHotkeyTaken` / `TranslateHotkeyTaken` / `LineHotkeyTaken` / `BeltHotkeyTaken`。
+/// 注销全部后注册唤起、截图、录屏、翻译、便签、传送带与搅拌机快捷键（后六个为空串表示不启用，跳过；不含晾衣绳的版本不注册便签）；任何失败都视为被占用。
+/// 七个都会尝试注册，按唤起、截图、录屏、翻译、便签、传送带、搅拌机的顺序返回第一个失败：
+/// `HotkeyTaken` / `ShotHotkeyTaken` / `RecHotkeyTaken` / `TranslateHotkeyTaken` / `LineHotkeyTaken` / `BeltHotkeyTaken` / `MixerHotkeyTaken`。
+// ponytail: 每个快捷键一个参数，再多就该改成结构体
+#[allow(clippy::too_many_arguments)]
 pub fn register(
     app: &AppHandle,
     panel: &str,
@@ -20,6 +22,7 @@ pub fn register(
     translate: &str,
     line: &str,
     belt: &str,
+    mixer: &str,
 ) -> Result<(), AppError> {
     let gs = app.global_shortcut();
     let taken = |e: tauri_plugin_global_shortcut::Error| log::debug!("全局快捷键插件错误：{e}");
@@ -37,7 +40,9 @@ pub fn register(
         !crate::line::enabled() || line.is_empty() || gs.register(line).map_err(taken).is_ok();
     let belt_ok =
         !crate::belt::enabled() || belt.is_empty() || gs.register(belt).map_err(taken).is_ok();
-    first_failure(panel_ok, shot_ok, rec_ok, tr_ok, line_ok, belt_ok)
+    let mixer_ok =
+        !crate::mixer::enabled() || mixer.is_empty() || gs.register(mixer).map_err(taken).is_ok();
+    first_failure(panel_ok, shot_ok, rec_ok, tr_ok, line_ok, belt_ok, mixer_ok)
 }
 
 /// 按唤起、截图、录屏、翻译、便签、传送带的顺序取第一个没注册上的。
@@ -48,14 +53,16 @@ fn first_failure(
     translate: bool,
     line: bool,
     belt: bool,
+    mixer: bool,
 ) -> Result<(), AppError> {
-    match (panel, shot, rec, translate, line, belt) {
+    match (panel, shot, rec, translate, line, belt, mixer) {
         (false, ..) => Err(AppError::HotkeyTaken),
         (_, false, ..) => Err(AppError::ShotHotkeyTaken),
         (_, _, false, ..) => Err(AppError::RecHotkeyTaken),
         (_, _, _, false, ..) => Err(AppError::TranslateHotkeyTaken),
-        (_, _, _, _, false, _) => Err(AppError::LineHotkeyTaken),
-        (_, _, _, _, _, false) => Err(AppError::BeltHotkeyTaken),
+        (_, _, _, _, false, ..) => Err(AppError::LineHotkeyTaken),
+        (_, _, _, _, _, false, _) => Err(AppError::BeltHotkeyTaken),
+        (_, _, _, _, _, _, false) => Err(AppError::MixerHotkeyTaken),
         _ => Ok(()),
     }
 }
@@ -89,10 +96,12 @@ pub enum Role {
     Translate,
     Line,
     Belt,
+    Mixer,
 }
 
 /// 触发的快捷键是哪一个（M23 规则 1、M24、M26 规则 18）：按解析后的组合比较；截图、录屏、翻译为空串时不认。
 /// Windows 上录屏不注册、设置里也不校验，它留着的组合可能正是翻译快捷键，不认录屏。
+#[allow(clippy::too_many_arguments)]
 pub fn role_of(
     pressed: &Shortcut,
     panel: &str,
@@ -101,6 +110,7 @@ pub fn role_of(
     translate: &str,
     line: &str,
     belt: &str,
+    mixer: &str,
 ) -> Option<Role> {
     let is = |s: &str| !s.is_empty() && s.parse::<Shortcut>().is_ok_and(|k| k == *pressed);
     if is(panel) {
@@ -115,6 +125,8 @@ pub fn role_of(
         Some(Role::Line)
     } else if crate::belt::enabled() && is(belt) {
         Some(Role::Belt)
+    } else if crate::mixer::enabled() && is(mixer) {
+        Some(Role::Mixer)
     } else {
         None
     }
@@ -332,17 +344,20 @@ mod tests {
         let (p, s, r) = ("CommandOrControl+Shift+V", "Alt+Shift+A", "Alt+Shift+R");
         let t = "Alt+Shift+T";
         let l = "Alt+Shift+N";
-        assert_eq!(role_of(&shot, p, s, r, t, l, ""), Some(Role::Shot));
-        assert_eq!(role_of(&panel, p, s, r, t, l, ""), Some(Role::Panel));
+        assert_eq!(role_of(&shot, p, s, r, t, l, "", ""), Some(Role::Shot));
+        assert_eq!(role_of(&panel, p, s, r, t, l, "", ""), Some(Role::Panel));
         // Windows 不注册录屏快捷键（REC_SUPPORTED），也就不认
         assert_eq!(
-            role_of(&rec, p, s, r, t, l, ""),
+            role_of(&rec, p, s, r, t, l, "", ""),
             REC_SUPPORTED.then_some(Role::Rec)
         );
         // 截图、录屏为空串表示不启用：不认
-        assert_eq!(role_of(&shot, p, "", r, t, l, ""), None);
-        assert_eq!(role_of(&rec, p, s, "", t, l, ""), None);
-        assert_eq!(role_of(&panel, p, "", "", "", "", ""), Some(Role::Panel));
+        assert_eq!(role_of(&shot, p, "", r, t, l, "", ""), None);
+        assert_eq!(role_of(&rec, p, s, "", t, l, "", ""), None);
+        assert_eq!(
+            role_of(&panel, p, "", "", "", "", "", ""),
+            Some(Role::Panel)
+        );
     }
 
     #[test]
@@ -350,11 +365,11 @@ mod tests {
         let tr = "Alt+Shift+T".parse().unwrap();
         let (p, s, r) = ("CommandOrControl+Shift+V", "Alt+Shift+A", "Alt+Shift+R");
         assert_eq!(
-            role_of(&tr, p, s, r, "alt+shift+t", "", ""),
+            role_of(&tr, p, s, r, "alt+shift+t", "", "", ""),
             Some(Role::Translate)
         );
         // 为空串表示不启用：不认
-        assert_eq!(role_of(&tr, p, s, r, "", "", ""), None);
+        assert_eq!(role_of(&tr, p, s, r, "", "", "", ""), None);
         // Windows 上录屏不注册（M24）：翻译用了留着默认值的录屏组合时按翻译认，不能开录屏
         let rec = "Alt+Shift+R".parse().unwrap();
         let want = if cfg!(target_os = "macos") {
@@ -362,7 +377,7 @@ mod tests {
         } else {
             Role::Translate
         };
-        assert_eq!(role_of(&rec, p, s, r, r, "", ""), Some(want));
+        assert_eq!(role_of(&rec, p, s, r, r, "", "", ""), Some(want));
     }
 
     #[test]
@@ -376,11 +391,11 @@ mod tests {
         );
         // 不含晾衣绳的版本不注册便签，也就不认
         assert_eq!(
-            role_of(&key, p, s, r, t, "alt+shift+n", ""),
+            role_of(&key, p, s, r, t, "alt+shift+n", "", ""),
             crate::line::enabled().then_some(Role::Line)
         );
         // 为空串表示不启用：不认
-        assert_eq!(role_of(&key, p, s, r, t, "", ""), None);
+        assert_eq!(role_of(&key, p, s, r, t, "", "", ""), None);
     }
 
     #[test]
@@ -393,15 +408,15 @@ mod tests {
             "Alt+Shift+T",
         );
         assert_eq!(
-            role_of(&key, p, s, r, t, "", "alt+shift+b"),
+            role_of(&key, p, s, r, t, "", "alt+shift+b", ""),
             crate::belt::enabled().then_some(Role::Belt)
         );
-        assert_eq!(role_of(&key, p, s, r, t, "", ""), None);
+        assert_eq!(role_of(&key, p, s, r, t, "", "", ""), None);
     }
 
     #[test]
     fn register_reports_first_failure_in_order() {
-        let kind = |f: [bool; 6]| match first_failure(f[0], f[1], f[2], f[3], f[4], f[5]) {
+        let kind = |f: [bool; 7]| match first_failure(f[0], f[1], f[2], f[3], f[4], f[5], f[6]) {
             Ok(()) => "ok",
             Err(AppError::HotkeyTaken) => "panel",
             Err(AppError::ShotHotkeyTaken) => "shot",
@@ -409,15 +424,23 @@ mod tests {
             Err(AppError::TranslateHotkeyTaken) => "translate",
             Err(AppError::LineHotkeyTaken) => "line",
             Err(AppError::BeltHotkeyTaken) => "belt",
+            Err(AppError::MixerHotkeyTaken) => "mixer",
             Err(_) => "other",
         };
-        assert_eq!(kind([true; 6]), "ok");
-        assert_eq!(kind([true, true, true, true, true, false]), "belt");
-        assert_eq!(kind([true, true, true, true, false, false]), "line");
-        assert_eq!(kind([true, true, true, false, false, false]), "translate");
-        assert_eq!(kind([true, true, false, false, false, false]), "rec");
-        assert_eq!(kind([true, false, false, false, false, false]), "shot");
-        assert_eq!(kind([false; 6]), "panel");
+        assert_eq!(kind([true; 7]), "ok");
+        assert_eq!(kind([true, true, true, true, true, true, false]), "mixer");
+        assert_eq!(kind([true, true, true, true, true, false, false]), "belt");
+        assert_eq!(kind([true, true, true, true, false, false, false]), "line");
+        assert_eq!(
+            kind([true, true, true, false, false, false, false]),
+            "translate"
+        );
+        assert_eq!(kind([true, true, false, false, false, false, false]), "rec");
+        assert_eq!(
+            kind([true, false, false, false, false, false, false]),
+            "shot"
+        );
+        assert_eq!(kind([false; 7]), "panel");
     }
 
     #[test]

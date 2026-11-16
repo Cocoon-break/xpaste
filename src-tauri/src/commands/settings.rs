@@ -186,6 +186,9 @@ pub fn changed_fields(old: &Settings, new: &Settings) -> Vec<&'static str> {
         ("beltEnabled", old.belt_enabled != new.belt_enabled),
         ("beltAuto", old.belt_auto != new.belt_auto),
         ("beltHotkey", old.belt_hotkey != new.belt_hotkey),
+        ("mixerEnabled", old.mixer_enabled != new.mixer_enabled),
+        ("mixerHotkey", old.mixer_hotkey != new.mixer_hotkey),
+        ("mixerRecipes", old.mixer_recipes != new.mixer_recipes),
         (
             "beltBackHotkey",
             old.belt_back_hotkey != new.belt_back_hotkey,
@@ -230,6 +233,8 @@ fn hotkeys_changed(changed: &[&str]) -> bool {
         "lineEnabled",
         "beltHotkey",
         "beltEnabled",
+        "mixerHotkey",
+        "mixerEnabled",
     ]
     .iter()
     .any(|k| changed.contains(k))
@@ -249,15 +254,16 @@ fn set_autostart(app: &AppHandle, on: bool) {
     }
 }
 
-/// 注册唤起、截图、录屏、翻译、便签、传送带快捷键。
-type RegisterFn<'a> = dyn FnMut(&str, &str, &str, &str, &str, &str) -> Result<(), AppError> + 'a;
+/// 注册唤起、截图、录屏、翻译、便签、传送带、搅拌机快捷键。
+type RegisterFn<'a> =
+    dyn FnMut(&str, &str, &str, &str, &str, &str, &str) -> Result<(), AppError> + 'a;
 
 /// 校验 → 快捷键改了就注册新的唤起、截图、录屏、翻译与便签快捷键（失败恢复旧的五个）→ 持久化（失败也恢复）；返回变化的字段名。
-/// `register(唤起, 截图, 录屏, 翻译, 便签, 传送带)` 是唯一注入点（正式为 `hotkey::register`），测试借此模拟快捷键被占用。
+/// `register(唤起, 截图, 录屏, 翻译, 便签, 传送带, 搅拌机)` 是唯一注入点（正式为 `hotkey::register`），测试借此模拟快捷键被占用。
 pub fn commit_settings(
     state: &AppState,
     mut settings: Settings,
-    mut register: impl FnMut(&str, &str, &str, &str, &str, &str) -> Result<(), AppError>,
+    mut register: impl FnMut(&str, &str, &str, &str, &str, &str, &str) -> Result<(), AppError>,
 ) -> Result<Vec<&'static str>, AppError> {
     // 先去空白再校验、比较：粘贴带空格的 Base URL 不该报错，也不该算作改动（M26 规则 6）
     settings.normalize();
@@ -268,6 +274,10 @@ pub fn commit_settings(
     // 不含晾衣绳的版本里设置页没有传送带快捷键：撞上了同样让出
     if !crate::belt::enabled() {
         settings.yield_belt_hotkeys();
+    }
+    // 搅拌机还没有设置页入口：撞上了让出，不报用户看不到的错
+    if !crate::mixer::enabled() {
+        settings.yield_mixer_hotkey();
     }
     settings.validate()?;
     let old = state.settings().clone();
@@ -286,6 +296,7 @@ pub fn commit_settings(
             &old.translate_hotkey,
             old.effective_line_hotkey(),
             old.effective_belt_hotkey(),
+            old.effective_mixer_hotkey(),
         ) {
             Err(e @ AppError::HotkeyTaken) => log::warn!("恢复原快捷键失败：{e}"),
             Err(e) => log::debug!("恢复原截图、录屏或翻译快捷键失败：{e}"),
@@ -304,6 +315,7 @@ pub fn commit_settings(
             &settings.translate_hotkey,
             settings.effective_line_hotkey(),
             settings.effective_belt_hotkey(),
+            settings.effective_mixer_hotkey(),
         )
         && !(line_switch_only && matches!(e, AppError::LineHotkeyTaken))
         && !(belt_switch_only && matches!(e, AppError::BeltHotkeyTaken))
@@ -326,13 +338,14 @@ pub fn save_settings(
     state: State<'_, AppState>,
     settings: Settings,
 ) -> Result<(), AppError> {
-    let (hotkey, shot_hotkey, rec_hotkey, tr_hotkey, line_hotkey, belt_hotkey) = (
+    let (hotkey, shot_hotkey, rec_hotkey, tr_hotkey, line_hotkey, belt_hotkey, mixer_hotkey) = (
         settings.hotkey.clone(),
         settings.shot_hotkey.clone(),
         settings.rec_hotkey.clone(),
         settings.translate_hotkey.clone(),
         settings.effective_line_hotkey().to_owned(),
         settings.effective_belt_hotkey().to_owned(),
+        settings.effective_mixer_hotkey().to_owned(),
     );
     let (belt_on, belt_auto) = {
         let s = state.settings();
@@ -344,8 +357,8 @@ pub fn save_settings(
         settings.ocr_enabled,
         settings.update_check,
     );
-    let changed = commit_settings(&state, settings, |p, s, r, t, l, b| {
-        crate::hotkey::register(&app, p, s, r, t, l, b)
+    let changed = commit_settings(&state, settings, |p, s, r, t, l, b, m| {
+        crate::hotkey::register(&app, p, s, r, t, l, b, m)
     })
     // 注册失败时 register 恢复了旧的快捷键，传送带开着的话把退回快捷键也补回来
     .inspect_err(|_| crate::belt::configure(&app, belt_on, belt_auto))?;
@@ -386,7 +399,8 @@ pub fn save_settings(
                     &rec_hotkey,
                     &tr_hotkey,
                     &line_hotkey,
-                    &belt_hotkey
+                    &belt_hotkey,
+                    &mixer_hotkey
                 ),
                 Err(AppError::HotkeyTaken)
             ) {
@@ -617,7 +631,7 @@ mod tests {
             hotkey: "Alt+Shift+N".into(),
             ..Settings::default()
         };
-        let r = commit_settings(&state, new, |_, _, _, _, _, _| Ok(()));
+        let r = commit_settings(&state, new, |_, _, _, _, _, _, _| Ok(()));
         if crate::line::enabled() {
             assert!(matches!(
                 r,
@@ -638,7 +652,7 @@ mod tests {
             translate_model: " m ".into(),
             ..Settings::default()
         };
-        let changed = commit_settings(&state, new, |_, _, _, _, _, _| Ok(())).unwrap();
+        let changed = commit_settings(&state, new, |_, _, _, _, _, _, _| Ok(())).unwrap();
         assert_eq!(changed, ["translateBaseUrl", "translateModel"]);
         let saved = state.store().load_settings();
         assert_eq!(
@@ -654,7 +668,7 @@ mod tests {
             ..saved
         };
         assert!(
-            commit_settings(&state, same, |_, _, _, _, _, _| Ok(()))
+            commit_settings(&state, same, |_, _, _, _, _, _, _| Ok(()))
                 .unwrap()
                 .is_empty()
         );
@@ -764,7 +778,7 @@ mod tests {
             ..Settings::default()
         };
         let mut calls = Vec::new();
-        let r = commit_settings(&state, new, |p, s, _, _, _, _| {
+        let r = commit_settings(&state, new, |p, s, _, _, _, _, _| {
             calls.push((p.to_string(), s.to_string()));
             if p == "CommandOrControl+Alt+C" {
                 Err(AppError::HotkeyTaken)
@@ -791,7 +805,7 @@ mod tests {
             ..Settings::default()
         };
         let mut calls = Vec::new();
-        let r = commit_settings(&state, new, |p, s, _, _, _, _| {
+        let r = commit_settings(&state, new, |p, s, _, _, _, _, _| {
             calls.push((p.to_string(), s.to_string()));
             if s == "Alt+Shift+S" {
                 Err(AppError::ShotHotkeyTaken)
@@ -820,7 +834,7 @@ mod tests {
             ..Settings::default()
         };
         let mut calls = Vec::new();
-        let r = commit_settings(&state, new, |p, s, r, _, _, _| {
+        let r = commit_settings(&state, new, |p, s, r, _, _, _, _| {
             calls.push([p, s, r].map(String::from));
             if r == "Alt+Shift+Y" {
                 Err(AppError::RecHotkeyTaken)
@@ -850,7 +864,7 @@ mod tests {
             ..Settings::default()
         };
         let mut calls = Vec::new();
-        let r = commit_settings(&state, new, |p, s, r, t, _, _| {
+        let r = commit_settings(&state, new, |p, s, r, t, _, _, _| {
             calls.push([p, s, r, t].map(String::from));
             if t == "Alt+Shift+U" {
                 Err(AppError::TranslateHotkeyTaken)
@@ -878,10 +892,10 @@ mod tests {
             line_enabled: false,
             ..Settings::default()
         };
-        commit_settings(&state, off, |_, _, _, _, _, _| Ok(())).unwrap();
+        commit_settings(&state, off, |_, _, _, _, _, _, _| Ok(())).unwrap();
         // 便签快捷键被别的应用占着：开关照样打开并保存，没注册上的提示由 hotkey_status 给
         let on = Settings::default();
-        let changed = commit_settings(&state, on.clone(), |_, _, _, _, l, _| {
+        let changed = commit_settings(&state, on.clone(), |_, _, _, _, l, _, _| {
             if l.is_empty() {
                 Ok(())
             } else {
@@ -897,7 +911,7 @@ mod tests {
             line_hotkey: "Alt+Shift+J".into(),
             ..Settings::default()
         };
-        let r = commit_settings(&state, new, |_, _, _, _, l, _| {
+        let r = commit_settings(&state, new, |_, _, _, _, l, _, _| {
             if l == "Alt+Shift+J" {
                 Err(AppError::LineHotkeyTaken)
             } else {
@@ -916,7 +930,7 @@ mod tests {
             ..Settings::default()
         };
         let mut calls = 0;
-        let changed = commit_settings(&state, new, |_, _, _, _, _, _| {
+        let changed = commit_settings(&state, new, |_, _, _, _, _, _, _| {
             calls += 1;
             Ok(())
         })
@@ -929,7 +943,7 @@ mod tests {
             line_hotkey: "Alt+Shift+J".into(),
             ..Settings::default()
         };
-        let changed = commit_settings(&state, new, |_, _, _, _, _, _| {
+        let changed = commit_settings(&state, new, |_, _, _, _, _, _, _| {
             calls += 1;
             Ok(())
         })

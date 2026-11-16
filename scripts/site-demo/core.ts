@@ -51,6 +51,7 @@ export const settings: Settings = {
   lineSide: 'top',
   linePinned: false,
   beltEnabled: true, beltAuto: false, beltHotkey: 'Alt+Shift+B', beltBackHotkey: 'Alt+Shift+Z',
+  mixerEnabled: true, mixerHotkey: 'Alt+Shift+M', mixerRecipes: [],
 };
 
 const byId = (id: number) => RECORDS.find((r) => r.id === id);

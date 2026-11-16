@@ -71,7 +71,16 @@ export interface Settings {
   beltHotkey: string;
   /** 退回上一条的全局快捷键；'' 表示不启用 */
   beltBackHotkey: string;
+  /** 搅拌机总开关 */
+  mixerEnabled: boolean;
+  /** 打开或关闭搅拌机的全局快捷键；'' 表示不启用 */
+  mixerHotkey: string;
+  /** 配方列表；空表示还没存过，运行时补齐自带配方 */
+  mixerRecipes: Recipe[];
 }
+
+/** 搅拌机的配方；builtin 是自带配方的键名，自定义的为 null */
+export interface Recipe { name: string; prompt: string; show: boolean; builtin: string | null }
 
 export type LineSide = 'top' | 'left' | 'right';
 
@@ -185,6 +194,7 @@ export interface AppError {
     | 'translateHotkeyTaken'
     | 'lineHotkeyTaken'
     | 'beltHotkeyTaken'
+    | 'mixerHotkeyTaken'
     | 'invalidSettings'
     | 'invalid'
     | 'internal'
