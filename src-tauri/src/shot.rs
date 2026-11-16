@@ -16,6 +16,7 @@ use xpaste_platform::{Frame, WinRect};
 
 use crate::error::AppError;
 use crate::events;
+use crate::float_hide::Hidden;
 use crate::panel::on_main;
 use crate::state::AppState;
 use crate::translate::{self, Delta, Fail};
@@ -489,9 +490,11 @@ pub fn begin(app: &AppHandle, mode: Mode) {
     if mode == Mode::Shot {
         warm_ocr();
     }
+    // 晾衣绳等浮层不截进冻结图；在主线程上设，立即生效
+    let floats = crate::float_hide::hide(app);
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        freeze(&app, generation, hide_panel || stale, mode)
+        freeze(&app, generation, hide_panel || stale, mode, floats)
     });
 }
 
@@ -526,10 +529,14 @@ fn warm_ocr() {
 }
 
 /// `settle`：刚隐藏过窗口（面板或上次的遮罩），冻结前先等它们撤下。
-fn freeze(app: &AppHandle, generation: u64, settle: bool, mode: Mode) {
+/// `floats`：冻结期间给浮层设的内容保护，冻结图拿到就复原，浮层照常能用。
+fn freeze(app: &AppHandle, generation: u64, settle: bool, mode: Mode, floats: Hidden) {
     if settle {
         // ponytail: 固定等 50 ms 让窗口服务器撤下窗口；冻结图里仍出现面板时改为等隐藏生效的回调
         std::thread::sleep(Duration::from_millis(50));
+    } else if !floats.is_empty() {
+        // 内容保护要等下一次合成才生效，等 1 帧
+        std::thread::sleep(Duration::from_millis(16));
     }
     let t = Instant::now();
     let frames = match xpaste_platform::freeze_displays() {
@@ -543,6 +550,7 @@ fn freeze(app: &AppHandle, generation: u64, settle: bool, mode: Mode) {
             return end_if_current(app, generation);
         }
     };
+    drop(floats);
     let rects = xpaste_platform::window_rects();
     log::info!(
         "shot 冻结 {} 屏 {}ms",

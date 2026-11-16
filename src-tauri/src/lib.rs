@@ -10,6 +10,7 @@ mod enrich;
 pub mod error;
 mod events;
 mod float_drag;
+mod float_hide;
 #[cfg(debug_assertions)]
 mod focus_check;
 mod hotkey;

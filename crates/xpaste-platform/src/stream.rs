@@ -24,6 +24,8 @@ pub struct AreaOptions {
     pub scale: f64,
     /// macOS 不截进画面的窗口编号（长截图边框）；Windows 不用
     pub exclude_window: Option<u32>,
+    /// macOS 画面流另外不截进去的窗口编号（Pro 的几个浮层）；逐帧截屏回退与 Windows 不用
+    pub also_exclude: Vec<u32>,
     /// 同一区域的原生坐标（同 `capture_rect`），逐帧截屏回退用
     pub native: WinRect,
 }

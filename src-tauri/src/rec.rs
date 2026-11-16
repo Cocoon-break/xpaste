@@ -271,7 +271,11 @@ fn launch(
         fps: cur.rec_fps,
         system_audio,
         microphone,
-        exclude_window: exclude,
+        // 浮层整场照常显示、能用，只是不录进去（录屏只在 macOS 上有，见 `float_hide`）
+        exclude_windows: exclude
+            .into_iter()
+            .chain(crate::float_hide::window_numbers(app))
+            .collect(),
         path: path.clone(),
     };
     let recorder = match xpaste_platform::start_recording(opts) {
