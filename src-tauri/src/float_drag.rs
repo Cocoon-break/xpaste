@@ -184,11 +184,16 @@ fn move_to(app: &AppHandle, label: &str, frame: &Frame, target: (f64, f64), size
 }
 
 /// 拖完：记下离光标所在屏工作区右下角的距离。主线程调用。
-pub fn save(app: &AppHandle, label: &str, frame: &Frame) {
-    let ((x, y), k) = *frame.lock().unwrap_or_else(PoisonError::into_inner);
+fn save(app: &AppHandle, label: &str, frame: &Frame) {
     let Ok(Some((work, _))) = cursor_work(app) else {
         return;
     };
+    save_in(app, label, frame, work);
+}
+
+/// 同 `save`，但按给定的工作区算（调长度时用按下时所在屏的，不跟光标换屏）
+pub fn save_in(app: &AppHandle, label: &str, frame: &Frame, work: Rect) {
+    let ((x, y), k) = *frame.lock().unwrap_or_else(PoisonError::into_inner);
     let (dx, dy) = offset_of((x / k, y / k), work);
     let v = format!("{dx:.0},{dy:.0}");
     if let Err(e) = app.state::<AppState>().store().kv_set(&key(label), &v) {
@@ -255,6 +260,24 @@ mod tests {
         assert_eq!(
             resized((100.0, 0.0), 600.0, 400.0, Side::Left, false, 360.0, 1400.0),
             ((340.0, 0.0), 360.0)
+        );
+    }
+
+    #[test]
+    fn resize_clamps_max_and_centered_left() {
+        // 居中、左边往外拖 50：宽 +100，左边往左 50
+        assert_eq!(
+            resized((100.0, 0.0), 600.0, -50.0, Side::Left, true, 360.0, 1400.0),
+            ((50.0, 0.0), 700.0)
+        );
+        // 超过上限：宽到 max；居中时左边只让出 (max-w0)/2
+        assert_eq!(
+            resized((100.0, 0.0), 600.0, 900.0, Side::Right, true, 360.0, 800.0),
+            ((0.0, 0.0), 800.0)
+        );
+        assert_eq!(
+            resized((100.0, 0.0), 600.0, -900.0, Side::Left, false, 360.0, 800.0),
+            ((-100.0, 0.0), 800.0)
         );
     }
 

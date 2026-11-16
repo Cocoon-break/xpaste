@@ -61,6 +61,9 @@ struct Resize {
     origin: (f64, f64),
     w0: f64,
     centered: bool,
+    /// 按下时光标所在屏的工作区（逻辑像素）和换算系数：拖过屏也按这块算
+    work: Rect,
+    k: f64,
     last: Option<f64>,
 }
 static RESIZE: Mutex<Option<Resize>> = Mutex::new(None);
@@ -126,9 +129,23 @@ fn saved_len(app: &AppHandle) -> Option<f64> {
 
 /// 页面在某一端的边上按下：开始拖动调长度
 pub fn resize(app: &AppHandle, side: Side) {
-    if !shown() {
+    // 只在带子打开着时；拖动换位置中不开始
+    if !shown()
+        || crate::belt::open_stamp().is_none()
+        || DRAG
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
+    {
         return;
     }
+    let (tx, rx) = std::sync::mpsc::channel();
+    on_main(app, move |app| {
+        let _ = tx.send(float_drag::cursor_work(app).ok().flatten());
+    });
+    let Ok(Some((work, k))) = rx.recv_timeout(Duration::from_secs(1)) else {
+        return;
+    };
     let Some(cursor) = xpaste_platform::pointer_position() else {
         return;
     };
@@ -140,6 +157,8 @@ pub fn resize(app: &AppHandle, side: Side) {
         origin,
         w0,
         centered: float_drag::saved(app, LABEL).is_none(),
+        work,
+        k,
         last: None,
     });
 }
@@ -151,11 +170,11 @@ fn resize_tick(app: &AppHandle, cursor_x: f64, button: bool) {
         return;
     };
     if !button {
-        let (moved, centered) = (r.last.is_some(), r.centered);
+        let (moved, centered, work) = (r.last.is_some(), r.centered, r.work);
         *g = None;
         drop(g);
         if moved {
-            on_main(app, move |app| finish_resize(app, centered));
+            on_main(app, move |app| finish_resize(app, centered, work));
         }
         return;
     }
@@ -163,50 +182,42 @@ fn resize_tick(app: &AppHandle, cursor_x: f64, button: bool) {
         return;
     }
     r.last = Some(cursor_x);
-    let (side, dx_px, origin, w0, centered) =
-        (r.side, cursor_x - r.cursor_x, r.origin, r.w0, r.centered);
+    let st = (r.side, cursor_x - r.cursor_x, r.origin, r.w0, r.centered);
+    let (work, k) = (r.work, r.k);
     drop(g);
-    on_main(app, move |app| {
-        apply_resize(app, side, dx_px, origin, w0, centered)
-    });
+    on_main(app, move |app| apply_resize(app, st, work, k));
 }
 
-/// 按光标位移算新矩形，限在光标所在屏工作区里并更新 `FRAME`、`SIZE`。主线程调用。
+/// 按光标位移算新矩形，限在按下时所在屏的工作区里并更新 `FRAME`、`SIZE`。主线程调用。
 fn apply_resize(
     app: &AppHandle,
-    side: Side,
-    dx_px: f64,
-    origin: (f64, f64),
-    w0: f64,
-    centered: bool,
+    (side, dx_px, origin, w0, centered): (Side, f64, (f64, f64), f64, bool),
+    work: Rect,
+    k: f64,
 ) {
     let Some(w) = app.get_webview_window(LABEL) else {
         return;
     };
-    let done = float_drag::cursor_work(app).and_then(|cw| {
-        let Some((work, k)) = cw else { return Ok(()) };
-        let h = SIZE.lock().unwrap_or_else(PoisonError::into_inner).1;
-        let (o, nw) = float_drag::resized(
-            (origin.0 / k, origin.1 / k),
-            w0,
-            dx_px / k,
-            side,
-            centered,
-            MIN_LEN.min(work.w),
-            work.w,
-        );
-        let o = float_drag::clamp(o, (nw, h), work);
-        *FRAME.lock().unwrap_or_else(PoisonError::into_inner) = ((o.0 * k, o.1 * k), k);
-        *SIZE.lock().unwrap_or_else(PoisonError::into_inner) = (nw, h);
-        crate::shot::place(&w, (o.0 * k, o.1 * k), (nw * k, h * k))
-    });
-    if let Err(e) = done {
+    let h = SIZE.lock().unwrap_or_else(PoisonError::into_inner).1;
+    let (o, nw) = float_drag::resized(
+        (origin.0 / k, origin.1 / k),
+        w0,
+        dx_px / k,
+        side,
+        centered,
+        MIN_LEN.min(work.w),
+        work.w,
+    );
+    let o = float_drag::clamp(o, (nw, h), work);
+    *FRAME.lock().unwrap_or_else(PoisonError::into_inner) = ((o.0 * k, o.1 * k), k);
+    *SIZE.lock().unwrap_or_else(PoisonError::into_inner) = (nw, h);
+    if let Err(e) = crate::shot::place(&w, (o.0 * k, o.1 * k), (nw * k, h * k)) {
         log::warn!("传送带调长度失败：{e}");
     }
 }
 
 /// 松手：记下长度；位置拖过的话把角也重新记下（居中的保持自动居中）。主线程调用。
-fn finish_resize(app: &AppHandle, centered: bool) {
+fn finish_resize(app: &AppHandle, centered: bool, work: Rect) {
     let len = SIZE.lock().unwrap_or_else(PoisonError::into_inner).0;
     if let Err(e) = app
         .state::<AppState>()
@@ -216,13 +227,18 @@ fn finish_resize(app: &AppHandle, centered: bool) {
         log::warn!("传送带记下长度失败：{e}");
     }
     if !centered {
-        float_drag::save(app, LABEL, &FRAME);
+        float_drag::save_in(app, LABEL, &FRAME, work);
     }
 }
 
 /// 页面在左端把手上按下：开始拖动换位置
 pub fn drag() {
-    if shown() {
+    if shown()
+        && RESIZE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_none()
+    {
         let size = *SIZE.lock().unwrap_or_else(PoisonError::into_inner);
         float_drag::start(&DRAG, &FRAME, size);
     }
