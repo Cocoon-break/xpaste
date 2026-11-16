@@ -278,10 +278,8 @@ pub fn commit_settings(
     // 不含晾衣绳的版本里设置页没有搅拌机快捷键：撞上了同样让出；含的版本整理一下配方列表
     if !crate::mixer::enabled() {
         settings.yield_mixer_hotkey();
-    } else {
-        settings.mixer_recipes =
-            xpaste_pro::normalize_recipes(std::mem::take(&mut settings.mixer_recipes));
     }
+    crate::mixer::normalize_settings(&mut settings);
     settings.validate()?;
     let old = state.settings().clone();
     // 面板尺寸只由拖动记忆（panel::remember_size）写；这里只为 changed 不含 panelSize，落库时 save_settings_inner 持锁再取
@@ -656,9 +654,16 @@ mod tests {
         }
     }
 
+    /// 同真实启动：内存里的设置已整理过配方列表（含 Pro 的构建会补齐自带配方），比较“改了哪些字段”时才不会多出配方
+    fn normalized_state() -> AppState {
+        let state = AppState::for_test();
+        crate::mixer::normalize_settings(&mut state.settings());
+        state
+    }
+
     #[test]
     fn commit_settings_trims_translate_fields_before_validate() {
-        let state = AppState::for_test();
+        let state = normalized_state();
         let new = Settings {
             translate_base_url: " https://x/v1/ ".into(),
             translate_model: " m ".into(),
@@ -899,14 +904,16 @@ mod tests {
 
     #[test]
     fn line_switch_turns_on_even_when_line_hotkey_taken() {
-        let state = AppState::for_test();
+        let state = normalized_state();
         let off = Settings {
             line_enabled: false,
             ..Settings::default()
         };
         commit_settings(&state, off, |_, _, _, _, _, _, _| Ok(())).unwrap();
         // 便签快捷键被别的应用占着：开关照样打开并保存，没注册上的提示由 hotkey_status 给
-        let on = Settings::default();
+        // 保存时会整理配方列表，期望值也先整理，才能整体比较
+        let mut on = Settings::default();
+        crate::mixer::normalize_settings(&mut on);
         let changed = commit_settings(&state, on.clone(), |_, _, _, _, l, _, _| {
             if l.is_empty() {
                 Ok(())
@@ -936,7 +943,7 @@ mod tests {
 
     #[test]
     fn unchanged_hotkey_is_not_reregistered() {
-        let state = AppState::for_test();
+        let state = normalized_state();
         let new = Settings {
             max_records: 1000,
             ..Settings::default()

@@ -113,10 +113,7 @@ pub fn run() {
                 Store::open(&data_dir).inspect_err(|e| log::error!("打开数据库失败：{e}"))?;
             let first_run = matches!(store.kv_get("onboarded"), Ok(None));
             let mut settings = store.load_settings();
-            if mixer::enabled() {
-                settings.mixer_recipes =
-                    xpaste_pro::normalize_recipes(std::mem::take(&mut settings.mixer_recipes));
-            }
+            mixer::normalize_settings(&mut settings);
             let (
                 hotkey,
                 shot_hotkey,

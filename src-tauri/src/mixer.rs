@@ -34,6 +34,14 @@ pub fn enabled() -> bool {
     crate::line::enabled()
 }
 
+/// 配方列表补齐自带配方、去掉坏项。读入设置、保存设置和测试用的状态都走这里，内存里的设置总是整理过的。
+pub fn normalize_settings(settings: &mut xpaste_core::Settings) {
+    if enabled() {
+        settings.mixer_recipes =
+            xpaste_pro::normalize_recipes(std::mem::take(&mut settings.mixer_recipes));
+    }
+}
+
 /// 这次入库的复制是不是搅拌机自己写的结果：是就不放进杯子。xPaste 别的普通写入（截图复制等）照常放。
 pub fn takes_copy(seq: u64, result_seq: u64) -> bool {
     seq != result_seq
