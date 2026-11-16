@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { deviceLine, proControls, proLine } from './pro-status.ts';
+import { deviceLine, proCard, proControls, proLine } from './pro-status.ts';
 
 test('Pro 状态的状态行', () => {
   assert.equal(proLine({ state: 'trial', daysLeft: 9 }), '试用中，还剩 9 天');
@@ -29,4 +29,16 @@ test('已绑定设备的激活日期按本地时区写', () => {
   assert.equal(deviceLine('2026-10-02T18:15:30Z'), '激活于 2026-10-03');
   assert.equal(deviceLine(''), '');
   assert.equal(deviceLine('不是时间'), '');
+});
+
+test('Pro 概览的授权卡片', () => {
+  assert.deepEqual(proCard({ state: 'trial', daysLeft: 9 }, true),
+    { tone: 'trial', title: '试用中 · 还剩 9 天', sub: '试用期内可以用全部 Pro 功能', buy: true, code: true, manage: false });
+  assert.deepEqual(proCard({ state: 'licensed', email: 'a@b.com', major: 1 }, true),
+    { tone: 'ok', title: '已授权 · 1.x', sub: 'a@b.com', buy: false, code: false, manage: true });
+  assert.equal(proCard({ state: 'licensed', email: 'a@b.com', major: null }, true).title, '已授权 · 订阅');
+  assert.deepEqual(proCard({ state: 'expired', reason: null }, false),
+    { tone: 'off', title: '试用已结束', sub: '激活后照常使用全部 Pro 功能', buy: false, code: true, manage: false });
+  // 存着的授权用不了：标题直接写原因
+  assert.equal(proCard({ state: 'expired', reason: '授权已过期，联网后自动续期' }, true).title, '授权已过期，联网后自动续期');
 });

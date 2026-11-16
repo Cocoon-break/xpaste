@@ -350,26 +350,50 @@
             </div>
           </section>
           <section class="dlg-body" role="tabpanel" id="st-pro" aria-labelledby="st-tab-pro" inert hidden>
-            <div class="line" style="--i:0">
+            <!-- Pro 概览：授权卡片 + 功能清单（只列已经有的功能）；点功能行进它自己的设置页，“‹ Pro”或 Esc 回来 -->
+            <div class="pro-page" id="proHome" style="--i:0">
+              <div class="pro-lic" id="proLic">
+                <span class="dot" aria-hidden="true"></span>
+                <span class="txt"><b id="proLicTitle"></b><small id="proLicSub"></small></span>
+                <span class="btns"><button class="btn sm primary" type="button" id="proLicBuy" hidden>购买</button><button class="btn sm" type="button" id="proLicCode" hidden>输入授权码</button><button class="btn sm" type="button" id="proLicManage" hidden>管理授权</button></span>
+              </div>
+              <p class="pro-h" id="proFeatsLabel">功能</p>
+              <div class="pro-feats" role="group" aria-labelledby="proFeatsLabel">
+                <div class="pro-feat" id="proFeatLine">
+                  <button type="button" data-pro-go="proLinePage" aria-describedby="proSumLine"><span class="ic2" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M2.5 4.5q7.5 3 15 0"/><rect x="5" y="6.5" width="4" height="6" rx="1"/><rect x="11" y="6.5" width="4" height="6" rx="1"/></svg></span><span class="t"><b>晾衣绳便签</b><small id="proSumLine"></small></span><svg class="chev" viewBox="0 0 20 20" aria-hidden="true"><path d="m8 5 5 5-5 5"/></svg></button>
+                  <label class="switch"><input type="checkbox" id="lineOnQuick" aria-label="晾衣绳便签"></label>
+                </div>
+                <div class="pro-feat" id="proFeatBelt">
+                  <button type="button" data-pro-go="proBeltPage" aria-describedby="proSumBelt"><span class="ic2" aria-hidden="true"><svg viewBox="0 0 20 20"><rect x="2" y="11" width="16" height="4.5" rx="2.25"/><rect x="4" y="6" width="4" height="4" rx="1"/><rect x="9.5" y="6" width="4" height="4" rx="1"/></svg></span><span class="t"><b>传送带</b><small id="proSumBelt"></small></span><svg class="chev" viewBox="0 0 20 20" aria-hidden="true"><path d="m8 5 5 5-5 5"/></svg></button>
+                  <label class="switch"><input type="checkbox" id="beltOnQuick" aria-label="传送带"></label>
+                </div>
+              </div>
+            </div>
+            <div class="pro-page" id="proLicPage" style="--i:0" aria-label="授权" hidden>
+              <button type="button" class="pro-back" data-pro-back><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m12 5-5 5 5 5"/></svg>Pro</button>
+            <div class="line">
               <span><b>xPaste Pro</b><small id="proStatus" role="status" aria-live="polite"></small></span>
               <span class="btns"><button class="btn sm" type="button" id="proBuyBtn" hidden>购买 xPaste Pro</button><button class="btn sm" type="button" id="proOffBtn" aria-describedby="proOffErr" hidden>在这台设备上停用…</button></span>
             </div>
-            <p class="err" id="proOffErr" role="alert" style="--i:0" hidden></p>
-            <div class="switches" style="--i:1">
-              <label class="switch"><span><b>晾衣绳便签</b><small id="lineOnHelp"></small></span><input type="checkbox" id="lineOn"></label>
-            </div>
-            <div class="field" id="proActField" style="--i:2">
+            <p class="err" id="proOffErr" role="alert" hidden></p>
+            <div class="field" id="proActField">
               <label for="proCode">授权码</label>
               <div class="pick"><input id="proCode" autocomplete="off" spellcheck="false" placeholder="粘贴授权码" aria-describedby="proCodeErr"><button class="btn" type="button" id="proActBtn">激活</button></div>
               <p class="err" id="proCodeErr" role="alert" hidden></p>
               <div class="switches" id="proDevices" role="group" aria-label="已绑定的设备" hidden></div>
             </div>
-            <div class="field" style="--i:3">
+            </div>
+            <div class="pro-page" id="proLinePage" style="--i:0" aria-label="晾衣绳便签" hidden>
+              <button type="button" class="pro-back" data-pro-back><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m12 5-5 5 5 5"/></svg>Pro</button>
+            <div class="switches">
+              <label class="switch"><span><b>晾衣绳便签</b><small id="lineOnHelp"></small></span><input type="checkbox" id="lineOn"></label>
+            </div>
+            <div class="field">
               <label for="lineHotkey">便签快捷键</label>
               <input id="lineHotkey" readonly autocomplete="off" spellcheck="false" placeholder="未启用" aria-describedby="lineHotkeyHelp">
               <p class="help" id="lineHotkeyHelp">把最近复制的一条挂到晾衣绳上；面板开着时挂选中的那条</p>
             </div>
-            <div class="field" id="lineSideField" style="--i:4">
+            <div class="field" id="lineSideField">
               <span class="lbl" id="lineSideLabel">位置</span>
               <div class="side-pick" id="lineSide" role="radiogroup" aria-labelledby="lineSideLabel" aria-describedby="lineSideHelp lineSideHint">
                 <label><input type="radio" name="lineSide" value="top"><svg viewBox="0 0 100 62" aria-hidden="true"><rect class="scr" x="1" y="1" width="98" height="60" rx="6"/><path d="M12 14H88"/><rect x="27" y="19" width="13" height="11" rx="1.5"/><rect x="45" y="19" width="13" height="11" rx="1.5"/><rect x="63" y="19" width="13" height="11" rx="1.5"/></svg><span>顶部</span></label>
@@ -379,26 +403,30 @@
               <p class="help" id="lineSideHelp"></p>
               <p class="help" id="lineSideHint" hidden></p>
             </div>
-            <div class="switches" id="linePinField" style="--i:5">
+            <div class="switches" id="linePinField">
               <label class="switch"><span><b>一直显示晾衣绳</b><small>绳子和便签一直留在屏幕上，空白处可以点穿</small></span><input type="checkbox" id="linePin"></label>
             </div>
-            <div class="field" id="lineStyleField" style="--i:6" hidden></div>
-            <div class="switches" style="--i:7">
+            <div class="field" id="lineStyleField" hidden></div>
+            </div>
+            <div class="pro-page" id="proBeltPage" style="--i:0" aria-label="传送带" hidden>
+              <button type="button" class="pro-back" data-pro-back><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m12 5-5 5 5 5"/></svg>Pro</button>
+            <div class="switches">
               <label class="switch"><span><b>传送带</b><small>把几件内容排成一队，在别的应用里按 Ctrl/⌘ V 逐件贴出去</small></span><input type="checkbox" id="beltOn"></label>
             </div>
-            <div class="line" style="--i:8">
+            <div class="line">
               <span><label for="beltAuto"><b>开启方式</b></label><small>手动：按快捷键或从面板放上时打开，空着也能打开；自动：30 秒内复制满 3 次，带子从底边探出一截，问要不要按顺序贴</small></span>
               <select id="beltAuto"><option value="manual">手动</option><option value="auto">自动</option></select>
             </div>
-            <div class="field" style="--i:9">
+            <div class="field">
               <label for="beltHotkey">传送带快捷键</label>
               <input id="beltHotkey" readonly autocomplete="off" spellcheck="false" placeholder="未启用" aria-describedby="beltHotkeyHelp">
               <p class="help" id="beltHotkeyHelp"></p>
             </div>
-            <div class="field" style="--i:10">
+            <div class="field">
               <label for="beltBackHotkey">退回快捷键</label>
               <input id="beltBackHotkey" readonly autocomplete="off" spellcheck="false" placeholder="未启用" aria-describedby="beltBackHotkeyHelp">
               <p class="help" id="beltBackHotkeyHelp"></p>
+            </div>
             </div>
           </section>
         </div>

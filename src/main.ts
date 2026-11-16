@@ -23,7 +23,7 @@ import {
 } from './api/events';
 import { lineDragDrop, lineDragHover, lineHangFromPanel, lineHide, lineSideHint, onLineChanged, onLineHangSelected, onProLink, proActivate, proBuy, proDeactivate, proStatus, proTakeLink, proUnbind, type LineView } from './api/line';
 import { beltPut, onBeltPutSelected } from './api/belt';
-import { deviceLine, proControls, proLine } from './pro-status';
+import { deviceLine, proCard, proControls, proLine } from './pro-status';
 import type { AppError, Appearance, BoundDevice, Engines, FileEntry, LineSide, LineStyle, PanelStyle, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
 import { appCounts, bestApp, freshSug, fromApp, type Sug } from './source';
 import { COMPACT, compactGroups, compactHeadH, rowParts } from './compact';
@@ -1858,6 +1858,8 @@ function selectStTab(i: number, instant = true) {
 function showStControl(el: HTMLElement) {
   const i = stPanes.findIndex((p) => p.contains(el));
   if (i !== stTab) selectStTab(i, false);
+  const page = el.closest<HTMLElement>('.pro-page');
+  if (page) proGo(page.id, null);
   el.focus();
 }
 // 出错项所在标签显示红点：跟着行内错误走（.err 显示着），改正或复原后消失
@@ -1948,6 +1950,7 @@ function paintProStatus() {
   if (!c.activate) paintProErr();
   if (!c.off) paintProOffErr();
   if (move) (c.off ? proOffBtn : c.activate ? proCodeIn : $('#st-tab-pro')).focus();
+  paintProHome();
 }
 function setProBusy(text: string) {
   proBusy = text;
@@ -2112,6 +2115,78 @@ lineSideEl.addEventListener('change', (e) => {
   draftLineSide = (e.target as HTMLInputElement).value as LineSide;
   paintLineSide();
 });
+// 设置“Pro”：概览（授权卡片 + 功能清单）和授权、各功能的子页。切到别的标签再回来停在原来的子页，重新打开设置回到概览。
+// focus：undefined 时进子页聚焦“‹ Pro”、回概览聚焦刚才那一行；null 不动焦点（由调用方聚焦具体控件）
+const proPages = [...document.querySelectorAll<HTMLElement>('#st-pro .pro-page')];
+const proLicEl = $('#proLic'), proLicBuy = $<HTMLButtonElement>('#proLicBuy'), proLicCode = $<HTMLButtonElement>('#proLicCode'), proLicManage = $<HTMLButtonElement>('#proLicManage');
+const lineOnQuick = $<HTMLInputElement>('#lineOnQuick'), beltOnQuick = $<HTMLInputElement>('#beltOnQuick');
+const LINE_SIDE_NAME: Record<LineSide, string> = { top: '顶部', left: '左侧', right: '右侧' };
+let proPage = 'proHome';
+function proGo(id: string, focus?: HTMLElement | null, animate = true) {
+  const from = proPage;
+  if (from !== id) {
+    proPage = id;
+    for (const p of proPages) {
+      p.hidden = p.id !== id;
+      p.classList.remove('in-r', 'in-l');
+    }
+    const cur = $(`#${id}`);
+    if (animate) {
+      void cur.offsetWidth;
+      cur.classList.add(id === 'proHome' ? 'in-l' : 'in-r');
+    }
+    $('#st-pro').scrollTop = 0;
+    if (id === 'proHome') paintProHome();
+  }
+  if (focus === undefined) focus = id === 'proHome' ? $(`[data-pro-go="${from}"]`) : $(`#${id} .pro-back`);
+  focus?.focus({ preventScroll: true });
+}
+/** 功能行的摘要：快捷键 · 其余设置；关着写“已关闭” */
+function featSummary(el: HTMLElement, on: boolean, hotkey: string, rest: string) {
+  if (!on) return void (el.textContent = '已关闭');
+  const k = document.createElement(hotkey ? 'kbd' : 'span');
+  k.textContent = hotkey ? hotkeyLabel(hotkey, S.platform.os) : '没有快捷键';
+  el.replaceChildren(k, '·', rest);
+}
+function paintProHome() {
+  const c = proCard(S.line.pro, S.line.canBuy);
+  proLicEl.dataset.tone = c.tone;
+  $('#proLicTitle').textContent = c.title;
+  $('#proLicSub').textContent = c.sub;
+  proLicBuy.hidden = !c.buy;
+  proLicCode.hidden = !c.code;
+  proLicManage.hidden = !c.manage;
+  lineOnQuick.checked = draftLineEnabled;
+  beltOnQuick.checked = beltOnIn.checked;
+  featSummary($('#proSumLine'), draftLineEnabled, lineKey.pending, LINE_SIDE_NAME[draftLineSide] + (draftLinePinned ? ' · 一直显示' : ''));
+  featSummary($('#proSumBelt'), beltOnIn.checked, beltKey.pending, beltAutoIn.value === 'auto' ? '自动开启' : '手动开启');
+  $('#proFeatLine').classList.toggle('off', !draftLineEnabled);
+  $('#proFeatBelt').classList.toggle('off', !beltOnIn.checked);
+  // 传送带关着时下面几项变淡，仍可改（同晾衣绳）
+  for (const el of document.querySelectorAll('#proBeltPage > .line, #proBeltPage > .field')) el.classList.toggle('line-off', !beltOnIn.checked);
+}
+$('#st-pro').addEventListener('click', (e) => {
+  const t = e.target as Element, go = t.closest<HTMLElement>('[data-pro-go]');
+  if (go) proGo(go.dataset.proGo!);
+  else if (t.closest('[data-pro-back]')) proGo('proHome');
+});
+// 概览上的开关和子页里的是同一份草稿
+lineOnQuick.addEventListener('change', () => {
+  lineOnIn.checked = lineOnQuick.checked;
+  lineOnIn.dispatchEvent(new Event('change'));
+});
+beltOnQuick.addEventListener('change', () => {
+  beltOnIn.checked = beltOnQuick.checked;
+  paintProHome();
+});
+lineOnIn.addEventListener('change', paintProHome);
+beltOnIn.addEventListener('change', paintProHome);
+proLicCode.addEventListener('click', () => proGo('proLicPage', proCodeIn));
+proLicManage.addEventListener('click', () => proGo('proLicPage'));
+proLicBuy.addEventListener('click', () => void proBuy().catch((err: AppError) => {
+  proGo('proLicPage', null);
+  paintProErr(err.message);
+}));
 // 在输入框里按 Enter 是激活，不是保存设置
 proCodeIn.addEventListener('keydown', (e) => {
   if (e.key !== 'Enter' || e.isComposing) return;
@@ -2530,6 +2605,8 @@ function openSettings() {
   draftLineSide = st.lineSide;
   linePinIn.checked = draftLinePinned = st.linePinned;
   if (S.line.available) paintLineSide();
+  proGo('proHome', null, false);
+  paintProHome();
   // 试用可能在面板开着时到期（没有广播），打开设置时重新取一次
   if (S.line.available)
     void proStatus().then((p) => {
@@ -2637,7 +2714,10 @@ dlg.addEventListener('close', () => {
 });
 dlg.addEventListener('cancel', (e) => {
   e.preventDefault();
-  if (!escClosedList && !justComposed()) closeSettings();
+  if (escClosedList || justComposed()) return;
+  // 在“Pro”的子页里先回概览，再按才关设置
+  if (proPage !== 'proHome' && stPanes[stTab]?.id === 'st-pro') return proGo('proHome');
+  closeSettings();
 });
 // 遮罩点击才关：在输入框里拖选文字、松手落到遮罩上不算（那次 click 的目标也是 dialog）
 let downOnBackdrop = false;

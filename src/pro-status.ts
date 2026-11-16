@@ -17,6 +17,15 @@ export function proControls(p: Pro, canBuy: boolean): { activate: boolean; buy: 
   return { activate: open, buy: open && canBuy, off: p.state === 'licensed' };
 }
 
+/** “Pro”概览最上面的授权卡片：色点、标题、一行说明和放哪几个按钮（购买没有购买页时不放） */
+export function proCard(p: Pro, canBuy: boolean): { tone: 'ok' | 'trial' | 'off'; title: string; sub: string; buy: boolean; code: boolean; manage: boolean } {
+  switch (p.state) {
+    case 'licensed': return { tone: 'ok', title: `已授权 · ${p.major === null ? '订阅' : `${p.major}.x`}`, sub: p.email, buy: false, code: false, manage: true };
+    case 'trial': return { tone: 'trial', title: `试用中 · 还剩 ${p.daysLeft} 天`, sub: '试用期内可以用全部 Pro 功能', buy: canBuy, code: true, manage: false };
+    default: return { tone: 'off', title: p.state === 'expired' ? p.reason ?? '试用已结束' : '', sub: '激活后照常使用全部 Pro 功能', buy: canBuy, code: true, manage: false };
+  }
+}
+
 /** 已绑定设备名字下面的一行：激活日期（本地时区）；时间读不出来为空 */
 export function deviceLine(activatedAt: string): string {
   const d = new Date(activatedAt);

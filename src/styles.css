@@ -665,6 +665,42 @@ dialog > form { display: contents; }
 /* 设置里带小标题的一组（“截图”标签的截图 / 长截图，“翻译”标签的两种方式）：上面一道分隔线；标签内第一组不画，免得和标签栏的分隔线叠成两道 */
 .st-group { display: grid; gap: 12px; padding-top: 16px; border-top: 1px solid var(--line); }
 .st-panes .dlg-body > .st-group:first-child { padding-top: 0; border-top: 0; }
+/* 设置“Pro”：概览（授权卡片 + 功能清单）和各功能的子页；进子页从右边滑进，返回从左边滑进，减少动态效果时只淡入 */
+.pro-page { display: grid; gap: 16px; align-content: start; min-width: 0; }
+.pro-page[hidden] { display: none; }
+.pro-page.in-r { animation: proInR 260ms var(--ease-enter) both; }
+.pro-page.in-l { animation: proInL 260ms var(--ease-enter) both; }
+@keyframes proInR { from { opacity: 0; transform: translateX(16px); } }
+@keyframes proInL { from { opacity: 0; transform: translateX(-16px); } }
+@media (prefers-reduced-motion: reduce) { .pro-page.in-r, .pro-page.in-l { animation: proFade 160ms ease-out both; } }
+@keyframes proFade { from { opacity: 0; } }
+.pro-lic { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 10px; background: var(--glass-2); border: 1px solid var(--line); }
+.pro-lic .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--c-code); }
+.pro-lic[data-tone="trial"] .dot { background: var(--c-image); }
+.pro-lic[data-tone="off"] .dot { background: var(--c-video); }
+.pro-lic .txt { flex: 1; min-width: 0; }
+.pro-lic b { display: block; font-weight: 500; font-size: 13px; }
+.pro-lic small { display: block; font-size: 12px; color: var(--faint); overflow-wrap: anywhere; }
+.pro-lic .btns { display: flex; gap: 6px; flex: none; }
+.pro-h { margin: 4px 0 -8px; font-size: 12px; color: var(--faint); }
+.pro-feats { display: grid; border-top: 1px solid var(--line); }
+.pro-feat { display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--line); }
+.pro-feat > button { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 11px 4px 11px 0; border: 0; border-radius: 8px; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.pro-feat > button:focus-visible { outline: 2px solid var(--beam); outline-offset: -2px; }
+.pro-feat .ic2 { width: 30px; height: 30px; flex: none; display: grid; place-items: center; border-radius: 8px; background: var(--glass-3); color: var(--muted); }
+.pro-feat svg { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.pro-feat .ic2 svg { width: 18px; height: 18px; }
+.pro-feat .t { flex: 1; min-width: 0; }
+.pro-feat .t b { display: block; font-weight: 500; font-size: 13px; }
+.pro-feat .t small { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--faint); white-space: nowrap; overflow: hidden; }
+.pro-feat.off .t small { opacity: .7; }
+.pro-feat .chev { width: 14px; height: 14px; flex: none; color: var(--faint); stroke-width: 1.6; transition: transform 140ms var(--ease-enter), color 140ms; }
+@media (hover: hover) and (pointer: fine) { .pro-feat > button:hover .chev { color: var(--fg); transform: translateX(2px); } }
+.pro-feat .switch { padding: 0; border: 0; flex: none; }
+.pro-back { display: inline-flex; align-items: center; gap: 2px; justify-self: start; height: 26px; margin: -6px 0 -4px -6px; padding: 0 8px 0 4px; border: 0; border-radius: 7px; background: none; color: var(--muted); font: 12.5px var(--font-ui); cursor: pointer; }
+.pro-back svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.pro-back:focus-visible { outline: 2px solid var(--beam); }
+@media (hover: hover) and (pointer: fine) { .pro-back:hover { background: var(--glass-3); color: var(--fg); } }
 .st-group h3 { margin: 0; font-size: 13px; font-weight: 600; }
 .st-group > .help { margin: -6px 0 0; }
 /* 组里的开关列表：紧跟小标题时不画顶线；在组末尾时去掉最后一个显示着的行的底线（Windows 上权限行隐藏），由下一组的分隔线隔开，不叠成两道 */
