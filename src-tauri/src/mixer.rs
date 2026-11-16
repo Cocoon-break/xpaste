@@ -453,7 +453,10 @@ fn close(rt: &mut Runtime, fx: &mut Fx, undo: bool) {
     reset_result(rt);
     rt.taken = None;
     fx.changed(Cause::Clear, None);
-    log::info!("搅拌机 收起 倒掉 {n} 样");
+    // 角标时贴出后的收起（不撤销、杯已空）不再记“倒掉 0 样”，“贴出”已记过
+    if undo || n > 0 {
+        log::info!("搅拌机 收起 倒掉 {n} 样");
+    }
 }
 
 /// 采集回调的第一件事（每次剪切板变化）：结果在剪切板里时，变成了别的内容就记下“不再是结果”。
@@ -1460,6 +1463,7 @@ fn pasted(app: &AppHandle, at_press: u64) {
             return;
         }
         rt.open = false;
+        rt.mini = false;
         fx.linger = true;
         fx.changed(Cause::Other, None);
         log::info!("搅拌机 贴出后收起");

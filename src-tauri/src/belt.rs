@@ -420,6 +420,7 @@ pub fn release(app: &AppHandle) {
 fn collapse(rt: &mut Runtime, fx: &mut Fx) {
     rt.finishing = false;
     rt.open = false;
+    rt.mini = false;
     fx.linger = true;
     fx.changed(Cause::Other, None);
 }
@@ -501,7 +502,8 @@ fn set_mini(rt: &mut Runtime, fx: &mut Fx, on: bool) {
 /// 收成角标或展开（只在正式开着时生效，探出不算）
 pub fn mini(app: &AppHandle, on: bool) {
     with(app, |_, _, rt, fx| {
-        if rt.open {
+        // 贴完的提示期间不收成角标
+        if rt.open && !rt.finishing {
             set_mini(rt, fx, on);
         }
     });
@@ -877,8 +879,8 @@ fn pasted(app: &AppHandle, at_press: u64) {
 
 /// 贴完最后一件：剪切板留着它，提示可以退回，抖一下再过 0.7 s 后收起；宽限期（到提示消失为止）里退回快捷键还在。
 fn finish(rt: &mut Runtime, fx: &mut Fx) {
+    log::info!("传送带 贴完 {} 件", rt.pasted);
     if after_finish(rt.mini) == AfterFinish::Close {
-        log::info!("传送带 贴完 {} 件", rt.pasted);
         rt.belt.forget_done();
         close(rt, fx, false);
         return;
@@ -890,7 +892,6 @@ fn finish(rt: &mut Runtime, fx: &mut Fx) {
     fx.toasts
         .push(toast(format!("贴了 {} 件", rt.pasted), &["back"], None));
     fx.timer = Some(Timer::Finish(rt.round));
-    log::info!("传送带 贴完 {} 件", rt.pasted);
 }
 
 fn finish_timer(app: &AppHandle, g: u64) {
@@ -926,6 +927,7 @@ pub fn back(app: &AppHandle) {
         };
         if !rt.open || rt.finishing {
             rt.open = true;
+            rt.mini = false;
             rt.finishing = false;
             rt.round += 1;
             fx.show = true;
