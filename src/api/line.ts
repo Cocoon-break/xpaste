@@ -65,6 +65,8 @@ export interface LineView {
   pinned: boolean;
   /** 离开便签区域多久收起（设置里“收起”的快慢） */
   leaveMs: number;
+  /** 左右两侧时挂钩离屏幕边多远（用户拖过才有，两侧共用），null 用默认 */
+  hookX: number | null;
   /** 这次启动时便签文件读不全，已留底：页面提示一次 */
   recovered: boolean;
   /** 有购买页可去：设置里显示“购买 xPaste Pro” */
@@ -135,6 +137,8 @@ export const lineResize = (extent: number) => invoke<void>('line_resize', { exte
 /** 要收起：后端发 line-hide，页面播完再调 lineHidden */
 export const lineHide = () => invoke<void>('line_hide');
 export const lineHidden = () => invoke<void>('line_hidden');
+/** 左右两侧拖完挂钩：记下它离屏幕边多远 */
+export const lineHook = (x: number) => invoke<void>('line_hook', { x });
 /** 一直显示时能点的地方：`[x, y, w, h]`，窗口内逻辑像素，其余地方点击穿透；变了才报 */
 export const lineHitRects = (rects: number[][]) => invoke<void>('line_hit_rects', { rects });
 /** 拿键盘（true）或交还（false） */

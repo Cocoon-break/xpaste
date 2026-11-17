@@ -67,6 +67,8 @@ pub struct LineView {
     pub pinned: bool,
     /// 离开便签区域多久收起（设置里“收起”的快慢）
     pub leave_ms: u64,
+    /// 左右两侧时挂钩离屏幕边多远（逻辑像素，用户拖过才有；两侧共用），None 用页面的默认
+    pub hook_x: Option<f64>,
     /// 这次启动时便签文件读不全，已留底：页面提示一次
     pub recovered: bool,
     /// 有购买页可去（构建时给了站点地址）：设置里显示“购买 xPaste Pro”
@@ -252,6 +254,7 @@ pub fn view(state: &AppState) -> LineView {
             s.line_leave,
         )
     };
+    let hook_x = saved_hook_x(state);
     let line = state.line();
     let pro = line.status(now());
     LineView {
@@ -265,9 +268,37 @@ pub fn view(state: &AppState) -> LineView {
         side,
         pinned,
         leave_ms: crate::line::leave_ms(leave),
+        hook_x,
         recovered: line.recovered(),
         can_buy: license::site().is_some(),
     }
+}
+
+/// 记下的挂钩位置（逻辑像素，整数字符串）
+const HOOK_KEY: &str = "line_hook_x";
+
+/// 记下的挂钩位置的内存副本：外层 None 为还没从库里读过。`view` 每次广播都要它，不每次锁库查一遍
+static HOOK_X: Mutex<Option<Option<f64>>> = Mutex::new(None);
+
+fn saved_hook_x(state: &AppState) -> Option<f64> {
+    *HOOK_X
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get_or_insert_with(|| {
+            let v = state.store().kv_get(HOOK_KEY).ok()??;
+            v.parse().ok().filter(|x: &f64| x.is_finite())
+        })
+}
+
+/// 左右两侧拖完挂钩：记下它离屏幕边多远，下次打开照这个挂（页面限在 86–400，这里只收 0–4000 的数）
+#[tauri::command(async)]
+pub fn line_hook(state: State<'_, AppState>, x: f64) -> Result<(), AppError> {
+    if !(0.0..=4000.0).contains(&x) {
+        return Err(AppError::Invalid("挂钩位置不对".into()));
+    }
+    state.store().kv_set(HOOK_KEY, &format!("{x:.0}"))?;
+    *HOOK_X.lock().unwrap_or_else(PoisonError::into_inner) = Some(Some(x.round()));
+    Ok(())
 }
 
 /// 写命令成功后广播完整视图；调用时不能持有 `line`、`settings` 锁
