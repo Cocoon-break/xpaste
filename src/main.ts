@@ -2127,7 +2127,7 @@ lineOnIn.addEventListener('change', () => {
   paintLineOn();
 });
 linePinIn.addEventListener('change', () => void (draftLinePinned = linePinIn.checked));
-// 出现、收起的快慢：只改表单里的选择，随“保存设置”生效
+// 晾衣绳出现、收起的快慢：只改表单里的选择，随“保存设置”生效
 const PACES: Pace[] = ['fast', 'normal', 'slow'];
 const PACE_HELP: Record<'lineAppear' | 'lineLeave', Record<Pace, string>> = {
   lineAppear: { fast: '鼠标碰到边缘停 0.1 秒就放下', normal: '鼠标碰到边缘停 0.2 秒放下', slow: '停 0.5 秒才放下，鼠标划过边缘不放下' },
