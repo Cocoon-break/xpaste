@@ -275,6 +275,20 @@ pub fn at_edge(c: (f64, f64), rects: &[Rect], cfg: &EdgeCfg) -> bool {
 
 /// 窗口在工作区里的矩形：顶部占工作区全宽、高为 `extent`；左右两侧占工作区全高、宽为 `extent`，贴着那一侧。
 /// `extent` 不超过工作区的高（顶部）或宽（左右）。
+/// 窗口至少这么大（顶部是高，左右两侧是宽）。页面报的尺寸随便签展开、整串轻摆、滑进来每帧都在变，
+/// 窗口跟着改尺寸就一顿一顿的（每次都要走主线程、网页重排，挂右侧时窗口左边还跟着移）：窗口取不小于它，
+/// 只有大卡片、甩绳子要得更多时才改。多出来的透明处点穿（规则 2），便签区域仍按页面报的尺寸算
+const MIN_FRAME_TOP: f64 = 400.0;
+const MIN_FRAME_SIDE: f64 = 480.0;
+
+/// 窗口实际取的尺寸：页面报的和下限取大的
+pub fn frame_extent(side: LineSide, extent: f64) -> f64 {
+    extent.max(match side {
+        LineSide::Top => MIN_FRAME_TOP,
+        LineSide::Left | LineSide::Right => MIN_FRAME_SIDE,
+    })
+}
+
 pub fn side_rect(work: Rect, side: LineSide, extent: f64) -> Rect {
     match side {
         LineSide::Top => Rect {
@@ -616,9 +630,10 @@ pub fn is_ready() -> bool {
     READY.load(Ordering::Relaxed)
 }
 
-/// 绳子已放下（只露绳子不算）时窗口的矩形，换到检测线程的坐标空间（除以 `k` 之后）、从窗口逻辑像素换过去的倍数和放下的方式；没放下为 None。
+/// 绳子已放下（只露绳子不算）时窗口的矩形、页面报的便签范围的矩形（都换到检测线程的坐标空间，除以 `k` 之后）、
+/// 从窗口逻辑像素换过去的倍数和放下的方式；没放下为 None。
 /// macOS 两边都是点；Windows 窗口按所在屏缩放记的逻辑像素，检测线程按主屏缩放，差一个 sf / k。
-fn open_rect(k: f64) -> Option<(Rect, f64, How)> {
+fn open_rect(k: f64) -> Option<(Rect, Rect, f64, How)> {
     let s = shown();
     let how = s.how.filter(|&h| h != How::Peek)?;
     let f = if cfg!(target_os = "macos") {
@@ -626,14 +641,15 @@ fn open_rect(k: f64) -> Option<(Rect, f64, How)> {
     } else {
         s.sf / k
     };
-    let r = side_rect(s.work, s.side, s.extent);
-    let win = Rect {
+    let scale = |r: Rect| Rect {
         x: r.x * f,
         y: r.y * f,
         w: r.w * f,
         h: r.h * f,
     };
-    Some((win, f, how))
+    let win = scale(side_rect(s.work, s.side, frame_extent(s.side, s.extent)));
+    let area = scale(side_rect(s.work, s.side, s.extent));
+    Some((win, area, f, how))
 }
 
 /// 绳子自己放下来的（快捷键亮一下、提醒到点），用户没去碰：同常驻，只有能点的地方接收点击，其余点穿
@@ -926,7 +942,13 @@ fn pin_step(app: &AppHandle, pin: &mut Pin, local: (f64, f64), inside: bool, but
         pin.stale = true;
     }
     pin.regen(GEN.load(Ordering::Relaxed), button);
-    let want = pass_through(hit, button, pin.drag, pin.pass);
+    // 拖着东西整窗接收（好接住拖放），但只在便签区域里：窗口有下限，区域外的透明处照常让给下面的应用，
+    // 拖着文件经过绳子再到下面的应用里松手，不被挂上绳子
+    let want = if pin.drag && !inside {
+        true
+    } else {
+        pass_through(hit, button, pin.drag, pin.pass)
+    };
     let was_passing = pin.pass == Some(true);
     if pin.pass != Some(want) {
         // 刚从接收换成穿透：页面收不到光标离开，告诉它把悬停的样子去掉
@@ -1139,8 +1161,8 @@ fn detect(app: &AppHandle) {
             xpaste_platform::drag_count,
             xpaste_platform::moving_window,
         );
-        if let Some((win, f, how)) = open_rect(k) {
-            let now_in = pointer_inside(c, win, rects, cfg.side);
+        if let Some((win, area, f, how)) = open_rect(k) {
+            let now_in = pointer_inside(c, area, rects, cfg.side);
             if inside != Some(now_in) {
                 inside = Some(now_in);
                 emit_to(
@@ -1490,7 +1512,7 @@ fn place_on(w: &WebviewWindow, m: &tauri::Monitor) -> tauri::Result<()> {
         s.mon = Some(mon_of(m));
         s.extent
     };
-    apply(w, side_rect(work, side, extent), sf)
+    apply(w, side_rect(work, side, frame_extent(side, extent)), sf)
 }
 
 /// 工作区顶端高于刘海下沿时（菜单栏自动隐藏、全屏应用），往下让到刘海下面，免得中间的便签被刘海盖住。
@@ -1760,12 +1782,20 @@ pub fn resize(app: &AppHandle, extent: f64) {
     if !(extent.is_finite() && extent > 0.0) {
         return;
     }
-    let (r, sf, visible) = {
+    let (r, sf, visible, same) = {
         let mut s = shown();
+        let old = frame_extent(s.side, s.extent);
         s.extent = extent;
-        (side_rect(s.work, s.side, extent), s.sf, s.how.is_some())
+        let new = frame_extent(s.side, extent);
+        (
+            side_rect(s.work, s.side, new),
+            s.sf,
+            s.how.is_some(),
+            old == new,
+        )
     };
-    if visible {
+    // 窗口取下限时页面报的尺寸变了不用改窗口，只换便签区域
+    if visible && !same {
         on_main(app, move |app| {
             if let Some(w) = app.get_webview_window(LABEL)
                 && let Err(e) = set_frame(&w, r, sf)
@@ -2373,6 +2403,16 @@ mod tests {
             e.step((1439.5, 450.), &r, 16, Press::Up, &cfg(LineSide::Right)),
             Some(EdgeEvent::Open(How::Mouse))
         );
+    }
+
+    #[test]
+    fn frame_keeps_a_floor_and_grows_past_it() {
+        // 页面报的尺寸在下限以内怎么变，窗口都不改；大卡片、甩绳子要得更多时才跟着长
+        assert_eq!(frame_extent(LineSide::Left, 200.), 480.);
+        assert_eq!(frame_extent(LineSide::Right, 479.), 480.);
+        assert_eq!(frame_extent(LineSide::Right, 760.), 760.);
+        assert_eq!(frame_extent(LineSide::Top, 240.), 400.);
+        assert_eq!(frame_extent(LineSide::Top, 520.), 520.);
     }
 
     #[test]
