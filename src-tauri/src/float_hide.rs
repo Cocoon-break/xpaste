@@ -77,10 +77,10 @@ impl Drop for Hidden {
             for l in &self.labels {
                 protect(&self.app, l, false);
             }
-            return;
         }
+        // 只有 macOS 会设成全透明（faded）
         #[cfg(target_os = "macos")]
-        {
+        if self.faded {
             let labels = std::mem::take(&mut self.labels);
             crate::panel::on_main(&self.app, move |app| {
                 for l in &labels {
