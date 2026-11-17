@@ -16,7 +16,6 @@ use xpaste_platform::{Frame, WinRect};
 
 use crate::error::AppError;
 use crate::events;
-use crate::float_hide::Hidden;
 use crate::panel::on_main;
 use crate::state::AppState;
 use crate::translate::{self, Delta, Fail};
@@ -408,8 +407,9 @@ pub fn begin(app: &AppHandle, mode: Mode) {
     let panel_shown = app
         .get_webview_window("panel")
         .is_some_and(|w| w.is_visible().unwrap_or(false));
-    // 设置或确认框开着：面板不隐藏，跟屏上其他内容一样截进去，截完回到对话框（M15 交互规则 4）
-    let hide_panel = panel_shown && !keeps_panel(app);
+    // 截图时面板不隐藏，跟屏上其他内容一样截进去，截完键盘回到面板（M23 规则 1）；
+    // 录屏照旧先藏起面板，设置或确认框开着时除外（M15 交互规则 4）
+    let hide_panel = panel_shown && mode != Mode::Shot && !keeps_panel(app);
     // 截完只在开始时键盘就在面板上才还给面板：对话框开着、用户已切到别的应用时不把键盘抢回来
     PANEL_HAD_KEY.store(
         panel_shown
@@ -490,11 +490,10 @@ pub fn begin(app: &AppHandle, mode: Mode) {
     if mode == Mode::Shot {
         warm_ocr();
     }
-    // 晾衣绳等浮层不截进冻结图；在主线程上设，立即生效
-    let floats = crate::float_hide::hide_for_freeze(app);
+    // 晾衣绳、传送带、搅拌机照常截进去：屏幕上看到什么就截到什么（同系统截图）
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        freeze(&app, generation, hide_panel || stale, mode, floats)
+        freeze(&app, generation, hide_panel || stale, mode)
     });
 }
 
@@ -529,14 +528,10 @@ fn warm_ocr() {
 }
 
 /// `settle`：刚隐藏过窗口（面板或上次的遮罩），冻结前先等它们撤下。
-/// `floats`：冻结期间藏起的浮层，冻结图拿到就复原，浮层照常能用。
-fn freeze(app: &AppHandle, generation: u64, settle: bool, mode: Mode, floats: Hidden) {
+fn freeze(app: &AppHandle, generation: u64, settle: bool, mode: Mode) {
     if settle {
         // ponytail: 固定等 50 ms 让窗口服务器撤下窗口；冻结图里仍出现面板时改为等隐藏生效的回调
         std::thread::sleep(Duration::from_millis(50));
-    } else if !floats.is_empty() {
-        // 藏起浮层要等下一次合成才生效，等 1 帧；settle 时上面的 50 ms 已经够了，不再另等
-        std::thread::sleep(Duration::from_millis(16));
     }
     let t = Instant::now();
     let frames = match xpaste_platform::freeze_displays() {
@@ -550,7 +545,6 @@ fn freeze(app: &AppHandle, generation: u64, settle: bool, mode: Mode, floats: Hi
             return end_if_current(app, generation);
         }
     };
-    drop(floats);
     let rects = xpaste_platform::window_rects();
     log::info!(
         "shot 冻结 {} 屏 {}ms",
@@ -881,12 +875,8 @@ static PANEL_HAD_KEY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicB
 /// `generation`：刚结束的那一次截图，在结束它的同一次加锁里取，不会误报给之后开始的新一次。
 fn after_end(app: &AppHandle, generation: u64, previous: Option<isize>) {
     hide_overlays(app);
-    let panel_kept = keeps_panel(app)
-        && app
-            .get_webview_window("panel")
-            .is_some_and(|w| w.is_visible().unwrap_or(false));
-    if panel_kept && PANEL_HAD_KEY.load(Ordering::SeqCst) {
-        // 截图时没隐藏的面板（开着对话框）：键盘回到对话框，不还给原来的应用
+    if panel_takes_key(app) {
+        // 截图时没隐藏的面板：键盘回到面板（开着对话框就回到对话框），不还给原来的应用
         crate::panel::refocus(app);
     } else if let Some(h) = previous {
         // 排在 hide_overlays 之后：遮罩还拿着前台，本进程此刻是前台进程，系统允许切
@@ -906,7 +896,27 @@ pub fn active(app: &AppHandle) -> bool {
     session(app).is_active()
 }
 
-/// 面板上开着设置或确认框：截图不隐藏面板。
+/// 截完键盘回到面板：面板还在屏上，截图开始时键盘就在面板上
+fn panel_takes_key(app: &AppHandle) -> bool {
+    PANEL_HAD_KEY.load(Ordering::SeqCst)
+        && app
+            .get_webview_window("panel")
+            .is_some_and(|w| w.is_visible().unwrap_or(false))
+}
+
+/// 从截图遮罩进长截图：面板（没开对话框时）收起，不拼进长图、不挡自动滚动，结束后键盘还给原应用（长截图全局占着回车、Esc、空格，
+/// 留在屏上的面板也操作不了）
+pub fn release_panel(app: &AppHandle) {
+    if keeps_panel(app) {
+        return;
+    }
+    PANEL_HAD_KEY.store(false, Ordering::SeqCst);
+    if crate::panel::visible(app) {
+        crate::panel::hide(app);
+    }
+}
+
+/// 面板上开着设置或确认框：录屏也不隐藏面板。
 fn keeps_panel(app: &AppHandle) -> bool {
     app.state::<AppState>().dialog_open.load(Ordering::SeqCst)
 }
@@ -1346,6 +1356,7 @@ pub fn copy_text(app: &AppHandle, generation: u64, text: &str) -> Result<(), App
 }
 
 /// 提示条模式：遮罩鼠标穿透、交出键盘焦点，提示条照常显示；`shot_cancel` 时撤销。
+/// 截图时开着、拿着键盘的面板（M23 规则 1）：键盘直接回到面板，不先还给原应用再被 `after_end` 抢回来
 fn enter_toast(app: &AppHandle, generation: u64) {
     let previous = {
         let mut s = session(app);
@@ -1354,6 +1365,18 @@ fn enter_toast(app: &AppHandle, generation: u64) {
         }
         s.finish(Instant::now())
     };
+    if panel_takes_key(app) {
+        on_main(app, |app| {
+            for (l, w) in app.webview_windows() {
+                if overlay_index(&l).is_some()
+                    && let Err(e) = w.set_ignore_cursor_events(true)
+                {
+                    log::warn!("遮罩鼠标穿透失败：{e}");
+                }
+            }
+        });
+        return crate::panel::refocus(app);
+    }
     on_main(app, move |app| {
         for (l, w) in app.webview_windows() {
             if overlay_index(&l).is_none() {

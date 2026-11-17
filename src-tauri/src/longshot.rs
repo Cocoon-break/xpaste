@@ -153,6 +153,7 @@ pub fn start(app: &AppHandle, generation: u64, index: usize, rect: LRect) -> Res
     if let Some(r) = running().as_mut() {
         r.hidden = Some(hidden);
     }
+    shot::release_panel(app);
     // 撤下遮罩、把键盘还给原应用；随后边框上屏（主线程上排在隐藏遮罩之后）
     shot::end_if_current(app, generation);
     let below = rec::show_frame(app, bounds);
