@@ -176,6 +176,9 @@ export const onLineDrag = (cb: (x: number, y: number, item: DragItem) => void): 
 /** `pass`：一直显示时窗口刚换成点击穿透，页面去掉悬停的样子 */
 export const onLinePointer = (cb: (inside: boolean, pass: boolean) => void): Promise<UnlistenFn> =>
   listen<{ inside: boolean; pass?: boolean }>('line-pointer', (e) => cb(e.payload.inside, !!e.payload.pass), target());
+/** 空白处点穿期间光标在窗口里的位置（逻辑像素）：页面收不到穿透过去的移动，靠它接着算悬停和摆动 */
+export const onLineMove = (cb: (x: number, y: number) => void): Promise<UnlistenFn> =>
+  listen<{ x: number; y: number }>('line-move', (e) => cb(e.payload.x, e.payload.y), target());
 /** 便签的提醒到了：每张到期的发一次，页面让它高亮 */
 export const onLineRemind = (cb: (id: number) => void): Promise<UnlistenFn> =>
   listen<{ id: number }>('line-remind', (e) => cb(e.payload.id), target());

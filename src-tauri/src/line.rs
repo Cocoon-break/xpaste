@@ -14,7 +14,8 @@ use xpaste_core::{LineSide, Pace};
 
 use crate::error::AppError;
 use crate::events::{
-    LINE_DRAG, LINE_HANG_SELECTED, LINE_HIDE, LINE_POINTER, LINE_SHOW, LINE_TOAST, emit_to,
+    LINE_DRAG, LINE_HANG_SELECTED, LINE_HIDE, LINE_MOVE, LINE_POINTER, LINE_SHOW, LINE_TOAST,
+    emit_to,
 };
 use crate::panel::{Rect, on_main};
 use crate::state::AppState;
@@ -867,6 +868,8 @@ struct Pin {
     fullscreen: bool,
     /// 挪到另一块屏后，到这个时刻再看要不要临时露出来（遮挡状态是系统异步更新的，刚挪过去读到的还是旧的）
     recheck: Option<Instant>,
+    /// 上次报给页面的光标位置（`line-move`）
+    moved: Option<(f64, f64)>,
 }
 
 impl Pin {
@@ -924,6 +927,7 @@ fn pin_step(app: &AppHandle, pin: &mut Pin, local: (f64, f64), inside: bool, but
     }
     pin.regen(GEN.load(Ordering::Relaxed), button);
     let want = pass_through(hit, button, pin.drag, pin.pass);
+    let was_passing = pin.pass == Some(true);
     if pin.pass != Some(want) {
         // 刚从接收换成穿透：页面收不到光标离开，告诉它把悬停的样子去掉
         if want && pin.pass == Some(false) {
@@ -942,6 +946,17 @@ fn pin_step(app: &AppHandle, pin: &mut Pin, local: (f64, f64), inside: bool, but
                 log::warn!("晾衣绳设置点击穿透失败：{e}");
             }
         });
+    }
+    // 点穿期间页面收不到光标移动：在便签区域里动了就报位置，页面照常算悬停展开和便签摆动；
+    // 刚换回接收的这一下也报，不用等下一次真的移动才认出光标到了便签上
+    if (want || was_passing) && inside && pin.moved != Some(local) {
+        pin.moved = Some(local);
+        emit_to(
+            app,
+            LABEL,
+            LINE_MOVE,
+            serde_json::json!({ "x": local.0, "y": local.1 }),
+        );
     }
     pin.out = if inside {
         None
