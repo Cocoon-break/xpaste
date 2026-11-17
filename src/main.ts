@@ -28,7 +28,7 @@ import { mountRecipes } from './recipes';
 import { deviceLine, proCard, proControls, proLine } from './pro-status';
 import { popSelect } from './select-pop';
 import { installTips } from './tip';
-import type { AppError, Appearance, BoundDevice, Engines, FileEntry, LineSide, LineStyle, PanelStyle, PlatformInfo, Recipe, RecordDetail, RecordSummary, Settings } from './api/types';
+import type { AppError, Appearance, BoundDevice, Engines, FileEntry, LineSide, LineStyle, Pace, PanelStyle, PlatformInfo, Recipe, RecordDetail, RecordSummary, Settings } from './api/types';
 import { appCounts, bestApp, freshSug, fromApp, type Sug } from './source';
 import { COMPACT, compactGroups, compactHeadH, rowParts } from './compact';
 import { copyToast, needsAccessibility } from './copy-status';
@@ -93,8 +93,8 @@ const I = {
   translate: '<path d="M3 5h7M6.5 3.5V5M8.7 5c-.7 3-2.5 5.2-5.2 6.5M5.2 7.6c.9 1.7 2.3 2.9 4 3.6"/><path d="m10.5 16.5 3-7.5 3 7.5M11.6 14h3.8"/>',
   // 挂到晾衣绳：衣架
   hang: '<path d="M8 5.5a2 2 0 1 1 2 2V9"/><path d="M10 9 3 14.5h14z"/>',
-  // 放上传送带：向下的箭头落在底线上
-  put: '<path d="M3 15.5h14"/><path d="M10 3.5v8M6.8 8.5 10 11.7l3.2-3.2"/>',
+  // 放上传送带：带子上两个箱子（同设置里传送带那一行；向下的箭头像下载，不用）
+  belt: '<rect x="2.5" y="12.5" width="15" height="4" rx="2"/><rect x="4.5" y="6" width="4.5" height="4" rx="1"/><rect x="11" y="6" width="4.5" height="4" rx="1"/>',
   // 放进搅拌机：量杯
   cup: '<path d="M5.5 4h9l-1.2 8.5H6.7z"/><path d="M6.7 12.5h6.6l.7 3.5H6z"/><path d="M8 8.5h4"/>',
 };
@@ -174,7 +174,7 @@ const S = {
   /** 当前可见条数，供 aria-setsize */
   count: 0,
   /** 晾衣绳：不含晾衣绳的版本 available 为 false，挂钩按钮、已挂刻线与“Pro”标签都不出现 */
-  line: { available: false, pro: { state: 'unavailable' }, notes: [], hung: [], hotkey: '', style: { rope: 'jute', thick: 'mid', peg: 'plastic', paper: 'parch', edge: 'auto' }, on: true, side: 'top', pinned: false, recovered: false, canBuy: false } as LineView,
+  line: { available: false, pro: { state: 'unavailable' }, notes: [], hung: [], hotkey: '', style: { rope: 'jute', thick: 'mid', peg: 'plastic', paper: 'parch', edge: 'auto' }, on: true, side: 'top', pinned: false, leaveMs: 350, recovered: false, canBuy: false } as LineView,
 };
 const menuOpen = () => menu.dataset.open === 'true' || moreMenu.dataset.open === 'true';
 
@@ -247,7 +247,7 @@ const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id ===
               ${isSnip(r) ? `<button type="button" tabindex="-1" data-qa="edit" title="编辑片段">${svg('pencil')}</button>`
                 : `<button type="button" tabindex="-1" data-qa="pin" title="${r.pinned ? '取消置顶' : '置顶'}">${svg(r.pinned ? 'pinFill' : 'pin')}</button>`}
               ${lineOn() ? `<button type="button" tabindex="-1" data-qa="hang" title="挂到晾衣绳">${svg('hang')}</button>` : ''}
-              ${beltOn() ? `<button type="button" tabindex="-1" data-qa="belt" title="放上传送带">${svg('put')}</button>` : ''}
+              ${beltOn() ? `<button type="button" tabindex="-1" data-qa="belt" title="放上传送带">${svg('belt')}</button>` : ''}
               ${mixerOn() && r.kind !== 'video' ? `<button type="button" tabindex="-1" data-qa="mixer" data-tip="放进搅拌机">${svg('cup')}</button>` : ''}
               <button type="button" tabindex="-1" data-qa="copy" title="${copyVerb(S.canPaste)}">${svg('copy')}</button>
             </span>
@@ -2107,7 +2107,7 @@ function paintLineOn() {
   lineOnIn.checked = draftLineEnabled;
   $('#lineOnHelp').textContent = draftLineEnabled ? '鼠标碰到屏幕边缘、按快捷键时放下晾衣绳'
     : '已关闭：碰边缘不放下，快捷键和面板上的挂钩按钮都不起作用；挂着的便签和提醒都留着，打开后恢复';
-  for (const f of ['#lineSideField', '#linePinField', '#lineStyleField']) $(f).classList.toggle('line-off', !draftLineEnabled);
+  for (const f of ['#lineSideField', '#linePinField', '#linePaceField', '#lineStyleField']) $(f).classList.toggle('line-off', !draftLineEnabled);
 }
 /** 位置说明下面是程序坞提示：后端按当前屏幕算，为空不显示；连点几下只认最后一次的结果 */
 function paintLineSide() {
@@ -2127,6 +2127,43 @@ lineOnIn.addEventListener('change', () => {
   paintLineOn();
 });
 linePinIn.addEventListener('change', () => void (draftLinePinned = linePinIn.checked));
+// 出现、收起的快慢：只改表单里的选择，随“保存设置”生效
+const PACES: Pace[] = ['fast', 'normal', 'slow'];
+const PACE_HELP: Record<'lineAppear' | 'lineLeave', Record<Pace, string>> = {
+  lineAppear: { fast: '鼠标碰到边缘停 0.1 秒就放下', normal: '鼠标碰到边缘停 0.2 秒放下', slow: '停 0.5 秒才放下，鼠标划过边缘不放下' },
+  lineLeave: { fast: '鼠标离开 0.25 秒就收起', normal: '鼠标离开 0.35 秒收起', slow: '鼠标离开 0.8 秒才收起' },
+};
+const draftPace: Record<'lineAppear' | 'lineLeave', Pace> = { lineAppear: 'normal', lineLeave: 'normal' };
+const paceSegs = [...document.querySelectorAll<HTMLElement>('[data-pace-seg]')];
+function paintPace() {
+  for (const seg of paceSegs) {
+    const k = seg.id as keyof typeof draftPace;
+    for (const b of seg.querySelectorAll<HTMLElement>('[data-pace]')) {
+      const on = b.dataset.pace === draftPace[k];
+      b.setAttribute('aria-checked', String(on));
+      b.tabIndex = on ? 0 : -1;
+    }
+    $(`#${k}Help`).textContent = PACE_HELP[k][draftPace[k]];
+  }
+}
+for (const seg of paceSegs) {
+  const k = seg.id as keyof typeof draftPace;
+  seg.addEventListener('click', (e) => {
+    const b = (e.target as Element).closest<HTMLElement>('[data-pace]');
+    if (!b) return;
+    draftPace[k] = b.dataset.pace as Pace;
+    paintPace();
+  });
+  seg.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    e.stopPropagation();
+    const i = PACES.indexOf(draftPace[k]) + (e.key === 'ArrowRight' ? 1 : -1);
+    draftPace[k] = PACES[Math.max(0, Math.min(PACES.length - 1, i))];
+    paintPace();
+    seg.querySelector<HTMLElement>(`[data-pace="${draftPace[k]}"]`)!.focus();
+  });
+}
 lineSideEl.addEventListener('change', (e) => {
   draftLineSide = (e.target as HTMLInputElement).value as LineSide;
   paintLineSide();
@@ -2664,6 +2701,9 @@ function openSettings() {
   paintLineOn();
   draftLineSide = st.lineSide;
   linePinIn.checked = draftLinePinned = st.linePinned;
+  draftPace.lineAppear = st.lineAppear;
+  draftPace.lineLeave = st.lineLeave;
+  paintPace();
   if (S.line.available) paintLineSide();
   proGo('proHome', null, false);
   paintProHome();
@@ -2829,6 +2869,7 @@ async function submitSettings() {
   Object.assign(s, {
     translateEngine: trSave(), translateBaseUrl: trBaseIn.value.trim(), translateApiKey: trKeyIn.value, translateModel: trModelIn.value.trim(), translateLang: trLangIn.value,
     translateHotkey: trKey.pending, lineStyle: draftLineStyle, lineEnabled: draftLineEnabled, lineSide: draftLineSide, linePinned: draftLinePinned,
+    lineAppear: draftPace.lineAppear, lineLeave: draftPace.lineLeave,
   });
   saving = true;
   try {

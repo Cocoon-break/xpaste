@@ -65,6 +65,8 @@ pub struct LineView {
     pub side: LineSide,
     /// 一直显示：页面不自己收起，报能点的地方
     pub pinned: bool,
+    /// 离开便签区域多久收起（设置里“收起”的快慢）
+    pub leave_ms: u64,
     /// 这次启动时便签文件读不全，已留底：页面提示一次
     pub recovered: bool,
     /// 有购买页可去（构建时给了站点地址）：设置里显示“购买 xPaste Pro”
@@ -235,7 +237,7 @@ pub fn effective_style(pro: &Pro, chosen: &LineStyle) -> LineStyle {
 
 pub fn view(state: &AppState) -> LineView {
     // 先取设置再锁 line，两把锁不同时持有
-    let (hotkey, chosen, on, side, pinned) = {
+    let (hotkey, chosen, on, side, pinned, leave) = {
         let s = state.settings();
         let hotkey = match s.effective_line_hotkey() {
             "" => String::new(),
@@ -247,6 +249,7 @@ pub fn view(state: &AppState) -> LineView {
             s.line_enabled,
             s.line_side,
             s.line_pinned,
+            s.line_leave,
         )
     };
     let line = state.line();
@@ -261,6 +264,7 @@ pub fn view(state: &AppState) -> LineView {
         on,
         side,
         pinned,
+        leave_ms: crate::line::leave_ms(leave),
         recovered: line.recovered(),
         can_buy: license::site().is_some(),
     }

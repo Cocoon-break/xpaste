@@ -546,6 +546,17 @@ pub fn drag_count() -> Option<i64> {
     })
 }
 
+/// 拖拽剪切板里的文字（从浏览器、编辑器拖文字进来时）；没有文字为 None
+pub fn drag_text() -> Option<String> {
+    autoreleasepool(|_| {
+        // SAFETY: 系统常量，进程内一直有效
+        let (name, ty) = unsafe { (NSPasteboardNameDrag, NSPasteboardTypeString) };
+        NSPasteboard::pasteboardWithName(name)
+            .stringForType(ty)
+            .map(|s| crate::decode::normalize_newlines(&s.to_string()))
+    })
+}
+
 /// 系统正在拖动、缩放窗口：macOS 读不到，算不是（按下后拖拽剪切板没变就已经不算在拖东西）
 pub fn moving_window() -> bool {
     false

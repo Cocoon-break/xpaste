@@ -846,6 +846,21 @@ pub fn missed(app: &AppHandle, seq: u64) {
     });
 }
 
+/// 暂停记录期间复制了一次、新复制本来归带子：提示这次没排上
+pub fn paused(app: &AppHandle, seq: u64) {
+    let state = app.state::<AppState>();
+    let writing = state.own_writing.load(Ordering::SeqCst);
+    if !take_on_belt(seq, state.own_write_seq.load(Ordering::SeqCst), writing) {
+        return;
+    }
+    with(app, |_, _, rt, fx| {
+        if rt.open {
+            fx.toasts
+                .push(toast("记录已暂停，这次复制没排上传送带", &[], None));
+        }
+    });
+}
+
 fn peek_timer(app: &AppHandle, g: u64) {
     std::thread::sleep(Duration::from_millis(PEEK_HOLD_MS));
     with(app, |_, _, rt, fx| {

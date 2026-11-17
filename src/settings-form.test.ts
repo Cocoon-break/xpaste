@@ -59,7 +59,7 @@ test('formToSettings 只改表单字段，其余（含外观：点选即保存�
     lineStyle: { rope: 'jute', thick: 'mid', peg: 'plastic', paper: 'parch', edge: 'auto' },
     lineEnabled: true,
     lineSide: 'top',
-    linePinned: false,
+    linePinned: false, lineAppear: 'normal', lineLeave: 'normal',
     beltEnabled: true, beltAuto: false, beltHotkey: 'Alt+Shift+B', beltBackHotkey: 'Alt+Shift+Z',
     mixerEnabled: true, mixerHotkey: 'Alt+Shift+M', mixerRecipes: [],
   };
@@ -86,7 +86,7 @@ test('formToSettings 只改表单字段，其余（含外观：点选即保存�
       lineStyle: { rope: 'jute', thick: 'mid', peg: 'plastic', paper: 'parch', edge: 'auto' },
       lineEnabled: true,
       lineSide: 'top',
-      linePinned: false,
+      linePinned: false, lineAppear: 'normal', lineLeave: 'normal',
       beltEnabled: false, beltAuto: true, beltHotkey: 'Alt+Shift+J', beltBackHotkey: 'Alt+Shift+K',
       mixerEnabled: false, mixerHotkey: 'Alt+Shift+H', mixerRecipes: [{ name: 'a', prompt: 'p', show: true, builtin: null }],
     },

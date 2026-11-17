@@ -63,6 +63,8 @@ export interface LineView {
   side: LineSide;
   /** 一直显示：页面不自己收起，把能点的地方报给后端（lineHitRects） */
   pinned: boolean;
+  /** 离开便签区域多久收起（设置里“收起”的快慢） */
+  leaveMs: number;
   /** 这次启动时便签文件读不全，已留底：页面提示一次 */
   recovered: boolean;
   /** 有购买页可去：设置里显示“购买 xPaste Pro” */

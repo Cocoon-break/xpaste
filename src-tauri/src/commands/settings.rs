@@ -183,6 +183,8 @@ pub fn changed_fields(old: &Settings, new: &Settings) -> Vec<&'static str> {
         ("lineEnabled", old.line_enabled != new.line_enabled),
         ("lineSide", old.line_side != new.line_side),
         ("linePinned", old.line_pinned != new.line_pinned),
+        ("lineAppear", old.line_appear != new.line_appear),
+        ("lineLeave", old.line_leave != new.line_leave),
         ("beltEnabled", old.belt_enabled != new.belt_enabled),
         ("beltAuto", old.belt_auto != new.belt_auto),
         ("beltHotkey", old.belt_hotkey != new.belt_hotkey),
@@ -454,13 +456,19 @@ pub fn save_settings(
             then = Some(crate::line::repin);
         }
     }
-    // 空绳子的提示里写着便签快捷键；样式、开关、位置、一直显示在面板与晾衣绳页面里都要跟着换
+    // 出现、收起的快慢：检测线程下次采样就按新的；页面的收起时间随下面的视图广播换
+    {
+        let s = state.settings();
+        crate::line::set_pace(s.line_appear, s.line_leave);
+    }
+    // 空绳子的提示里写着便签快捷键；样式、开关、位置、一直显示、收起快慢在面板与晾衣绳页面里都要跟着换
     if [
         "lineHotkey",
         "lineStyle",
         "lineEnabled",
         "lineSide",
         "linePinned",
+        "lineLeave",
     ]
     .iter()
     .any(|k| changed.contains(k))

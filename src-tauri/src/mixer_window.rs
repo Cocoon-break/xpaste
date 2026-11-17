@@ -258,6 +258,8 @@ fn spawn_pointer(app: &AppHandle) {
         .spawn(move || {
             let mut prev: Option<bool> = None;
             let mut seen = GEN.load(Ordering::SeqCst);
+            // 松开时拖拽剪切板的计数：按着键时变了就是在拖东西（Windows 读不到，按着一律当拖）
+            let (mut drag_base, mut was_down) = (None, false);
             loop {
                 std::thread::sleep(TICK);
                 if !SHOWN.load(Ordering::SeqCst) {
@@ -282,7 +284,21 @@ fn spawn_pointer(app: &AppHandle) {
                 let button = xpaste_platform::mouse_button_down();
                 // 拖着时窗口一直接收（按着键时 pass_through 本来就保持按下那一刻的状态）
                 float_drag::tick(&app, LABEL, &DRAG, &FRAME, (x, y), button);
-                let want = pass_through(hit, button, false, prev);
+                // 从别的应用拖着东西经过杯子：整窗接收到松开，才收得到拖放
+                let dragging = if button {
+                    hit && crate::line::press_of(
+                        drag_base,
+                        xpaste_platform::drag_count(),
+                        xpaste_platform::moving_window(),
+                    ) == crate::line::Press::Drag
+                } else {
+                    if was_down || drag_base.is_none() {
+                        drag_base = xpaste_platform::drag_count();
+                    }
+                    false
+                };
+                was_down = button;
+                let want = pass_through(hit, button, dragging, prev);
                 if prev != Some(want) {
                     prev = Some(want);
                     if KEYBOARD.lock().unwrap_or_else(PoisonError::into_inner).0 {

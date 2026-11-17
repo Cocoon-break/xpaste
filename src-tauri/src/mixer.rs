@@ -548,12 +548,62 @@ pub fn missed(app: &AppHandle, seq: u64) {
     });
 }
 
+/// 暂停记录期间复制了一次、新复制本来归搅拌机：提示这次没放进杯子
+pub fn paused(app: &AppHandle, seq: u64) {
+    with(app, |_, rt, fx| {
+        if rt.open && takes_copy(seq, rt.result_seq) {
+            fx.toasts.push(toast("记录已暂停，这次复制没放进杯子", &[]));
+        }
+    });
+}
+
 /// 面板里放进几条记录（按给的顺序排在最后），搅拌机没开就顺便打开。
 pub fn put(app: &AppHandle, ids: &[i64]) {
     if !rt().on {
         return;
     }
     let pieces = gather(&app.state::<AppState>(), ids);
+    put_pieces(app, pieces);
+}
+
+/// 从别的应用拖进来的原料不对应历史记录：图片按路径读，不看原记录在不在
+const DROPPED: i64 = 0;
+
+/// 从别的应用拖进杯子：文件按文件记录的规则逐个判断；没有文件时拖的是文字，读拖拽剪切板（Windows 读不到）
+pub fn drop_in(app: &AppHandle, paths: Vec<PathBuf>, text: Option<String>) {
+    if !rt().on {
+        return;
+    }
+    let pieces: Vec<(i64, Piece)> = if paths.is_empty() {
+        let text = text.or_else(xpaste_platform::drag_text);
+        let Some(t) = text.filter(|t| !t.trim().is_empty()) else {
+            log::info!("搅拌机 拖进来的没有文件也没有文字");
+            return;
+        };
+        vec![(DROPPED, Ok(dropped_text(t)))]
+    } else {
+        paths
+            .iter()
+            .map(|p| (DROPPED, read_file(DROPPED, p)))
+            .collect()
+    };
+    put_pieces(app, pieces);
+}
+
+/// 拖进来的文字：标题是第一行不空的（最多 200 字）
+fn dropped_text(t: String) -> (IngredientKind, String, Body) {
+    let title = t
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or_default()
+        .chars()
+        .take(200)
+        .collect();
+    (IngredientKind::Text, title, Body::Text(t))
+}
+
+fn put_pieces(app: &AppHandle, pieces: Vec<(i64, Piece)>) {
     with(app, |pro, rt, fx| {
         if !rt.on {
             return;
@@ -586,7 +636,12 @@ fn place(rt: &mut Runtime, fx: &mut Fx, pieces: Vec<(i64, Piece)>) -> (usize, Op
     let (mut n, mut last, mut refused) = (0, None, None);
     for (record_id, piece) in pieces {
         let r = piece.and_then(|(kind, title, body)| {
-            match rt.cup.push(kind, title, Some(record_id), body) {
+            match rt.cup.push(
+                kind,
+                title,
+                (record_id != DROPPED).then_some(record_id),
+                body,
+            ) {
                 Ok(id) => Ok(id),
                 Err(CupError::Full) => Err(Refuse::Full),
                 // 只有不含 Pro 的空实现会这样，那时搅拌机不会打开
@@ -946,7 +1001,7 @@ fn title(recipe: Option<&str>, extra: &str) -> String {
 
 /// 图片原料的原图：原记录还在、文件也在时返回路径（位图记录在 `images/<id>.png`）。不要在持有 `RT` 时调用。
 fn image_file(state: &AppState, record_id: i64, path: Option<&Path>) -> Option<PathBuf> {
-    let live = matches!(state.store().live_summary(record_id), Ok(Some(_)));
+    let live = record_id == DROPPED || matches!(state.store().live_summary(record_id), Ok(Some(_)));
     let p = path.map(Path::to_path_buf).unwrap_or_else(|| {
         state
             .data_dir

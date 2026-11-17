@@ -410,6 +410,24 @@
             <div class="switches" id="linePinField">
               <label class="switch"><span><b>一直显示晾衣绳</b><small>绳子和便签一直留在屏幕上，空白处可以点穿</small></span><input type="checkbox" id="linePin"></label>
             </div>
+            <div class="field" id="linePaceField">
+              <div class="line">
+                <span><b id="lineAppearLabel">出现</b><small id="lineAppearHelp"></small></span>
+                <div class="seg text" id="lineAppear" data-pace-seg role="radiogroup" aria-labelledby="lineAppearLabel" aria-describedby="lineAppearHelp">
+                  <button type="button" role="radio" data-pace="fast">快</button>
+                  <button type="button" role="radio" data-pace="normal">标准</button>
+                  <button type="button" role="radio" data-pace="slow">慢</button>
+                </div>
+              </div>
+              <div class="line">
+                <span><b id="lineLeaveLabel">收起</b><small id="lineLeaveHelp"></small></span>
+                <div class="seg text" id="lineLeave" data-pace-seg role="radiogroup" aria-labelledby="lineLeaveLabel" aria-describedby="lineLeaveHelp">
+                  <button type="button" role="radio" data-pace="fast">快</button>
+                  <button type="button" role="radio" data-pace="normal">标准</button>
+                  <button type="button" role="radio" data-pace="slow">慢</button>
+                </div>
+              </div>
+            </div>
             <div class="field" id="lineStyleField" hidden></div>
             </div>
             <div class="pro-page" id="proBeltPage" style="--i:0" aria-label="传送带" hidden>

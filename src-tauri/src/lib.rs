@@ -140,6 +140,7 @@ pub fn run() {
                 settings.line_side,
                 settings.line_pinned,
             );
+            line::set_pace(settings.line_appear, settings.line_leave);
             let (belt_on, belt_auto) = (settings.belt_enabled, settings.belt_auto);
             let mixer_on = settings.mixer_enabled;
             let enrich = enrich::start(app.handle().clone());
@@ -490,6 +491,8 @@ pub fn run() {
             commands::mixer::mixer_ready,
             commands::mixer::mixer_hits,
             commands::mixer::mixer_put,
+            commands::mixer::mixer_drop,
+            commands::mixer::mixer_recent,
             commands::mixer::mixer_remove,
             commands::mixer::mixer_undo_remove,
             commands::mixer::mixer_close,

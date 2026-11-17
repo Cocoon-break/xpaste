@@ -46,6 +46,12 @@ fn handle_change(app: &AppHandle, seq: u64) {
     // 暂停或忽略的应用：连剪切板都不读（process 里仍有同样的检查兜底）
     if state.paused.load(Ordering::SeqCst) {
         log::info!("跳过 Paused");
+        // 传送带、搅拌机开着时说一声，免得以为没收到
+        match crate::collect::taker(crate::belt::open_stamp(), crate::mixer::open_stamp()) {
+            Some(crate::collect::Taker::Belt) => crate::belt::paused(app, seq),
+            Some(crate::collect::Taker::Mixer) => crate::mixer::paused(app, seq),
+            None => {}
+        }
         return;
     }
     let (ignored, skip_sensitive) = {

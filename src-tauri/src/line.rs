@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
-use xpaste_core::LineSide;
+use xpaste_core::{LineSide, Pace};
 
 use crate::error::AppError;
 use crate::events::{
@@ -47,9 +47,23 @@ pub enum EdgeEvent {
     Leave,
 }
 
-/// 停在边缘这么久才放下
-const DWELL_MS: u64 = 200;
-/// 程序坞在同一侧且自动隐藏：鼠标停得久一点，免得和唤出程序坞抢
+/// 停在边缘这么久才放下（设置里“出现”的快、标准、慢）；慢档不认甩
+pub fn dwell_ms(p: Pace) -> u64 {
+    match p {
+        Pace::Fast => 100,
+        Pace::Normal => 200,
+        Pace::Slow => 500,
+    }
+}
+/// 离开便签区域这么久收起（设置里“收起”的快、标准、慢）；页面从 `LineView.leave_ms` 拿
+pub fn leave_ms(p: Pace) -> u64 {
+    match p {
+        Pace::Fast => 250,
+        Pace::Normal => 350,
+        Pace::Slow => 800,
+    }
+}
+/// 程序坞在同一侧且自动隐藏：鼠标至少停这么久，免得和唤出程序坞抢
 const DWELL_DOCK_MS: u64 = 400;
 /// 离屏幕两端这么近不算（角落留给系统的热角；顶部还有苹果菜单和状态栏图标）
 const CORNER: f64 = 40.0;
@@ -103,6 +117,8 @@ pub struct Edge {
     phase: Phase,
     /// 上一次采样的鼠标主键
     prev: Press,
+    /// 设置里“出现”的快慢，检测线程每次采样前更新
+    appear: Pace,
 }
 
 impl Default for Edge {
@@ -111,12 +127,13 @@ impl Default for Edge {
             last: None,
             phase: Phase::Away,
             prev: Press::Up,
+            appear: Pace::Normal,
         }
     }
 }
 
 impl Edge {
-    /// 每 16 ms 采样一次：碰到边缘停 200 ms 或朝左右两侧甩过去才放下，两屏相接的边不算。
+    /// 每 16 ms 采样一次：碰到边缘停够时间（`dwell_ms`）或朝左右两侧甩过去才放下，两屏相接的边不算。
     /// 在边缘按着键却不是在拖东西（停着时点了菜单栏、拖窗口贴顶）就作废，离开边缘才再算。
     /// rects：全部屏幕的逻辑坐标矩形；press：鼠标主键，拖东西时放下为 Drag
     pub fn step(
@@ -132,9 +149,14 @@ impl Edge {
             .dock
             .as_ref()
             .is_some_and(|d| d.autohide && d.on(cfg.side));
-        let dwell = if hidden_dock { DWELL_DOCK_MS } else { DWELL_MS };
+        let dwell = if hidden_dock {
+            dwell_ms(self.appear).max(DWELL_DOCK_MS)
+        } else {
+            dwell_ms(self.appear)
+        };
         // 沿这一侧的法线方向算速度：左侧看 x 减小，右侧看 x 增大
         let fling = !hidden_dock
+            && self.appear != Pace::Slow
             && self.last.is_some_and(|(x, _, t)| {
                 let d = match cfg.side {
                     LineSide::Top => return false,
@@ -454,6 +476,28 @@ pub fn enabled() -> bool {
 static ON: AtomicBool = AtomicBool::new(true);
 static SIDE: AtomicU8 = AtomicU8::new(0);
 static PINNED: AtomicBool = AtomicBool::new(false);
+/// 出现、收起的快慢（`Pace as u8`）
+static APPEAR: AtomicU8 = AtomicU8::new(Pace::Normal as u8);
+static LEAVE_PACE: AtomicU8 = AtomicU8::new(Pace::Normal as u8);
+
+fn pace(a: &AtomicU8) -> Pace {
+    match a.load(Ordering::Relaxed) {
+        0 => Pace::Fast,
+        2 => Pace::Slow,
+        _ => Pace::Normal,
+    }
+}
+
+/// 出现、收起的快慢：启动和保存设置时写
+pub fn set_pace(appear: Pace, leave: Pace) {
+    APPEAR.store(appear as u8, Ordering::Relaxed);
+    LEAVE_PACE.store(leave as u8, Ordering::Relaxed);
+}
+
+/// 离开便签区域多久收起（页面和常驻时临时露出来的都按它）
+pub fn leave() -> Duration {
+    Duration::from_millis(leave_ms(pace(&LEAVE_PACE)))
+}
 
 /// 位置变了（含启动时读到的不是顶部）时，窗口尺寸换成新位置的初始值，等页面再报。不要在持有设置锁时调用。
 pub fn configure(on: bool, side: LineSide, pinned: bool) {
@@ -596,9 +640,10 @@ fn passive(how: How) -> bool {
     matches!(how, How::Flash | How::Remind)
 }
 
-/// 不常驻、自己放下来的绳子上按着键碰到了边缘（拖文件过来）：同常驻碰边，整窗接收到松开（`Pin.drag`）
-pub fn passive_drag(pinned: bool, how: How, press: Press) -> bool {
-    !pinned && passive(how) && press == Press::Drag
+/// 不常驻的绳子整窗接收到松开（`Pin.drag`）：放下着时按着键碰到了边缘（拖文件过来），或刚因拖着东西碰边放下（`fresh`：放下后还没按光标设过点穿）。
+/// 常驻的走碰边放下（`pin_edge`）
+pub fn takes_drop(pinned: bool, how: How, press: Press, fresh: bool) -> bool {
+    !pinned && (press == Press::Drag || (fresh && how == How::Drag))
 }
 
 /// 放下着时又来了一次放下，后端记下的方式（同页面）：快捷键亮一下、提醒到点不改原来的鼠标、键盘、拖动，
@@ -839,8 +884,6 @@ impl Pin {
     }
 }
 
-/// 离开便签区域这么久，临时露出来的常驻绳子再让开（同页面离开后收起）
-const LEAVE: Duration = Duration::from_millis(350);
 // ponytail: 等系统更新遮挡状态的时间是估的，真机上挪过去露不出来再加长
 const RECHECK: Duration = Duration::from_millis(200);
 
@@ -905,7 +948,8 @@ fn pin_step(app: &AppHandle, pin: &mut Pin, local: (f64, f64), inside: bool, but
     } else {
         pin.out.or_else(|| Some(Instant::now()))
     };
-    let left = pin.out.is_some_and(|o| o.elapsed() >= LEAVE);
+    // 离开便签区域够久，临时露出来的常驻绳子再让开（同页面离开后收起）
+    let left = pin.out.is_some_and(|o| o.elapsed() >= leave());
     if pin.recheck.is_some_and(|t| Instant::now() >= t) {
         pin.recheck = None;
         on_main(app, |app| {
@@ -1071,6 +1115,7 @@ fn detect(app: &AppHandle) {
         };
         let (rects, k) = (&screens.0, screens.1);
         let cfg = EdgeCfg { side: side(), dock };
+        edge.appear = pace(&APPEAR);
         let c = (x / k, y / k);
         // 放下期间也跟着按下、松开，基准才是这次按下之前的
         let press = probe.sample(
@@ -1097,14 +1142,13 @@ fn detect(app: &AppHandle) {
                     pin_edge(app, &mut pin, how, other_screen(c, win, rects));
                 }
             }
-            if passive_drag(pin_on, how, press) {
+            let fresh = pin.generation != GEN.load(Ordering::Relaxed);
+            if takes_drop(pin_on, how, press, fresh) {
                 pin.drag = true;
             }
-            // 常驻、自己放下来的：按光标在不在能点的地方切换点穿
-            if pin_on || passive(how) {
-                let local = ((c.0 - win.x) / f, (c.1 - win.y) / f);
-                pin_step(app, &mut pin, local, now_in, press != Press::Up);
-            }
+            // 放下着就按光标在不在能点的地方切换点穿，空白处点到下面的应用
+            let local = ((c.0 - win.x) / f, (c.1 - win.y) / f);
+            pin_step(app, &mut pin, local, now_in, press != Press::Up);
             if pin_on {
                 continue;
             }
@@ -1335,9 +1379,9 @@ fn show_on(app: &AppHandle, how: How, select: Option<u64>, primary: bool) {
             log::warn!("晾衣绳定位失败：{e}");
         }
         let pin = pinned();
-        // 只露绳子时点击穿透到下面的应用；常驻、自己放下来的（亮一下、提醒）刚放下先穿透，检测线程按光标在不在能点的地方切换。
-        // 这两种已放下着（又来了提醒、快捷键）不动它，交给检测线程，免得拖到一半变成点穿
-        let hits = pin || passive(kept);
+        // 只露绳子时点击穿透到下面的应用；放下后先穿透，检测线程按光标在不在能点的地方切换。
+        // 拖着东西碰边放下的整窗接收，松开后同样交给检测线程；已放下着（又来了提醒、快捷键）不动它，免得拖到一半变成点穿
+        let hits = pin || kept != How::Drag;
         if (first || !hits)
             && let Err(e) = w.set_ignore_cursor_events(kept == How::Peek || hits)
         {
@@ -2317,6 +2361,37 @@ mod tests {
     }
 
     #[test]
+    fn appear_pace_sets_dwell_and_slow_ignores_fling() {
+        let r = [rect(0., 0., 1440., 900.)];
+        let top = cfg(LineSide::Top);
+        let opens_at = |appear| {
+            let mut e = Edge {
+                appear,
+                ..Edge::default()
+            };
+            e.step((700., 0.), &r, 0, Press::Up, &top);
+            (1..100)
+                .map(|i| i * 16)
+                .find(|&t| e.step((700., 0.), &r, t, Press::Up, &top).is_some())
+        };
+        assert_eq!(opens_at(Pace::Fast), Some(112));
+        assert_eq!(opens_at(Pace::Normal), Some(208));
+        assert_eq!(opens_at(Pace::Slow), Some(512));
+        // 慢档：甩到右边不放下，只露绳子
+        let mut e = Edge {
+            appear: Pace::Slow,
+            ..Edge::default()
+        };
+        let right = cfg(LineSide::Right);
+        e.step((1300., 450.), &r, 0, Press::Up, &right);
+        assert_eq!(
+            e.step((1439.5, 450.), &r, 16, Press::Up, &right),
+            Some(EdgeEvent::Peek)
+        );
+        assert_eq!(leave_ms(Pace::Normal), 350);
+    }
+
+    #[test]
     fn dock_blocks_only_its_own_screen() {
         // B 在 A 左边、往下错开；程序坞在 A 的左边，占满 A 的整条边
         let r = [rect(0., 0., 1440., 900.), rect(-1920., 400., 1920., 1080.)];
@@ -2439,18 +2514,19 @@ mod tests {
     }
 
     #[test]
-    fn passive_drop_takes_a_file_dragged_to_the_edge() {
-        // 亮一下、提醒到点放下的，按着键碰到边缘在拖东西：整窗接收
-        for how in [How::Flash, How::Remind] {
-            assert!(passive_drag(false, how, Press::Drag));
-            assert!(!passive_drag(false, how, Press::Held));
-            assert!(!passive_drag(false, how, Press::Up));
+    fn open_line_takes_a_file_dragged_to_the_edge() {
+        // 放下着，按着键碰到边缘在拖东西：整窗接收
+        for how in [How::Flash, How::Remind, How::Mouse, How::Kbd] {
+            assert!(takes_drop(false, how, Press::Drag, false));
+            assert!(!takes_drop(false, how, Press::Held, false));
+            assert!(!takes_drop(false, how, Press::Up, true));
         }
-        // 常驻的走碰边放下（`pin_edge`）；用户自己放下的本来就整窗接收
-        assert!(!passive_drag(true, How::Flash, Press::Drag));
-        for how in [How::Mouse, How::Kbd, How::Drag, How::Peek] {
-            assert!(!passive_drag(false, how, Press::Drag));
-        }
+        // 拖着东西碰边刚放下：光标已离开边缘也整窗接收；松开后再按（点空白）不算
+        assert!(takes_drop(false, How::Drag, Press::Held, true));
+        assert!(!takes_drop(false, How::Drag, Press::Held, false));
+        // 常驻的走碰边放下（`pin_edge`）
+        assert!(!takes_drop(true, How::Flash, Press::Drag, false));
+        assert!(!takes_drop(true, How::Drag, Press::Held, true));
         // 碰过边以后拖回便签上（不在能点的地方、按着键）仍然接收
         assert!(!pass_through(false, true, true, Some(true)));
     }

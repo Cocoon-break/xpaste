@@ -175,6 +175,12 @@ pub struct Settings {
     pub line_side: LineSide,
     /// 一直显示晾衣绳：总开关开着时绳子和便签一直留在屏幕上，空白处点击穿透
     pub line_pinned: bool,
+    /// 晾衣绳碰边出现的快慢
+    #[serde(deserialize_with = "tolerant_default")]
+    pub line_appear: Pace,
+    /// 晾衣绳离开后收起的快慢
+    #[serde(deserialize_with = "tolerant_default")]
+    pub line_leave: Pace,
     /// 传送带总开关；关掉并保存后带子清空、收起，传送带快捷键不注册
     pub belt_enabled: bool,
     /// 开启方式为自动：带子没开时 30 秒内复制满 3 次，带子从底边探出一截，问要不要按顺序贴（否则只用快捷键或面板打开）
@@ -229,6 +235,24 @@ pub enum LineSide {
     Top,
     Left,
     Right,
+}
+
+/// 晾衣绳出现、收起的快慢档
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Pace {
+    Fast,
+    #[default]
+    Normal,
+    Slow,
+}
+
+/// 未知值或类型不对只让这一项退回默认，不连累其他设置
+fn tolerant_default<'de, D: serde::Deserializer<'de>, T: serde::de::DeserializeOwned + Default>(
+    d: D,
+) -> Result<T, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(v).unwrap_or_default())
 }
 
 /// 未知值或类型不对（如 `lineSide: "bottom"`）只让这一项退回顶部，不连累其他设置
@@ -345,6 +369,8 @@ impl Default for Settings {
             line_enabled: true,
             line_side: LineSide::Top,
             line_pinned: false,
+            line_appear: Pace::Normal,
+            line_leave: Pace::Normal,
             belt_enabled: true,
             belt_auto: false,
             belt_hotkey: "Alt+Shift+B".into(),
@@ -994,6 +1020,10 @@ mod tests {
         assert_eq!((s.hotkey.as_str(), s.line_side), ("Alt+V", LineSide::Top));
         let s: Settings = serde_json::from_str(r#"{"hotkey":"Alt+V","lineSide":7}"#).unwrap();
         assert_eq!(s.line_side, LineSide::Top);
+        // 快慢档：旧文件没有按标准，认不得的按标准
+        let s: Settings =
+            serde_json::from_str(r#"{"lineAppear":"slow","lineLeave":"turbo"}"#).unwrap();
+        assert_eq!((s.line_appear, s.line_leave), (Pace::Slow, Pace::Normal));
     }
 
     #[test]

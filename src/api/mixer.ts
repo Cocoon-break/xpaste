@@ -2,10 +2,11 @@
 // 面板用 mixerPut、onMixerPutSelected；其余命令和 mixer-* 事件给搅拌机页面用。
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type { HitRect } from './belt';
 import type { Pro } from './line';
-import type { Recipe } from './types';
+import type { Recipe, RecordSummary } from './types';
 
 export type IngredientKind = 'text' | 'link' | 'code' | 'image' | 'file';
 /** 杯里的一样（对应 `xpaste_pro::Ingredient`）：全文不发给页面；`preview` 是悬停提示用的前三行，图片为空串；
@@ -60,6 +61,13 @@ export const mixerReady = () => invoke<void>('mixer_ready');
 export const mixerHits = (rects: HitRect[]) => invoke<void>('mixer_hits', { rects });
 /** 面板里放进几条记录，按给的顺序排在最后，搅拌机没开就顺便打开 */
 export const mixerPut = (ids: number[]) => invoke<void>('mixer_put', { ids });
+/** 杯子上“＋”列出的候选：最近 8 条记录（视频不列） */
+export const mixerRecent = () => invoke<RecordSummary[]>('mixer_recent');
+/** 从别的应用拖进杯子：`paths` 是文件；拖的是文字时为空，`text` 是页面自己拿到的文字（拿不到由后端读拖拽剪切板） */
+export const mixerDrop = (paths: string[], text?: string) => invoke<void>('mixer_drop', { paths, text: text ?? null });
+/** 拖着东西经过、离开、松手（Tauri 的拖放只给文件路径；拖文字时 paths 为空） */
+export const onMixerDragDrop = (cb: (d: { type: 'over' } | { type: 'leave' } | { type: 'drop'; paths: string[] }) => void): Promise<UnlistenFn> =>
+  getCurrentWebview().onDragDropEvent(({ payload: p }) => cb(p.type === 'drop' ? { type: 'drop', paths: p.paths } : p.type === 'leave' ? { type: 'leave' } : { type: 'over' }));
 export const mixerRemove = (id: number) => invoke<void>('mixer_remove', { id });
 export const mixerUndoRemove = () => invoke<void>('mixer_undo_remove');
 export const mixerClose = () => invoke<void>('mixer_close');

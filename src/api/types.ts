@@ -63,6 +63,9 @@ export interface Settings {
   lineSide: LineSide;
   /** 一直显示晾衣绳：空白处点击穿透 */
   linePinned: boolean;
+  /** 晾衣绳碰边出现、离开收起的快慢 */
+  lineAppear: Pace;
+  lineLeave: Pace;
   /** 传送带总开关 */
   beltEnabled: boolean;
   /** 开启方式为自动：30 秒内复制满 3 次时带子探出一截，问要不要按顺序贴 */
@@ -83,6 +86,7 @@ export interface Settings {
 export interface Recipe { name: string; prompt: string; show: boolean; builtin: string | null }
 
 export type LineSide = 'top' | 'left' | 'right';
+export type Pace = 'fast' | 'normal' | 'slow';
 
 export interface LineStyle { rope: string; thick: string; peg: string; paper: string; edge: string }
 

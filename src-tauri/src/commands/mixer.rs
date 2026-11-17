@@ -1,10 +1,12 @@
 //! 搅拌机页面与面板调用的命令。都在后台线程跑：要读库、读文件，不占主线程。
 
-use tauri::AppHandle;
+use tauri::{AppHandle, State};
+use xpaste_core::{Kind, RecordSummary};
 
 use crate::error::AppError;
 use crate::mixer::{self, MixerState};
 use crate::panel::Rect;
+use crate::state::AppState;
 
 #[tauri::command(async)]
 pub fn mixer_state(app: AppHandle) -> MixerState {
@@ -27,6 +29,25 @@ pub fn mixer_hits(rects: Vec<Rect>) {
 #[tauri::command(async)]
 pub fn mixer_put(app: AppHandle, ids: Vec<i64>) {
     mixer::put(&app, &ids);
+}
+
+/// 杯子上“＋”列出的候选：最近 8 条记录，视频不收、不列
+#[tauri::command(async)]
+pub fn mixer_recent(state: State<'_, AppState>) -> Result<Vec<RecordSummary>, AppError> {
+    // ponytail: 读出全部摘要再取前 8 条；记录多到点开明显变慢时换成带 LIMIT 的查询
+    Ok(state
+        .store()
+        .list_summaries()?
+        .into_iter()
+        .filter(|r| r.kind != Kind::Video)
+        .take(8)
+        .collect())
+}
+
+/// 从别的应用拖进杯子：`paths` 是拖进来的文件，空表示拖的是文字（`text` 是页面拿到的，没有时后端读拖拽剪切板）
+#[tauri::command(async)]
+pub fn mixer_drop(app: AppHandle, paths: Vec<String>, text: Option<String>) {
+    mixer::drop_in(&app, paths.into_iter().map(Into::into).collect(), text);
 }
 
 #[tauri::command(async)]

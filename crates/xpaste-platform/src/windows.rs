@@ -1489,6 +1489,11 @@ pub fn drag_count() -> Option<i64> {
     None
 }
 
+/// 拖拽剪切板里的文字：Windows 上拖放只给文件路径，读不到，为 None
+pub fn drag_text() -> Option<String> {
+    None
+}
+
 /// 前台线程正在拖动、缩放窗口（拖标题栏贴顶最大化也是）。读不到算不是。
 pub fn moving_window() -> bool {
     use windows::Win32::UI::WindowsAndMessaging::{
