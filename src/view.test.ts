@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import type { RecordSummary } from './api/types.ts';
 import { rel, type Filter } from './format.ts';
 import {
-  armUndo, canUndo, counts, cycleFilter, ensureSelection, groupOf, groups, inFilter, isStale, isTextKind, extendRange, mergeable, nextSelection, pruneMulti, rangeIds, snippetTextChange, visible,
+  armUndo, canUndo, counts, cycleFilter, ensureSelection, groupOf, groups, inFilter, isStale, isTextKind, extendRange, mergeable, nextSelection, pruneMulti, putOrder, rangeIds, snippetTextChange, visible,
 } from './view.ts';
 
 const mk = (id: number, over: Partial<RecordSummary>): RecordSummary => ({
@@ -153,4 +153,10 @@ test('extendRange：Shift 连选从锚点到当前行，往回按会收回（M25
 
 test('isTextKind：文本、代码、链接', () => {
   assert.deepEqual((['text', 'code', 'link', 'image', 'video', 'file'] as const).map(isTextKind), [true, true, true, false, false, false]);
+});
+
+test('putOrder：有多选按选中的先后，否则只放当前选中的', () => {
+  assert.deepEqual(putOrder(5, [9, 3, 5]), [9, 3, 5]);
+  assert.deepEqual(putOrder(5, []), [5]);
+  assert.deepEqual(putOrder(null, []), []);
 });

@@ -22,8 +22,8 @@ pub struct RecordOptions {
     pub system_audio: bool,
     /// macOS 15 起才录得到；更早的系统忽略
     pub microphone: bool,
-    /// 不录进画面的窗口编号（`window_number`），通常是录屏边框
-    pub exclude_window: Option<u32>,
+    /// 不录进画面的窗口编号（`window_number`）：录屏边框，以及 Pro 的几个浮层
+    pub exclude_windows: Vec<u32>,
     /// 输出的 MP4 路径
     pub path: PathBuf,
 }

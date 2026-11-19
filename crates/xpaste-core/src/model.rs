@@ -163,6 +163,160 @@ pub struct Settings {
     pub translate_lang: String,
     /// 划词翻译全局快捷键；空字符串表示不启用（M15、M26 规则 18）
     pub translate_hotkey: String,
+    /// 把最近复制或面板选中的记录挂上晾衣绳的全局快捷键；空字符串表示不启用
+    pub line_hotkey: String,
+    /// 晾衣绳的样式（绳子、粗细、夹子、纸张、边缘）
+    #[serde(deserialize_with = "tolerant_line_style")]
+    pub line_style: LineStyle,
+    /// 晾衣绳总开关；关掉后不检测边缘、便签快捷键不注册、提醒不触发，挂着的便签与提醒都留着
+    pub line_enabled: bool,
+    /// 晾衣绳挂在屏幕哪一侧
+    #[serde(deserialize_with = "tolerant_line_side")]
+    pub line_side: LineSide,
+    /// 一直显示晾衣绳：总开关开着时绳子和便签一直留在屏幕上，空白处点击穿透
+    pub line_pinned: bool,
+    /// 晾衣绳碰边出现的快慢
+    #[serde(deserialize_with = "tolerant_default")]
+    pub line_appear: Pace,
+    /// 晾衣绳离开后收起的快慢
+    #[serde(deserialize_with = "tolerant_default")]
+    pub line_leave: Pace,
+    /// 传送带总开关；关掉并保存后带子清空、收起，传送带快捷键不注册
+    pub belt_enabled: bool,
+    /// 开启方式为自动：带子没开时 30 秒内复制满 3 次，带子从底边探出一截，问要不要按顺序贴（否则只用快捷键或面板打开）
+    pub belt_auto: bool,
+    /// 打开或关闭传送带的全局快捷键（面板开着时放上选中的）；空字符串表示不启用
+    pub belt_hotkey: String,
+    /// 退回上一条的全局快捷键；空字符串表示不启用
+    pub belt_back_hotkey: String,
+    /// 搅拌机总开关；关掉后搅拌机快捷键不注册
+    pub mixer_enabled: bool,
+    /// 打开或关闭搅拌机的全局快捷键；空字符串表示不启用
+    pub mixer_hotkey: String,
+    /// 配方列表；空表示还没存过，运行时补齐自带配方。解析不了的项逐个丢掉
+    #[serde(deserialize_with = "tolerant_recipes")]
+    pub mixer_recipes: Vec<Recipe>,
+}
+
+/// 搅拌机的配方：名字、提示词、是否在杯口显示；`builtin` 是自带配方的键名，自定义的为空
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Recipe {
+    pub name: String,
+    pub prompt: String,
+    pub show: bool,
+    pub builtin: Option<String>,
+}
+
+// 提示词是用户写的，不能进日志：手写 Debug，不打印内容
+impl fmt::Debug for Recipe {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Recipe(..)")
+    }
+}
+
+/// 数组里解析不了的项逐个丢掉；整段不是数组时为空
+fn tolerant_recipes<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Recipe>, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(match v {
+        serde_json::Value::Array(a) => a
+            .into_iter()
+            .filter_map(|x| serde_json::from_value(x).ok())
+            .collect(),
+        _ => Vec::new(),
+    })
+}
+
+/// 晾衣绳挂的位置
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LineSide {
+    #[default]
+    Top,
+    Left,
+    Right,
+}
+
+/// 晾衣绳出现、收起的快慢档
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Pace {
+    Fast,
+    #[default]
+    Normal,
+    Slow,
+}
+
+/// 未知值或类型不对只让这一项退回默认，不连累其他设置
+fn tolerant_default<'de, D: serde::Deserializer<'de>, T: serde::de::DeserializeOwned + Default>(
+    d: D,
+) -> Result<T, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(v).unwrap_or_default())
+}
+
+/// 未知值或类型不对（如 `lineSide: "bottom"`）只让这一项退回顶部，不连累其他设置
+fn tolerant_line_side<'de, D: serde::Deserializer<'de>>(d: D) -> Result<LineSide, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(v).unwrap_or_default())
+}
+
+impl Settings {
+    /// 实际该注册的传送带快捷键：总开关关着时为空串（不注册）
+    pub fn effective_belt_hotkey(&self) -> &str {
+        if self.belt_enabled {
+            &self.belt_hotkey
+        } else {
+            ""
+        }
+    }
+
+    /// 实际该注册的搅拌机快捷键：总开关关着时为空串（不注册）
+    pub fn effective_mixer_hotkey(&self) -> &str {
+        if self.mixer_enabled {
+            &self.mixer_hotkey
+        } else {
+            ""
+        }
+    }
+
+    /// 实际该注册的便签快捷键：总开关关着时为空串（不注册）
+    pub fn effective_line_hotkey(&self) -> &str {
+        if self.line_enabled {
+            &self.line_hotkey
+        } else {
+            ""
+        }
+    }
+}
+
+/// 晾衣绳样式，各项存选项键；不认识的键由前端按默认处理
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct LineStyle {
+    pub rope: String,
+    pub thick: String,
+    pub peg: String,
+    pub paper: String,
+    pub edge: String,
+}
+
+impl Default for LineStyle {
+    fn default() -> Self {
+        Self {
+            rope: "jute".into(),
+            thick: "mid".into(),
+            peg: "plastic".into(),
+            paper: "parch".into(),
+            edge: "auto".into(),
+        }
+    }
+}
+
+/// 类型坏了（如 `lineStyle: 42`）只让这一项退回默认，不连累其他设置
+fn tolerant_line_style<'de, D: serde::Deserializer<'de>>(d: D) -> Result<LineStyle, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(v).unwrap_or_default())
 }
 
 impl Default for Settings {
@@ -210,6 +364,20 @@ impl Default for Settings {
             translate_model: String::new(),
             translate_lang: "zh-Hans".into(),
             translate_hotkey: "Alt+Shift+T".into(),
+            line_hotkey: "Alt+Shift+N".into(),
+            line_style: LineStyle::default(),
+            line_enabled: true,
+            line_side: LineSide::Top,
+            line_pinned: false,
+            line_appear: Pace::Normal,
+            line_leave: Pace::Normal,
+            belt_enabled: true,
+            belt_auto: false,
+            belt_hotkey: "Alt+Shift+B".into(),
+            belt_back_hotkey: "Alt+Shift+Z".into(),
+            mixer_enabled: true,
+            mixer_hotkey: "Alt+Shift+M".into(),
+            mixer_recipes: Vec::new(),
         }
     }
 }
@@ -316,6 +484,114 @@ impl Settings {
         if self.translate_hotkey_clash().is_some() {
             self.translate_hotkey.clear();
         }
+        // 便签快捷键同理：升级前别的快捷键已用了 Alt+Shift+N 的，读出为不启用
+        self.yield_line_hotkey();
+        self.yield_belt_hotkeys();
+        self.yield_mixer_hotkey();
+    }
+
+    /// 便签快捷键与别的快捷键冲突时停用它（读出设置时用；不含晾衣绳的版本保存设置时也用，用户看不到这一项）。
+    pub fn yield_line_hotkey(&mut self) {
+        if self.line_hotkey_clash().is_some() {
+            self.line_hotkey.clear();
+        }
+    }
+
+    /// 传送带的两个快捷键与别的快捷键（含便签、彼此）冲突时停用冲突的那个（读出设置时用）。
+    pub fn yield_belt_hotkeys(&mut self) {
+        if self.belt_hotkey_clash(&self.belt_hotkey, false).is_some() {
+            self.belt_hotkey.clear();
+        }
+        if self
+            .belt_hotkey_clash(&self.belt_back_hotkey, true)
+            .is_some()
+        {
+            self.belt_back_hotkey.clear();
+        }
+    }
+
+    /// 搅拌机快捷键与别的快捷键冲突时停用它（读出设置时用）。
+    pub fn yield_mixer_hotkey(&mut self) {
+        if self.mixer_hotkey_clash().is_some() {
+            self.mixer_hotkey.clear();
+        }
+    }
+
+    /// 搅拌机快捷键与哪个快捷键是同一组合（含传送带的两个）；录屏只在 macOS 上比。
+    fn mixer_hotkey_clash(&self) -> Option<&'static str> {
+        if self.mixer_hotkey.is_empty() {
+            return None;
+        }
+        let key = hotkey_key(&self.mixer_hotkey);
+        [
+            ("唤起", self.hotkey.as_str()),
+            ("截图", self.shot_hotkey.as_str()),
+            (
+                "录屏",
+                if cfg!(target_os = "macos") {
+                    self.rec_hotkey.as_str()
+                } else {
+                    ""
+                },
+            ),
+            ("翻译", self.translate_hotkey.as_str()),
+            ("便签", self.line_hotkey.as_str()),
+            ("传送带", self.belt_hotkey.as_str()),
+            ("退回", self.belt_back_hotkey.as_str()),
+        ]
+        .into_iter()
+        .find(|(_, c)| !c.is_empty() && hotkey_key(c) == key)
+        .map(|(name, _)| name)
+    }
+
+    /// 传送带的某个快捷键与哪个快捷键是同一组合；`back` 为退回键时还要比放上键，放上键不比退回键（让退回键先让出）。
+    fn belt_hotkey_clash(&self, k: &str, back: bool) -> Option<&'static str> {
+        if k.is_empty() {
+            return None;
+        }
+        let key = hotkey_key(k);
+        [
+            ("唤起", self.hotkey.as_str()),
+            ("截图", self.shot_hotkey.as_str()),
+            (
+                "录屏",
+                if cfg!(target_os = "macos") {
+                    self.rec_hotkey.as_str()
+                } else {
+                    ""
+                },
+            ),
+            ("翻译", self.translate_hotkey.as_str()),
+            ("便签", self.line_hotkey.as_str()),
+            ("传送带", if back { self.belt_hotkey.as_str() } else { "" }),
+        ]
+        .into_iter()
+        .find(|(_, c)| !c.is_empty() && hotkey_key(c) == key)
+        .map(|(name, _)| name)
+    }
+
+    /// 便签快捷键与哪个快捷键是同一组合（按唤起、截图、录屏、翻译的顺序）；录屏只在 macOS 上比。
+    fn line_hotkey_clash(&self) -> Option<&'static str> {
+        if self.line_hotkey.is_empty() {
+            return None;
+        }
+        let key = hotkey_key(&self.line_hotkey);
+        [
+            ("唤起", self.hotkey.as_str()),
+            ("截图", self.shot_hotkey.as_str()),
+            (
+                "录屏",
+                if cfg!(target_os = "macos") {
+                    self.rec_hotkey.as_str()
+                } else {
+                    ""
+                },
+            ),
+            ("翻译", self.translate_hotkey.as_str()),
+        ]
+        .into_iter()
+        .find(|(_, k)| !k.is_empty() && hotkey_key(k) == key)
+        .map(|(name, _)| name)
     }
 
     /// 翻译快捷键与哪个快捷键是同一组合（按唤起、截图、录屏的顺序）；录屏只在 macOS 上比（M24：别处不注册录屏快捷键）。
@@ -386,6 +662,29 @@ impl Settings {
         }
         if let Some(name) = self.translate_hotkey_clash() {
             return fail(&format!("翻译快捷键不能与{name}快捷键相同"));
+        }
+        if !self.line_hotkey.is_empty() && !has_modifier(&self.line_hotkey) {
+            return fail("便签快捷键至少需要包含 Mod 或 Alt");
+        }
+        if let Some(name) = self.line_hotkey_clash() {
+            return fail(&format!("便签快捷键不能与{name}快捷键相同"));
+        }
+        for (label, k, back) in [
+            ("传送带", &self.belt_hotkey, false),
+            ("退回", &self.belt_back_hotkey, true),
+        ] {
+            if !k.is_empty() && !has_modifier(k) {
+                return fail(&format!("{label}快捷键至少需要包含 Mod 或 Alt"));
+            }
+            if let Some(name) = self.belt_hotkey_clash(k, back) {
+                return fail(&format!("{label}快捷键不能与{name}快捷键相同"));
+            }
+        }
+        if !self.mixer_hotkey.is_empty() && !has_modifier(&self.mixer_hotkey) {
+            return fail("搅拌机快捷键至少需要包含 Mod 或 Alt");
+        }
+        if let Some(name) = self.mixer_hotkey_clash() {
+            return fail(&format!("搅拌机快捷键不能与{name}快捷键相同"));
         }
         if !matches!(self.translate_engine.as_str(), "" | "system" | "openai") {
             return fail("翻译引擎只能是系统翻译或 OpenAI 兼容接口");
@@ -705,6 +1004,62 @@ pub fn snippet_name(raw: &str) -> Result<String, CoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn line_switch_and_side_defaults_and_tolerance() {
+        let s: Settings = serde_json::from_str(r#"{"hotkey":"Alt+V"}"#).unwrap();
+        assert!(s.line_enabled);
+        assert_eq!(s.line_side, LineSide::Top);
+        assert!(!s.line_pinned);
+        let s: Settings = serde_json::from_str(r#"{"hotkey":"Alt+V","linePinned":true}"#).unwrap();
+        assert!(s.line_pinned);
+        let s: Settings = serde_json::from_str(r#"{"hotkey":"Alt+V","lineSide":"left"}"#).unwrap();
+        assert_eq!(s.line_side, LineSide::Left);
+        let s: Settings =
+            serde_json::from_str(r#"{"hotkey":"Alt+V","lineSide":"bottom"}"#).unwrap();
+        assert_eq!((s.hotkey.as_str(), s.line_side), ("Alt+V", LineSide::Top));
+        let s: Settings = serde_json::from_str(r#"{"hotkey":"Alt+V","lineSide":7}"#).unwrap();
+        assert_eq!(s.line_side, LineSide::Top);
+        // 快慢档：旧文件没有按标准，认不得的按标准
+        let s: Settings =
+            serde_json::from_str(r#"{"lineAppear":"slow","lineLeave":"turbo"}"#).unwrap();
+        assert_eq!((s.line_appear, s.line_leave), (Pace::Slow, Pace::Normal));
+    }
+
+    #[test]
+    fn line_hotkey_is_empty_when_switched_off() {
+        let mut s = Settings::default();
+        assert_eq!(s.effective_line_hotkey(), "Alt+Shift+N");
+        s.line_enabled = false;
+        assert_eq!(s.effective_line_hotkey(), "");
+    }
+
+    #[test]
+    fn line_style_defaults_and_tolerates_bad_values() {
+        let s: Settings = serde_json::from_str(r#"{"hotkey":"Alt+V"}"#).unwrap();
+        assert_eq!(
+            s.line_style,
+            LineStyle {
+                rope: "jute".into(),
+                thick: "mid".into(),
+                peg: "plastic".into(),
+                paper: "parch".into(),
+                edge: "auto".into()
+            }
+        );
+        let s: Settings =
+            serde_json::from_str(r#"{"hotkey":"Alt+V","lineStyle":{"rope":"silk"}}"#).unwrap();
+        assert_eq!(
+            (s.line_style.rope.as_str(), s.line_style.paper.as_str()),
+            ("silk", "parch")
+        );
+        // 类型坏了：只有这一项退回默认，别的设置照留
+        let s: Settings = serde_json::from_str(r#"{"hotkey":"Alt+V","lineStyle":42}"#).unwrap();
+        assert_eq!(
+            (s.hotkey.as_str(), s.line_style.clone()),
+            ("Alt+V", LineStyle::default())
+        );
+    }
 
     #[test]
     fn crlf_normalizes_line_breaks_without_doubling() {
@@ -1137,6 +1492,145 @@ mod tests {
                 .is_ok()
         );
         assert!(with("Alt+Space", "Alt+Shift+A", "R").validate().is_ok());
+    }
+
+    #[test]
+    fn line_hotkey_conflict_is_invalid() {
+        assert_eq!(Settings::default().line_hotkey, "Alt+Shift+N");
+        assert!(Settings::default().validate().is_ok());
+        let with = |line: &str| Settings {
+            hotkey: "Alt+Space".into(),
+            line_hotkey: line.into(),
+            ..Default::default()
+        };
+        assert!(with("").validate().is_ok());
+        assert_eq!(invalid(&with("N")), "便签快捷键至少需要包含 Mod 或 Alt");
+        assert_eq!(
+            invalid(&with(" alt+SPACE")),
+            "便签快捷键不能与唤起快捷键相同"
+        );
+        assert_eq!(
+            invalid(&with("Option+Shift+A")),
+            "便签快捷键不能与截图快捷键相同"
+        );
+        assert_eq!(
+            invalid(&with("Alt+Shift+T")),
+            "便签快捷键不能与翻译快捷键相同"
+        );
+    }
+
+    /// 旧版设置的 JSON 里没有 lineHotkey：读出默认值；唤起已用了 Alt+Shift+N 的读出为不启用。
+    #[test]
+    fn line_hotkey_defaults_when_missing_and_yields_on_clash() {
+        let (s, dropped) = Settings::from_json_lenient(r#"{"maxRecords":1000}"#).unwrap();
+        assert_eq!(s.line_hotkey, "Alt+Shift+N");
+        assert!(dropped.is_empty());
+        let s: Settings = serde_json::from_str(r#"{"hotkey":"Alt+Space"}"#).unwrap();
+        assert_eq!(s.line_hotkey, "Alt+Shift+N");
+        let (s, dropped) = Settings::from_json_lenient(r#"{"hotkey":"Alt+Shift+N"}"#).unwrap();
+        assert_eq!(
+            (s.hotkey.as_str(), s.line_hotkey.as_str()),
+            ("Alt+Shift+N", "")
+        );
+        assert!(dropped.is_empty(), "{dropped:?}");
+    }
+
+    #[test]
+    fn belt_defaults() {
+        let s: Settings = serde_json::from_str(r#"{"maxRecords":1000}"#).unwrap();
+        assert!(s.belt_enabled);
+        assert!(!s.belt_auto);
+        assert_eq!(s.belt_hotkey, "Alt+Shift+B");
+        assert_eq!(s.belt_back_hotkey, "Alt+Shift+Z");
+    }
+
+    #[test]
+    fn belt_hotkey_clash_yields() {
+        let mut s = Settings {
+            belt_hotkey: "Alt+Shift+N".into(),
+            ..Default::default()
+        };
+        s.yield_belt_hotkeys();
+        assert_eq!(s.belt_hotkey, "");
+        assert_eq!(s.belt_back_hotkey, "Alt+Shift+Z");
+        let mut s = Settings {
+            belt_back_hotkey: "Alt+Shift+B".into(),
+            ..Default::default()
+        };
+        s.yield_belt_hotkeys();
+        assert_eq!(s.belt_back_hotkey, "");
+        assert_eq!(s.belt_hotkey, "Alt+Shift+B");
+    }
+
+    #[test]
+    fn belt_back_needs_modifier() {
+        let s = Settings {
+            belt_back_hotkey: "Z".into(),
+            ..Default::default()
+        };
+        assert_eq!(invalid(&s), "退回快捷键至少需要包含 Mod 或 Alt");
+        let s = Settings {
+            belt_hotkey: "B".into(),
+            ..Default::default()
+        };
+        assert_eq!(invalid(&s), "传送带快捷键至少需要包含 Mod 或 Alt");
+    }
+
+    #[test]
+    fn mixer_defaults() {
+        let s: Settings = serde_json::from_str(r#"{"maxRecords":1000}"#).unwrap();
+        assert!(s.mixer_enabled);
+        assert_eq!(s.mixer_hotkey, "Alt+Shift+M");
+        assert!(s.mixer_recipes.is_empty());
+    }
+
+    #[test]
+    fn recipes_tolerant() {
+        let s: Settings = serde_json::from_str(
+            r#"{"mixerRecipes":[{"name":"a","prompt":"p","show":true,"builtin":null},42,{"name":"b"}],"maxRecords":1000}"#,
+        )
+        .unwrap();
+        assert_eq!(s.mixer_recipes.len(), 1);
+        assert_eq!(s.mixer_recipes[0].name, "a");
+        assert_eq!(s.max_records, 1000);
+        let s: Settings = serde_json::from_str(r#"{"mixerRecipes":"x"}"#).unwrap();
+        assert!(s.mixer_recipes.is_empty());
+    }
+
+    #[test]
+    fn mixer_hotkey_clash_yields() {
+        let mut s = Settings {
+            mixer_hotkey: "Alt+Shift+B".into(),
+            ..Default::default()
+        };
+        s.yield_mixer_hotkey();
+        assert_eq!(s.mixer_hotkey, "");
+        assert_eq!(s.belt_hotkey, "Alt+Shift+B");
+    }
+
+    #[test]
+    fn mixer_hotkey_needs_modifier() {
+        let s = Settings {
+            mixer_hotkey: "M".into(),
+            ..Default::default()
+        };
+        assert_eq!(invalid(&s), "搅拌机快捷键至少需要包含 Mod 或 Alt");
+    }
+
+    #[test]
+    fn effective_mixer_hotkey_off() {
+        let mut s = Settings::default();
+        assert_eq!(s.effective_mixer_hotkey(), "Alt+Shift+M");
+        s.mixer_enabled = false;
+        assert_eq!(s.effective_mixer_hotkey(), "");
+    }
+
+    #[test]
+    fn effective_belt_hotkey_off() {
+        let mut s = Settings::default();
+        assert_eq!(s.effective_belt_hotkey(), "Alt+Shift+B");
+        s.belt_enabled = false;
+        assert_eq!(s.effective_belt_hotkey(), "");
     }
 
     #[test]

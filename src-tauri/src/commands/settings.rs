@@ -20,7 +20,7 @@ pub struct PlatformInfo {
     pub macos_major: Option<u32>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Bootstrap {
     pub settings: Settings,
@@ -28,6 +28,8 @@ pub struct Bootstrap {
     pub records: Vec<RecordSummary>,
     pub first_run: bool,
     pub paused: bool,
+    /// 晾衣绳：面板据此显示挂钩按钮、已挂刻线与设置里的“Pro”标签
+    pub line: crate::commands::line::LineView,
 }
 
 pub fn bootstrap_inner(state: &AppState) -> Result<Bootstrap, AppError> {
@@ -41,8 +43,10 @@ pub fn bootstrap_inner(state: &AppState) -> Result<Bootstrap, AppError> {
         (records, store.kv_get("onboarded")?.is_none())
     };
     log::info!("bootstrap 返回 {} 条记录", records.len());
+    // 先取出设置、放开锁：view 里还要锁 settings
+    let settings = state.settings().clone();
     Ok(Bootstrap {
-        settings: state.settings().clone(),
+        settings,
         platform: PlatformInfo {
             os: xpaste_platform::OS,
             material: crate::panel::material(),
@@ -51,6 +55,7 @@ pub fn bootstrap_inner(state: &AppState) -> Result<Bootstrap, AppError> {
         records,
         first_run,
         paused: state.paused.load(Ordering::SeqCst),
+        line: crate::commands::line::view(state),
     })
 }
 
@@ -173,6 +178,23 @@ pub fn changed_fields(old: &Settings, new: &Settings) -> Vec<&'static str> {
             "translateHotkey",
             old.translate_hotkey != new.translate_hotkey,
         ),
+        ("lineHotkey", old.line_hotkey != new.line_hotkey),
+        ("lineStyle", old.line_style != new.line_style),
+        ("lineEnabled", old.line_enabled != new.line_enabled),
+        ("lineSide", old.line_side != new.line_side),
+        ("linePinned", old.line_pinned != new.line_pinned),
+        ("lineAppear", old.line_appear != new.line_appear),
+        ("lineLeave", old.line_leave != new.line_leave),
+        ("beltEnabled", old.belt_enabled != new.belt_enabled),
+        ("beltAuto", old.belt_auto != new.belt_auto),
+        ("beltHotkey", old.belt_hotkey != new.belt_hotkey),
+        ("mixerEnabled", old.mixer_enabled != new.mixer_enabled),
+        ("mixerHotkey", old.mixer_hotkey != new.mixer_hotkey),
+        ("mixerRecipes", old.mixer_recipes != new.mixer_recipes),
+        (
+            "beltBackHotkey",
+            old.belt_back_hotkey != new.belt_back_hotkey,
+        ),
     ]
     .into_iter()
     .filter_map(|(name, changed)| changed.then_some(name))
@@ -204,9 +226,20 @@ pub fn hotkey_action(
 }
 
 fn hotkeys_changed(changed: &[&str]) -> bool {
-    ["hotkey", "shotHotkey", "recHotkey", "translateHotkey"]
-        .iter()
-        .any(|k| changed.contains(k))
+    [
+        "hotkey",
+        "shotHotkey",
+        "recHotkey",
+        "translateHotkey",
+        "lineHotkey",
+        "lineEnabled",
+        "beltHotkey",
+        "beltEnabled",
+        "mixerHotkey",
+        "mixerEnabled",
+    ]
+    .iter()
+    .any(|k| changed.contains(k))
 }
 
 /// 开关开机启动；开发构建从不改系统登录项。失败只记日志（错误里可能带路径，只在 debug 级别输出）。
@@ -223,18 +256,32 @@ fn set_autostart(app: &AppHandle, on: bool) {
     }
 }
 
-/// 注册唤起、截图、录屏、翻译快捷键。
-type RegisterFn<'a> = dyn FnMut(&str, &str, &str, &str) -> Result<(), AppError> + 'a;
+/// 注册唤起、截图、录屏、翻译、便签、传送带、搅拌机快捷键。
+type RegisterFn<'a> =
+    dyn FnMut(&str, &str, &str, &str, &str, &str, &str) -> Result<(), AppError> + 'a;
 
-/// 校验 → 快捷键改了就注册新的唤起、截图、录屏与翻译快捷键（失败恢复旧的四个）→ 持久化（失败也恢复）；返回变化的字段名。
-/// `register(唤起, 截图, 录屏, 翻译)` 是唯一注入点（正式为 `hotkey::register`），测试借此模拟快捷键被占用。
+/// 校验 → 快捷键改了就注册新的唤起、截图、录屏、翻译与便签快捷键（失败恢复旧的五个）→ 持久化（失败也恢复）；返回变化的字段名。
+/// `register(唤起, 截图, 录屏, 翻译, 便签, 传送带, 搅拌机)` 是唯一注入点（正式为 `hotkey::register`），测试借此模拟快捷键被占用。
 pub fn commit_settings(
     state: &AppState,
     mut settings: Settings,
-    mut register: impl FnMut(&str, &str, &str, &str) -> Result<(), AppError>,
+    mut register: impl FnMut(&str, &str, &str, &str, &str, &str, &str) -> Result<(), AppError>,
 ) -> Result<Vec<&'static str>, AppError> {
     // 先去空白再校验、比较：粘贴带空格的 Base URL 不该报错，也不该算作改动（M26 规则 6）
     settings.normalize();
+    // 不含晾衣绳的版本里设置页没有便签快捷键：撞上了就让出，不能报一个用户看不到的错
+    if !crate::line::enabled() {
+        settings.yield_line_hotkey();
+    }
+    // 不含晾衣绳的版本里设置页没有传送带快捷键：撞上了同样让出
+    if !crate::belt::enabled() {
+        settings.yield_belt_hotkeys();
+    }
+    // 不含晾衣绳的版本里设置页没有搅拌机快捷键：撞上了同样让出；含的版本整理一下配方列表
+    if !crate::mixer::enabled() {
+        settings.yield_mixer_hotkey();
+    }
+    crate::mixer::normalize_settings(&mut settings);
     settings.validate()?;
     let old = state.settings().clone();
     // 面板尺寸只由拖动记忆（panel::remember_size）写；这里只为 changed 不含 panelSize，落库时 save_settings_inner 持锁再取
@@ -242,7 +289,7 @@ pub fn commit_settings(
     settings.compact_size = old.compact_size;
     let changed = changed_fields(&old, &settings);
     let hotkey_changed = hotkeys_changed(&changed);
-    // register 会先注销全部快捷键，失败时要把旧的四个注册回去
+    // register 会先注销全部快捷键，失败时要把旧的五个注册回去
     let restore = |register: &mut RegisterFn| {
         // 截图、录屏、翻译键在被占用时恢复不了很常见（多半正是它被占用），只记 debug
         match register(
@@ -250,19 +297,34 @@ pub fn commit_settings(
             &old.shot_hotkey,
             &old.rec_hotkey,
             &old.translate_hotkey,
+            old.effective_line_hotkey(),
+            old.effective_belt_hotkey(),
+            old.effective_mixer_hotkey(),
         ) {
             Err(e @ AppError::HotkeyTaken) => log::warn!("恢复原快捷键失败：{e}"),
             Err(e) => log::debug!("恢复原截图、录屏或翻译快捷键失败：{e}"),
             Ok(()) => {}
         }
     };
+    // 只打开了开关、便签快捷键没改：它被占用时前四个都已注册上（按顺序取第一个失败），照样保存，走“没注册上”的提示
+    let line_switch_only = changed.contains(&"lineEnabled") && !changed.contains(&"lineHotkey");
+    // 传送带同理：它排在最后，被占用时前面的都已注册上
+    let belt_switch_only = changed.contains(&"beltEnabled") && !changed.contains(&"beltHotkey");
+    // 搅拌机同理
+    let mixer_switch_only = changed.contains(&"mixerEnabled") && !changed.contains(&"mixerHotkey");
     if hotkey_changed
         && let Err(e) = register(
             &settings.hotkey,
             &settings.shot_hotkey,
             &settings.rec_hotkey,
             &settings.translate_hotkey,
+            settings.effective_line_hotkey(),
+            settings.effective_belt_hotkey(),
+            settings.effective_mixer_hotkey(),
         )
+        && !(line_switch_only && matches!(e, AppError::LineHotkeyTaken))
+        && !(belt_switch_only && matches!(e, AppError::BeltHotkeyTaken))
+        && !(mixer_switch_only && matches!(e, AppError::MixerHotkeyTaken))
     {
         restore(&mut register);
         return Err(e);
@@ -282,26 +344,45 @@ pub fn save_settings(
     state: State<'_, AppState>,
     settings: Settings,
 ) -> Result<(), AppError> {
-    let (hotkey, shot_hotkey, rec_hotkey, tr_hotkey, appearance, launch, ocr_on, upd_on) = (
+    let (hotkey, shot_hotkey, rec_hotkey, tr_hotkey, line_hotkey, belt_hotkey, mixer_hotkey) = (
         settings.hotkey.clone(),
         settings.shot_hotkey.clone(),
         settings.rec_hotkey.clone(),
         settings.translate_hotkey.clone(),
+        settings.effective_line_hotkey().to_owned(),
+        settings.effective_belt_hotkey().to_owned(),
+        settings.effective_mixer_hotkey().to_owned(),
+    );
+    let (belt_on, belt_auto) = {
+        let s = state.settings();
+        (s.belt_enabled, s.belt_auto)
+    };
+    let (appearance, launch, ocr_on, upd_on) = (
         settings.appearance,
         settings.launch_at_login,
         settings.ocr_enabled,
         settings.update_check,
     );
-    let changed = commit_settings(&state, settings, |p, s, r, t| {
-        crate::hotkey::register(&app, p, s, r, t)
-    })?;
+    let changed = commit_settings(&state, settings, |p, s, r, t, l, b, m| {
+        crate::hotkey::register(&app, p, s, r, t, l, b, m)
+    })
+    // 注册失败时 register 恢复了旧的快捷键，传送带开着的话把退回快捷键也补回来
+    .inspect_err(|_| crate::belt::configure(&app, belt_on, belt_auto))?;
     // 快捷键改了必为 Register，与 commit_settings 内一致；没改时只决定是否尽力重试
-    let (shot_missing, rec_missing, tr_missing) =
-        crate::hotkey::unregistered(&app, &shot_hotkey, &rec_hotkey, &tr_hotkey);
+    let (shot_missing, rec_missing, tr_missing, line_missing, belt_missing, mixer_missing) =
+        crate::hotkey::unregistered(
+            &app,
+            &shot_hotkey,
+            &rec_hotkey,
+            &tr_hotkey,
+            &line_hotkey,
+            &belt_hotkey,
+            &mixer_hotkey,
+        );
     let action = hotkey_action(
         hotkeys_changed(&changed),
         crate::tray::hotkey_failed(),
-        shot_missing || rec_missing || tr_missing,
+        shot_missing || rec_missing || tr_missing || line_missing || belt_missing || mixer_missing,
     );
     log::info!("设置已保存 changed=[{}]", changed.join(", "));
     // 设置已持久化并生效：以下步骤失败不回滚、不算保存失败（都只记日志）
@@ -318,13 +399,85 @@ pub fn save_settings(
         // 唤起注册上后 set_hotkey_label 清掉失败状态（截图、录屏、翻译失败不算）；唤起失败时原本也没注册上，无需恢复
         HotkeyAction::RetryBestEffort => {
             if !matches!(
-                crate::hotkey::register(&app, &hotkey, &shot_hotkey, &rec_hotkey, &tr_hotkey),
+                crate::hotkey::register(
+                    &app,
+                    &hotkey,
+                    &shot_hotkey,
+                    &rec_hotkey,
+                    &tr_hotkey,
+                    &line_hotkey,
+                    &belt_hotkey,
+                    &mixer_hotkey
+                ),
                 Err(AppError::HotkeyTaken)
             ) {
                 crate::tray::set_hotkey_label(&hotkey);
             }
         }
         HotkeyAction::None => {}
+    }
+    // 传送带：总开关关掉时直接清空收起；register 注销过全部快捷键时补回退回快捷键
+    {
+        let (on, auto) = {
+            let s = state.settings();
+            (s.belt_enabled, s.belt_auto)
+        };
+        crate::belt::configure(&app, on, auto);
+    }
+    // 搅拌机：总开关关掉时直接倒掉收起
+    {
+        let on = state.settings().mixer_enabled;
+        crate::mixer::configure(&app, on);
+    }
+    // 开关、位置与一直显示先生效，再收起或唤醒；设置锁只在取值时短暂持有
+    // 改位置、改一直显示后的放下或收起：等页面拿到新的位置和 pinned 之后再做
+    let mut then: Option<fn(&AppHandle)> = None;
+    if ["lineEnabled", "lineSide", "linePinned"]
+        .iter()
+        .any(|k| changed.contains(k))
+    {
+        let (on, side, pinned) = {
+            let s = state.settings();
+            (s.line_enabled, s.line_side, s.line_pinned)
+        };
+        crate::line::configure(on, side, pinned);
+        if changed.contains(&"lineEnabled") {
+            if on {
+                // 补发关着期间错过的提醒
+                crate::remind::wake();
+            } else {
+                crate::line::hide(&app);
+            }
+        }
+        // 关掉时上面已经收起，不再到新位置放下；一直显示时到新位置常驻
+        if on && changed.contains(&"lineSide") {
+            then = Some(crate::line::relocate);
+        } else if on && (changed.contains(&"linePinned") || changed.contains(&"lineEnabled")) {
+            then = Some(crate::line::repin);
+        }
+    }
+    // 出现、收起的快慢：检测线程下次采样就按新的；页面的收起时间随下面的视图广播换
+    {
+        let s = state.settings();
+        crate::line::set_pace(s.line_appear, s.line_leave);
+    }
+    // 空绳子的提示里写着便签快捷键；样式、开关、位置、一直显示、收起快慢在面板与晾衣绳页面里都要跟着换
+    if [
+        "lineHotkey",
+        "lineStyle",
+        "lineEnabled",
+        "lineSide",
+        "linePinned",
+        "lineLeave",
+    ]
+    .iter()
+    .any(|k| changed.contains(k))
+    {
+        crate::commands::line::changed(&app);
+    }
+    // 页面先拿到新的位置和 pinned 再放下或收起：常驻时收着的绳子改了位置直接放下，页面要先换好位置
+    if let Some(f) = then {
+        f(&app);
     }
     if changed.contains(&"launchAtLogin") {
         set_autostart(&app, launch);
@@ -411,6 +564,7 @@ mod tests {
         assert!(b.records.is_empty());
         assert!(b.first_run);
         assert!(!b.paused);
+        assert_eq!(b.line.available, crate::line::enabled());
     }
 
     #[test]
@@ -487,15 +641,43 @@ mod tests {
         assert_eq!(state.store().load_settings().compact_size, (420.0, 560.0));
     }
 
+    /// 不含晾衣绳的版本：唤起设成 Alt+Shift+N 照常保存，便签快捷键让出；含晾衣绳的版本照常报冲突。
+    #[test]
+    fn line_hotkey_clash_yields_only_without_line() {
+        let state = AppState::for_test();
+        let new = Settings {
+            hotkey: "Alt+Shift+N".into(),
+            ..Settings::default()
+        };
+        let r = commit_settings(&state, new, |_, _, _, _, _, _, _| Ok(()));
+        if crate::line::enabled() {
+            assert!(matches!(
+                r,
+                Err(AppError::Core(CoreError::InvalidSettings(_)))
+            ));
+        } else {
+            r.unwrap();
+            assert_eq!(state.settings().line_hotkey, "");
+            assert_eq!(state.store().load_settings().line_hotkey, "");
+        }
+    }
+
+    /// 同真实启动：内存里的设置已整理过配方列表（含 Pro 的构建会补齐自带配方），比较“改了哪些字段”时才不会多出配方
+    fn normalized_state() -> AppState {
+        let state = AppState::for_test();
+        crate::mixer::normalize_settings(&mut state.settings());
+        state
+    }
+
     #[test]
     fn commit_settings_trims_translate_fields_before_validate() {
-        let state = AppState::for_test();
+        let state = normalized_state();
         let new = Settings {
             translate_base_url: " https://x/v1/ ".into(),
             translate_model: " m ".into(),
             ..Settings::default()
         };
-        let changed = commit_settings(&state, new, |_, _, _, _| Ok(())).unwrap();
+        let changed = commit_settings(&state, new, |_, _, _, _, _, _, _| Ok(())).unwrap();
         assert_eq!(changed, ["translateBaseUrl", "translateModel"]);
         let saved = state.store().load_settings();
         assert_eq!(
@@ -511,7 +693,7 @@ mod tests {
             ..saved
         };
         assert!(
-            commit_settings(&state, same, |_, _, _, _| Ok(()))
+            commit_settings(&state, same, |_, _, _, _, _, _, _| Ok(()))
                 .unwrap()
                 .is_empty()
         );
@@ -521,6 +703,18 @@ mod tests {
     fn changed_fields_lists_only_differences() {
         let old = Settings::default();
         assert!(changed_fields(&old, &old).is_empty());
+        let mut peg = old.clone();
+        peg.line_style.peg = "tip".into();
+        assert_eq!(changed_fields(&old, &peg), ["lineStyle"]);
+        let mut off = old.clone();
+        off.line_enabled = false;
+        assert_eq!(changed_fields(&old, &off), ["lineEnabled"]);
+        let mut side = old.clone();
+        side.line_side = xpaste_core::LineSide::Left;
+        assert_eq!(changed_fields(&old, &side), ["lineSide"]);
+        let mut pin = old.clone();
+        pin.line_pinned = true;
+        assert_eq!(changed_fields(&old, &pin), ["linePinned"]);
         let new = Settings {
             hotkey: "Alt+Space".into(),
             update_check: false,
@@ -544,6 +738,7 @@ mod tests {
             rec_quality: xpaste_core::RecQuality::High,
             rec_fps: 60,
             translate_hotkey: "Alt+Shift+U".into(),
+            line_hotkey: "Alt+Shift+J".into(),
             ..Settings::default()
         };
         assert_eq!(
@@ -570,9 +765,16 @@ mod tests {
                 "recCopy",
                 "recQuality",
                 "recFps",
-                "translateHotkey"
+                "translateHotkey",
+                "lineHotkey"
             ]
         );
+    }
+
+    #[test]
+    fn line_switch_counts_as_hotkey_change() {
+        assert!(hotkeys_changed(&["lineEnabled"]));
+        assert!(!hotkeys_changed(&["lineSide"]));
     }
 
     #[test]
@@ -601,7 +803,7 @@ mod tests {
             ..Settings::default()
         };
         let mut calls = Vec::new();
-        let r = commit_settings(&state, new, |p, s, _, _| {
+        let r = commit_settings(&state, new, |p, s, _, _, _, _, _| {
             calls.push((p.to_string(), s.to_string()));
             if p == "CommandOrControl+Alt+C" {
                 Err(AppError::HotkeyTaken)
@@ -628,7 +830,7 @@ mod tests {
             ..Settings::default()
         };
         let mut calls = Vec::new();
-        let r = commit_settings(&state, new, |p, s, _, _| {
+        let r = commit_settings(&state, new, |p, s, _, _, _, _, _| {
             calls.push((p.to_string(), s.to_string()));
             if s == "Alt+Shift+S" {
                 Err(AppError::ShotHotkeyTaken)
@@ -657,7 +859,7 @@ mod tests {
             ..Settings::default()
         };
         let mut calls = Vec::new();
-        let r = commit_settings(&state, new, |p, s, r, _| {
+        let r = commit_settings(&state, new, |p, s, r, _, _, _, _| {
             calls.push([p, s, r].map(String::from));
             if r == "Alt+Shift+Y" {
                 Err(AppError::RecHotkeyTaken)
@@ -687,7 +889,7 @@ mod tests {
             ..Settings::default()
         };
         let mut calls = Vec::new();
-        let r = commit_settings(&state, new, |p, s, r, t| {
+        let r = commit_settings(&state, new, |p, s, r, t, _, _, _| {
             calls.push([p, s, r, t].map(String::from));
             if t == "Alt+Shift+U" {
                 Err(AppError::TranslateHotkeyTaken)
@@ -709,20 +911,72 @@ mod tests {
     }
 
     #[test]
+    fn line_switch_turns_on_even_when_line_hotkey_taken() {
+        let state = normalized_state();
+        let off = Settings {
+            line_enabled: false,
+            ..Settings::default()
+        };
+        commit_settings(&state, off, |_, _, _, _, _, _, _| Ok(())).unwrap();
+        // 便签快捷键被别的应用占着：开关照样打开并保存，没注册上的提示由 hotkey_status 给
+        // 保存时会整理配方列表，期望值也先整理，才能整体比较
+        let mut on = Settings::default();
+        crate::mixer::normalize_settings(&mut on);
+        let changed = commit_settings(&state, on.clone(), |_, _, _, _, l, _, _| {
+            if l.is_empty() {
+                Ok(())
+            } else {
+                Err(AppError::LineHotkeyTaken)
+            }
+        })
+        .unwrap();
+        assert_eq!(changed, ["lineEnabled"]);
+        assert_eq!(*state.settings(), on);
+        assert_eq!(state.store().load_settings(), on);
+        // 改的是便签快捷键本身时仍报被占用，不保存
+        let new = Settings {
+            line_hotkey: "Alt+Shift+J".into(),
+            ..Settings::default()
+        };
+        let r = commit_settings(&state, new, |_, _, _, _, l, _, _| {
+            if l == "Alt+Shift+J" {
+                Err(AppError::LineHotkeyTaken)
+            } else {
+                Ok(())
+            }
+        });
+        assert!(matches!(r, Err(AppError::LineHotkeyTaken)));
+        assert_eq!(*state.settings(), on);
+    }
+
+    #[test]
     fn unchanged_hotkey_is_not_reregistered() {
-        let state = AppState::for_test();
+        let state = normalized_state();
         let new = Settings {
             max_records: 1000,
             ..Settings::default()
         };
         let mut calls = 0;
-        let changed = commit_settings(&state, new, |_, _, _, _| {
+        let changed = commit_settings(&state, new, |_, _, _, _, _, _, _| {
             calls += 1;
             Ok(())
         })
         .unwrap();
         assert_eq!(calls, 0);
         assert_eq!(changed, ["maxRecords"]);
+        // 只改了便签快捷键也要重新注册
+        let new = Settings {
+            max_records: 1000,
+            line_hotkey: "Alt+Shift+J".into(),
+            ..Settings::default()
+        };
+        let changed = commit_settings(&state, new, |_, _, _, _, _, _, _| {
+            calls += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(calls, 1);
+        assert_eq!(changed, ["lineHotkey"]);
     }
 
     #[test]
@@ -753,23 +1007,33 @@ pub struct HotkeyStatus {
     shot: bool,
     rec: bool,
     translate: bool,
+    line: bool,
+    belt: bool,
+    mixer: bool,
 }
 
 #[tauri::command]
 pub fn hotkey_status(app: AppHandle, state: State<'_, AppState>) -> HotkeyStatus {
-    let (shot, rec, tr) = {
+    let (shot, rec, tr, line, belt, mixer) = {
         let s = state.settings();
         (
             s.shot_hotkey.clone(),
             s.rec_hotkey.clone(),
             s.translate_hotkey.clone(),
+            s.effective_line_hotkey().to_owned(),
+            s.effective_belt_hotkey().to_owned(),
+            s.effective_mixer_hotkey().to_owned(),
         )
     };
-    let (shot, rec, translate) = crate::hotkey::unregistered(&app, &shot, &rec, &tr);
+    let (shot, rec, translate, line, belt, mixer) =
+        crate::hotkey::unregistered(&app, &shot, &rec, &tr, &line, &belt, &mixer);
     HotkeyStatus {
         panel: crate::tray::hotkey_failed(),
         shot,
         rec,
         translate,
+        line,
+        belt,
+        mixer,
     }
 }

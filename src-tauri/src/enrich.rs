@@ -86,12 +86,17 @@ fn handle(app: &AppHandle, job: Job) {
                     false
                 }
             };
+            let thumb = state.data_dir.join("thumbs").join(format!("{id}.png"));
+            // 先写临时名再改名：挂便签时不会把写到一半的封面当成已生成的拿走
+            let tmp = thumb.with_extension("png.tmp");
             let poster = match xpaste_platform::video_poster(&path, THUMB_MAX) {
-                Some(png) => {
-                    std::fs::write(state.data_dir.join("thumbs").join(format!("{id}.png")), png)
-                        .inspect_err(|e| log::warn!("记录 {id} 写入缩略图失败：{e}"))
-                        .is_ok()
-                }
+                Some(png) => std::fs::write(&tmp, png)
+                    .and_then(|()| std::fs::rename(&tmp, &thumb))
+                    .inspect_err(|e| {
+                        let _ = std::fs::remove_file(&tmp);
+                        log::warn!("记录 {id} 写入缩略图失败：{e}");
+                    })
+                    .is_ok(),
                 None => {
                     log::debug!("记录 {id} 视频封面生成失败");
                     false
@@ -99,6 +104,10 @@ fn handle(app: &AppHandle, job: Job) {
             };
             if meta || poster {
                 emit_summary(app, RECORD_UPDATED, id);
+            }
+            // 复制完马上挂上的视频便签这时还没有封面
+            if poster {
+                crate::commands::line::cover_ready(app, id, &thumb);
             }
         }
         Job::AppIcon { app_id } => {

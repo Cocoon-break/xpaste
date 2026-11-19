@@ -1,4 +1,4 @@
-use std::cell::OnceCell;
+use std::cell::{Cell, OnceCell};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
@@ -51,6 +51,9 @@ use windows::Win32::System::Memory::{
     GMEM_MOVEABLE, GMEM_ZEROINIT, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock,
 };
 use windows::Win32::System::Ole::CF_UNICODETEXT;
+use windows::Win32::System::Registry::{
+    HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RRF_SUBKEY_WOW6464KEY, RegGetValueW,
+};
 use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
 use windows::Win32::System::Threading::{
     GetCurrentProcess, GetCurrentProcessId, GetCurrentThread, GetThreadId, OpenProcess,
@@ -65,25 +68,27 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT,
     KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, MOUSEEVENTF_WHEEL, MOUSEINPUT,
     MapVirtualKeyW, SendInput, VIRTUAL_KEY, VK_CONTROL, VK_INSERT, VK_LBUTTON, VK_LWIN, VK_MENU,
-    VK_RBUTTON, VK_RWIN, VK_SHIFT,
+    VK_RBUTTON, VK_RWIN, VK_SHIFT, VK_V,
 };
 use windows::Win32::UI::Shell::PropertiesSystem::{
     GPS_DEFAULT, IPropertyStore, SHGetPropertyStoreFromParsingName,
 };
 use windows::Win32::UI::Shell::{
-    IShellItemImageFactory, IShellLinkW, SHCreateItemFromParsingName, SHDefExtractIconW,
-    SIIGBF_THUMBNAILONLY, ShellLink,
+    ABE_BOTTOM, ABE_LEFT, ABE_RIGHT, ABM_GETSTATE, ABM_GETTASKBARPOS, ABS_AUTOHIDE, APPBARDATA,
+    IShellItemImageFactory, IShellLinkW, SHAppBarMessage, SHCreateItemFromParsingName,
+    SHDefExtractIconW, SIIGBF_THUMBNAILONLY, ShellLink,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyIcon, DispatchMessageW,
     EVENT_SYSTEM_FOREGROUND, EnumWindows, GWL_EXSTYLE, GetClassNameW, GetCursorPos,
     GetForegroundWindow, GetIconInfo, GetMessageW, GetWindowLongW, GetWindowTextLengthW,
-    GetWindowThreadProcessId, HC_ACTION, HICON, HWND_MESSAGE, ICONINFO, InternalGetWindowText,
-    IsIconic, IsWindow, IsWindowVisible, KBDLLHOOKSTRUCT, LLKHF_INJECTED, LLMHF_INJECTED,
-    MONITORINFOF_PRIMARY, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW, PostThreadMessageW,
-    RegisterClassW, SW_HIDE, SW_SHOWNOACTIVATE, SetForegroundWindow, SetWindowsHookExW, ShowWindow,
-    UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_CLIPBOARDUPDATE, WM_QUIT, WM_USER,
+    GetWindowThreadProcessId, HC_ACTION, HICON, HOOKPROC, HWND_MESSAGE, ICONINFO,
+    InternalGetWindowText, IsIconic, IsWindow, IsWindowVisible, KBDLLHOOKSTRUCT, LLKHF_INJECTED,
+    LLMHF_INJECTED, MONITORINFOF_PRIMARY, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW,
+    PostThreadMessageW, RegisterClassW, SW_HIDE, SW_SHOWNOACTIVATE, SetForegroundWindow,
+    SetWindowsHookExW, ShowWindow, UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WINDOWS_HOOK_ID, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
+    WM_CLIPBOARDUPDATE, WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_USER,
     WNDCLASSW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
 };
 use windows::core::{BOOL, Error, HSTRING, Interface, PCWSTR, PWSTR, w};
@@ -690,6 +695,90 @@ pub fn hide_window(hwnd: isize) {
     unsafe {
         let _ = ShowWindow(HWND(hwnd as *mut _), SW_HIDE);
     }
+}
+
+/// 把已经显示着的窗口提到同一层（置顶窗口在置顶的那些里）最上面，不激活、不动位置尺寸。
+/// `ShowWindow(SW_SHOWNOACTIVATE)` 不改已显示窗口的上下顺序。hwnd 失效时什么也不做。
+pub fn raise_no_activate(hwnd: isize) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos,
+    };
+    // SAFETY: hwnd 失效时调用失败而不会崩溃
+    unsafe {
+        let _ = SetWindowPos(
+            HWND(hwnd as *mut _),
+            Some(HWND_TOP),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
+}
+
+/// 一次设好窗口的位置和尺寸（物理像素），不分两步：贴着屏幕右边的窗口改宽时右边缘不跳。不激活、不改层级。
+/// 只用于同一块屏里改尺寸（跨不同 DPI 的屏要先移过去再定尺寸）。hwnd 失效时什么也不做。
+pub fn set_window_rect(hwnd: isize, x: i32, y: i32, w: i32, h: i32) {
+    use windows::Win32::UI::WindowsAndMessaging::{SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos};
+    // SAFETY: hwnd 失效时调用失败而不会崩溃
+    unsafe {
+        let _ = SetWindowPos(
+            HWND(hwnd as *mut _),
+            None,
+            x,
+            y,
+            w,
+            h,
+            SWP_NOACTIVATE | SWP_NOZORDER,
+        );
+    }
+}
+
+/// 浮层窗口（晾衣绳）不进 Alt+Tab：扩展样式补上 WS_EX_TOOLWINDOW、去掉 WS_EX_APPWINDOW。tao 每次改窗口状态（显示、点穿）
+/// 都按自己的标记整个重写扩展样式，所以另挂一个窗口子类，在 WM_STYLECHANGING 里每次改回来。窗口还没显示时、在它所在的线程（主线程）调用。
+pub fn tool_window(hwnd: isize) {
+    use windows::Win32::UI::Shell::SetWindowSubclass;
+    use windows::Win32::UI::WindowsAndMessaging::{SetWindowLongW, WS_EX_APPWINDOW};
+    let h = HWND(hwnd as *mut _);
+    // SAFETY: hwnd 失效时调用失败而不会崩溃；子类回调是静态函数，随窗口销毁
+    unsafe {
+        let _ = SetWindowSubclass(h, Some(keep_tool_window), 1, 0);
+        let ex = (GetWindowLongW(h, GWL_EXSTYLE) as u32 | WS_EX_TOOLWINDOW.0) & !WS_EX_APPWINDOW.0;
+        SetWindowLongW(h, GWL_EXSTYLE, ex as i32);
+    }
+}
+
+unsafe extern "system" fn keep_tool_window(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id: usize,
+    _data: usize,
+) -> LRESULT {
+    use windows::Win32::UI::Shell::DefSubclassProc;
+    use windows::Win32::UI::WindowsAndMessaging::{STYLESTRUCT, WM_STYLECHANGING, WS_EX_APPWINDOW};
+    if msg == WM_STYLECHANGING && wparam.0 as i32 == GWL_EXSTYLE.0 {
+        // SAFETY: WM_STYLECHANGING 的 lparam 指向系统给的 STYLESTRUCT，回调返回前有效
+        let s = unsafe { &mut *(lparam.0 as *mut STYLESTRUCT) };
+        s.styleNew = (s.styleNew | WS_EX_TOOLWINDOW.0) & !WS_EX_APPWINDOW.0;
+    }
+    // SAFETY: 参数原样交给下一个处理者
+    unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+}
+
+/// 前台是全屏应用（全屏的视频、游戏、演示，或开着演示设置）：按系统决定要不要弹通知时的判断，不分哪块屏。读不到算不是。
+pub fn fullscreen_app() -> bool {
+    use windows::Win32::UI::Shell::{
+        QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN,
+        SHQueryUserNotificationState,
+    };
+    // SAFETY: 只读查询
+    matches!(
+        unsafe { SHQueryUserNotificationState() },
+        Ok(s) if s == QUNS_BUSY || s == QUNS_RUNNING_D3D_FULL_SCREEN || s == QUNS_PRESENTATION_MODE
+    )
 }
 
 /// 把 `target` 切回前台（最多等 100 ms），再发 Ctrl+V。
@@ -1395,6 +1484,29 @@ pub fn mouse_button_down() -> bool {
     }
 }
 
+/// 拖拽剪切板的计数：Windows 没有这一项，为 None（调用方只看 `moving_window`）
+pub fn drag_count() -> Option<i64> {
+    None
+}
+
+/// 拖拽剪切板里的文字：Windows 上拖放只给文件路径，读不到，为 None
+pub fn drag_text() -> Option<String> {
+    None
+}
+
+/// 前台线程正在拖动、缩放窗口（拖标题栏贴顶最大化也是）。读不到算不是。
+pub fn moving_window() -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GUI_INMOVESIZE, GUITHREADINFO, GetGUIThreadInfo,
+    };
+    let mut info = GUITHREADINFO {
+        cbSize: size_of::<GUITHREADINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: info 是本地变量，cbSize 已填；线程 0 表示前台线程
+    unsafe { GetGUIThreadInfo(0, &mut info) }.is_ok() && info.flags.contains(GUI_INMOVESIZE)
+}
+
 // 长截图自动滚动（M23 规则 13）
 
 /// Windows 的滚轮作用于指针下的窗口：`scroll_at` 的 (x, y) 只供调用方判断指针在不在选区里
@@ -1466,47 +1578,68 @@ impl InputWatch {
 
 impl Drop for InputWatch {
     fn drop(&mut self) {
-        let Some(handle) = self.thread.take() else {
-            return;
-        };
-        // SAFETY: JoinHandle 持有线程句柄，join 或丢弃前一直有效
-        let tid = unsafe { GetThreadId(HANDLE(handle.as_raw_handle())) };
-        let deadline = Instant::now() + Duration::from_millis(500);
-        while Instant::now() < deadline {
-            // 线程的消息队列可能还没建好（投递失败），没退出就隔一会儿再投
-            // SAFETY: 只向本模块起的线程投递 WM_QUIT；线程已退出时投递失败而不会崩溃
-            let _ = unsafe { PostThreadMessageW(tid, WM_QUIT, WPARAM(0), LPARAM(0)) };
-            if handle.is_finished() {
-                let _ = handle.join();
-                return;
-            }
-            thread::sleep(Duration::from_millis(10));
+        if let Some(handle) = self.thread.take()
+            && !quit_hook_thread(handle)
+        {
+            // 放手不等：线程若之后退出会自己卸钩，最坏是钩子留到进程结束，只记时刻、原样放行，不影响输入
+            log::warn!("用户输入观察线程没有按时退出，不再等待");
         }
-        // 放手不等：线程若之后退出会自己卸钩，最坏是钩子留到进程结束，只记时刻、原样放行，不影响输入
-        log::warn!("用户输入观察线程没有按时退出，不再等待");
     }
 }
 
-/// 钩子线程主体：装钩子、建消息队列、通知就绪，跑消息循环直到 `WM_QUIT`，最后卸钩（M23 规则 13）。
+/// 让钩子线程退出：反复投 `WM_QUIT`，最多等 500 ms。返回线程有没有按时退出。
+fn quit_hook_thread(handle: thread::JoinHandle<()>) -> bool {
+    // SAFETY: JoinHandle 持有线程句柄，join 或丢弃前一直有效
+    let tid = unsafe { GetThreadId(HANDLE(handle.as_raw_handle())) };
+    let deadline = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < deadline {
+        // 线程的消息队列可能还没建好（投递失败），没退出就隔一会儿再投
+        // SAFETY: 只向本模块起的线程投递 WM_QUIT；线程已退出时投递失败而不会崩溃
+        let _ = unsafe { PostThreadMessageW(tid, WM_QUIT, WPARAM(0), LPARAM(0)) };
+        if handle.is_finished() {
+            let _ = handle.join();
+            return true;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    false
+}
+
+/// 观察线程主体（M23 规则 13）。
 fn hook_input(last: Arc<Mutex<Option<Instant>>>, ready: mpsc::Sender<()>) {
     INPUT_LAST.with(|c| {
         let _ = c.set(last);
     });
+    run_hooks(
+        &[
+            (WH_MOUSE_LL, Some(mouse_hook as HookFn)),
+            (WH_KEYBOARD_LL, Some(keyboard_hook as HookFn)),
+        ],
+        ready,
+        "用户输入",
+    );
+}
+
+type HookFn = unsafe extern "system" fn(i32, WPARAM, LPARAM) -> LRESULT;
+
+/// 钩子线程的公共部分：装低层钩子、建消息队列、通知就绪，跑消息循环直到 `WM_QUIT`，最后卸钩。
+/// 低层钩子的回调在装它的线程上、由消息循环分发。装不上时不通知就绪，直接返回。
+fn run_hooks(hooks: &[(WINDOWS_HOOK_ID, HOOKPROC)], ready: mpsc::Sender<()>, label: &str) {
     // 回调屡次超过 LowLevelHooksTimeout 时系统会悄悄摘掉低层钩子：拼接吃满 CPU 时也要及时响应，先提优先级。
     // 线程几乎总睡在 GetMessageW 里，回调只做一次判断，提高优先级不占 CPU
     // SAFETY: 只改当前线程的优先级，伪句柄无需关闭
     if let Err(e) = unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST) } {
-        log::warn!("用户输入观察线程提优先级失败：{e}");
+        log::warn!("{label}钩子线程提优先级失败：{e}");
     }
     // SAFETY: 钩子过程是本模块的函数，进程存活期间有效；钩子句柄只在本线程使用、退出前卸掉；msg 是本地变量
     unsafe {
         let instance: Option<HINSTANCE> = GetModuleHandleW(PCWSTR::null()).ok().map(Into::into);
-        let hooks = [
-            SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), instance, 0),
-            SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), instance, 0),
-        ];
+        let hooks: Vec<_> = hooks
+            .iter()
+            .map(|&(id, proc)| SetWindowsHookExW(id, proc, instance, 0))
+            .collect();
         if let Some(Err(e)) = hooks.iter().find(|h| h.is_err()) {
-            log::warn!("用户输入钩子安装失败：{e}");
+            log::warn!("{label}钩子安装失败：{e}");
         } else {
             let mut msg = MSG::default();
             // 先建好本线程的消息队列，Drop 投递的 WM_QUIT 才有处可去
@@ -1565,12 +1698,186 @@ extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> L
     unsafe { CallNextHookEx(None, code, wparam, lparam) }
 }
 
+pub fn accessibility_trusted() -> bool {
+    true
+}
+
+thread_local! {
+    /// `PasteKeyWatch` 钩子线程上的回调和按键配对状态（只在钩子线程里设置、读写）。
+    static PASTE_CB: OnceCell<Box<dyn Fn(u64)>> = const { OnceCell::new() };
+    /// 配对状态，以及 V 是否按着（同一个键连着收到按下、中间没有松开，算连发）
+    static PASTE_ARM: Cell<(crate::PasteArm, bool)> = Cell::new(Default::default());
+}
+
+/// 监听 Ctrl+V。专用线程装低层键盘钩子并跑消息循环；丢弃时让线程卸钩退出，最多等 500 ms。
+pub struct PasteKeyWatch {
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+/// 松开 V 时调 `on_paste`，前提是按下 V 那一刻是 Ctrl+V（不带别的修饰键、不是连发），
+/// 而且前台窗口不是 xPaste 自己的。参数是按下 V 那一刻的剪切板序号（`change_count`）：
+/// 目标应用按下时就读剪切板，贴出去的是那时的内容。回调在钩子线程上来，要很快返回。钩子装不上时返回 None。
+/// 只判断是不是 Ctrl+V，不记录任何按键。
+pub fn watch_paste_key(on_paste: impl Fn(u64) + Send + Sync + 'static) -> Option<PasteKeyWatch> {
+    let (ready_tx, ready) = mpsc::channel();
+    let thread = thread::Builder::new()
+        .name("xpaste-paste-key".into())
+        .spawn(move || {
+            PASTE_CB.with(|c| {
+                let _ = c.set(Box::new(on_paste));
+            });
+            run_hooks(
+                &[(WH_KEYBOARD_LL, Some(paste_key_hook as HookFn))],
+                ready_tx,
+                "粘贴键",
+            );
+        })
+        .inspect_err(|e| log::warn!("粘贴键监听线程启动失败：{e}"))
+        .ok()?;
+    let watch = PasteKeyWatch {
+        thread: Some(thread),
+    };
+    // 装不上或超时都返回 None，丢弃 watch 时让线程退出
+    ready.recv_timeout(Duration::from_millis(500)).ok()?;
+    Some(watch)
+}
+
+impl Drop for PasteKeyWatch {
+    fn drop(&mut self) {
+        if let Some(handle) = self.thread.take()
+            && !quit_hook_thread(handle)
+        {
+            // 钩子只做判断、原样放行，留到进程结束也不影响输入
+            log::warn!("粘贴键监听线程没有按时退出，不再等待");
+        }
+    }
+}
+
+/// 低层键盘钩子：只判断是不是 Ctrl+V，事件一律放行
+extern "system" fn paste_key_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code == HC_ACTION as i32 {
+        // SAFETY: code 为 HC_ACTION 时 lparam 指向系统提供的 KBDLLHOOKSTRUCT，回调期间有效
+        let info = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
+        let is_v = info.vkCode == u32::from(VK_V.0);
+        let (mut arm, mut v_held) = PASTE_ARM.get();
+        let mut fired = None;
+        match wparam.0 as u32 {
+            WM_KEYDOWN | WM_SYSKEYDOWN => {
+                let repeat = is_v && v_held;
+                v_held |= is_v;
+                // SAFETY: 纯查询；最高位为 1 表示按着
+                let down = |vk: VIRTUAL_KEY| unsafe { GetAsyncKeyState(vk.0 as i32) } < 0;
+                let m = crate::Mods {
+                    cmd: down(VK_LWIN) || down(VK_RWIN),
+                    ctrl: down(VK_CONTROL),
+                    shift: down(VK_SHIFT),
+                    alt: down(VK_MENU),
+                };
+                // 落在 xPaste 自己窗口里的 V 当作别的键
+                let v = is_v && !repeat && !foreground_is_own();
+                arm.key_down(m, v, repeat, false, change_count);
+            }
+            WM_KEYUP | WM_SYSKEYUP => {
+                v_held &= !is_v;
+                fired = arm.key_up(is_v);
+            }
+            _ => {}
+        }
+        PASTE_ARM.set((arm, v_held));
+        if let Some(seq) = fired {
+            PASTE_CB.with(|c| {
+                if let Some(f) = c.get() {
+                    f(seq);
+                }
+            });
+        }
+    }
+    // SAFETY: 参数原样交给下一个钩子
+    unsafe { CallNextHookEx(None, code, wparam, lparam) }
+}
+
+/// 前台窗口属于本进程。
+fn foreground_is_own() -> bool {
+    // SAFETY: 两个都是无参数的只读查询
+    let (hwnd, own) = unsafe { (GetForegroundWindow(), GetCurrentProcessId()) };
+    window_pid(hwnd) == Some(own)
+}
+
+/// Windows 屏幕没有刘海。
+pub fn notch_inset(_x: f64, _w: f64) -> f64 {
+    0.0
+}
+
 /// 指针的屏幕坐标（物理像素，与 `capture_rect` 同一坐标系：进程是 Per-Monitor-v2）。
 pub fn pointer_position() -> Option<(f64, f64)> {
     let mut p = POINT::default();
     // SAFETY: p 是本地变量
     unsafe { GetCursorPos(&mut p) }.ok()?;
     Some((f64::from(p.x), f64::from(p.y)))
+}
+
+/// 任务栏停在哪一边、是否自动隐藏，以及它的矩形（物理像素，同 `pointer_position`）。任务栏总是占满那一整条边。
+/// 读不到或停在顶部时为 None。
+pub fn dock() -> Option<crate::DockFrame> {
+    use crate::{DockEdge, DockFrame};
+    let mut abd = APPBARDATA {
+        cbSize: size_of::<APPBARDATA>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: abd 是本地变量，cbSize 已填
+    if unsafe { SHAppBarMessage(ABM_GETTASKBARPOS, &mut abd) } == 0 {
+        return None;
+    }
+    let edge = match abd.uEdge {
+        ABE_LEFT => DockEdge::Left,
+        ABE_RIGHT => DockEdge::Right,
+        ABE_BOTTOM => DockEdge::Bottom,
+        _ => return None,
+    };
+    // SAFETY: 同上；ABM_GETSTATE 只读 cbSize
+    let state = unsafe { SHAppBarMessage(ABM_GETSTATE, &mut abd) } as u32;
+    let rc = abd.rc;
+    Some(DockFrame {
+        x: f64::from(rc.left),
+        y: f64::from(rc.top),
+        w: f64::from(rc.right - rc.left),
+        h: f64::from(rc.bottom - rc.top),
+        edge,
+        autohide: state & ABS_AUTOHIDE != 0,
+    })
+}
+
+/// 这台电脑的硬件标识（注册表 `MachineGuid`），授权绑定设备用；读不到为 None。
+/// 重装应用不变，重装系统会变。调用方只拿它算哈希，原值不上传、不落盘、不进日志。
+pub fn hardware_id() -> Option<String> {
+    // GUID 是 36 个字符，留足余量；RRF_RT_REG_SZ 保证读回的是以 NUL 结尾的字符串
+    let mut buf = [0u16; 128];
+    let mut bytes = size_of_val(&buf) as u32;
+    // SAFETY: buf 和 bytes 是本地变量，bytes 是 buf 的字节数；64 位视图，32 位进程读到的也是同一个值
+    let r = unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            w!(r"SOFTWARE\Microsoft\Cryptography"),
+            w!("MachineGuid"),
+            RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY,
+            None,
+            Some(buf.as_mut_ptr().cast()),
+            Some(&mut bytes),
+        )
+    };
+    if r.is_err() {
+        return None;
+    }
+    let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    let id = String::from_utf16(&buf[..len]).ok()?;
+    (!id.trim().is_empty()).then_some(id)
+}
+
+/// 电脑名，用户在已绑定设备的列表里靠它认设备；读不到为 None。
+pub fn device_name() -> Option<String> {
+    std::env::var("COMPUTERNAME")
+        .ok()
+        .filter(|n| !n.trim().is_empty())
 }
 
 /// Windows 发滚动不需要权限（M23 规则 13）

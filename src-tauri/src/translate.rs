@@ -371,16 +371,33 @@ async fn openai(
     timeouts: Option<Timeouts>,
     on_delta: &mut (impl FnMut(Lang, &str) -> bool + Send),
 ) -> Result<String, Fail> {
-    let loopback = is_loopback(&cfg.base_url);
+    let body = chat_body(cfg.model.trim(), target, text);
+    chat_stream(
+        &cfg.base_url,
+        &cfg.api_key,
+        &body,
+        timeouts,
+        &mut |d: &str| on_delta(target, d),
+    )
+    .await
+}
+
+/// 向 OpenAI 兼容接口发一个流式请求：请求体由调用方给（翻译、搅拌机各拼各的）。
+/// 增量交给 `on_delta`，它返回 false 时中止（Fail::Aborted）。返回拼好的完整文本（不去空白）。
+pub async fn chat_stream(
+    base_url: &str,
+    api_key: &str,
+    body: &serde_json::Value,
+    timeouts: Option<Timeouts>,
+    on_delta: &mut (impl FnMut(&str) -> bool + Send),
+) -> Result<String, Fail> {
+    let loopback = is_loopback(base_url);
     let client = match timeouts {
         Some(t) => build_client(loopback, t)?,
         None => client(loopback)?,
     };
-    let mut req =
-        client
-            .post(endpoint(&cfg.base_url))
-            .json(&chat_body(cfg.model.trim(), target, text));
-    let key = cfg.api_key.trim();
+    let mut req = client.post(endpoint(base_url)).json(body);
+    let key = api_key.trim();
     if !key.is_empty() {
         req = req.bearer_auth(key);
     }
@@ -398,7 +415,7 @@ async fn openai(
         // 忽略 stream 直接回整段 JSON 的兼容服务：当作一段一次性给出
         let body = resp.bytes().await.map_err(net)?;
         let out = completion_text(&String::from_utf8_lossy(&body)).ok_or(Fail::Bad)?;
-        if !on_delta(target, &out) {
+        if !on_delta(&out) {
             return Err(Fail::Aborted);
         }
         return Ok(out);
@@ -419,7 +436,7 @@ async fn openai(
             match sse_line(String::from_utf8_lossy(&line).trim_end()) {
                 SseLine::Delta(d) => {
                     out.push_str(&d);
-                    if !on_delta(target, &d) {
+                    if !on_delta(&d) {
                         return Err(Fail::Aborted);
                     }
                 }
@@ -524,6 +541,42 @@ pub(crate) mod tests {
 
     fn err_msg(r: Result<(Lang, String), AppError>) -> String {
         r.unwrap_err().to_string()
+    }
+
+    #[test]
+    fn chat_stream_passes_body_through() {
+        let (url, h) = serve(
+            vec![(
+                0,
+                format!("{SSE_HEAD}{}{}data: [DONE]\n\n", delta("ab"), delta("cd")).into_bytes(),
+            )],
+            false,
+        );
+        let body = serde_json::json!({"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}],"x":1});
+        let r =
+            tauri::async_runtime::block_on(chat_stream(&url, "k", &body, Some(FAST), &mut |_| {
+                true
+            }));
+        assert_eq!(r.unwrap(), "abcd");
+        let got: serde_json::Value = serde_json::from_str(&h.join().unwrap()).unwrap();
+        assert_eq!(got, body);
+    }
+
+    #[test]
+    fn chat_stream_abort_stops() {
+        let (url, _h) = serve(
+            vec![(
+                0,
+                format!("{SSE_HEAD}{}{}data: [DONE]\n\n", delta("ab"), delta("cd")).into_bytes(),
+            )],
+            false,
+        );
+        let body = serde_json::json!({"model":"m","stream":true});
+        let r =
+            tauri::async_runtime::block_on(chat_stream(&url, "k", &body, Some(FAST), &mut |_| {
+                false
+            }));
+        assert!(matches!(r, Err(Fail::Aborted)));
     }
 
     #[test]

@@ -41,6 +41,25 @@ pub struct WinRect {
     pub h: f64,
 }
 
+/// 程序坞 / 任务栏停在屏幕哪一边。Windows 任务栏在顶部时不算（`dock()` 返回 None）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DockEdge {
+    Left,
+    Right,
+    Bottom,
+}
+
+/// 程序坞 / 任务栏露出来的矩形，坐标与 `pointer_position()` 同一空间。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DockFrame {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+    pub edge: DockEdge,
+    pub autohide: bool,
+}
+
 /// 本进程窗口里只有贴图（标题以此开头）参与窗口吸附；遮罩（`xpaste-shot…`）与面板都不算。
 const PIN_TITLE_PREFIX: &str = "xpaste-pin";
 
@@ -171,6 +190,54 @@ pub fn copy_selection() -> Result<bool, PlatformError> {
     Ok(wait_until(|| change_count() != before, 20, 400))
 }
 
+/// 按键那一刻按着的修饰键。`cmd` 在 macOS 是 ⌘，在 Windows 是 Win 键。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Mods {
+    pub cmd: bool,
+    pub ctrl: bool,
+    pub shift: bool,
+    pub alt: bool,
+}
+
+/// 只认普通的粘贴组合：macOS 是 ⌘ 单独加 V，Windows 是 Ctrl 单独加 V；键盘连发不算。
+pub fn is_paste_chord(m: Mods, key_is_v: bool, repeat: bool, mac: bool) -> bool {
+    let primary = if mac {
+        m.cmd && !m.ctrl
+    } else {
+        m.ctrl && !m.cmd
+    };
+    key_is_v && !repeat && primary && !m.shift && !m.alt
+}
+
+/// 按下与松开的配对：按下 V 那一刻是粘贴组合就记下当时的剪切板序号（目标应用按下时就读剪切板），
+/// 松开 V 时算贴出一次、交出这个序号。中间按了别的键就作废（比如漏掉了松开），连发的按下不改状态。
+/// 只记序号，不记是哪个键。
+#[derive(Clone, Copy, Default)]
+pub(crate) struct PasteArm {
+    armed: Option<u64>,
+}
+
+impl PasteArm {
+    /// `seq` 只在按下的是粘贴组合时才调，取此刻的剪切板序号。
+    pub(crate) fn key_down(
+        &mut self,
+        m: Mods,
+        key_is_v: bool,
+        repeat: bool,
+        mac: bool,
+        seq: impl FnOnce() -> u64,
+    ) {
+        if !repeat {
+            self.armed = is_paste_chord(m, key_is_v, repeat, mac).then(seq);
+        }
+    }
+
+    /// 这次松开算贴出一次时，返回按下那一刻的剪切板序号。
+    pub(crate) fn key_up(&mut self, key_is_v: bool) -> Option<u64> {
+        if key_is_v { self.armed.take() } else { None }
+    }
+}
+
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
@@ -237,5 +304,143 @@ mod tests {
         assert_eq!(codec_label("VP90"), "VP9");
         assert_eq!(codec_label(" xyz "), "XYZ");
         assert_eq!(codec_label(""), "");
+    }
+
+    fn mods(cmd: bool, ctrl: bool, shift: bool, alt: bool) -> super::Mods {
+        super::Mods {
+            cmd,
+            ctrl,
+            shift,
+            alt,
+        }
+    }
+
+    #[test]
+    fn mac_cmd_v_is_paste() {
+        assert!(super::is_paste_chord(
+            mods(true, false, false, false),
+            true,
+            false,
+            true
+        ));
+    }
+
+    #[test]
+    fn win_ctrl_v_is_paste() {
+        assert!(super::is_paste_chord(
+            mods(false, true, false, false),
+            true,
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn paste_chord_rejects_extra_modifiers() {
+        use super::is_paste_chord;
+        // macOS：⌘⇧V、⌥⇧⌘V、⌃⌘V，以及只按 ⌃V
+        assert!(!is_paste_chord(
+            mods(true, false, true, false),
+            true,
+            false,
+            true
+        ));
+        assert!(!is_paste_chord(
+            mods(true, false, true, true),
+            true,
+            false,
+            true
+        ));
+        assert!(!is_paste_chord(
+            mods(true, true, false, false),
+            true,
+            false,
+            true
+        ));
+        assert!(!is_paste_chord(
+            mods(false, true, false, false),
+            true,
+            false,
+            true
+        ));
+        // Windows：Ctrl+Shift+V、Ctrl+Alt+V、Win+Ctrl+V，以及不按 Ctrl
+        assert!(!is_paste_chord(
+            mods(false, true, true, false),
+            true,
+            false,
+            false
+        ));
+        assert!(!is_paste_chord(
+            mods(false, true, false, true),
+            true,
+            false,
+            false
+        ));
+        assert!(!is_paste_chord(
+            mods(true, true, false, false),
+            true,
+            false,
+            false
+        ));
+        assert!(!is_paste_chord(
+            mods(false, false, false, false),
+            true,
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn repeat_is_not_a_paste() {
+        use super::is_paste_chord;
+        assert!(!is_paste_chord(
+            mods(true, false, false, false),
+            true,
+            true,
+            true
+        ));
+        assert!(!is_paste_chord(
+            mods(false, true, false, false),
+            true,
+            true,
+            false
+        ));
+    }
+
+    #[test]
+    fn other_key_is_not_a_paste() {
+        use super::is_paste_chord;
+        assert!(!is_paste_chord(
+            mods(true, false, false, false),
+            false,
+            false,
+            true
+        ));
+        assert!(!is_paste_chord(
+            mods(false, true, false, false),
+            false,
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn paste_arm_fires_once_on_release_of_v() {
+        let cmd = mods(true, false, false, false);
+        let mut a = super::PasteArm::default();
+        a.key_down(cmd, true, false, true, || 7);
+        // 按住连发不改状态（序号仍是按下时的 7），松开别的键不算
+        a.key_down(cmd, true, true, true, || 9);
+        assert_eq!(a.key_up(false), None);
+        assert_eq!(a.key_up(true), Some(7));
+        assert_eq!(a.key_up(true), None);
+        // 按下的不是粘贴组合、或中间按了别的键，都作废；不是粘贴组合时不取序号
+        a.key_down(mods(true, false, true, false), true, false, true, || {
+            panic!("不该取序号")
+        });
+        assert_eq!(a.key_up(true), None);
+        a.key_down(cmd, true, false, true, || 7);
+        a.key_down(cmd, false, false, true, || 8);
+        assert_eq!(a.key_up(true), None);
     }
 }

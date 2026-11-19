@@ -1,4 +1,5 @@
 @import '../tokens.css';
+@import '../ui.css';
 
 /* 划词翻译卡片（M26 规则 19）：外观同截图译文卡片（src/shot/shot.css 的 .card）。窗口宽 360、透明，卡片铺满整个窗口
    （透明的部分也会接住点击，不能留空条）；高度由脚本按内容告诉后端，超过工作区 60% 时正文在卡片内滚动。
@@ -55,6 +56,7 @@ kbd {
 /* 展开时没有原文提示，标题行加高，好按住拖动 */
 .card.wide .c-head { padding: 10px 10px 4px 14px; }
 .card .c-head .c-to { flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.card .c-to .sel-btn { min-width: 0; height: 26px; gap: 4px; padding: 0 6px 0 9px; font-size: 12px; }
 .card .c-head select {
   flex: none; height: 22px; padding: 0 4px; border: 1px solid var(--line-2); border-radius: 6px;
   background: var(--glass-2); color: var(--fg); font: inherit; font-size: 12px; cursor: pointer;

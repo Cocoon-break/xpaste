@@ -271,11 +271,15 @@ pub async fn translate_download(
     if card {
         crate::trcard::set_downloading(&app, true);
     }
+    state
+        .tr_download_panel
+        .store(window_label == "panel", Ordering::SeqCst);
     let r = tauri::async_runtime::spawn_blocking(move || {
         // SAFETY: 面板（及其他 xPaste 窗口）常驻、不销毁，指针在等待期间一直有效
         unsafe { xpaste_platform::translate_prepare(&src, &target, ns as *mut std::ffi::c_void) }
     })
     .await;
+    state.tr_download_panel.store(false, Ordering::SeqCst);
     drop(guard);
     if card {
         crate::trcard::set_downloading(&app, false);
@@ -585,8 +589,8 @@ pub async fn trcard_translate(
 
 /// 划词卡片“复制译文”：普通写入剪切板，进历史。
 #[tauri::command(async)]
-pub fn trcard_copy(text: String) -> Result<(), AppError> {
-    crate::trcard::copy(&text)
+pub fn trcard_copy(state: tauri::State<'_, AppState>, text: String) -> Result<(), AppError> {
+    crate::trcard::copy(&state, &text)
 }
 
 /// 关闭划词卡片（Esc、复制后、提示到时）：中止进行中的请求，键盘交还原处。不是当前的 `seq` 时忽略。

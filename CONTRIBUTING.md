@@ -25,6 +25,18 @@ make release-x64   # 在 Apple 芯片 Mac 上打 Intel 版 .dmg（需 rustup tar
 make release-win   # 在 macOS 上交叉打 Windows 安装程序（见下文）
 ```
 
+## 窗口键盘自检
+
+面板、晾衣绳、划词卡片、贴图在 macOS 上都是不激活应用的浮动窗口，它们之间换键盘时系统常常不发失焦。这类问题（面板留在屏上却没有键盘，Esc、点外面都收不掉）只在真实的窗口系统里出现，单元测试测不到。改了这些窗口的显示、隐藏、拿键盘的代码后，跑一遍自检：
+
+```sh
+XPASTE_FOCUS_CHECK=/tmp/focus-go make dev-isolated   # 需要带私有组件（没有晾衣绳时不启动自检）
+touch /tmp/focus-go                                  # 应用就绪后执行；约 25 秒，期间不要碰键盘鼠标
+grep FOCUS .xpaste-dev/logs/xPaste.log | tail -12    # 最后一行：FOCUS 完成：N 项，失败 M 项
+```
+
+场景在 `src-tauri/src/focus_check.rs`，只编进开发构建。它从后端入口驱动，和真实鼠标点击不完全一样，通过后仍要手动点一遍。
+
 ## 排查长截图
 
 开发构建里设 `XPASTE_LONG_DUMP=<目录> make dev-isolated`，长截图时每一帧按序号存成 PNG（正式构建不存）；用 `cargo run -p xpaste-core --example stitch_replay -- <目录> [--scale 2] [--out x.png]` 离线重放拼接，输出没接上的帧数、长图高度和最慢一帧的耗时，`--out` 把长图存成文件。存下的帧含屏幕内容，别提交进仓库。
@@ -45,7 +57,7 @@ make release-win   # 在 macOS 上交叉打 Windows 安装程序（见下文）
 两条硬约束：
 
 - **日志里不能出现剪切板内容、标题、文件路径和搜索词。**
-- **数据只存在本机。** 不加联网、同步或统计功能。唯一的例外是用户手动触发的翻译（M26），只发送要翻译的那段文字。
+- **数据只存在本机。** 不加联网、同步或统计功能。例外只有三处：用户手动触发的翻译（M26），只发送要翻译的那段文字；检查更新（M28），不发送任何数据；xPaste Pro 的授权请求（`src-tauri/src/license.rs`），只发送授权码、设备哈希、电脑名和应用版本，没有授权码的用户不发任何请求。三处都不带剪切板内容。
 
 ## 分支与协作
 
@@ -60,14 +72,53 @@ make release-win   # 在 macOS 上交叉打 Windows 安装程序（见下文）
 `.github/workflows/release.yml` 在推送 `v*` 标签时打 Apple 芯片、Intel、Windows 三个安装包，并发布 GitHub Release。每个安装包另存一份不带版本号的文件名（`xPaste_aarch64.dmg`、`xPaste_x64.dmg`、`xPaste_x64-setup.exe`），官网和 README 用 `releases/latest/download/<文件名>` 固定链接到最新版。
 
 1. 同步改 `package.json` 与根 `Cargo.toml` 中 `[workspace.package]` 的版本号（`pnpm check:version` 检查两者一致），走 PR 合并到 `main`。
-2. 在 `main` 上打标签并推送：`git tag v0.2.1 && git push origin v0.2.1`。标签必须等于 `v` + 版本号，不一致时流程直接失败。
-3. 给已有标签补发或重发：Actions → Release → Run workflow，填标签名。
+2. 先给私有组件仓库打同名标签并推送（`v0.2.1`），指向这次要带的那份私有代码。发版流程按标签拉私有代码，找不到同名标签就失败。
+3. 在 `main` 上打标签并推送：`git tag v0.2.1 && git push origin v0.2.1`。标签必须等于 `v` + 版本号，不一致时流程直接失败。
+4. 给已有标签补发或重发：Actions → Release → Run workflow，填标签名。用的仍是两边同名标签上的代码。
+
+**内测版**：标签在 `v` + 版本号后面带后缀（如 `v0.8.0-beta.1`），可以打在还没合并的分支上，私有组件仓库同样先打同名标签。
+
+- 流程照样打三个安装包，只建草稿预发布：只有仓库成员看得到，不算最新版。
+- 官网下载链接、应用里的检查更新、Homebrew tap 都不受影响。
+- 安装包从草稿页下载，再自己发给内测的人。
 
 发布之后，流程里的 `tap` 任务会更新 [Cocoon-break/homebrew-tap](https://github.com/Cocoon-break/homebrew-tap) 里 `Casks/xpaste.rb` 的版本号和两个 dmg 的 sha256，用户 `brew upgrade --cask xpaste` 就能升到新版。
 
 - 它用的是 tap 仓库上一把有写权限的 deploy key，私钥存在本仓库的 Secret `TAP_DEPLOY_KEY`。没配置时只发警告，不影响发布。
 - 只在这次发布的就是最新版时更新；给旧标签补发不会把 tap 退回旧版本。
 - cask 里的其他内容（最低系统版本、卸载时删除的数据目录等）在 tap 仓库里手动改，`tap` 任务只动 `version` 和 `sha256` 三处。
+
+## Pro 代码
+
+官方安装包带一个收费功能“晾衣绳便签”（xPaste Pro）。它的代码在私有仓库 `Cocoon-break/xpaste-pro`，克隆到本仓库的 `pro/` 目录（已被 `.gitignore` 忽略，不要 `git add pro`，在 `pro/` 里用它自己的 git）。
+
+- **没有 `pro/` 目录时编译的是空实现**：功能不存在，设置里也没有“Pro”标签。`make check` 带不带 `pro/` 都要能过。
+- 刚克隆出 `pro/` 后如果编译结果仍是空实现（`cfg(pro)` 没有切过来），执行 `touch crates/xpaste-pro/build.rs` 再编译。
+- `crates/xpaste-pro/Cargo.toml` 的依赖要和私有实现 `pro/rust/` 用到的一致，私有实现多用了依赖时两边一起改。
+- **公开代码与公开提交信息不写私有规格的编号**，注释里直接写规则本身。
+- **授权由在线授权服务签发和管理**，本仓库里没有签发工具。应用端分两层：
+  - `crates/xpaste-pro`（私有实现在 `pro/rust/`）不做网络，只规整授权码、算本机设备哈希、离线验证并保存授权服务发来的设备凭证、判断该不该续期。
+  - `src-tauri/src/license.rs` 做网络：激活、每天静默续期、解绑设备、在本机停用，以及 `xpaste://activate?code=…` 链接。
+- **按大版本收费**：买断授权的凭证里写明适用的大版本，应用的大版本 0.x 按 1 算，凭证的大版本要大于等于应用的；订阅不看大版本。发 2.0 之前，先定好升级价和给老用户的提示；不要为了“兼容”放宽判断，否则旧授权会在 2.0 上继续有效。
+- **吊销、退款、解绑设备**都在授权服务的管理后台做。应用最晚第二天续期时得知；一直不联网的设备最长用到凭证过期。
+- **站点地址 `XPASTE_SITE`**（如 `https://xpaste.example.com`，不带末尾斜杠）在编译时写进程序：授权接口是 `$XPASTE_SITE/v1/…`，购买页是 `$XPASTE_SITE/buy.html`。没设时不显示购买入口，激活报“授权服务还没开通”。开发构建（debug）里运行时的同名环境变量优先于编译时的。
+- **验凭证的公钥**是 `pro/rust/license.rs` 里的常量 `PUBLIC_KEY`（授权服务管理后台“应用”页里 xpaste 的公钥）。开发构建里环境变量 `XPASTE_LICENSE_PUBKEY`（标准 base64）可以临时换一把；发布构建只认常量。
+- **对着本机的授权服务联调**：
+  - 运行应用：`XPASTE_SITE=http://localhost:18080 XPASTE_LICENSE_PUBKEY=<联调环境的公钥> make dev-isolated`。本机地址不走系统代理。开发版在 macOS 上注册不了 `xpaste://` 协议，激活链接要用安装包验。
+  - 端到端检查（默认不跑，CI 不依赖它）：下单、模拟付款、激活、设备满员、解绑、续期、停用、吊销后续期被拒，用的是应用里的同一套代码。要授权服务开着 mock 收款渠道、有一个在售的买断商品 `pro-1x`（2 台设备）：
+
+    ```sh
+    XPASTE_SITE=http://localhost:18080 \
+    XPASTE_LICENSE_PUBKEY=<联调环境的公钥> \
+    XPASTE_E2E_INTERNAL=http://localhost:18081 \
+    XPASTE_E2E_SITE_SECRET=<站点密钥> \
+    XPASTE_E2E_ADMIN=<管理员用户名>:<密码> \
+    cargo test -p xpaste --lib e2e_against_local_issuance -- --ignored --nocapture
+    ```
+- **签名团队校验**：macOS 正式构建（release）只有用团队 `GP6QC26B5F` 的 Developer ID 证书签名时才启用 Pro，没签名、ad-hoc 签名或别的证书重签的副本表现同开源版（没有晾衣绳和“Pro”标签）。开发构建（`make dev-isolated`）不查。本地打测试用的 Pro 安装包要带上签名身份：`APPLE_SIGNING_IDENTITY="Developer ID Application: …（GP6QC26B5F）" pnpm tauri build --bundles dmg`（不设 `APPLE_ID` 等就只签名不公证）。Windows 安装包没签名，不做这项校验。
+- 维护者须知：删掉数据目录里的 `pro.json` 会重新开始 14 天试用，测试试用与到期时可以用它。
+- **发版前**：在公开仓库的 Settings → Secrets and variables → Actions → Variables 里设好 `XPASTE_SITE`；把 `pro/rust/license.rs` 的 `PUBLIC_KEY` 换成正式授权服务的公钥，并删掉它上面的 `LOCAL-E2E-KEY` 标记。正式版标签（不带 `-`）缺任何一项，`release.yml` 都会停下并说明原因；内测标签不拦。
+- **发版**：`release.yml` 用 Secret `PRO_DEPLOY_KEY`（`xpaste-pro` 仓库的只读 deploy key）拉取 `pro/`，所以官方安装包带 Pro；没配置时拉取失败，发版会直接停下。流程还会检查安装包的 Rust 一侧带上了 Pro：在二进制里查找标记字符串 `pro.json.tmp`（出自 `pro/rust/trial.rs`）。改了那个文件名要两处同步。
 
 ## 官网
 
@@ -93,7 +144,7 @@ cargo install cargo-xwin        # MSVC 运行库与 Windows SDK（首次运行�
 ## 签名与公证
 
 - **macOS**：安装包用 Developer ID Application 证书签名并公证。
-  - CI：`release.yml` 把仓库 Secrets 里的六个值传给 `make release`，Tauri 签名并公证 `.app`；之后再把 dmg 本身提交公证、附上票据（Tauri 只公证 `.app`）。最后检查 dmg 和里面的 `.app` 都带公证票据、系统放行，否则失败，不发布。
+  - CI：`release.yml` 把仓库 Secrets 里的六个值传给 `make release`，Tauri 签名并公证 `.app`；之后再把 dmg 本身提交公证、附上票据（Tauri 只公证 `.app`）。最后检查 dmg 和里面的 `.app` 都带公证票据、系统放行，`.app` 的签名团队和 `pro/rust/genuine.rs` 里的团队号一致，否则失败，不发布。
     - `APPLE_CERTIFICATE`：证书连同私钥导出的 `.p12`，base64 编码
     - `APPLE_CERTIFICATE_PASSWORD`：`.p12` 的导出密码
     - `APPLE_SIGNING_IDENTITY`：证书名称，如 `Developer ID Application: <名字> (<TEAM ID>)`

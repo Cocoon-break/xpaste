@@ -407,8 +407,17 @@ pub fn begin(app: &AppHandle, mode: Mode) {
     let panel_shown = app
         .get_webview_window("panel")
         .is_some_and(|w| w.is_visible().unwrap_or(false));
-    // 设置或确认框开着：面板不隐藏，跟屏上其他内容一样截进去，截完回到对话框（M15 交互规则 4）
-    let hide_panel = panel_shown && !keeps_panel(app);
+    // 截图时面板不隐藏，跟屏上其他内容一样截进去，截完键盘回到面板（M23 规则 1）；
+    // 录屏照旧先藏起面板，设置或确认框开着时除外（M15 交互规则 4）
+    let hide_panel = panel_shown && mode != Mode::Shot && !keeps_panel(app);
+    // 截完只在开始时键盘就在面板上才还给面板：对话框开着、用户已切到别的应用时不把键盘抢回来
+    PANEL_HAD_KEY.store(
+        panel_shown
+            && app
+                .get_webview_window("panel")
+                .is_some_and(|w| w.is_focused().unwrap_or(false)),
+        Ordering::SeqCst,
+    );
     // 已全部上屏的遮罩被关掉或隐藏了（Windows 上 Alt+F4 已拦下，这里兜底）：会话不会再结束，重新开始
     let shown = session(app).shown_overlays();
     let lost = (0..shown).any(|i| {
@@ -481,6 +490,7 @@ pub fn begin(app: &AppHandle, mode: Mode) {
     if mode == Mode::Shot {
         warm_ocr();
     }
+    // 晾衣绳、传送带、搅拌机照常截进去：屏幕上看到什么就截到什么（同系统截图）
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         freeze(&app, generation, hide_panel || stale, mode)
@@ -913,6 +923,15 @@ pub fn end(app: &AppHandle) {
 #[cfg(target_os = "macos")]
 pub fn overlay_crashed(w: &tauri::Webview) {
     let Some(i) = overlay_index(w.label()) else {
+        // 注册了这个回调后 tauri 不再替别的窗口重新加载：面板、划词卡片、晾衣绳、贴图也在这里重载。
+        // 晾衣绳只有页面会要求收起，页面没了就先收起，免得透明窗口一直挡在屏幕边上
+        log::warn!("{} 页面进程退出，重新加载", w.label());
+        if w.label() == crate::line::LABEL {
+            crate::line::hidden(w.app_handle());
+        }
+        if let Err(e) = w.reload() {
+            log::warn!("重新加载 {} 失败：{e}", w.label());
+        }
         return;
     };
     log::warn!("遮罩 {i} 页面进程退出，结束截图并重新加载");
@@ -922,15 +941,14 @@ pub fn overlay_crashed(w: &tauri::Webview) {
     }
 }
 
+/// 这次截图开始时键盘在面板上
+static PANEL_HAD_KEY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// `generation`：刚结束的那一次截图，在结束它的同一次加锁里取，不会误报给之后开始的新一次。
 fn after_end(app: &AppHandle, generation: u64, previous: Option<isize>) {
     hide_overlays(app);
-    let panel_kept = keeps_panel(app)
-        && app
-            .get_webview_window("panel")
-            .is_some_and(|w| w.is_visible().unwrap_or(false));
-    if panel_kept {
-        // 截图时没隐藏的面板（开着对话框）：键盘回到对话框，不还给原来的应用
+    if panel_takes_key(app) {
+        // 截图时没隐藏的面板：键盘回到面板（开着对话框就回到对话框），不还给原来的应用
         crate::panel::refocus(app);
     } else if let Some(h) = previous {
         // 排在 hide_overlays 之后：遮罩还拿着前台，本进程此刻是前台进程，系统允许切
@@ -950,7 +968,27 @@ pub fn active(app: &AppHandle) -> bool {
     session(app).is_active()
 }
 
-/// 面板上开着设置或确认框：截图不隐藏面板。
+/// 截完键盘回到面板：面板还在屏上，截图开始时键盘就在面板上
+fn panel_takes_key(app: &AppHandle) -> bool {
+    PANEL_HAD_KEY.load(Ordering::SeqCst)
+        && app
+            .get_webview_window("panel")
+            .is_some_and(|w| w.is_visible().unwrap_or(false))
+}
+
+/// 从截图遮罩进长截图：面板（没开对话框时）收起，不拼进长图、不挡自动滚动，结束后键盘还给原应用（长截图全局占着回车、Esc、空格，
+/// 留在屏上的面板也操作不了）
+pub fn release_panel(app: &AppHandle) {
+    if keeps_panel(app) {
+        return;
+    }
+    PANEL_HAD_KEY.store(false, Ordering::SeqCst);
+    if crate::panel::visible(app) {
+        crate::panel::hide(app);
+    }
+}
+
+/// 面板上开着设置或确认框：录屏也不隐藏面板。
 fn keeps_panel(app: &AppHandle) -> bool {
     app.state::<AppState>().dialog_open.load(Ordering::SeqCst)
 }
@@ -1172,7 +1210,7 @@ fn run_action(
 ) -> Result<ShotOutcome, AppError> {
     Ok(match action {
         Action::Copy => {
-            copy_png(png)?;
+            copy_png(app, png)?;
             ShotOutcome {
                 action: "copy",
                 chars: None,
@@ -1202,14 +1240,9 @@ fn run_action(
 }
 
 /// 写 PNG 到剪切板，不标记为自身写入：监听器照常把它作为图片记录入库（M23 规则 7、M01 规则 5）。
-pub(crate) fn copy_png(png: Vec<u8>) -> Result<(), AppError> {
-    let bytes = png.len();
-    xpaste_platform::write(&xpaste_platform::png_flavors(png))
-        .map(drop)
-        .map_err(|e| {
-            log::warn!("截图写剪切板失败 {bytes} 字节：{e}");
-            AppError::ClipboardWrite
-        })
+pub(crate) fn copy_png(app: &AppHandle, png: Vec<u8>) -> Result<(), AppError> {
+    let state = app.state::<AppState>();
+    crate::clipboard::write_own(&state, &xpaste_platform::png_flavors(png), "截图").map(drop)
 }
 
 /// 保存到截图文件夹；“保存截图时同时复制”开着时也写剪切板。截图与贴图共用。
@@ -1230,7 +1263,7 @@ fn save(app: &AppHandle, png: Vec<u8>) -> Result<ShotOutcome, AppError> {
     let stamp = xpaste_core::capture::local_stamp(crate::clock::now_ms());
     let name = write_unique(&dir, &stamp, &png)?;
     // 文件已存好，复制失败不算整次失败（已记日志），提示条按“已保存”显示
-    let copied = also_copy && copy_png(png).is_ok();
+    let copied = also_copy && copy_png(app, png).is_ok();
     Ok(ShotOutcome {
         action: "save",
         chars: None,
@@ -1275,7 +1308,7 @@ fn ocr(app: &AppHandle, generation: u64, png: Vec<u8>) -> Result<ShotOutcome, Ap
     }
     if let Some(text) = &text {
         // 不经过 write_marked：同“复制截图”，要进历史
-        crate::clipboard::write_text(text, "识别文字")?;
+        crate::clipboard::write_text(&app.state::<AppState>(), text, "识别文字")?;
     }
     Ok(ShotOutcome {
         action: "ocr",
@@ -1388,13 +1421,14 @@ pub fn copy_text(app: &AppHandle, generation: u64, text: &str) -> Result<(), App
     if !session(app).is_current(generation) {
         return Err(AppError::Invalid("截图已结束".into()));
     }
-    crate::clipboard::write_text(text, "译文")?;
+    crate::clipboard::write_text(&app.state::<AppState>(), text, "译文")?;
     log::info!("shot 复制译文 {} 字", text.chars().count());
     enter_toast(app, generation);
     Ok(())
 }
 
 /// 提示条模式：遮罩鼠标穿透、交出键盘焦点，提示条照常显示；`shot_cancel` 时撤销。
+/// 截图时开着、拿着键盘的面板（M23 规则 1）：键盘直接回到面板，不先还给原应用再被 `after_end` 抢回来
 fn enter_toast(app: &AppHandle, generation: u64) {
     let previous = {
         let mut s = session(app);
@@ -1403,6 +1437,18 @@ fn enter_toast(app: &AppHandle, generation: u64) {
         }
         s.finish(Instant::now())
     };
+    if panel_takes_key(app) {
+        on_main(app, |app| {
+            for (l, w) in app.webview_windows() {
+                if overlay_index(&l).is_some()
+                    && let Err(e) = w.set_ignore_cursor_events(true)
+                {
+                    log::warn!("遮罩鼠标穿透失败：{e}");
+                }
+            }
+        });
+        return crate::panel::refocus(app);
+    }
     on_main(app, move |app| {
         for (l, w) in app.webview_windows() {
             if overlay_index(&l).is_none() {
@@ -1609,7 +1655,7 @@ fn pin_shrink(side: f64, scale: f64) -> f64 {
 
 /// 贴图右键“复制”：原图写剪切板，进入历史（同截图的复制）。
 pub fn pin_copy(app: &AppHandle, w: &WebviewWindow) -> Result<ShotOutcome, AppError> {
-    copy_png(std::fs::read(pin_path(app, pin_n(w)?))?)?;
+    copy_png(app, std::fs::read(pin_path(app, pin_n(w)?))?)?;
     Ok(ShotOutcome {
         action: "copy",
         chars: None,

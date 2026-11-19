@@ -306,7 +306,7 @@ fn merged_text(state: &AppState, ids: &[i64]) -> Result<String, AppError> {
 }
 
 /// 写入剪切板、给 `ids` 各记一次使用，再按 `paste` 决定只复制还是隐藏面板去粘贴。
-async fn write_then_paste(
+pub(crate) async fn write_then_paste(
     app: &AppHandle,
     state: &AppState,
     flavors: &[Flavor],
@@ -369,11 +369,11 @@ fn plain_flavors(kind: Kind, text: Option<String>) -> Option<Vec<Flavor>> {
 /// 预览“复制文字”：只写一份纯文本，标记为自身写入（不入库、不计使用次数）。
 #[tauri::command(async)]
 pub fn copy_text_plain(state: State<'_, AppState>, text: String) -> Result<(), AppError> {
-    write_text_plain(&state, &text)
+    write_text_plain(&state, &text).map(drop)
 }
 
-/// 写一份纯文本并标记为自身写入；截图的识别文字也走这里。
-fn write_text_plain(state: &AppState, text: &str) -> Result<(), AppError> {
+/// 写一份纯文本并标记为自身写入；截图的识别文字也走这里。返回写入后的剪切板序号（同 `write_marked`）。
+pub(crate) fn write_text_plain(state: &AppState, text: &str) -> Result<u64, AppError> {
     write_text_plain_via(state, text, xpaste_platform::write)
 }
 
@@ -381,12 +381,12 @@ fn write_text_plain_via(
     state: &AppState,
     text: &str,
     write: impl FnOnce(&[Flavor]) -> Result<u64, PlatformError>,
-) -> Result<(), AppError> {
+) -> Result<u64, AppError> {
     write_marked(state, || write(&[text_flavor(text)]))
 }
 
 /// 设计 8.5 第 1–2 步：记录存在、文件都在、有可写回的 flavor。任何一步不满足都不碰剪切板。
-fn precheck(state: &AppState, id: i64) -> Result<Vec<Flavor>, AppError> {
+pub(crate) fn precheck(state: &AppState, id: i64) -> Result<Vec<Flavor>, AppError> {
     let store = state.store();
     let detail = store
         .detail(id)?
@@ -402,17 +402,18 @@ fn precheck(state: &AppState, id: i64) -> Result<Vec<Flavor>, AppError> {
 }
 
 /// 写剪切板期间置 `writing`，成功后记下序号，让监听线程跳过这次自身写入。
-fn write_marked(
+/// 返回这次写入的序号：调用方要认自己的写入时用它，别再读 `last_write_seq`（别的线程可能已经又写了一次）。
+pub(crate) fn write_marked(
     state: &AppState,
     f: impl FnOnce() -> Result<u64, PlatformError>,
-) -> Result<(), AppError> {
+) -> Result<u64, AppError> {
     state.writing.store(true, Ordering::SeqCst);
     let written = f();
     if let Ok(seq) = written {
         state.last_write_seq.store(seq, Ordering::SeqCst);
     }
     state.writing.store(false, Ordering::SeqCst);
-    written.map(drop).map_err(|e| {
+    written.map_err(|e| {
         log::warn!("写剪切板出错：{e}");
         AppError::ClipboardWrite
     })
@@ -602,7 +603,7 @@ mod tests {
         assert!(matches!(r, Err(AppError::ClipboardWrite)));
         assert!(!state.writing.load(Ordering::SeqCst));
         assert_eq!(state.last_write_seq.load(Ordering::SeqCst), u64::MAX);
-        write_marked(&state, || Ok(7)).unwrap();
+        assert_eq!(write_marked(&state, || Ok(7)).unwrap(), 7);
         assert_eq!(state.last_write_seq.load(Ordering::SeqCst), 7);
     }
 

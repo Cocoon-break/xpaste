@@ -13,6 +13,7 @@
 //!
 //! 期间临时把回车、Esc（能自动滚动时还有空格）注册成全局快捷键（键盘已还给原应用，否则收不到），结束时注销。
 //! 画面排除边框窗口：macOS 由画面流排除它的窗口编号，Windows 上它带 `WDA_EXCLUDEFROMCAPTURE`（见 `rec::show_frame`）。
+//! 晾衣绳、传送带、搅拌机整场也不截进去（见 `float_hide`）。
 //!
 //! 开发构建里设了 `XPASTE_LONG_DUMP=<目录>` 时，每帧另存为 `NNNNN.png`（第一帧为 00000），用来重放排查接不上。
 
@@ -70,6 +71,8 @@ struct Run {
     /// 截屏线程拿到第一帧后放进来；预览在命令线程里读，截屏线程拼接时短暂加锁
     st: Arc<Mutex<Option<Stitch>>>,
     keys: Arc<Mutex<Keys>>,
+    /// 晾衣绳等浮层整场设内容保护（逐帧截屏回退、Windows 只能靠它），`end` 清掉 Run 时复原
+    hidden: Option<crate::float_hide::Hidden>,
 }
 
 /// 快捷键回调交给截屏线程的：空格按了奇数次没处理（切换暂停；手动滚时开始自动滚动），以及最近一次长截图快捷键的时刻
@@ -142,8 +145,15 @@ pub fn start(app: &AppHandle, generation: u64, index: usize, rect: LRect) -> Res
             rect,
             st: st.clone(),
             keys: keys.clone(),
+            hidden: None,
         });
     }
+    // 不在持锁时取（要切主线程）；Run 只在截屏线程的 `end` 里清掉，这时还没开始
+    let hidden = crate::float_hide::hide(app);
+    if let Some(r) = running().as_mut() {
+        r.hidden = Some(hidden);
+    }
+    shot::release_panel(app);
     // 撤下遮罩、把键盘还给原应用；随后边框上屏（主线程上排在隐藏遮罩之后）
     shot::end_if_current(app, generation);
     let below = rec::show_frame(app, bounds);
@@ -167,6 +177,7 @@ pub fn start(app: &AppHandle, generation: u64, index: usize, rect: LRect) -> Res
         rect: (rect.x, rect.y, rect.w, rect.h),
         scale,
         exclude_window: below,
+        also_exclude: crate::float_hide::window_numbers(app),
         native: WinRect {
             x: o.0,
             y: o.1,
@@ -503,7 +514,7 @@ fn run(
     let t = Instant::now();
     let (notice, ok) = match encode(w, h, rgba).and_then(|png| {
         let n = png.len();
-        shot::copy_png(png).map(|()| n)
+        shot::copy_png(app, png).map(|()| n)
     }) {
         Ok(bytes) => {
             log::info!(

@@ -144,6 +144,8 @@
           <button type="button" role="tab" id="st-tab-shot" aria-controls="st-shot" aria-selected="false" tabindex="-1">截图</button>
           <button type="button" role="tab" id="st-tab-rec" class="os-mac" aria-controls="st-rec" aria-selected="false" tabindex="-1">录屏</button>
           <button type="button" role="tab" id="st-tab-translate" aria-controls="st-translate" aria-selected="false" tabindex="-1">翻译</button>
+          <!-- 晾衣绳：只在含晾衣绳的版本里显示 -->
+          <button type="button" role="tab" id="st-tab-pro" aria-controls="st-pro" aria-selected="false" tabindex="-1" hidden>Pro</button>
           <span class="st-ind" aria-hidden="true"></span>
         </div>
         <div class="st-panes">
@@ -325,7 +327,7 @@
             </div>
             <div class="st-group" id="trApi" style="--i:4">
               <h3 id="trApiTitle">AI 翻译（OpenAI 兼容接口）</h3>
-              <p class="help" id="trPrivacy">翻译时，只把你选中要翻译的那段文字发送到下面的接口；不按翻译就不会发送任何内容。请求按系统代理设置发出，可能经过你在系统里设置的代理</p>
+              <p class="help" id="trPrivacy">翻译时，只把你选中要翻译的那段文字发送到下面的接口；Pro 的搅拌机在你按配方键时，把杯子里的内容（文字和图片）发到你在“翻译”里配置的接口；除此之外不会发送任何内容。请求按系统代理设置发出，可能经过你在系统里设置的代理</p>
               <div class="field">
                 <label for="trBaseUrl">接口地址（Base URL）</label>
                 <input id="trBaseUrl" autocomplete="off" spellcheck="false" placeholder="https://api.openai.com/v1" aria-describedby="trBaseUrlHelp trBaseUrlErr">
@@ -345,6 +347,128 @@
                 <span class="help tr-result" id="trTestResult" role="status" aria-live="polite"></span>
                 <button class="btn" type="button" id="trTestBtn">测试翻译</button>
               </div>
+            </div>
+          </section>
+          <section class="dlg-body" role="tabpanel" id="st-pro" aria-labelledby="st-tab-pro" inert hidden>
+            <!-- Pro 概览：授权卡片 + 功能清单（只列已经有的功能）；点功能行进它自己的设置页，“‹ Pro”或 Esc 回来 -->
+            <div class="pro-page" id="proHome" style="--i:0">
+              <div class="pro-lic" id="proLic">
+                <span class="dot" aria-hidden="true"></span>
+                <span class="txt"><b id="proLicTitle"></b><small id="proLicSub"></small></span>
+                <span class="btns"><button class="btn sm primary" type="button" id="proLicBuy" hidden>购买</button><button class="btn sm" type="button" id="proLicCode" hidden>输入授权码</button><button class="btn sm" type="button" id="proLicManage" hidden>管理授权</button></span>
+              </div>
+              <p class="pro-h" id="proFeatsLabel">功能</p>
+              <div class="pro-feats" role="group" aria-labelledby="proFeatsLabel">
+                <div class="pro-feat" id="proFeatLine">
+                  <button type="button" data-pro-go="proLinePage" aria-describedby="proSumLine"><span class="ic2" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M2.5 4.5q7.5 3 15 0"/><rect x="5" y="6.5" width="4" height="6" rx="1"/><rect x="11" y="6.5" width="4" height="6" rx="1"/></svg></span><span class="t"><b>晾衣绳便签</b><small id="proSumLine"></small></span><svg class="chev" viewBox="0 0 20 20" aria-hidden="true"><path d="m8 5 5 5-5 5"/></svg></button>
+                  <label class="switch"><input type="checkbox" id="lineOnQuick" aria-label="晾衣绳便签"></label>
+                </div>
+                <div class="pro-feat" id="proFeatBelt">
+                  <button type="button" data-pro-go="proBeltPage" aria-describedby="proSumBelt"><span class="ic2" aria-hidden="true"><svg viewBox="0 0 20 20"><rect x="2" y="11" width="16" height="4.5" rx="2.25"/><rect x="4" y="6" width="4" height="4" rx="1"/><rect x="9.5" y="6" width="4" height="4" rx="1"/></svg></span><span class="t"><b>传送带</b><small id="proSumBelt"></small></span><svg class="chev" viewBox="0 0 20 20" aria-hidden="true"><path d="m8 5 5 5-5 5"/></svg></button>
+                  <label class="switch"><input type="checkbox" id="beltOnQuick" aria-label="传送带"></label>
+                </div>
+                <div class="pro-feat" id="proFeatMixer">
+                  <button type="button" data-pro-go="proMixerPage" aria-describedby="proSumMixer"><span class="ic2" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M5.5 4h9l-1.2 8.5H6.7z"/><path d="M6.7 12.5h6.6l.7 3.5H6z"/><path d="M8 8.5h4"/></svg></span><span class="t"><b>搅拌机</b><small id="proSumMixer"></small></span><svg class="chev" viewBox="0 0 20 20" aria-hidden="true"><path d="m8 5 5 5-5 5"/></svg></button>
+                  <label class="switch"><input type="checkbox" id="mixerOnQuick" aria-label="搅拌机"></label>
+                </div>
+              </div>
+            </div>
+            <div class="pro-page" id="proLicPage" style="--i:0" aria-label="授权" hidden>
+              <button type="button" class="pro-back" data-pro-back><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m12 5-5 5 5 5"/></svg>Pro</button>
+            <div class="line">
+              <span><b>xPaste Pro</b><small id="proStatus" role="status" aria-live="polite"></small></span>
+              <span class="btns"><button class="btn sm" type="button" id="proBuyBtn" hidden>购买 xPaste Pro</button><button class="btn sm" type="button" id="proOffBtn" aria-describedby="proOffErr" hidden>在这台设备上停用…</button></span>
+            </div>
+            <p class="err" id="proOffErr" role="alert" hidden></p>
+            <div class="field" id="proActField">
+              <label for="proCode">授权码</label>
+              <div class="pick"><input id="proCode" autocomplete="off" spellcheck="false" placeholder="粘贴授权码" aria-describedby="proCodeErr"><button class="btn" type="button" id="proActBtn">激活</button></div>
+              <p class="err" id="proCodeErr" role="alert" hidden></p>
+              <div class="switches" id="proDevices" role="group" aria-label="已绑定的设备" hidden></div>
+            </div>
+            </div>
+            <div class="pro-page" id="proLinePage" style="--i:0" aria-label="晾衣绳便签" hidden>
+              <button type="button" class="pro-back" data-pro-back><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m12 5-5 5 5 5"/></svg>Pro</button>
+            <div class="switches">
+              <label class="switch"><span><b>晾衣绳便签</b><small id="lineOnHelp"></small></span><input type="checkbox" id="lineOn"></label>
+            </div>
+            <div class="field">
+              <label for="lineHotkey">便签快捷键</label>
+              <input id="lineHotkey" readonly autocomplete="off" spellcheck="false" placeholder="未启用" aria-describedby="lineHotkeyHelp">
+              <p class="help" id="lineHotkeyHelp">把最近复制的一条挂到晾衣绳上；面板开着时挂选中的那条</p>
+            </div>
+            <div class="field" id="lineSideField">
+              <span class="lbl" id="lineSideLabel">位置</span>
+              <div class="side-pick" id="lineSide" role="radiogroup" aria-labelledby="lineSideLabel" aria-describedby="lineSideHelp lineSideHint">
+                <label><input type="radio" name="lineSide" value="top"><svg viewBox="0 0 100 62" aria-hidden="true"><rect class="scr" x="1" y="1" width="98" height="60" rx="6"/><path d="M12 14H88"/><rect x="27" y="19" width="13" height="11" rx="1.5"/><rect x="45" y="19" width="13" height="11" rx="1.5"/><rect x="63" y="19" width="13" height="11" rx="1.5"/></svg><span>顶部</span></label>
+                <label><input type="radio" name="lineSide" value="left"><svg viewBox="0 0 100 62" aria-hidden="true"><rect class="scr" x="1" y="1" width="98" height="60" rx="6"/><path d="M22 8V54"/><rect x="14" y="12" width="16" height="10" rx="1.5"/><rect x="14" y="26" width="16" height="10" rx="1.5"/><rect x="14" y="40" width="16" height="10" rx="1.5"/></svg><span>左侧</span></label>
+                <label><input type="radio" name="lineSide" value="right"><svg viewBox="0 0 100 62" aria-hidden="true"><rect class="scr" x="1" y="1" width="98" height="60" rx="6"/><path d="M78 8V54"/><rect x="70" y="12" width="16" height="10" rx="1.5"/><rect x="70" y="26" width="16" height="10" rx="1.5"/><rect x="70" y="40" width="16" height="10" rx="1.5"/></svg><span>右侧</span></label>
+              </div>
+              <p class="help" id="lineSideHelp"></p>
+              <p class="help" id="lineSideHint" hidden></p>
+            </div>
+            <div class="switches" id="linePinField">
+              <label class="switch"><span><b>一直显示晾衣绳</b><small>绳子和便签一直留在屏幕上，空白处可以点穿</small></span><input type="checkbox" id="linePin"></label>
+            </div>
+            <div class="field" id="linePaceField">
+              <div class="line">
+                <span><b id="lineAppearLabel">出现</b><small id="lineAppearHelp"></small></span>
+                <div class="seg text" id="lineAppear" data-pace-seg role="radiogroup" aria-labelledby="lineAppearLabel" aria-describedby="lineAppearHelp">
+                  <button type="button" role="radio" data-pace="fast">快</button>
+                  <button type="button" role="radio" data-pace="normal">标准</button>
+                  <button type="button" role="radio" data-pace="slow">慢</button>
+                </div>
+              </div>
+              <div class="line">
+                <span><b id="lineLeaveLabel">收起</b><small id="lineLeaveHelp"></small></span>
+                <div class="seg text" id="lineLeave" data-pace-seg role="radiogroup" aria-labelledby="lineLeaveLabel" aria-describedby="lineLeaveHelp">
+                  <button type="button" role="radio" data-pace="fast">快</button>
+                  <button type="button" role="radio" data-pace="normal">标准</button>
+                  <button type="button" role="radio" data-pace="slow">慢</button>
+                </div>
+              </div>
+            </div>
+            <div class="field" id="lineStyleField" hidden></div>
+            </div>
+            <div class="pro-page" id="proBeltPage" style="--i:0" aria-label="传送带" hidden>
+              <button type="button" class="pro-back" data-pro-back><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m12 5-5 5 5 5"/></svg>Pro</button>
+            <div class="switches">
+              <label class="switch"><span><b>传送带</b><small>把几件内容排成一队，在别的应用里按 Ctrl/⌘ V 逐件贴出去</small></span><input type="checkbox" id="beltOn"></label>
+            </div>
+            <div class="line">
+              <span><label for="beltAuto"><b>开启方式</b></label><small>手动：按快捷键或从面板放上时打开，空着也能打开；自动：30 秒内复制满 3 次，带子从底边探出一截，问要不要按顺序贴</small></span>
+              <select id="beltAuto"><option value="manual">手动</option><option value="auto">自动</option></select>
+            </div>
+            <div class="field">
+              <label for="beltHotkey">传送带快捷键</label>
+              <input id="beltHotkey" readonly autocomplete="off" spellcheck="false" placeholder="未启用" aria-describedby="beltHotkeyHelp">
+              <p class="help" id="beltHotkeyHelp"></p>
+            </div>
+            <div class="field">
+              <label for="beltBackHotkey">退回快捷键</label>
+              <input id="beltBackHotkey" readonly autocomplete="off" spellcheck="false" placeholder="未启用" aria-describedby="beltBackHotkeyHelp">
+              <p class="help" id="beltBackHotkeyHelp"></p>
+            </div>
+            </div>
+            <div class="pro-page" id="proMixerPage" style="--i:0" aria-label="搅拌机" hidden>
+              <button type="button" class="pro-back" data-pro-back><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m12 5-5 5 5 5"/></svg>Pro</button>
+            <div class="switches">
+              <label class="switch"><span><b>搅拌机</b><small>把几条复制的内容丢进杯子，按配方让 AI 合成一条</small></span><input type="checkbox" id="mixerOn"></label>
+            </div>
+            <div class="field">
+              <label for="mixerHotkey">搅拌机快捷键</label>
+              <input id="mixerHotkey" readonly autocomplete="off" spellcheck="false" placeholder="未启用" aria-describedby="mixerHotkeyHelp">
+              <p class="help" id="mixerHotkeyHelp"></p>
+            </div>
+            <div class="line">
+              <span><b>AI 接口</b><small>用“翻译”里配置的 OpenAI 兼容接口（地址、Key、模型）；杯里有图片时，模型要能看图</small></span>
+              <button class="btn sm" type="button" id="mixerTrGo">去翻译设置</button>
+            </div>
+            <div class="recipes">
+              <span class="lbl">配方</span>
+              <p class="help">打开的配方按这个顺序出现在搅拌机上：前三个是底座上的按键，其余在 ⋯ 里。拖左边的把手调整顺序</p>
+              <div id="mixerRecipes"></div>
+            </div>
             </div>
           </section>
         </div>
