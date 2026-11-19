@@ -1,5 +1,5 @@
 // 贴图页面（pin.html），每张贴图一个窗口，窗口即图片（M23 规则 9）。交互对照原型 docs/specs/2026-10-28-截图与录屏-原型.html
-// 的 makePin：拖动移动、滚轮以光标为锚缩放、双击或 Esc 关闭、右键菜单。坐标为屏幕逻辑坐标。
+// 的 makePin：拖动移动、滚轮以光标为锚缩放、右上角关闭按钮、双击或 Esc 关闭、右键菜单。坐标为屏幕逻辑坐标。
 import './pin.css';
 import {
   onPinMoved, pinButtonDown, pinClose, pinCopy, pinImageSrc, pinMenu, pinPosition, pinSave, pinSetBounds, pinStartDrag, pinWorkArea,
@@ -114,7 +114,7 @@ async function save() {
   try { flash((await pinSave()).copied ? '已保存并复制' : '已保存'); } catch { flash('保存失败'); }
 }
 
-/** 双击、菜单关闭淡出 120 ms；Esc 等键盘触发不加动画（M20）。 */
+/** 关闭按钮、双击、菜单关闭淡出 120 ms；Esc 等键盘触发不加动画（M20）。 */
 let closing = false;
 function close(animate: boolean) {
   if (closing) return;
@@ -125,6 +125,14 @@ function close(animate: boolean) {
 }
 
 pin.addEventListener('dblclick', () => close(true));
+
+/* 右上角的关闭按钮（M23 规则 9）：按下不交给拖动；贴图缩到很小时不放 */
+const closeBtn = $('close');
+closeBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+closeBtn.addEventListener('click', () => close(true));
+const fit = () => pin.classList.toggle('tiny', innerWidth < 48 || innerHeight < 32);
+addEventListener('resize', fit);
+fit();
 addEventListener('contextmenu', (e) => {
   e.preventDefault();
   const items: MenuEntry[] = [
