@@ -3,7 +3,7 @@
 import './shot.css';
 import {
   onShotBegin, onShotClaim, onShotEnd, onShotTranslateDelta, recStart, shotAlive, shotCancel, shotClaim, shotCopyText, shotEngines,
-  shotFinish, shotFrame, shotLongStart, shotReady, shotTranslateAgain, type BeginPayload, type ShotAction, type ShotOutcome,
+  shotFinish, shotFrame, shotLongStart, shotReady, shotTranslateAgain, shotTyping, type BeginPayload, type ShotAction, type ShotOutcome,
 } from '../api/shot';
 import { error as logError, info } from '../api/log';
 import type { AppError, Engines } from '../api/types';
@@ -524,12 +524,17 @@ function openText(x: number, y: number) {
     if (e.key === 'Escape' || (e.key === 'Enter' && (isMac ? e.metaKey : e.ctrlKey))) { e.preventDefault(); commitText(); }
   });
   el.addEventListener('pointerdown', (e) => e.stopPropagation());
+  // 系统输入法的候选窗在本进程里、组字时才出现，后端每次把它抬到遮罩之上
+  el.addEventListener('compositionupdate', () => void shotTyping(true).catch(() => {}));
   el.focus();
+  // 输入法候选窗层级低于遮罩，输入期间遮罩让一让；截图中途结束时后端上屏会复位
+  void shotTyping(true).catch((e) => logError(`遮罩降层级失败：${String(e)}`));
 }
 function commitText() {
   const ed = S.editing;
   if (!ed) return;
   S.editing = null;
+  void shotTyping(false).catch((e) => logError(`遮罩恢复层级失败：${String(e)}`));
   const text = ed.el.innerText.replace(/\n$/, '');
   ed.el.remove();
   if (text.trim()) { S.objs.push({ t: 'text', x: ed.x, y: ed.y, text, color: ed.color, size: ed.size }); S.redo = []; }

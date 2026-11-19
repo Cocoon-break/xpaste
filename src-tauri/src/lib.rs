@@ -269,6 +269,7 @@ pub fn run() {
             commands::shot::shot_begin_payload,
             commands::shot::shot_ready,
             commands::shot::shot_alive,
+            commands::shot::shot_typing,
             commands::shot::shot_cancel,
             commands::shot::overlay_begin,
             commands::shot::shot_finish,
