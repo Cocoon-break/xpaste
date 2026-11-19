@@ -7,9 +7,10 @@
     <script type="module" src="/src/pin/main.ts"></script>
   </head>
   <body>
-    <div id="pin" role="img" tabindex="0" aria-label="贴图。拖动移动，滚轮缩放，双击或按 Esc 关闭">
+    <div id="pin" role="img" tabindex="0" aria-label="贴图。拖动移动，滚轮缩放，点右上角的关闭按钮、双击或按 Esc 关闭">
       <img id="img" alt="" draggable="false" />
       <span class="zoom" id="zoom" role="status" aria-live="polite"></span>
+      <button class="x" id="close" type="button" tabindex="-1" aria-label="关闭贴图"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 2l6 6M8 2l-6 6" /></svg></button>
     </div>
   </body>
 </html>

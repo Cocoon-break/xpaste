@@ -50,6 +50,9 @@ export const shotReady = (generation: number) => (stub ? Promise.resolve() : inv
 /** 遮罩页心跳；返回这次截图是否仍在进行（后端已结束时为 false）。 */
 export const shotAlive = (generation: number) => (stub ? Promise.resolve(true) : invoke<boolean>('shot_alive', { generation }));
 
+/** 文字标注开始 / 结束输入：输入期间后端降低遮罩层级，让输入法候选窗露出来（M23 规则 6）。 */
+export const shotTyping = (typing: boolean) => (stub ? Promise.resolve() : invoke<void>('shot_typing', { typing }));
+
 /** 退出截图；`generation` 不是当前这次时后端忽略（上一次截图迟到的退出不能结束新的一次）。 */
 export const shotCancel = (generation: number) => (stub ? dev.cancel() : invoke<void>('shot_cancel', { generation }));
 

@@ -31,9 +31,24 @@ body { font: 14px/1.5 var(--font-ui); color: var(--fg); -webkit-font-smoothing: 
   position: absolute; right: 8px; top: 8px; pointer-events: none; white-space: nowrap;
   font: 500 11px/1 var(--font-ui); font-variant-numeric: tabular-nums; padding: 5px 7px; border-radius: 6px;
   color: var(--fg); background: var(--pop); border: 1px solid var(--line-2);
-  opacity: 0; transition: opacity 200ms ease-out;
+  opacity: 0; transition: opacity 200ms ease-out, right 140ms ease-out;
 }
 .zoom.on { opacity: 1; transition-duration: 0s; }
+
+/* 右上角的关闭按钮（M23 规则 9）：悬停才出现，半透明深色圆钮，深浅图上都看得清；出现时标签让到它左边。
+   太小的贴图不放，免得盖住大半张图（仍可双击、Esc、右键关闭） */
+.x {
+  position: absolute; top: 6px; right: 6px; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%;
+  display: grid; place-items: center; color: #fff; background: rgb(0 0 0 / .55); cursor: default;
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); box-shadow: 0 0 0 .5px rgb(255 255 255 / .25);
+  opacity: 0; transform: scale(.9); pointer-events: none;
+  transition: opacity 140ms ease-out, transform 140ms ease-out, background-color 120ms ease-out;
+}
+.x svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.x:hover { background: rgb(0 0 0 / .75); }
+#pin:hover:not(.drag) .x { opacity: 1; transform: none; pointer-events: auto; }
+#pin.tiny .x { display: none; }
+#pin:hover:not(.drag):not(.tiny) .zoom { right: 32px; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0s !important; animation-delay: 0s !important; transition-duration: 0s !important; transition-delay: 0s !important; }
