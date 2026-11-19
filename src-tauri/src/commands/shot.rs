@@ -37,6 +37,13 @@ pub fn shot_ready(app: AppHandle, window: WebviewWindow, generation: u64) -> Res
     Ok(())
 }
 
+/// 文字标注开始（`true`）/ 结束（`false`）输入：输入期间降低遮罩层级，让输入法候选窗露出来（M23 规则 6）。
+#[tauri::command]
+pub fn shot_typing(app: AppHandle, window: WebviewWindow, typing: bool) -> Result<(), AppError> {
+    shot::typing(&app, index_of(&window)?, typing);
+    Ok(())
+}
+
 /// 遮罩页心跳：已上屏的遮罩每秒调一次，后端 3 s 收不到就撤下遮罩（M23 规则 1）。
 /// 返回这次截图是否仍在进行；`false` 时前端放掉像素、停止心跳。
 /// 不走主线程：只量页面是否还活着。

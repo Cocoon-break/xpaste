@@ -644,6 +644,73 @@ pub(crate) fn place(w: &WebviewWindow, origin: (f64, f64), size: (f64, f64)) -> 
 #[cfg(target_os = "macos")]
 pub(crate) const NS_SCREEN_SAVER_WINDOW_LEVEL: i32 = 1000;
 
+/// 文字标注输入期间遮罩的层级（`NSStatusWindowLevel`）：仍压住菜单栏（24）和 Dock（20），
+/// 第三方输入法在自己进程里画的、层级更高的候选窗能露出来（M23 规则 6）。
+#[cfg(target_os = "macos")]
+const NS_STATUS_WINDOW_LEVEL: i32 = 25;
+
+/// 文字标注开始、组字更新（`typing`）与结束输入时调：输入期间把这块遮罩降到 `NS_STATUS_WINDOW_LEVEL`，
+/// 再把本进程里的输入法窗口抬到遮罩之上（系统拼音的候选窗就在本进程里），结束时遮罩升回。
+/// Windows 上遮罩是普通置顶窗口，没有这么高的层级，暂不处理；候选窗是否被盖住待真机确认。
+pub fn typing(app: &AppHandle, i: usize, typing: bool) {
+    #[cfg(target_os = "macos")]
+    on_main(app, move |app| {
+        use tauri_nspanel::ManagerExt;
+        if let Ok(p) = app.get_webview_panel(&label(i)) {
+            p.set_level(if typing {
+                NS_STATUS_WINDOW_LEVEL
+            } else {
+                NS_SCREEN_SAVER_WINDOW_LEVEL
+            });
+            // 同层级里排到最前，压住同为 25 的状态栏图标
+            p.order_front_regardless();
+        }
+        if typing {
+            raise_ime_windows(app);
+        }
+    });
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, i, typing);
+}
+
+/// 系统自带的输入法（拼音等）把候选窗画在打字的应用自己的进程里，层级只有 20，比菜单栏还低，
+/// 遮罩降到 25 也盖得住它（真机实测）。这里把本进程里不是 Tauri 窗口、层级低于遮罩的窗口抬到遮罩之上。
+/// 候选窗在第一个按键时才建、每次选字可能复位层级，所以组字的每次更新都调一遍。主线程调用。
+#[cfg(target_os = "macos")]
+#[allow(deprecated, unexpected_cfgs)] // 同 panel::animate_alpha
+fn raise_ime_windows(app: &AppHandle) {
+    use tauri_nspanel::cocoa::base::id;
+    use tauri_nspanel::objc::{class, msg_send, sel, sel_impl};
+    let ours: Vec<usize> = app
+        .webview_windows()
+        .values()
+        .filter_map(|w| w.ns_window().ok())
+        .map(|p| p as usize)
+        .collect();
+    unsafe {
+        let ns_app: id = msg_send![class!(NSApplication), sharedApplication];
+        let windows: id = msg_send![ns_app, windows];
+        let n: usize = msg_send![windows, count];
+        for k in 0..n {
+            let w: id = msg_send![windows, objectAtIndex: k];
+            let level: isize = msg_send![w, level];
+            let visible: bool = msg_send![w, isVisible];
+            // 状态栏图标的窗口是 25，不在此列
+            if ours.contains(&(w as usize)) || level >= NS_STATUS_WINDOW_LEVEL as isize || !visible
+            {
+                continue;
+            }
+            let _: () = msg_send![w, setLevel: (NS_STATUS_WINDOW_LEVEL + 1) as isize];
+            let name: id = msg_send![w, className];
+            let name: *const std::os::raw::c_char = msg_send![name, UTF8String];
+            log::info!(
+                "shot 抬高输入法窗口 {} 层级 {level}",
+                std::ffi::CStr::from_ptr(name).to_string_lossy()
+            );
+        }
+    }
+}
+
 /// 补齐 `shot-0` … `shot-<n-1>`；返回新建窗口的页面加载完成信号。
 fn ensure_overlays(app: &AppHandle, n: usize) -> Vec<mpsc::Receiver<()>> {
     (0..n)
@@ -802,7 +869,12 @@ fn show_overlay(app: &AppHandle, i: usize, focus: bool) {
         #[cfg(target_os = "macos")]
         {
             use tauri_nspanel::ManagerExt;
-            match app.get_webview_panel(&label(i)) {
+            let panel = app.get_webview_panel(&label(i));
+            // 上一次截图在文字输入中途结束时，层级还停在 `typing` 降下的那档
+            if let Ok(p) = &panel {
+                p.set_level(NS_SCREEN_SAVER_WINDOW_LEVEL);
+            }
+            match panel {
                 // orderFrontRegardless + makeKeyWindow
                 Ok(p) if focus => p.show(),
                 Ok(p) => p.order_front_regardless(),
