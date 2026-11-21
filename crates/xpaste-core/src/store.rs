@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension, Row, ToSql, params};
 use serde_json::Value;
 
 use crate::{
-    AppSummary, CoreError, FileEntry, Flavor, ImageInfo, Kind, NewRecord, RecordDetail,
+    AppSummary, CoreError, FileEntry, Flavor, ImageInfo, Kind, NewMeme, NewRecord, RecordDetail,
     RecordSummary, SearchHit, Settings, Snapshot, VideoInfo, capture, detect, ocr_state, pinyin,
     snippet_name, text_flavor,
 };
@@ -76,9 +76,11 @@ INSERT INTO fts_py(fts_py) VALUES ('rebuild');
     "ALTER TABLE records ADD COLUMN translation TEXT;\nALTER TABLE records ADD COLUMN translation_lang TEXT;",
     // 阶段 15.1 译文标注翻译方式（`system` / `openai:{模型}`），M26 规则 12、16
     "ALTER TABLE records ADD COLUMN translation_engine TEXT;",
+    // 表情包库：meme 不为 NULL 即表情包（JSON：info 与做法 scene），库里按置顶存、豁免所有清理
+    "ALTER TABLE records ADD COLUMN meme TEXT;",
 ];
 
-const SUBDIRS: [&str; 4] = ["blobs", "images", "thumbs", "icons"];
+const SUBDIRS: [&str; 5] = ["blobs", "images", "thumbs", "icons", "memes"];
 
 /// 超过此大小的 flavor 数据写到 `blobs/<id>/<n>`。
 const INLINE_MAX: usize = 1_048_576;
@@ -88,8 +90,9 @@ const DAY_MS: i64 = 86_400_000;
 
 /// 片段在两层上豁免所有清理（M25 规则 10）：库里按置顶存（`pinned = 1`），
 /// 这里再显式排除 `snippet_body IS NOT NULL`。后者是纵深防御：用户降级后在旧版本里
-/// 取消“置顶历史行”，再升级回来，片段也绝不能被清掉。
-const LIVE_UNPINNED: &str = "pinned = 0 AND snippet_body IS NULL AND deleted_at IS NULL";
+/// 取消“置顶历史行”，再升级回来，片段也绝不能被清掉。表情包同理（`meme IS NULL`）。
+const LIVE_UNPINNED: &str =
+    "pinned = 0 AND snippet_body IS NULL AND meme IS NULL AND deleted_at IS NULL";
 
 /// `save_snippet` 的结果：后两项告诉调用方要不要给新 id 补投后台任务。
 pub struct SavedSnippet {
@@ -103,7 +106,8 @@ const SUMMARY_SQL: &str = "SELECT r.id, r.kind, r.title, a.name, a.icon_path, r.
   CASE WHEN r.kind IN ('text', 'code') THEN length(rtrim(r.text, char(9, 10, 13, 32)))
     - length(replace(rtrim(r.text, char(9, 10, 13, 32)), char(10), '')) + 1 END,
   CASE WHEN r.kind = 'link' THEN substr(r.text, 1, 2048) END,
-  CASE WHEN r.kind = 'file' AND json_valid(r.paths) THEN json_array_length(r.paths) END
+  CASE WHEN r.kind = 'file' AND json_valid(r.paths) THEN json_array_length(r.paths) END,
+  r.meme
   FROM records r LEFT JOIN apps a ON a.id = r.app_id";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -973,12 +977,14 @@ impl Store {
 
     /// 仅当记录仍是那次软删除（`deleted_at` 相同）时彻底删除。
     pub fn purge_if_deleted_at(&mut self, id: i64, deleted_at: i64) -> Result<bool, CoreError> {
+        let files = meme_files(&self.conn, &self.dir, &[id])?;
         let n = self.conn.execute(
             "DELETE FROM records WHERE id = ?1 AND deleted_at = ?2",
             [id, deleted_at],
         )?;
         if n > 0 {
             self.delete_files(id);
+            remove_meme_files(&files);
         }
         Ok(n > 0)
     }
@@ -1079,6 +1085,7 @@ impl Store {
             .get::<_, Option<String>>(3)?
             .map(|name| AppSummary { name, icon });
         let meta = parse_meta(row.get(10)?);
+        let is_meme = row.get::<_, Option<String>>(16)?.is_some();
         let snippet_body = row.get::<_, Option<String>>(12)?.map(|b| {
             // 图片片段存空串，尺寸由 meta 现拼：缩略图任务晚于存片段时也能显示对
             if kind != Kind::Image || !b.is_empty() {
@@ -1098,7 +1105,7 @@ impl Store {
             copied_at: row.get(5)?,
             uses: row.get(6)?,
             // 片段库里按置顶存，对外不报置顶（M25 规则 10）
-            pinned: row.get::<_, bool>(7)? && snippet_body.is_none(),
+            pinned: row.get::<_, bool>(7)? && snippet_body.is_none() && !is_meme,
             size: row.get::<_, i64>(8)? as u64,
             lang: row.get(9)?,
             thumb: existing(self.dir.join("thumbs").join(format!("{id}.png"))),
@@ -1112,6 +1119,10 @@ impl Store {
             lines: row.get(13)?,
             url: row.get(14)?,
             file_count: row.get(15)?,
+            meme: row
+                .get::<_, Option<String>>(16)?
+                .and_then(|j| serde_json::from_str::<Value>(&j).ok())
+                .and_then(|v| serde_json::from_value(v.get("info")?.clone()).ok()),
         })
     }
 
@@ -1119,12 +1130,73 @@ impl Store {
     fn delete_where(&mut self, cond: &str, args: &[&dyn ToSql]) -> Result<Vec<i64>, CoreError> {
         let tx = self.conn.transaction()?;
         let ids = ids_in(&tx, &format!("SELECT id FROM records WHERE {cond}"), args)?;
+        let files = meme_files(&tx, &self.dir, &ids)?;
         delete_rows(&tx, &ids)?;
         tx.commit()?;
         for &id in &ids {
             self.delete_files(id);
         }
+        remove_meme_files(&files);
         Ok(ids)
+    }
+
+    /// 存一个表情包（库里按置顶存、豁免所有清理）：文件已由调用方写到 `memes/` 下，
+    /// `flavors` 同剪切板里的文件记录，直接可以粘贴。
+    pub fn add_meme(
+        &mut self,
+        m: NewMeme,
+        flavors: &[Flavor],
+        now_ms: i64,
+    ) -> Result<i64, CoreError> {
+        let paths = serde_json::to_string(&[m.file.display().to_string()])?;
+        let meme = serde_json::json!({ "info": m.info, "scene": m.scene }).to_string();
+        let meta = serde_json::json!({ "w": m.width, "h": m.height }).to_string();
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT INTO records(hash, kind, title, paths, size, meta, search_text, py_text, copied_at,
+               pinned, ocr_state, meme)
+             VALUES (randomblob(16), 'image', ?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9)",
+            params![
+                m.info.name,
+                paths,
+                m.bytes as i64,
+                meta,
+                m.search.to_lowercase(),
+                pinyin::index_text(&m.search),
+                now_ms,
+                ocr_state::SKIPPED,
+                meme
+            ],
+        )?;
+        let id = tx.last_insert_rowid();
+        let writes = insert_flavors(&tx, &self.dir, id, flavors, "")?;
+        let written = write_all(&writes).and_then(|()| tx.commit().map_err(CoreError::from));
+        if let Err(e) = written {
+            self.delete_files(id);
+            return Err(e);
+        }
+        Ok(id)
+    }
+
+    /// 表情包的做法 JSON（原样，公开侧不解析）；不是表情包时为 None。
+    pub fn meme_scene(&self, id: i64) -> Result<Option<String>, CoreError> {
+        let j: Option<String> = self
+            .conn
+            .query_row("SELECT meme FROM records WHERE id = ?1", [id], |r| r.get(0))
+            .optional()?
+            .flatten();
+        Ok(j.and_then(|j| serde_json::from_str::<Value>(&j).ok())
+            .and_then(|v| v.get("scene")?.as_str().map(str::to_owned)))
+    }
+
+    /// 未删除的表情包个数与文件字节数。
+    pub fn meme_bytes(&self) -> Result<(u64, u64), CoreError> {
+        let (n, b): (i64, i64) = self.conn.query_row(
+            "SELECT count(*), COALESCE(sum(size), 0) FROM records WHERE meme IS NOT NULL AND deleted_at IS NULL",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        Ok((n as u64, b as u64))
     }
 
     fn delete_files(&self, id: i64) {
@@ -1329,6 +1401,36 @@ fn reindex_snippet(tx: &Connection, id: i64) -> Result<(), CoreError> {
     Ok(())
 }
 
+/// 这些记录里表情包指向的文件：只认数据目录 `memes/` 下的（挡掉 `..`），其余一律不碰。
+fn meme_files(conn: &Connection, dir: &Path, ids: &[i64]) -> Result<Vec<PathBuf>, CoreError> {
+    let root = dir.join("memes");
+    let mut out = Vec::new();
+    let mut stmt = conn.prepare("SELECT paths FROM records WHERE id = ?1 AND meme IS NOT NULL")?;
+    for &id in ids {
+        let paths: Option<String> = stmt.query_row([id], |r| r.get(0)).optional()?.flatten();
+        let list: Vec<String> = paths
+            .and_then(|p| serde_json::from_str(&p).ok())
+            .unwrap_or_default();
+        out.extend(list.into_iter().map(PathBuf::from).filter(|p| {
+            p.starts_with(&root)
+                && !p
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir))
+        }));
+    }
+    Ok(out)
+}
+
+fn remove_meme_files(files: &[PathBuf]) {
+    for f in files {
+        if let Err(e) = std::fs::remove_file(f)
+            && e.kind() != ErrorKind::NotFound
+        {
+            log::debug!("删除表情包文件失败：{e}");
+        }
+    }
+}
+
 fn existing(p: PathBuf) -> Option<String> {
     p.exists().then(|| p.display().to_string())
 }
@@ -1388,6 +1490,7 @@ fn backfill_pinyin(conn: &Connection) -> Result<usize, CoreError> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::MemeInfo;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU32, Ordering::SeqCst};
 
@@ -1405,7 +1508,7 @@ pub(crate) mod tests {
     fn open_creates_schema_and_dirs() {
         let dir = tmp();
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 9);
+        assert_eq!(s.schema_version().unwrap(), 10);
         for sub in ["blobs", "images", "thumbs", "icons"] {
             assert!(dir.join(sub).is_dir());
         }
@@ -1447,7 +1550,7 @@ pub(crate) mod tests {
         .unwrap();
         drop(old);
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 9);
+        assert_eq!(s.schema_version().unwrap(), 10);
         let row: (String, String) = s
             .conn
             .query_row("SELECT kind, title FROM records", [], |r| {
@@ -1472,7 +1575,7 @@ pub(crate) mod tests {
         .unwrap();
         drop(old);
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 9);
+        assert_eq!(s.schema_version().unwrap(), 10);
         let l = s.list_summaries().unwrap();
         assert_eq!(
             (l[0].kind, l[0].ocr_state),
@@ -1536,7 +1639,7 @@ pub(crate) mod tests {
         let dir = tmp();
         drop(Store::open(&dir).unwrap());
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 9);
+        assert_eq!(s.schema_version().unwrap(), 10);
     }
 
     #[test]
@@ -1645,7 +1748,7 @@ pub(crate) mod tests {
     fn backfill_is_part_of_migration() {
         let dir = v5_db_with_old_record();
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 9);
+        assert_eq!(s.schema_version().unwrap(), 10);
         let nulls: i64 = s
             .conn
             .query_row(
@@ -2637,7 +2740,7 @@ pub(crate) mod tests {
         .unwrap();
         drop(old);
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 9);
+        assert_eq!(s.schema_version().unwrap(), 10);
         let id = s.list_summaries().unwrap()[0].id;
         let nulls: i64 = s
             .conn
@@ -2668,10 +2771,127 @@ pub(crate) mod tests {
         .unwrap();
         drop(old);
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 9);
+        assert_eq!(s.schema_version().unwrap(), 10);
         let id = s.list_summaries().unwrap()[0].id;
         let d = s.detail(id).unwrap().unwrap();
         assert_eq!((d.translation, d.translation_lang), (None, None));
+    }
+
+    fn new_meme(dir: &Path, name: &str, search: &str) -> NewMeme {
+        NewMeme {
+            file: dir.join("memes").join("1.gif"),
+            info: MemeInfo {
+                source: "ai".into(),
+                name: name.into(),
+                style: Some("q".into()),
+            },
+            search: search.into(),
+            scene: r#"{"k":1}"#.into(),
+            width: 10,
+            height: 20,
+            bytes: 7,
+        }
+    }
+
+    #[test]
+    fn migrate_adds_meme_column() {
+        let dir = tmp();
+        make_dirs(&dir).unwrap();
+        let old = Connection::open(dir.join("xpaste.db")).unwrap();
+        for m in &MIGRATIONS[..9] {
+            old.execute_batch(m).unwrap();
+        }
+        old.pragma_update(None, "user_version", 9).unwrap();
+        old.execute(
+            "INSERT INTO records (hash, kind, title, text, copied_at, size, search_text, py_text) VALUES
+               (x'09', 'text', '旧记录', 'x', 1, 1, '旧记录', '')",
+            [],
+        )
+        .unwrap();
+        drop(old);
+        let s = Store::open(&dir).unwrap();
+        assert_eq!(s.schema_version().unwrap(), 10);
+        let id = s.list_summaries().unwrap()[0].id;
+        assert_eq!(s.summary(id).unwrap().unwrap().meme, None);
+        assert_eq!(s.meme_scene(id).unwrap(), None);
+    }
+
+    #[test]
+    fn memes_survive_cleanup() {
+        let mut s = mem();
+        let dir = s.dir.clone();
+        let a = s.add_meme(new_meme(&dir, "甲", "甲"), &[], 0).unwrap();
+        let b = s.add_meme(new_meme(&dir, "乙", "乙"), &[], 0).unwrap();
+        added(&mut s, &rec("h"), 1);
+        assert_eq!(s.count_unpinned().unwrap(), 1);
+        assert_eq!(s.prune_preview(Some(1), 1, 10 * DAY_MS).unwrap(), 1);
+        assert!(
+            s.prune_retention(Some(1), 10 * DAY_MS)
+                .unwrap()
+                .iter()
+                .all(|&i| i != a && i != b)
+        );
+        assert!(
+            s.prune_capacity(0)
+                .unwrap()
+                .iter()
+                .all(|&i| i != a && i != b)
+        );
+        s.clear_unpinned().unwrap();
+        assert!(s.live_summary(a).unwrap().is_some() && s.live_summary(b).unwrap().is_some());
+        assert_eq!(s.meme_bytes().unwrap(), (2, 14));
+    }
+
+    #[test]
+    fn meme_search_by_name_and_pinyin() {
+        let mut s = mem();
+        let dir = s.dir.clone();
+        let id = s
+            .add_meme(new_meme(&dir, "无语", "无语 我谢谢你 Q 版贴纸"), &[], 0)
+            .unwrap();
+        added(&mut s, &rec("other"), 1);
+        for q in ["wy", "谢谢"] {
+            let hits: Vec<i64> = s.search_hits(q).unwrap().iter().map(|h| h.id).collect();
+            assert_eq!(hits, vec![id], "{q}");
+        }
+    }
+
+    #[test]
+    fn purge_meme_deletes_its_file() {
+        let mut s = mem();
+        let dir = s.dir.clone();
+        std::fs::create_dir_all(dir.join("memes")).unwrap();
+        let inside = dir.join("memes").join("1.gif");
+        std::fs::write(&inside, b"g").unwrap();
+        let outside = dir.join("images").join("keep.gif");
+        std::fs::write(&outside, b"g").unwrap();
+        let a = s.add_meme(new_meme(&dir, "甲", "甲"), &[], 0).unwrap();
+        let mut m = new_meme(&dir, "乙", "乙");
+        m.file = outside.clone();
+        let b = s.add_meme(m, &[], 0).unwrap();
+        s.soft_delete(&[a, b], 5).unwrap();
+        assert!(s.purge_if_deleted_at(a, 5).unwrap());
+        assert!(!inside.exists());
+        s.purge_all_soft_deleted().unwrap();
+        assert!(outside.exists());
+    }
+
+    #[test]
+    fn summary_carries_meme_info() {
+        let mut s = mem();
+        let dir = s.dir.clone();
+        let id = s.add_meme(new_meme(&dir, "无语", "无语"), &[], 0).unwrap();
+        let sum = &s.list_summaries().unwrap()[0];
+        assert_eq!(
+            sum.meme,
+            Some(MemeInfo {
+                source: "ai".into(),
+                name: "无语".into(),
+                style: Some("q".into())
+            })
+        );
+        assert!(!sum.pinned);
+        assert_eq!(s.meme_scene(id).unwrap().as_deref(), Some(r#"{"k":1}"#));
     }
 
     #[test]
@@ -2691,7 +2911,7 @@ pub(crate) mod tests {
         .unwrap();
         drop(old);
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 9);
+        assert_eq!(s.schema_version().unwrap(), 10);
         let id = s.list_summaries().unwrap()[0].id;
         assert_eq!(s.detail(id).unwrap().unwrap().translation_engine, None);
     }

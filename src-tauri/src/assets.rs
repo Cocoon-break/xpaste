@@ -100,6 +100,7 @@ mod tests {
                 lines: None,
                 url: None,
                 file_count: None,
+                meme: None,
             },
             text: None,
             truncated: false,

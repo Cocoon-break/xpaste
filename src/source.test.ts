@@ -5,7 +5,7 @@ import { appCounts, bestApp, freshSug, fromApp } from './source.ts';
 
 const mk = (id: number, app: string | null, over: Partial<RecordSummary> = {}): RecordSummary => ({
   id, kind: 'text', title: '', app: app === null ? null : { name: app, icon: null }, copiedAt: 0, uses: 0, pinned: false,
-  size: 0, lang: null, thumb: null, durationSec: null, ocrState: 0, snippetBody: null, lines: null, url: null, fileCount: null, ...over,
+  size: 0, lang: null, thumb: null, durationSec: null, ocrState: 0, snippetBody: null, lines: null, url: null, fileCount: null, meme: null, ...over,
 });
 
 test('fromApp 只留来自这个应用的记录；没有胶囊时原样返回', () => {

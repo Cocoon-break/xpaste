@@ -135,6 +135,8 @@ export interface RecordSummary {
   lines: number | null;
   url: string | null;
   fileCount: number | null;
+  /** 不为 null 即表情包；source 为 final（成品）或 ai（生成） */
+  meme: { source: string; name: string; style: string | null } | null;
 }
 
 /** 已识别（有文字或无文字）的图片数 / 图片总数；`supported` 为本机是否有可用识别引擎。 */

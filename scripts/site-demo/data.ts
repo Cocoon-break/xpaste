@@ -36,6 +36,7 @@ export const mk = (kind: Kind, title: string, app: string | null, ago: number, e
   lines: null,
   url: null,
   fileCount: null,
+  meme: null,
   ...extra,
 });
 
@@ -45,6 +46,7 @@ const withCounts = (d: Demo): Demo => ({
   lines: d.kind === 'text' || d.kind === 'code' ? (d.text ?? '').replace(/[\t\n\r ]+$/, '').split('\n').length : null,
   url: d.kind === 'link' ? d.text : null,
   fileCount: d.kind === 'file' ? d.files.length : null,
+  meme: null,
 });
 
 const img = (file: string, w: number, h: number, ocr: string | null, bytes: number): Extra => ({

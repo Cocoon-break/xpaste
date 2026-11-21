@@ -870,6 +870,39 @@ pub struct RecordSummary {
     pub url: Option<String>,
     /// 文件记录的文件个数；不叫 files：`RecordDetail` 展平摘要后还有文件列表 `files`
     pub file_count: Option<u32>,
+    /// 不为 None 即表情包；前端按它判断，不看 pinned
+    pub meme: Option<MemeInfo>,
+}
+
+/// 表情包的展示信息：来源（`final` 成品 / `ai` 生成）、名字、风格。`Debug` 脱敏（名字是内容）。
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemeInfo {
+    pub source: String,
+    pub name: String,
+    pub style: Option<String>,
+}
+
+impl fmt::Debug for MemeInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MemeInfo")
+            .field("source", &self.source)
+            .finish()
+    }
+}
+
+/// `Store::add_meme` 的入参。不派生 `Debug`：带名字与路径。
+pub struct NewMeme {
+    /// 数据目录 `memes/` 下的绝对路径
+    pub file: std::path::PathBuf,
+    pub info: MemeInfo,
+    /// 搜索文本（名字、梗文字等），由调用方拼好
+    pub search: String,
+    /// 做法 JSON，公开侧不解析
+    pub scene: String,
+    pub width: u32,
+    pub height: u32,
+    pub bytes: u64,
 }
 
 impl fmt::Debug for RecordSummary {
@@ -1856,6 +1889,7 @@ mod tests {
             lines: None,
             url: None,
             file_count: None,
+            meme: None,
         };
         let d = RecordDetail {
             summary,

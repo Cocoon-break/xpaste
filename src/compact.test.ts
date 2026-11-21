@@ -6,7 +6,7 @@ import type { RecordSummary } from './api/types';
 let n = 0;
 const r = (o: Partial<RecordSummary> = {}): RecordSummary => ({
   id: ++n, kind: 'text', title: '标题', app: null, copiedAt: 1, uses: 0, pinned: false, size: 1, lang: null, thumb: null,
-  durationSec: null, ocrState: 0, snippetBody: null, lines: null, url: null, fileCount: null, ...o,
+  durationSec: null, ocrState: 0, snippetBody: null, lines: null, url: null, fileCount: null, meme: null, ...o,
 });
 
 test('多行文本补充“N 行”，一行不补', () => {
