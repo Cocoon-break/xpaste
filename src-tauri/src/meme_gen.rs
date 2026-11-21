@@ -1,14 +1,13 @@
 //! 表情包制作的出文案与生成：读参考图、调生图接口、抠掉白底、切网格，每张结果立刻存进表情包库；
 //! 另有抠图贴纸（抠主体加白边）与草图存盘。
 //!
-//! 每次生成带一个序号；取消、关窗口只把当前序号改掉，请求照常等它回来：
-//! 结果照样进库（花了的钱不白花），但不交给页面，页面也不提示。
+//! 生成由 AI 任务队列（`meme_tasks`）发起；取消记在队列的任务上，请求照常等它回来：
+//! 结果照样进库（花了的钱不白花），但不再显示、不提示。
 
 use std::collections::HashMap;
 use std::hash::{BuildHasher, RandomState};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex, PoisonError};
 use std::time::Instant;
 
@@ -73,10 +72,9 @@ pub enum GenOut {
     },
 }
 
-/// 生成要用到的外部：状态、序号、抠主体（测试里换掉）、存进库后通知面板
+/// 生成要用到的外部：状态、抠主体（测试里换掉）、存进库后通知面板
 pub struct Env<'a> {
     pub state: &'a AppState,
-    pub seq: &'a AtomicU64,
     pub cutout: Cutout,
     pub added: &'a (dyn Fn(i64) + Sync),
 }
@@ -200,10 +198,8 @@ fn read_refs(
     Ok(out)
 }
 
-/// 生成一张 / 一套 / 一套里的一部分 / AI 动作。结果立刻进库；晚到时返回 `LATE`。
+/// 生成一张 / 一套 / 一套里的一部分 / AI 动作。结果立刻进库。
 pub async fn generate(env: &Env<'_>, cfg: &ImageCfg, req: GenReq) -> Result<GenOut, String> {
-    let seq = env.seq.fetch_add(1, Ordering::SeqCst) + 1;
-    let late = || env.seq.load(Ordering::SeqCst) != seq;
     let act = act_of(req.act.as_deref());
     let what = match (req.kind.as_str(), act) {
         ("one", _) => MemeGen::One,
@@ -247,7 +243,6 @@ pub async fn generate(env: &Env<'_>, cfg: &ImageCfg, req: GenReq) -> Result<GenO
     );
     let png = match r {
         Ok(p) => p,
-        Err(_) if late() => return Err(LATE.into()),
         Err(e) => return Err(imagegen::reason(&e)),
     };
     // AI 动作的名字带上底图的情绪名：读库在这里做，抠图、切格、编码挪到阻塞线程上
@@ -274,10 +269,6 @@ pub async fn generate(env: &Env<'_>, cfg: &ImageCfg, req: GenReq) -> Result<GenO
         Ok(GenOut::Done { ids }) => log::info!("表情包 进库 {ids:?}"),
         Ok(GenOut::Irregular { id }) => log::info!("表情包 网格没画规整 进库 {id}"),
         Err(_) => {}
-    }
-    if late() {
-        log::info!("表情包 生成结果晚到（已取消或窗口已关），只进库");
-        return Err(LATE.into());
     }
     out
 }
@@ -695,7 +686,7 @@ mod tests {
     use super::*;
     use crate::imagegen::tests::{b64, fake, json_reply};
     use serde_json::json;
-    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use xpaste_core::NewMeme;
 
     fn run<T>(f: impl std::future::Future<Output = T>) -> T {
@@ -754,14 +745,12 @@ mod tests {
             return eprintln!("这个构建不含 Pro，跳过");
         }
         let state = AppState::for_test();
-        let seq = AtomicU64::new(0);
         let added = AtomicUsize::new(0);
         let on_added = |_| {
             added.fetch_add(1, Ordering::SeqCst);
         };
         let env = Env {
             state: &state,
-            seq: &seq,
             cutout: |_| None,
             added: &on_added,
         };
@@ -814,10 +803,8 @@ mod tests {
             return eprintln!("这个构建不含 Pro，跳过");
         }
         let state = AppState::for_test();
-        let seq = AtomicU64::new(0);
         let env = Env {
             state: &state,
-            seq: &seq,
             cutout: |_| None,
             added: &|_| {},
         };
@@ -856,10 +843,8 @@ mod tests {
     #[test]
     fn irregular_grid_kept() {
         let state = AppState::for_test();
-        let seq = AtomicU64::new(0);
         let env = Env {
             state: &state,
-            seq: &seq,
             cutout: |_| {
                 *CUT_ON.lock().unwrap() = Some(std::thread::current().id());
                 None
@@ -886,39 +871,10 @@ mod tests {
     }
 
     #[test]
-    fn late_result_saved_not_shown() {
-        static SEQ_T: AtomicU64 = AtomicU64::new(0);
-        let state = AppState::for_test();
-        let added = AtomicUsize::new(0);
-        let on_added = |_| {
-            added.fetch_add(1, Ordering::SeqCst);
-        };
-        let env = Env {
-            state: &state,
-            seq: &SEQ_T,
-            cutout: |_| None,
-            added: &on_added,
-        };
-        let p = grid(1);
-        // 请求进行中用户点了取消
-        let (url, _h) = fake(1, move |_| {
-            SEQ_T.fetch_add(1, Ordering::SeqCst);
-            json_reply(json!({"data": [{"b64_json": b64(&p)}]}))
-        });
-        let r = run(generate(&env, &cfg(&url), req(json!({}))));
-        // 页面收不到结果（LATE 不显示、不提示）；库里照样多一条，面板照样刷新
-        assert_eq!(r, Err(LATE.to_string()));
-        assert_eq!(memes(&state), 1);
-        assert_eq!(added.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
     fn unconfigured_no_request() {
         let state = AppState::for_test();
-        let seq = AtomicU64::new(0);
         let env = Env {
             state: &state,
-            seq: &seq,
             cutout: |_| None,
             added: &|_| {},
         };
@@ -930,10 +886,8 @@ mod tests {
     #[test]
     fn gone_ref_dropped() {
         let state = AppState::for_test();
-        let seq = AtomicU64::new(0);
         let env = Env {
             state: &state,
-            seq: &seq,
             cutout: |_| None,
             added: &|_| {},
         };
@@ -960,10 +914,8 @@ mod tests {
     #[test]
     fn ai_item_has_valid_scene() {
         let state = AppState::for_test();
-        let seq = AtomicU64::new(0);
         let env = Env {
             state: &state,
-            seq: &seq,
             cutout: |_| None,
             added: &|_| {},
         };
@@ -1007,10 +959,8 @@ mod tests {
     #[test]
     fn at_most_4_refs_sent() {
         let state = AppState::for_test();
-        let seq = AtomicU64::new(0);
         let env = Env {
             state: &state,
-            seq: &seq,
             cutout: |_| None,
             added: &|_| {},
         };
@@ -1064,10 +1014,8 @@ mod tests {
             return eprintln!("这个构建不含 Pro，跳过");
         }
         let state = AppState::for_test();
-        let seq = AtomicU64::new(0);
         let env = Env {
             state: &state,
-            seq: &seq,
             cutout: |_| None,
             added: &|_| {},
         };

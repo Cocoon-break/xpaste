@@ -3,7 +3,6 @@
 //!
 //! `Queue` 是纯数据结构（不联网、不碰窗口），运行时是下面薄薄一层：全局锁、`pump`、异步任务。
 
-use std::sync::atomic::AtomicU64;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use serde::Serialize;
@@ -307,11 +306,9 @@ async fn run(app: AppHandle, id: u64, req: GenReq) {
     let state = app.state::<AppState>();
     let cfg = meme_gen::image_cfg(&state.settings());
     let added = |rid| crate::events::emit_summary(&app, crate::events::RECORD_ADDED, rid);
-    // 任务的取消记在队列里，不用这个序号：给 generate 一个只属于这次的，它就永远不算晚到
-    let seq = AtomicU64::new(0);
+    // 任务的取消记在队列里（`Task.cancelled`）
     let env = meme_gen::Env {
         state: &state,
-        seq: &seq,
         cutout: xpaste_platform::foreground_cutout,
         added: &added,
     };
