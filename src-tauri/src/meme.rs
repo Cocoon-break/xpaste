@@ -67,6 +67,10 @@ pub struct OpenPayload {
     pub cutout: bool,
     /// 试用已结束：不带参考图和文字，页面只显示过期提示
     pub expired: bool,
+    /// 回到 AI 任务的那次：任务号（`scene` 是任务里的做法，`scene_id` 为 None）；平时为 None
+    pub task_id: Option<u64>,
+    /// 那次已经画好的结果 id（网格没画规整的是整张那一个）；在画、排队、没画出来的为空
+    pub task_ids: Vec<i64>,
 }
 
 /// 选中的一条记录里做表情包用得上的部分
@@ -177,7 +181,7 @@ fn gather(state: &AppState, ids: &[i64]) -> Vec<Item> {
 /// 带着这些记录打开制作窗口（`ids` 为空 = 空白打开，新窗口时恢复草稿）。已开着时参考图追加、满了提示；面板开着就收起。
 /// 试用结束时照常打开，载荷标上过期、不带记录，页面只显示过期提示。选中的全都用不上时返回原因，面板提示。
 pub fn open(app: &AppHandle, ids: &[i64]) -> Result<(), AppError> {
-    open_with(app, ids, None)
+    open_with(app, ids, None, None).map(|_| ())
 }
 
 /// 接着改：按库里这个表情包的做法打开（做法坏了：AI 出的只带它自己，做好的空白打开）。不恢复草稿，草稿也不丢
@@ -196,18 +200,46 @@ pub fn open_scene(app: &AppHandle, id: i64) -> Result<(), AppError> {
     open_with(
         app,
         &[],
-        Some((crate::meme_store::scene_for_open(scene, id, ai), id, !ai)),
+        Some((
+            crate::meme_store::scene_for_open(scene, id, ai),
+            Some(id),
+            !ai,
+        )),
+        None,
+    )
+    .map(|_| ())
+}
+
+/// 回到 AI 任务的那次：按任务里的做法打开，带上任务号和已画好的结果。返回是不是真恢复了（没关开关、试用没结束）
+pub fn open_task(
+    app: &AppHandle,
+    task: u64,
+    scene: String,
+    ids: Vec<i64>,
+) -> Result<bool, AppError> {
+    open_with(
+        app,
+        &[],
+        Some((Some(scene), None, false)),
+        Some((task, ids)),
     )
 }
 
-/// `again`：接着改的做法（可能没有）、库里的 id、是不是做好的成品
+/// 制作窗口开着没有
+pub fn window_open() -> bool {
+    rt().open
+}
+
+/// `again`：接着改的做法（可能没有）、库里的 id（回到任务时没有）、是不是做好的成品；
+/// `task`：回到 AI 任务时的任务号和结果。返回是不是按 `again` 恢复了（试用结束、开关关着时不是）
 fn open_with(
     app: &AppHandle,
     ids: &[i64],
-    again: Option<(Option<String>, i64, bool)>,
-) -> Result<(), AppError> {
+    again: Option<(Option<String>, Option<i64>, bool)>,
+    task: Option<(u64, Vec<i64>)>,
+) -> Result<bool, AppError> {
     if !on(app) {
-        return Ok(());
+        return Ok(false);
     }
     let expired = !crate::mixer::accepts_new(&crate::mixer::pro(app));
     let (add, idea) = if ids.is_empty() || expired {
@@ -237,9 +269,14 @@ fn open_with(
     let draft = blank
         .then(|| crate::meme_store::draft_get(&app.state::<AppState>().data_dir))
         .flatten();
+    let restored = again.is_some() && !expired;
     let (scene, scene_id, scene_final) = match again.filter(|_| !expired) {
-        Some((s, id, fin)) => (s, Some(id), fin),
+        Some((s, id, fin)) => (s, id, fin),
         None => (None, None, false),
+    };
+    let (task_id, task_ids) = match task.filter(|_| !expired) {
+        Some((t, ids)) => (Some(t), ids),
+        None => (None, Vec::new()),
     };
     log::info!(
         "表情包 打开 {} 参考图 {} 张{}{}{}",
@@ -247,9 +284,10 @@ fn open_with(
         refs.len(),
         if full { "（满了）" } else { "" },
         if expired { "（试用已结束）" } else { "" },
-        match (scene_id, draft.is_some()) {
-            (Some(id), _) => format!("（接着改 {id}）"),
-            (None, true) => "（恢复草稿）".into(),
+        match (scene_id, task_id, draft.is_some()) {
+            (Some(id), _, _) => format!("（接着改 {id}）"),
+            (None, Some(t), _) => format!("（回到任务 {t}）"),
+            (None, None, true) => "（恢复草稿）".into(),
             _ => String::new(),
         }
     );
@@ -262,12 +300,14 @@ fn open_with(
         draft,
         cutout: xpaste_platform::foreground_supported(),
         expired,
+        task_id,
+        task_ids,
     };
     if crate::panel::visible(app) {
         crate::panel::hide(app);
     }
     crate::meme_window::show(app, payload, fresh, full);
-    Ok(())
+    Ok(restored)
 }
 
 /// 关掉制作窗口（Esc、关闭按钮、Alt+F4、总开关关掉）。没开着时不做事。
@@ -305,7 +345,7 @@ fn shut() -> Option<Option<isize>> {
         rt.refs.clear();
         rt.back.take()
     };
-    // 进行中的生成不打断：回来的结果照样进库，只是不再交给页面
+    // 旧的“生成”命令：进行中的不打断，回来的结果照样进库，只是不再交给页面。AI 任务队列不受关窗口影响
     crate::meme_gen::cancel();
     Some(back)
 }

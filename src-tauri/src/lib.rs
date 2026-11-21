@@ -23,6 +23,7 @@ mod meme;
 mod meme_gen;
 mod meme_gif;
 mod meme_store;
+mod meme_tasks;
 mod meme_window;
 mod mixer;
 mod mixer_window;
@@ -566,6 +567,12 @@ pub fn run() {
             commands::meme::meme_captions,
             commands::meme::meme_generate,
             commands::meme::meme_cancel,
+            commands::meme::meme_task_start,
+            commands::meme::meme_task_cancel,
+            commands::meme::meme_task_retry,
+            commands::meme::meme_task_drop,
+            commands::meme::meme_task_open,
+            commands::meme::meme_tasks,
             commands::meme::meme_gen_info,
             commands::meme::meme_cutout,
             commands::meme::meme_save_sketch,

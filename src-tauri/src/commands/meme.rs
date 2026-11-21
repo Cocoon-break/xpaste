@@ -223,6 +223,42 @@ pub fn meme_cancel() {
     log::info!("表情包 取消生成");
 }
 
+/// 发起一个 AI 任务（排队，不跟窗口走），返回任务号。`title` 是列表里显示的那句话，`scene` 是发起时的做法 JSON，都原样带回
+#[tauri::command(async)]
+pub fn meme_task_start(app: AppHandle, req: GenReq, scene: String, title: String) -> u64 {
+    crate::meme_tasks::start(&app, req, title, scene)
+}
+
+/// 取消任务：排队的直接拿掉；在画的请求不中止，结果回来照样进库，不再显示
+#[tauri::command(async)]
+pub fn meme_task_cancel(app: AppHandle, id: u64) {
+    crate::meme_tasks::cancel(&app, id);
+}
+
+/// 没画出来的重试：回到队尾
+#[tauri::command(async)]
+pub fn meme_task_retry(app: AppHandle, id: u64) {
+    crate::meme_tasks::retry(&app, id);
+}
+
+/// 去掉画好的、没画出来的
+#[tauri::command(async)]
+pub fn meme_task_drop(app: AppHandle, id: u64) {
+    crate::meme_tasks::drop(&app, id);
+}
+
+/// 回到那次：按任务里的做法打开制作窗口，结果摆进预览；画好的随之拿掉
+#[tauri::command(async)]
+pub fn meme_task_open(app: AppHandle, id: u64) -> Result<(), AppError> {
+    crate::meme_tasks::open(&app, id)
+}
+
+/// 整份任务列表，新的在前
+#[tauri::command(async)]
+pub fn meme_tasks() -> Vec<crate::meme_tasks::TaskView> {
+    crate::meme_tasks::views()
+}
+
 /// 页面要的生图接口状态：配好了没有，这个服务商上次的一套画规整了没有
 #[derive(Serialize)]
 pub struct GenInfo {

@@ -45,7 +45,7 @@ pub fn cancel() {
 }
 
 /// 页面发来的生成请求。带用户写的话，不派生 Debug。
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct GenReq {
     /// one | set | set_part | act
     pub kind: String,

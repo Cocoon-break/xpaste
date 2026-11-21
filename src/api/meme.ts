@@ -17,9 +17,12 @@ export type RefKey = { id: number; file: number | null };
 
 /** 打开或追加到制作窗口（后端发给页面）：`refs` 是追加之后窗口里的全部参考图；`idea` 只在“想表达什么”为空时放进去；
  *  `scene` 是接着改的做法，`sceneId` 是它在库里的 id；`draft` 是空白打开新窗口时的草稿；
- *  `expired` 时试用已结束，不带参考图和文字，页面只显示过期提示 */
+ *  `expired` 时试用已结束，不带参考图和文字，页面只显示过期提示；
+ *  `taskId` 不为 null 时是回到 AI 任务的那次（`scene` 是任务里的做法，`sceneId` 为 null），`taskIds` 是那次已画好的结果
+ *  （网格没画规整的是整张那一个；在画、排队、没画出来的为空）。平时为 null 和空数组 */
 export interface MemeOpen {
   refs: RefKey[]; idea: string; scene: string | null; sceneId: number | null; sceneFinal: boolean; draft: string | null; cutout: boolean; expired: boolean;
+  taskId: number | null; taskIds: number[];
 }
 
 /** 面板的笑脸按钮、Mod+E：带着这些记录打开（空 = 空白打开）；全都做不了表情包时抛出 AppError */
@@ -67,6 +70,28 @@ export const MEME_LATE = '已取消';
 /** 生成，结果立刻进库；失败时抛出给用户看的原因（字符串） */
 export const memeGenerate = (req: GenReq) => invoke<GenOut>('meme_generate', { req });
 export const memeCancel = () => invoke<void>('meme_cancel');
+/** 一个 AI 任务（后端排队，不跟窗口走）。`startedMs` 是开始画的 Unix 毫秒，秒数页面自己走；`ahead` 是前面还在排队的个数；
+ *  画好的结果在 `ids`，网格没画规整时 `ids` 为空、整张图是 `irregular`；`title`、`scene` 是发起时传的，原样带回 */
+export interface TaskView {
+  id: number; kind: 'one' | 'set' | 'act'; state: 'queue' | 'run' | 'done' | 'fail';
+  title: string; style: string; startedMs: number | null; ahead: number;
+  ids: number[]; irregular: number | null; error: string; scene: string;
+}
+/** 发起一个 AI 任务，返回任务号。`scene` 是做法 JSON，`title` 是列表里显示的那句话 */
+export const memeTaskStart = (req: GenReq, scene: string, title: string) => invoke<number>('meme_task_start', { req, scene, title });
+/** 取消：排队的直接拿掉；在画的结果回来照样进库，不再显示 */
+export const memeTaskCancel = (id: number) => invoke<void>('meme_task_cancel', { id });
+/** 没画出来的重试（回到队尾） */
+export const memeTaskRetry = (id: number) => invoke<void>('meme_task_retry', { id });
+/** 去掉画好的、没画出来的 */
+export const memeTaskDrop = (id: number) => invoke<void>('meme_task_drop', { id });
+/** 回到那次：按任务里的做法打开制作窗口（发 meme-open，带 taskId、taskIds）；画好的随之拿掉 */
+export const memeTaskOpen = (id: number) => invoke<void>('meme_task_open', { id });
+/** 整份任务列表，新的在前 */
+export const memeTasks = () => invoke<TaskView[]>('meme_tasks');
+/** 任务列表变了（发给制作窗口和面板），载荷是整份列表，新的在前 */
+export const onMemeTasks = (cb: (tasks: TaskView[]) => void): Promise<UnlistenFn> =>
+  listen<TaskView[]>('meme-tasks', (e) => cb(e.payload));
 /** 生图接口配好了没有；这个服务商上次的一套没画规整（数量旁边提示） */
 export const memeGenInfo = () => invoke<{ ready: boolean; shaky: boolean }>('meme_gen_info');
 /** 抠图贴纸：抠出主体加白边的 PNG；没抠出主体时抛出原因 */
