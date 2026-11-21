@@ -1,6 +1,6 @@
-//! 表情包制作的命令：打开、关闭制作窗口，读参考图，设置页的“测试生成”与表情包库统计。
+//! 表情包制作的命令：打开、关闭制作窗口，读参考图，风格库，设置页的“测试生成”与表情包库统计。
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
 use crate::error::AppError;
@@ -62,7 +62,8 @@ pub fn meme_close(app: AppHandle) {
     meme::close(&app);
 }
 
-/// 页面的参考图变了（拿掉、从历史添加、画草图）：后端据此判断再从面板带进来时还能加几张
+/// 页面的参考图变了（拿掉、从历史添加、画草图）：后端据此判断再从面板带进来时还能加几张。
+/// 草图不是历史记录，页面用负数 id 占位，照样算一张；再发 `meme-open` 时原样带回去。
 #[tauri::command(async)]
 pub fn meme_set_refs(refs: Vec<RefKey>) {
     meme::set_refs(refs);
@@ -84,4 +85,53 @@ pub fn meme_ref_image(
 #[tauri::command(async)]
 pub fn meme_recent_images(state: State<'_, AppState>) -> Result<Vec<RefKey>, AppError> {
     meme::recent_images(&state)
+}
+
+/// 一种内置风格：键名、显示名、类别
+#[derive(Serialize)]
+pub struct StyleDto {
+    key: &'static str,
+    name: &'static str,
+    cat: &'static str,
+}
+
+/// 风格库：内置风格，以及设置里挑过的、自己写的（页面据此画常驻芯片）。带用户写的风格描述，不派生 Debug。
+#[derive(Serialize)]
+pub struct StylesDto {
+    styles: Vec<StyleDto>,
+    used: Vec<String>,
+    custom: Vec<String>,
+}
+
+#[tauri::command(async)]
+pub fn meme_styles(state: State<'_, AppState>) -> StylesDto {
+    let s = state.settings();
+    StylesDto {
+        styles: xpaste_pro::meme_styles()
+            .iter()
+            .map(|m| StyleDto {
+                key: m.key,
+                name: m.name,
+                cat: m.cat,
+            })
+            .collect(),
+        used: s.meme_styles_used.clone(),
+        custom: s.meme_styles_custom.clone(),
+    }
+}
+
+/// 挑过的风格、自己写的风格变了：整理（去重、限个数）后写回设置，下次打开还在
+#[tauri::command(async)]
+pub fn meme_styles_touch(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    used: Vec<String>,
+    custom: Vec<String>,
+) -> Result<(), String> {
+    let mut s = state.settings().clone();
+    (s.meme_styles_used, s.meme_styles_custom) = xpaste_pro::meme_normalize_styles(used, custom);
+    crate::commands::settings::save_settings_inner(&state, s.clone()).map_err(|e| e.to_string())?;
+    // 设置页开着时跟着刷新，免得它保存时把旧列表写回去
+    crate::events::emit_to(&app, "panel", crate::events::SETTINGS_CHANGED, s);
+    Ok(())
 }

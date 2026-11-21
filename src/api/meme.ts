@@ -12,7 +12,7 @@ export const memeTestImage = (cfg: ImageCfg) => invoke<ArrayBuffer>('meme_test_i
 /** 表情包库的个数与占用字节数 */
 export const memeLibraryStats = () => invoke<[number, number]>('meme_library_stats');
 
-/** 一张参考图：历史记录的 id，文件记录里是第几个文件（位图记录为 null） */
+/** 一张参考图：历史记录的 id，文件记录里是第几个文件（位图记录为 null）。页面里的草图用负数 id 占位 */
 export type RefKey = { id: number; file: number | null };
 
 /** 打开或追加到制作窗口（后端发给页面）：`refs` 是追加之后窗口里的全部参考图；`idea` 只在“想表达什么”为空时放进去；
@@ -29,6 +29,14 @@ export const memeSetRefs = (refs: RefKey[]) => invoke<void>('meme_set_refs', { r
 export const memeRefImage = (k: RefKey) => invoke<ArrayBuffer>('meme_ref_image', { id: k.id, file: k.file });
 /** “从历史添加”：最近 8 张图片 */
 export const memeRecentImages = () => invoke<RefKey[]>('meme_recent_images');
+
+/** 一种内置风格：键名、显示名、类别 */
+export interface MemeStyle { key: string; name: string; cat: string }
+/** 风格库：内置风格，设置里挑过的（键名）和自己写的（描述） */
+export interface MemeStyles { styles: MemeStyle[]; used: string[]; custom: string[] }
+export const memeStyles = () => invoke<MemeStyles>('meme_styles');
+/** 挑过的、自己写的风格变了：后端去重、限个数后写回设置 */
+export const memeStylesTouch = (used: string[], custom: string[]) => invoke<void>('meme_styles_touch', { used, custom });
 
 export const onMemeOpen = (cb: (p: MemeOpen) => void): Promise<UnlistenFn> =>
   listen<MemeOpen>('meme-open', (e) => cb(e.payload));
