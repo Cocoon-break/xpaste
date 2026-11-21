@@ -80,6 +80,8 @@ pub const MEME_OPEN: &str = "meme-open";
 pub const MEME_TOAST: &str = "meme-toast";
 /// 制作窗口关掉了（Esc、关闭按钮、总开关关掉），无载荷。只发给 `meme`：页面清空。
 pub const MEME_CLOSED: &str = "meme-closed";
+/// 制作窗口里点了“存进表情包”，后端已关掉窗口、唤起面板。载荷是表情包的记录 id。只发给 `panel`：切到“表情包”分类选中它。
+pub const MEME_REVEAL: &str = "meme-reveal";
 
 /// 冻结完成，发给每块屏的遮罩 `shot-<i>`（载荷见 `shot::BeginPayload`）。
 pub const SHOT_BEGIN: &str = "shot-begin";

@@ -26,6 +26,7 @@ export interface MemeOpen {
 export const memeOpen = (ids: number[]) => invoke<void>('meme_open', { ids });
 /** 页面的 Esc、关闭按钮 */
 export const memeClose = () => invoke<void>('meme_close');
+export const memeReveal = (id: number) => invoke<void>('meme_reveal', { id });
 /** 页面的参考图变了：后端据此判断再从面板带进来时还能加几张 */
 export const memeSetRefs = (refs: RefKey[]) => invoke<void>('meme_set_refs', { refs });
 /** 一张参考图的 PNG（动图取第一帧）；原记录没了时抛出 "gone" */
@@ -106,5 +107,8 @@ export const onMemeOpen = (cb: (p: MemeOpen) => void): Promise<UnlistenFn> =>
   listen<MemeOpen>('meme-open', (e) => cb(e.payload));
 export const onMemeToast = (cb: (text: string) => void): Promise<UnlistenFn> =>
   listen<string>('meme-toast', (e) => cb(e.payload));
+/** 制作窗口里存进了表情包（后端已唤起面板）：面板切到“表情包”分类选中这个 id */
+export const onMemeReveal = (cb: (id: number) => void): Promise<UnlistenFn> =>
+  listen<number>('meme-reveal', (e) => cb(e.payload));
 /** 窗口关掉了（Esc、关闭按钮、设置里关掉开关）：页面清空 */
 export const onMemeClosed = (cb: () => void): Promise<UnlistenFn> => listen('meme-closed', () => cb());

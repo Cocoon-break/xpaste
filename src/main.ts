@@ -24,7 +24,7 @@ import {
 import { lineDragDrop, lineDragHover, lineHangFromPanel, lineHide, lineSideHint, onLineChanged, onLineHangSelected, onProLink, proActivate, proBuy, proDeactivate, proStatus, proTakeLink, proUnbind, type LineView } from './api/line';
 import { beltPut, onBeltPutSelected } from './api/belt';
 import { mixerDefaults, mixerPut, onMixerPutSelected } from './api/mixer';
-import { memeLibraryStats, memeOpen, memeOpenScene, memeTestImage } from './api/meme';
+import { memeLibraryStats, memeOpen, memeOpenScene, memeTestImage, onMemeReveal } from './api/meme';
 import { cellHTML, gridMove, ofSource, previewHTML, type Arrow, type MemeSource } from './meme-grid';
 import { mountRecipes } from './recipes';
 import { deviceLine, proCard, proControls, proLine } from './pro-status';
@@ -3603,6 +3603,14 @@ await onOpenSettings((tab) => {
 await onProLink(activateFromLink);
 // 设置对话框开着时提示条被它盖住，结果同样写进“历史记录”行内：先切到“记录”标签，
 // 如同点了行内的“清空历史…”（确认框关闭后焦点回到这个按钮）
+// 制作窗口里点了“存进表情包”（M33 规则 10）：后端已关掉窗口、唤起面板；切到“表情包”分类，选中刚存的
+await onMemeReveal((id) => {
+  if (!memeOn()) return;
+  S.memeSrc = 'all';
+  setFilter('meme', true);
+  renderList();
+  if (S.records.has(id)) select(id, { scroll: true, instant: true });
+});
 await onConfirmClear(() => {
   if (dlg.open) showStControl($('#clearBtn'));
   void confirmClear().then((m) => m && dlg.open && (clearNote.textContent = m));

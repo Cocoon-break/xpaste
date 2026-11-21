@@ -553,6 +553,7 @@ pub fn run() {
             commands::mixer::mixer_settings,
             commands::meme::meme_open,
             commands::meme::meme_close,
+            commands::meme::meme_reveal,
             commands::meme::meme_set_refs,
             commands::meme::meme_ref_image,
             commands::meme::meme_styles,

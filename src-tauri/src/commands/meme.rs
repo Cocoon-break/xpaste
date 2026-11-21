@@ -64,6 +64,12 @@ pub fn meme_close(app: AppHandle) {
     meme::close(&app);
 }
 
+/// 页面的“存进表情包”存好之后：关窗口，面板切到“表情包”分类选中它
+#[tauri::command(async)]
+pub fn meme_reveal(app: AppHandle, id: i64) {
+    meme::reveal(&app, id);
+}
+
 /// 页面的参考图变了（拿掉、从历史添加、画草图）：后端据此判断再从面板带进来时还能加几张。
 /// 草图不是历史记录，页面用负数 id 占位，照样算一张；再发 `meme-open` 时原样带回去。
 #[tauri::command(async)]

@@ -272,10 +272,34 @@ fn open_with(
 
 /// 关掉制作窗口（Esc、关闭按钮、Alt+F4、总开关关掉）。没开着时不做事。
 pub fn close(app: &AppHandle) {
+    if let Some(back) = shut() {
+        log::info!("表情包 关闭窗口");
+        crate::meme_window::hide(app, back);
+    }
+}
+
+/// 存进表情包之后（规则 10）：关掉窗口，唤起面板切到“表情包”分类、选中刚存的这个。
+/// 面板的粘贴目标是打开制作窗口前的应用，选中后按 ↩ 就贴回去。
+pub fn reveal(app: &AppHandle, id: i64) {
+    let Some(back) = shut() else { return };
+    log::info!("表情包 存进库后到面板 id={id}");
+    crate::meme_window::hide(app, None);
+    app.state::<AppState>()
+        .previous_window
+        .store(back.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
+    crate::panel::reshow(app);
+    // 排在面板显示之后发：panel-shown 会把搜索清空、重画列表
+    crate::panel::on_main(app, move |app| {
+        crate::events::emit_to(app, "panel", crate::events::MEME_REVEAL, id)
+    });
+}
+
+/// 窗口记成关闭，返回打开前的前台窗口；本来就没开时返回 None
+fn shut() -> Option<Option<isize>> {
     let back = {
         let mut rt = rt();
         if !rt.open {
-            return;
+            return None;
         }
         rt.open = false;
         rt.refs.clear();
@@ -283,8 +307,7 @@ pub fn close(app: &AppHandle) {
     };
     // 进行中的生成不打断：回来的结果照样进库，只是不再交给页面
     crate::meme_gen::cancel();
-    log::info!("表情包 关闭窗口");
-    crate::meme_window::hide(app, back);
+    Some(back)
 }
 
 /// 页面的参考图变了（拿掉、从历史添加、画草图）：更新镜像。
