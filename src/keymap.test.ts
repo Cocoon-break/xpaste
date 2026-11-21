@@ -236,4 +236,6 @@ test('“全部”搜索结果里选中表情包：Mod+E 也是接着改，不�
   assert.deepEqual(k({ key: 'e', mod: true }), { t: 'editMeme' });
   assert.equal(k({ key: 'p', mod: true }), null);
   assert.equal(k({ key: 'ArrowLeft' }), null);
+  // 多选里当前选中的是表情包：接着改它，不去“做表情包”（不会提示做不了）
+  assert.deepEqual(keyAction(ev({ key: 'e', mod: true }), ctx({ meme: true, selIsMeme: true, multi: 3 })), { t: 'editMeme' });
 });

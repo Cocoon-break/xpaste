@@ -96,8 +96,8 @@ export const keyAction = (e: KeyEv, c: KeyCtx): Action => {
   // 片段（M25 规则 5、6）；翻译（M26 规则 2，多选时不可翻译）；表情包制作
   if (e.mod && !e.shift && !e.alt && !e.repeat) {
     if (lk === 't' && c.selTranslatable && c.multi < 2) return { t: c.compact ? 'peekTranslate' : 'translate' };
-    // 表情包上 Mod+E 是“接着改”；表情包不能存为片段、不能置顶
-    if (lk === 'e' && c.selIsMeme && c.multi < 2) return { t: 'editMeme' };
+    // 表情包上 Mod+E 是“接着改”（多选时看当前选中的那个）；表情包不能存为片段、不能置顶
+    if (lk === 'e' && c.selIsMeme) return { t: 'editMeme' };
     if ((lk === 's' || lk === 'p') && c.selIsMeme) return null;
     if (lk === 'e' && c.inMeme) return null;
     if (lk === 's' && c.hasSel && !c.selIsSnip) return { t: 'saveSnippet' };

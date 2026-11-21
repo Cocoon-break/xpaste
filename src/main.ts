@@ -40,7 +40,7 @@ import {
 } from './format';
 import { hotkeyFromEvent, hotkeyHint, hotkeyLabel } from './hotkey';
 import { keyAction } from './keymap';
-import { copyVerb, escHint, exportNote, fileTextHelp, importNote, openLabel, snippetExportName } from './labels';
+import { copyVerb, escHint, keptNote, exportNote, fileTextHelp, importNote, openLabel, snippetExportName } from './labels';
 import { ocrLabel, ocrProgressLabel, snippetHTML } from './ocr-label';
 import { searchGate } from './search-gate';
 import { otherEngine, staleDelta, translatable, trAfterDelta, trAfterEnd, trBlockHTML, type Engine, type Tr } from './translate';
@@ -811,10 +811,12 @@ function renderPreview(fade = false) {
     pbody.innerHTML = '<div class="p-empty">在左侧选择一条记录查看完整内容</div>';
     return;
   }
-  ptype.innerHTML = isMeme(r) ? `<span class="tchip" data-type="meme">${svg('smile')}表情包</span>` : (snip ? `<span class="tchip" data-type="snip">${svg('snip')}片段</span>` : '')
-    + `<span class="tchip" data-type="${r.kind}">${svg(r.kind)}${LABEL[r.kind]}</span>`
-    + (isFav(r, favMin()) ? `<span class="tchip" data-type="fav">${svg('star')}常用</span>` : '')
-    + (r.lang ? `<span class="chip">${esc(r.lang)}</span>` : '');
+  // 表情包只标“表情包”，不再标“图片”
+  ptype.innerHTML = isMeme(r) ? `<span class="tchip" data-type="meme">${svg('smile')}表情包</span>`
+    : (snip ? `<span class="tchip" data-type="snip">${svg('snip')}片段</span>` : '')
+      + `<span class="tchip" data-type="${r.kind}">${svg(r.kind)}${LABEL[r.kind]}</span>`
+      + (isFav(r, favMin()) ? `<span class="tchip" data-type="fav">${svg('star')}常用</span>` : '')
+      + (r.lang ? `<span class="chip">${esc(r.lang)}</span>` : '');
   setPin(r.pinned, true);
   pmeta.innerHTML = isMeme(r) ? '' : metaHTML(r, S.detail?.id === r.id ? S.detail : null);
   if (bodyFor === r.id && isMeme(r)) {
@@ -1857,7 +1859,7 @@ async function confirmClear(): Promise<string | null> {
   try {
     const n = await countUnpinned();
     if (n === 0) msg = '没有可删除的记录';
-    else if (!(await confirm({ title: '清空历史', body: `将删除 ${n} 条未置顶的记录，置顶记录与片段会保留`, ok: `删除 ${n} 条记录`, danger: true }))) return null;
+    else if (!(await confirm({ title: '清空历史', body: `将删除 ${n} 条未置顶的记录，${keptNote(memeOn())}`, ok: `删除 ${n} 条记录`, danger: true }))) return null;
     else [msg, icon] = [`已删除 ${await clearHistory()} 条记录`, 'trash'];
   } catch (e) {
     msg = (e as AppError).message;
@@ -2820,7 +2822,7 @@ function openSettings() {
   if (!S.settings.hotkey || dlg.classList.contains('is-shown')) return;
   clearTimeout(closeTimer);
   if (!dlg.open) dlgReturn = document.activeElement as HTMLElement | null;
-  clearNote.textContent = '置顶记录与片段会保留';
+  clearNote.textContent = keptNote(memeOn());
   logNote.textContent = LOG_NOTE;
   snipNote.textContent = SNIP_NOTE;
   const hasSnip = counts(S.records, favMin()).snip > 0;

@@ -3,6 +3,8 @@ import type { Kind, PlatformInfo } from './api/types';
 
 /** 能自动粘贴（macOS 已授权 / Windows）说“粘贴”，否则说“复制”。 */
 export const copyVerb = (canPaste: boolean) => (canPaste ? '粘贴' : '复制');
+/** 清空历史时保留的东西：开着表情包制作时把表情包也说上（库里的表情包不会被清空） */
+export const keptNote = (memes: boolean) => (memes ? '置顶记录、片段和表情包会保留' : '置顶记录与片段会保留');
 
 /** 状态栏 Esc 提示：多选时 Esc 先取消选择（与 keymap 的 clearMulti 同序，M25 规则 6），其次搜索框有字时清空搜索。 */
 export const escHint = (hasQuery: boolean, multi = false, app = false) => (multi ? '取消选择' : hasQuery ? '清空搜索' : app ? '去掉来源' : '隐藏');
