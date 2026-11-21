@@ -936,11 +936,11 @@ impl Store {
         Ok(())
     }
 
-    /// 粘贴后计数；`move_to_top` 时非置顶记录移到最前；片段总是更新 `copied_at`（“上次使用”，M25 规则 10）。
+    /// 粘贴后计数；`move_to_top` 时非置顶记录移到最前；片段和表情包总是更新 `copied_at`（“上次使用”，M25 规则 10）。
     pub fn bump_use(&self, id: i64, move_to_top: bool, now_ms: i64) -> Result<(), CoreError> {
         self.conn.execute(
             "UPDATE records SET uses = uses + 1,
-               copied_at = CASE WHEN snippet_body IS NOT NULL OR (?1 AND pinned = 0) THEN ?2 ELSE copied_at END WHERE id = ?3",
+               copied_at = CASE WHEN snippet_body IS NOT NULL OR meme IS NOT NULL OR (?1 AND pinned = 0) THEN ?2 ELSE copied_at END WHERE id = ?3",
             params![move_to_top, now_ms, id],
         )?;
         Ok(())
@@ -1141,7 +1141,7 @@ impl Store {
     }
 
     /// 存一个表情包（库里按置顶存、豁免所有清理）：文件已由调用方写到 `memes/` 下，
-    /// `flavors` 同剪切板里的文件记录，直接可以粘贴。
+    /// `flavors` 同剪切板里的文件记录，直接可以粘贴。插入失败时 `memes/` 里的文件由调用方清理。
     pub fn add_meme(
         &mut self,
         m: NewMeme,
@@ -1403,6 +1403,7 @@ fn reindex_snippet(tx: &Connection, id: i64) -> Result<(), CoreError> {
 
 /// 这些记录里表情包指向的文件：只认数据目录 `memes/` 下的（挡掉 `..`），其余一律不碰。
 fn meme_files(conn: &Connection, dir: &Path, ids: &[i64]) -> Result<Vec<PathBuf>, CoreError> {
+    // memes/ 由应用自己维护，不解析符号链接
     let root = dir.join("memes");
     let mut out = Vec::new();
     let mut stmt = conn.prepare("SELECT paths FROM records WHERE id = ?1 AND meme IS NOT NULL")?;
@@ -2902,6 +2903,16 @@ pub(crate) mod tests {
         let m = s.add_meme(new_meme(&dir, "甲", "甲"), &[], 99).unwrap();
         assert_eq!(s.latest_live_id().unwrap(), Some(a));
         assert!(s.save_snippet(m, "n", 100).is_err());
+    }
+
+    #[test]
+    fn bump_use_updates_meme_last_used() {
+        let mut s = mem();
+        let dir = s.dir.clone();
+        let id = s.add_meme(new_meme(&dir, "甲", "甲"), &[], 100).unwrap();
+        s.bump_use(id, false, 900).unwrap();
+        let sum = s.summary(id).unwrap().unwrap();
+        assert_eq!((sum.uses, sum.copied_at), (1, 900));
     }
 
     #[test]
