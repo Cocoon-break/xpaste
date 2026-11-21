@@ -567,8 +567,6 @@ pub fn run() {
             commands::meme::meme_test_image,
             commands::meme::meme_library_stats,
             commands::meme::meme_captions,
-            commands::meme::meme_generate,
-            commands::meme::meme_cancel,
             commands::meme::meme_task_start,
             commands::meme::meme_task_cancel,
             commands::meme::meme_task_retry,

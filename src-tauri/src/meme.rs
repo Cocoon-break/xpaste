@@ -502,8 +502,6 @@ fn shut() -> Option<Origin> {
         rt.refs.clear();
         std::mem::replace(&mut rt.origin, NOWHERE)
     };
-    // 旧的“生成”命令：进行中的不打断，回来的结果照样进库，只是不再交给页面。AI 任务队列不受关窗口影响
-    crate::meme_gen::cancel();
     Some(origin)
 }
 

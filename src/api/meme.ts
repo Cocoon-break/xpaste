@@ -77,13 +77,6 @@ export interface GenReq {
   /** 草图（负数 id）由页面滤掉，另经 `sketch` 带文件名 */
   refs: RefKey[]; sketch: string | null; base: number | null;
 }
-/** done：库里新存的那几张；irregular：网格没画规整，整张图已存成 id 这一张 */
-export type GenOut = { status: 'done'; ids: number[] } | { status: 'irregular'; id: number };
-/** 取消或关窗口之后才回来的结果：已进库，页面不显示、不提示 */
-export const MEME_LATE = '已取消';
-/** 生成，结果立刻进库；失败时抛出给用户看的原因（字符串） */
-export const memeGenerate = (req: GenReq) => invoke<GenOut>('meme_generate', { req });
-export const memeCancel = () => invoke<void>('meme_cancel');
 /** 一个 AI 任务（后端排队，不跟窗口走）。`startedMs` 是开始画的 Unix 毫秒，秒数页面自己走；`ahead` 是前面还在排队的个数；
  *  画好的结果在 `ids`，网格没画规整时 `ids` 为空、整张图是 `irregular`；`title`、`scene` 是发起时传的，原样带回 */
 export interface TaskView {

@@ -7,7 +7,7 @@ use tauri::{AppHandle, State};
 use crate::error::AppError;
 use crate::imagegen::{self, Format, ImageCfg};
 use crate::meme::{self, RefKey};
-use crate::meme_gen::{self, GenOut, GenReq};
+use crate::meme_gen::{self, GenReq};
 use crate::meme_store::{StoreOut, Then};
 use crate::state::AppState;
 
@@ -210,31 +210,6 @@ pub async fn meme_captions(
 ) -> Result<Vec<String>, String> {
     let cfg = crate::translate::cfg(&state.settings());
     meme_gen::captions(&state, &cfg, &idea, &refs, sketch.as_deref(), &avoid).await
-}
-
-/// 生成一张 / 一套 / 一套里的一部分 / AI 动作，结果立刻进库。取消或关窗口后才回来的，返回 `meme_gen::LATE`
-#[tauri::command]
-pub async fn meme_generate(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    req: GenReq,
-) -> Result<GenOut, String> {
-    let cfg = meme_gen::image_cfg(&state.settings());
-    let added = |id| crate::events::emit_summary(&app, crate::events::RECORD_ADDED, id);
-    let env = meme_gen::Env {
-        state: &state,
-        seq: &meme_gen::SEQ,
-        cutout: xpaste_platform::foreground_cutout,
-        added: &added,
-    };
-    meme_gen::generate(&env, &cfg, req).await
-}
-
-/// 取消生成：请求不打断，回来的结果照样进库，只是不交给页面
-#[tauri::command(async)]
-pub fn meme_cancel() {
-    meme_gen::cancel();
-    log::info!("表情包 取消生成");
 }
 
 /// 发起一个 AI 任务（排队，不跟窗口走），返回任务号。`title` 是列表里显示的那句话，`scene` 是发起时的做法 JSON，都原样带回。

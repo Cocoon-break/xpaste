@@ -24,7 +24,7 @@ use crate::meme::RefKey;
 use crate::state::AppState;
 use crate::translate::Fail;
 
-/// 晚到的结果（已取消、窗口已关）：页面收到这个原因时什么都不显示
+/// 晚到的结果（任务已取消）：不再显示、不提示
 pub const LATE: &str = "已取消";
 const GONE: &str = "原记录已删除，拿掉了一张";
 const CAPTION_UNCONFIGURED: &str = "AI 接口还没配好";
@@ -35,14 +35,6 @@ const REFS_SENT: usize = 4;
 
 /// 系统抠主体：返回与输入同尺寸的 RGBA，没抠到为 None
 pub type Cutout = fn(&[u8]) -> Option<(u32, u32, Vec<u8>)>;
-
-/// 当前这次生成的序号（应用里只有这一个；测试各用各的）
-pub static SEQ: AtomicU64 = AtomicU64::new(0);
-
-/// 取消、关窗口：让进行中的那次变成“晚到”
-pub fn cancel() {
-    SEQ.fetch_add(1, Ordering::SeqCst);
-}
 
 /// 页面发来的生成请求。带用户写的话，不派生 Debug。
 #[derive(Deserialize, Clone)]
