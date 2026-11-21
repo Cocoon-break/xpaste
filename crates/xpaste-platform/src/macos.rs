@@ -1060,6 +1060,15 @@ pub fn frontmost_app() -> Option<AppInfo> {
     })
 }
 
+/// 前台应用是不是本进程（比如 xPaste 的设置窗口拿着键盘）
+pub fn frontmost_is_self() -> bool {
+    autoreleasepool(|_| {
+        NSWorkspace::sharedWorkspace()
+            .frontmostApplication()
+            .is_some_and(|a| i64::from(a.processIdentifier()) == i64::from(std::process::id()))
+    })
+}
+
 /// 选择器候选：前台类（Regular）运行中应用的 `localizedName`，加上常见应用目录下一层 `*.app` 的显示名
 ///（去掉 `.app`）。与 `frontmost_app().name` 同口径；可重复、无序，由前端去重。
 pub fn installed_apps() -> Vec<String> {

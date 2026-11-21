@@ -96,6 +96,19 @@ pub fn meme_recent_images(state: State<'_, AppState>) -> Result<Vec<RefKey>, App
     meme::recent_images(&state)
 }
 
+/// 窗口里按 ⌘V：剪切板里是图片时让它成为历史记录（相同内容的用已有那条），返回参考图；不是图片时为 None。
+/// 暂停记录时返回给用户看的原因
+#[tauri::command(async)]
+pub fn meme_paste_image(app: AppHandle) -> Result<Option<RefKey>, String> {
+    meme::paste_image(&app)
+}
+
+/// 拖进窗口的文件：只收图片文件，作为一条文件记录进历史，按文件拆成参考图。暂停记录时返回原因
+#[tauri::command(async)]
+pub fn meme_add_files(app: AppHandle, paths: Vec<String>) -> Result<Vec<RefKey>, String> {
+    meme::add_files(&app, paths.into_iter().map(Into::into).collect())
+}
+
 /// 一种内置风格：键名、显示名、类别
 #[derive(Serialize)]
 pub struct StyleDto {

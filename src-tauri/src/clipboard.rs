@@ -2,7 +2,7 @@
 //! 日志只写字节数、敏感标记、来源应用名与记录 id。
 
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use tauri::{AppHandle, Manager};
 use xpaste_core::capture::{self, Outcome};
@@ -19,6 +19,15 @@ use crate::state::AppState;
 /// `last_write`：上次写入后的序号，`u64::MAX` 表示从未写过。
 pub fn is_self_write(seq: u64, last_write: u64, writing: bool) -> bool {
     writing || seq == last_write
+}
+
+/// 采集管道最后一次没收的那次变化（忽略的应用、敏感内容、过大等）的剪切板序号。
+/// 表情包制作窗口里按 ⌘V 时据此不收它：那时前台是 xPaste 自己，认不出当初是从哪个应用复制的
+static REFUSED: AtomicU64 = AtomicU64::new(u64::MAX);
+
+/// 剪切板此刻的内容是采集管道没收的那次
+pub fn refused_now() -> bool {
+    REFUSED.load(Ordering::SeqCst) == xpaste_platform::change_count()
 }
 
 pub fn start(app: AppHandle) {
@@ -61,6 +70,7 @@ fn handle_change(app: &AppHandle, seq: u64) {
     if xpaste_platform::frontmost_app().is_some_and(|a| capture::is_ignored_app(&a.name, &ignored))
     {
         log::info!("跳过 IgnoredApp");
+        REFUSED.store(seq, Ordering::SeqCst);
         return;
     }
     match xpaste_platform::read_snapshot(skip_sensitive) {
@@ -98,7 +108,21 @@ fn pdf_texts(paths: &[std::path::PathBuf]) -> Vec<String> {
 }
 
 /// `seq`：这次变化的剪切板序号，传送带据此认出 xPaste 自己按普通写入写的内容。
-fn ingest(app: &AppHandle, mut snap: Snapshot, seq: u64) {
+fn ingest(app: &AppHandle, snap: Snapshot, seq: u64) {
+    let kind = detect::kind(&snap);
+    match record(app, snap) {
+        Some(id) => {
+            crate::belt::on_recorded(app, id, kind, seq);
+            crate::mixer::on_recorded(app, id, kind, seq);
+        }
+        None => REFUSED.store(seq, Ordering::SeqCst),
+    }
+}
+
+/// 快照按采集规则入库（暂停、敏感、忽略的应用、过大、空的跳过；内容相同的合并进已有记录），
+/// 发事件给前端、把补全任务入队。返回记录 id，跳过或失败时为 None。
+/// 表情包制作窗口里按 ⌘V、拖文件进来也走这里。
+pub fn record(app: &AppHandle, mut snap: Snapshot) -> Option<i64> {
     let state = app.state::<AppState>();
     // process 会消耗快照，先记下补全任务要用的信息
     let kind = detect::kind(&snap);
@@ -121,25 +145,28 @@ fn ingest(app: &AppHandle, mut snap: Snapshot, seq: u64) {
     }
     let outcome = capture::process(snap, &settings, paused, &mut state.store(), now_ms());
     match outcome {
-        Err(e) => log::warn!("记录入库失败：{e}"),
-        Ok(Outcome::Skipped(reason)) => log::info!("跳过 {reason:?}"),
+        Err(e) => {
+            log::warn!("记录入库失败：{e}");
+            None
+        }
+        Ok(Outcome::Skipped(reason)) => {
+            log::info!("跳过 {reason:?}");
+            None
+        }
         Ok(Outcome::Merged(id, removed)) => {
             log::info!("记录更新 id={id}");
             emit_summary(app, RECORD_UPDATED, id);
             emit_removed(app, &removed);
-            crate::belt::on_recorded(app, id, kind, seq);
-            crate::mixer::on_recorded(app, id, kind, seq);
             // 再次复制还没识别的图片（例如补识别关着）：插队识别，已识别的由识别线程丢弃
             if kind == Kind::Image || ocr_files {
                 state.ocr.push_front(id);
             }
+            Some(id)
         }
         Ok(Outcome::Added(id, removed)) => {
             log::info!("记录新增 id={id}");
             emit_summary(app, RECORD_ADDED, id);
             emit_removed(app, &removed);
-            crate::belt::on_recorded(app, id, kind, seq);
-            crate::mixer::on_recorded(app, id, kind, seq);
             enqueue_followups(app, id, kind, first_path, ocr_files);
             if let Some(app_id) = source
                 && !icon_path(&state.data_dir, &app_id).exists()
@@ -147,6 +174,7 @@ fn ingest(app: &AppHandle, mut snap: Snapshot, seq: u64) {
             {
                 log::warn!("补全线程已退出");
             }
+            Some(id)
         }
     }
 }

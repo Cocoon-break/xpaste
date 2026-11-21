@@ -1,6 +1,7 @@
 // 表情包制作，对接 src-tauri/src/commands/meme.rs。
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
 import type { MemeFormat } from '../settings-form';
 
 /** 设置页表单里（未保存）的生图接口配置 */
@@ -16,7 +17,7 @@ export const memeLibraryStats = () => invoke<[number, number]>('meme_library_sta
 export type RefKey = { id: number; file: number | null };
 
 /** 打开或追加到制作窗口（后端发给页面）：`refs` 是追加之后窗口里的全部参考图；`idea` 只在“想表达什么”为空时放进去；
- *  `scene` 是接着改的做法，`sceneId` 是它在库里的 id；`draft` 是空白打开新窗口时的草稿；
+ *  `scene` 是接着改的做法，`sceneId` 是它在库里的 id；`draft` 是空白打开新窗口时的草稿（画成卡片，点“接着做”才恢复）；
  *  `expired` 时试用已结束，不带参考图和文字，页面只显示过期提示；
  *  `taskId` 不为 null 时是回到 AI 任务的那次（`scene` 是任务里的做法，`sceneId` 为 null），`taskIds` 是那次已画好的结果
  *  （网格没画规整的是整张那一个；在画、排队、没画出来的为空）。平时为 null 和空数组 */
@@ -41,6 +42,13 @@ export const memeSetRefs = (refs: RefKey[]) => invoke<void>('meme_set_refs', { r
 export const memeRefImage = (k: RefKey) => invoke<ArrayBuffer>('meme_ref_image', { id: k.id, file: k.file });
 /** “从历史添加”：最近 8 张图片 */
 export const memeRecentImages = () => invoke<RefKey[]>('meme_recent_images');
+/** 窗口里按 ⌘V：剪切板里是图片时让它成为历史记录（相同内容的用已有那条），返回参考图；不是图片时为 null。暂停记录时抛出原因 */
+export const memePasteImage = () => invoke<RefKey | null>('meme_paste_image');
+/** 拖进窗口的文件：只收图片文件，作为一条文件记录进历史，按文件拆成参考图。暂停记录时抛出原因 */
+export const memeAddFiles = (paths: string[]) => invoke<RefKey[]>('meme_add_files', { paths });
+/** 拖文件进窗口松开时：文件的路径 */
+export const onMemeFileDrop = (cb: (paths: string[]) => void): Promise<UnlistenFn> =>
+  getCurrentWebview().onDragDropEvent(({ payload: p }) => { if (p.type === 'drop' && p.paths.length) cb(p.paths); });
 
 /** 一种内置风格：键名、显示名、类别 */
 export interface MemeStyle { key: string; name: string; cat: string }

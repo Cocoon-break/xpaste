@@ -61,7 +61,7 @@ pub struct OpenPayload {
     pub scene_id: Option<i64>,
     /// 接着改的是做好的成品：做法没变时复制只放剪切板。AI 原图不算（复制要导出 240 的成品）
     pub scene_final: bool,
-    /// 空白打开新窗口时的草稿
+    /// 空白打开新窗口时的草稿：页面画成一张卡片，点“接着做”才恢复
     pub draft: Option<String>,
     /// 本机能抠主体
     pub cutout: bool,
@@ -132,12 +132,21 @@ pub fn arrive(
 /// 此刻的前台窗口和前台应用的名字（同采集时的来源应用名）
 fn foreground() -> (Option<isize>, Option<String>) {
     let back = xpaste_platform::foreground_window();
-    // Windows 的 frontmost_app 先看剪切板所有者，这里要的是前台窗口所属的应用
+    // Windows 的 frontmost_app 先看剪切板所有者，这里要的是前台窗口所属的应用（已排除本进程）
     #[cfg(windows)]
     let name = back.and_then(xpaste_platform::window_app_name);
     #[cfg(not(windows))]
-    let name = xpaste_platform::frontmost_app().map(|a| a.name);
+    let name = target_name(
+        xpaste_platform::frontmost_app(),
+        xpaste_platform::frontmost_is_self(),
+    );
     (back, name)
+}
+
+/// 粘贴目标的名字：前台是 xPaste 自己（比如设置窗口拿着键盘）时没有目标，贴不回自己
+#[cfg_attr(windows, allow(dead_code))]
+fn target_name(front: Option<xpaste_core::AppInfo>, is_self: bool) -> Option<String> {
+    front.filter(|_| !is_self).map(|a| a.name)
 }
 
 /// 选中的一条记录里做表情包用得上的部分
@@ -244,7 +253,7 @@ fn gather(state: &AppState, ids: &[i64]) -> Vec<Item> {
         .collect()
 }
 
-/// 带着这些记录打开制作窗口（`ids` 为空 = 空白打开，新窗口时恢复草稿）。已开着时参考图追加、满了提示；面板开着就收起。
+/// 带着这些记录打开制作窗口（`ids` 为空 = 空白打开，新窗口时带上草稿）。已开着时参考图追加、满了提示；面板开着就收起。
 /// 试用结束时照常打开，载荷标上过期、不带记录，页面只显示过期提示。选中的全都用不上时返回原因，面板提示。
 pub fn open(app: &AppHandle, ids: &[i64], entry: Entry) -> Result<(), AppError> {
     open_with(app, ids, None, None, entry).map(|_| ())
@@ -367,7 +376,7 @@ fn open_with(
         match (scene_id, task_id, draft.is_some()) {
             (Some(id), _, _) => format!("（接着改 {id}）"),
             (None, Some(t), _) => format!("（回到任务 {t}）"),
-            (None, None, true) => "（恢复草稿）".into(),
+            (None, None, true) => "（有草稿）".into(),
             _ => String::new(),
         }
     );
@@ -538,6 +547,115 @@ pub fn recent_images(state: &AppState) -> Result<Vec<RefKey>, AppError> {
     Ok(out)
 }
 
+const PASTE_PAUSED: &str = "暂停记录时加不了剪切板里的图";
+const DROP_PAUSED: &str = "暂停记录时加不了拖进来的图";
+
+/// 窗口里按 ⌘V：剪切板里是图片时按采集规则让它成为一条历史记录（内容相同的就用已有的那条），返回它；
+/// 不是图片、采集规则跳过（敏感内容、忽略的应用等）时为 None。暂停记录时不入库，返回原因。
+pub fn paste_image(app: &AppHandle) -> Result<Option<RefKey>, String> {
+    let state = app.state::<AppState>();
+    if state.paused.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(PASTE_PAUSED.into());
+    }
+    // 当初复制时采集管道就没收（忽略的应用、敏感内容等）：这里也不收
+    if crate::clipboard::refused_now() {
+        log::info!("表情包 剪切板里的这次当初没进历史，不加");
+        return Ok(None);
+    }
+    let skip_sensitive = state.settings().skip_sensitive;
+    let snap = match xpaste_platform::read_snapshot(skip_sensitive) {
+        Ok(Some(s)) => s,
+        Ok(None) => return Ok(None),
+        Err(e) => {
+            log::warn!("表情包 读剪切板失败：{e}");
+            return Ok(None);
+        }
+    };
+    let bytes = snap.bitmap.as_ref().map_or(0, Vec::len);
+    let r = image_ref(snap, |s| crate::clipboard::record(app, s));
+    match r {
+        Some(k) => log::info!("表情包 剪切板里的图加成参考图 id={} {bytes} 字节", k.id),
+        None => log::info!("表情包 剪切板里不是能用的图"),
+    }
+    Ok(r)
+}
+
+/// 剪切板快照是图片时交给 `record` 入库（返回记录 id），成为一张参考图
+fn image_ref(
+    snap: xpaste_core::Snapshot,
+    record: impl FnOnce(xpaste_core::Snapshot) -> Option<i64>,
+) -> Option<RefKey> {
+    if xpaste_core::detect::kind(&snap) != Kind::Image {
+        return None;
+    }
+    record(snap).map(|id| RefKey { id, file: None })
+}
+
+/// 拖进窗口的文件：只收图片文件，作为一条文件记录按采集规则入库，按文件拆成参考图。暂停记录时不入库，返回原因
+pub fn add_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<Vec<RefKey>, String> {
+    if app
+        .state::<AppState>()
+        .paused
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return Err(DROP_PAUSED.into());
+    }
+    let n = paths.len();
+    let refs = files_refs(paths, |s| crate::clipboard::record(app, s));
+    log::info!("表情包 拖进来 {n} 个文件，加成参考图 {} 张", refs.len());
+    Ok(refs)
+}
+
+/// 图片文件拼成一条文件记录的快照交给 `record` 入库（返回记录 id），按文件拆开；没有图片文件、没入库时为空
+fn files_refs(
+    paths: Vec<PathBuf>,
+    record: impl FnOnce(xpaste_core::Snapshot) -> Option<i64>,
+) -> Vec<RefKey> {
+    let files: Vec<PathBuf> = paths
+        .into_iter()
+        .filter(|p| xpaste_core::detect::is_image_file(p))
+        .collect();
+    if files.is_empty() {
+        return Vec::new();
+    }
+    let n = files.len() as u32;
+    let snap = xpaste_core::Snapshot {
+        flavors: file_flavors(&files),
+        file_paths: files,
+        ..Default::default()
+    };
+    record(snap).map_or_else(Vec::new, |id| {
+        (0..n).map(|i| RefKey { id, file: Some(i) }).collect()
+    })
+}
+
+/// 几个文件的剪切板格式（同复制文件时系统给的），记录粘贴、复制时原样写回：Windows 一个 `CF_HDROP`
+#[cfg(windows)]
+fn file_flavors(paths: &[PathBuf]) -> Vec<xpaste_core::Flavor> {
+    vec![xpaste_core::Flavor {
+        item: 0,
+        format: "CF_HDROP".into(),
+        data: xpaste_platform::winfmt::dropfiles(paths),
+    }]
+}
+
+/// 几个文件的剪切板格式：macOS 每个文件一项 `public.file-url`
+#[cfg(not(windows))]
+fn file_flavors(paths: &[PathBuf]) -> Vec<xpaste_core::Flavor> {
+    paths
+        .iter()
+        .enumerate()
+        .flat_map(|(i, p)| {
+            xpaste_platform::file_flavors(p)
+                .into_iter()
+                .map(move |f| xpaste_core::Flavor {
+                    item: i as u32,
+                    ..f
+                })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -642,5 +760,47 @@ mod tests {
         assert!(full);
         let (refs, full) = merge_refs(&[], vec![r(1, None)]);
         assert_eq!((refs.len(), full), (1, false));
+    }
+
+    #[test]
+    fn dropped_files_only_images() {
+        let mut got = None;
+        let refs = files_refs(vec!["/tmp/a.png".into(), "/tmp/b.pdf".into()], |s| {
+            got = Some(s.file_paths.clone());
+            Some(5)
+        });
+        assert_eq!(refs, vec![r(5, Some(0))]);
+        assert_eq!(got, Some(vec![PathBuf::from("/tmp/a.png")]));
+        // 一张图片都没有：不入库
+        assert!(files_refs(vec!["/tmp/b.pdf".into()], |_| panic!("不该入库")).is_empty());
+        // 采集规则跳过了（比如忽略的应用）：没有参考图
+        assert!(files_refs(vec!["/tmp/a.png".into()], |_| None).is_empty());
+    }
+
+    #[test]
+    fn pasted_image_only() {
+        let img = xpaste_core::Snapshot {
+            bitmap: Some(vec![1, 2, 3]),
+            ..Default::default()
+        };
+        assert_eq!(image_ref(img, |_| Some(9)), Some(r(9, None)));
+        let text = xpaste_core::Snapshot {
+            text: Some("不想上班".into()),
+            ..Default::default()
+        };
+        assert_eq!(image_ref(text, |_| panic!("文字不入库")), None);
+    }
+
+    #[test]
+    fn no_target_when_xpaste_is_in_front() {
+        let wx = || {
+            Some(xpaste_core::AppInfo {
+                id: "com.tencent.xinWeChat".into(),
+                name: "微信".into(),
+            })
+        };
+        assert_eq!(target_name(wx(), false).as_deref(), Some("微信"));
+        assert_eq!(target_name(wx(), true), None);
+        assert_eq!(target_name(None, false), None);
     }
 }
