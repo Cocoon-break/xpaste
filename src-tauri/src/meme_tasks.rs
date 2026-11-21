@@ -84,12 +84,39 @@ impl std::fmt::Debug for Queue {
     }
 }
 
-fn kind_of(req: &GenReq) -> &'static str {
-    match req.kind.as_str() {
-        "set" | "set_part" => "set",
+/// 一套的网格没画规整、用户选了“分 4 次重画”：一个任务里顺序发 4 次 `set_part`
+pub const SET_PARTS: &str = "set_parts";
+/// 分 4 次里某一次又没画规整：不再弹选择，任务算没画出来
+const PART_SHAKY: &str = "这次没画规整，再试一次";
+
+/// 列表里显示的种类；不认识的生成方式为 None
+fn kind_of(req: &GenReq) -> Option<&'static str> {
+    Some(match req.kind.as_str() {
+        "one" => "one",
+        "set" | "set_part" | SET_PARTS => "set",
         "act" => "act",
-        _ => "one",
+        _ => return None,
+    })
+}
+
+/// 分 4 次重画：依次跑第 0–3 部分，结果 id 按顺序拼起来。某一部分失败或没画规整就停下、返回原因
+/// （已画好的几部分在生成时就进了库）；被取消了不再发后面的部分
+pub async fn run_parts<F, Fut>(mut part: F, cancelled: impl Fn() -> bool) -> Result<GenOut, String>
+where
+    F: FnMut(u8) -> Fut,
+    Fut: std::future::Future<Output = Result<GenOut, String>>,
+{
+    let mut ids = Vec::new();
+    for k in 0..4 {
+        if cancelled() {
+            return Err(meme_gen::LATE.into());
+        }
+        match part(k).await? {
+            GenOut::Done { ids: got } => ids.extend(got),
+            GenOut::Irregular { .. } => return Err(PART_SHAKY.into()),
+        }
     }
+    Ok(GenOut::Done { ids })
 }
 
 impl Queue {
@@ -104,8 +131,9 @@ impl Queue {
         self.tasks.iter().position(|t| t.view.id == id)
     }
 
-    /// 入队，返回任务号
-    pub fn push(&mut self, req: GenReq, title: String, scene: String) -> u64 {
+    /// 入队，返回任务号；不认识的生成方式不入队
+    pub fn push(&mut self, req: GenReq, title: String, scene: String) -> Result<u64, String> {
+        let kind = kind_of(&req).ok_or("不认识的生成方式")?;
         self.last_id += 1;
         let style = if req.style.is_empty() {
             "自定义".to_owned()
@@ -115,7 +143,7 @@ impl Queue {
         self.tasks.push(Task {
             view: TaskView {
                 id: self.last_id,
-                kind: kind_of(&req),
+                kind,
                 state: TaskState::Queue,
                 title,
                 style,
@@ -129,7 +157,7 @@ impl Queue {
             req,
             cancelled: false,
         });
-        self.last_id
+        Ok(self.last_id)
     }
 
     /// 在画的不到 `MAX_RUNNING` 个时，把最早排队的标成在画并返回它（取消了还没回来的也占名额）
@@ -150,6 +178,11 @@ impl Queue {
         t.view.state = TaskState::Run;
         t.view.started_ms = Some(u64::try_from(crate::clock::now_ms()).unwrap_or(0));
         Some(t.view.id)
+    }
+
+    /// 在画时被取消了（或已经不在了）：分 4 次重画据此不再发后面的部分
+    pub fn cancelled(&self, id: u64) -> bool {
+        self.at(id).is_none_or(|i| self.tasks[i].cancelled)
     }
 
     /// 这个任务的生成请求（交给 `meme_gen::generate`）
@@ -243,6 +276,9 @@ impl Queue {
 // ---- 运行时 ----
 
 static Q: Mutex<Queue> = Mutex::new(Queue::new());
+/// 发列表时持有：取快照和发出去要成对，免得两处同时变化时旧快照晚于新快照发出、前端拿旧列表覆盖新的。
+/// 和 `Q` 分开，发事件时不占着队列；`emit_to` 不会回调进这个模块，不会死锁
+static EMIT: Mutex<()> = Mutex::new(());
 
 fn q() -> MutexGuard<'static, Queue> {
     Q.lock().unwrap_or_else(PoisonError::into_inner)
@@ -260,6 +296,7 @@ fn changed(app: &AppHandle) {
         log::info!("表情包 任务 {id} 开始画");
         tauri::async_runtime::spawn(run(app.clone(), id, req));
     }
+    let _emit = EMIT.lock().unwrap_or_else(PoisonError::into_inner);
     let views = q().views();
     for label in [crate::meme::LABEL, "panel"] {
         crate::events::emit_to(app, label, crate::events::MEME_TASKS, views.clone());
@@ -278,7 +315,19 @@ async fn run(app: AppHandle, id: u64, req: GenReq) {
         cutout: xpaste_platform::foreground_cutout,
         added: &added,
     };
-    let r = meme_gen::generate(&env, &cfg, req).await;
+    let r = if req.kind == SET_PARTS {
+        let part = |k| {
+            let r = GenReq {
+                kind: "set_part".into(),
+                part: Some(k),
+                ..req.clone()
+            };
+            meme_gen::generate(&env, &cfg, r)
+        };
+        run_parts(part, || q().cancelled(id)).await
+    } else {
+        meme_gen::generate(&env, &cfg, req).await
+    };
     log::info!(
         "表情包 任务 {id} {}",
         if r.is_ok() {
@@ -296,11 +345,11 @@ async fn run(app: AppHandle, id: u64, req: GenReq) {
     changed(&app);
 }
 
-pub fn start(app: &AppHandle, req: GenReq, title: String, scene: String) -> u64 {
-    let id = q().push(req, title, scene);
+pub fn start(app: &AppHandle, req: GenReq, title: String, scene: String) -> Result<u64, String> {
+    let id = q().push(req, title, scene)?;
     log::info!("表情包 任务 {id} 入队");
     changed(app);
-    id
+    Ok(id)
 }
 
 pub fn cancel(app: &AppHandle, id: u64) {
@@ -315,7 +364,7 @@ pub fn retry(app: &AppHandle, id: u64) {
     changed(app);
 }
 
-pub fn drop(app: &AppHandle, id: u64) {
+pub fn dismiss(app: &AppHandle, id: u64) {
     Queue::drop(&mut q(), id);
     changed(app);
 }
@@ -350,7 +399,7 @@ mod tests {
     }
 
     fn push(q: &mut Queue) -> u64 {
-        q.push(req("one"), "标题".into(), "{}".into())
+        q.push(req("one"), "标题".into(), "{}".into()).unwrap()
     }
 
     fn state(q: &Queue, id: u64) -> Option<TaskState> {
@@ -453,11 +502,13 @@ mod tests {
     #[test]
     fn title_scene_kept_not_logged() {
         let mut q = Queue::new();
-        let a = q.push(
-            req("set_part"),
-            "不想上班".into(),
-            r#"{"secret":"做法"}"#.into(),
-        );
+        let a = q
+            .push(
+                req("set_part"),
+                "不想上班".into(),
+                r#"{"secret":"做法"}"#.into(),
+            )
+            .unwrap();
         q.push(
             GenReq {
                 style: String::new(),
@@ -465,7 +516,8 @@ mod tests {
             },
             "x".into(),
             "{}".into(),
-        );
+        )
+        .unwrap();
         let v = &q.views()[1];
         assert_eq!((v.id, v.kind, v.style.as_str()), (a, "set", "clay"));
         assert_eq!(v.title, "不想上班");
@@ -478,5 +530,71 @@ mod tests {
         for s in ["不想上班", "做法", "secret"] {
             assert!(!logged.contains(s), "{logged}");
         }
+    }
+
+    #[test]
+    fn unknown_kind_not_queued() {
+        let mut q = Queue::new();
+        assert!(q.push(req("blah"), "x".into(), "{}".into()).is_err());
+        assert!(q.views().is_empty());
+        let a = q.push(req(SET_PARTS), "x".into(), "{}".into()).unwrap();
+        assert_eq!(q.views()[0].kind, "set");
+        // 分 4 次重画只占一个名额
+        q.next();
+        assert!(!q.cancelled(a));
+        q.cancel(a);
+        assert!(q.cancelled(a));
+    }
+
+    /// 跑一部分：第 `fail_at` 次失败、第 `shaky_at` 次没画规整，其余给 4 个 id；记下调了几次
+    fn parts(
+        calls: &std::cell::Cell<u8>,
+        fail_at: Option<u8>,
+        shaky_at: Option<u8>,
+    ) -> impl FnMut(u8) -> std::future::Ready<Result<GenOut, String>> + '_ {
+        move |k| {
+            calls.set(calls.get() + 1);
+            std::future::ready(if Some(k) == fail_at {
+                Err("服务商限流".into())
+            } else if Some(k) == shaky_at {
+                Ok(GenOut::Irregular { id: 99 })
+            } else {
+                let b = i64::from(k) * 4;
+                Ok(GenOut::Done {
+                    ids: (b..b + 4).collect(),
+                })
+            })
+        }
+    }
+
+    #[test]
+    fn set_parts_joins_16() {
+        let calls = std::cell::Cell::new(0);
+        let out = tauri::async_runtime::block_on(run_parts(parts(&calls, None, None), || false));
+        assert_eq!(
+            out,
+            Ok(GenOut::Done {
+                ids: (0..16).collect()
+            })
+        );
+        assert_eq!(calls.get(), 4);
+
+        calls.set(0);
+        let out = tauri::async_runtime::block_on(run_parts(parts(&calls, Some(2), None), || false));
+        assert_eq!(out, Err("服务商限流".into()));
+        assert_eq!(calls.get(), 3);
+
+        calls.set(0);
+        let out = tauri::async_runtime::block_on(run_parts(parts(&calls, None, Some(1)), || false));
+        assert_eq!(out, Err(PART_SHAKY.into()));
+        assert_eq!(calls.get(), 2);
+
+        // 画完第 1 部分后取消：不再发后面的
+        calls.set(0);
+        let out = tauri::async_runtime::block_on(run_parts(parts(&calls, None, None), || {
+            calls.get() >= 1
+        }));
+        assert!(out.is_err());
+        assert_eq!(calls.get(), 1);
     }
 }

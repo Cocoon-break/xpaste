@@ -47,7 +47,7 @@ pub fn cancel() {
 /// 页面发来的生成请求。带用户写的话，不派生 Debug。
 #[derive(Deserialize, Clone)]
 pub struct GenReq {
-    /// one | set | set_part | act
+    /// one | set | set_part | act；AI 任务另有 set_parts（分 4 次重画，见 `meme_tasks`）
     pub kind: String,
     /// set_part：第几次（0–3）
     pub part: Option<u8>,

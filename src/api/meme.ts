@@ -54,9 +54,9 @@ export const memeStylesTouch = (used: string[], custom: string[]) => invoke<void
 export const memeCaptions = (idea: string, refs: RefKey[], sketch: string | null, avoid: string[]) =>
   invoke<string[]>('meme_captions', { idea, refs, sketch, avoid });
 
-/** 生成请求：one 一张、set 一套 16 张、set_part 分 4 次里的第 part 次（0–3）、act 以库里 base 那张为底的 AI 动作 */
+/** 生成请求：one 一张、set 一套 16 张、set_part 分 4 次里的第 part 次（0–3）、set_parts 分 4 次重画（只用于 AI 任务）、act 以库里 base 那张为底的 AI 动作 */
 export interface GenReq {
-  kind: 'one' | 'set' | 'set_part' | 'act'; part: number | null; act: string | null;
+  kind: 'one' | 'set' | 'set_part' | 'set_parts' | 'act'; part: number | null; act: string | null;
   /** 内置风格的键名，自定义时为空串 */
   style: string; custom: string | null;
   idea: string; caption: string;
@@ -77,7 +77,8 @@ export interface TaskView {
   title: string; style: string; startedMs: number | null; ahead: number;
   ids: number[]; irregular: number | null; error: string; scene: string;
 }
-/** 发起一个 AI 任务，返回任务号。`scene` 是做法 JSON，`title` 是列表里显示的那句话 */
+/** 发起一个 AI 任务，返回任务号。`scene` 是做法 JSON，`title` 是列表里显示的那句话。
+ *  “分 4 次重画”传 `kind: 'set_parts'`（`part` 为 null），一个任务里顺序画 4 部分拼成 16 张；不认识的 kind 抛出原因 */
 export const memeTaskStart = (req: GenReq, scene: string, title: string) => invoke<number>('meme_task_start', { req, scene, title });
 /** 取消：排队的直接拿掉；在画的结果回来照样进库，不再显示 */
 export const memeTaskCancel = (id: number) => invoke<void>('meme_task_cancel', { id });

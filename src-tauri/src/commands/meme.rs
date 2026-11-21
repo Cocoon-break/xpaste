@@ -223,9 +223,15 @@ pub fn meme_cancel() {
     log::info!("表情包 取消生成");
 }
 
-/// 发起一个 AI 任务（排队，不跟窗口走），返回任务号。`title` 是列表里显示的那句话，`scene` 是发起时的做法 JSON，都原样带回
+/// 发起一个 AI 任务（排队，不跟窗口走），返回任务号。`title` 是列表里显示的那句话，`scene` 是发起时的做法 JSON，都原样带回。
+/// `req.kind` 为 `set_parts` 时是“分 4 次重画”：一个任务里顺序画 4 部分，拼成 16 张。不认识的生成方式返回原因
 #[tauri::command(async)]
-pub fn meme_task_start(app: AppHandle, req: GenReq, scene: String, title: String) -> u64 {
+pub fn meme_task_start(
+    app: AppHandle,
+    req: GenReq,
+    scene: String,
+    title: String,
+) -> Result<u64, String> {
     crate::meme_tasks::start(&app, req, title, scene)
 }
 
@@ -244,7 +250,7 @@ pub fn meme_task_retry(app: AppHandle, id: u64) {
 /// 去掉画好的、没画出来的
 #[tauri::command(async)]
 pub fn meme_task_drop(app: AppHandle, id: u64) {
-    crate::meme_tasks::drop(&app, id);
+    crate::meme_tasks::dismiss(&app, id);
 }
 
 /// 回到那次：按任务里的做法打开制作窗口，结果摆进预览；画好的随之拿掉
