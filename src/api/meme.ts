@@ -42,9 +42,10 @@ export const memeSetRefs = (refs: RefKey[]) => invoke<void>('meme_set_refs', { r
 export const memeRefImage = (k: RefKey) => invoke<ArrayBuffer>('meme_ref_image', { id: k.id, file: k.file });
 /** “从历史添加”：最近 8 张图片 */
 export const memeRecentImages = () => invoke<RefKey[]>('meme_recent_images');
-/** 窗口里按 ⌘V：剪切板里是图片时让它成为历史记录（相同内容的用已有那条），返回参考图；不是图片时为 null。暂停记录时抛出原因 */
-export const memePasteImage = () => invoke<RefKey | null>('meme_paste_image');
-/** 拖进窗口的文件：只收图片文件，作为一条文件记录进历史，按文件拆成参考图。暂停记录时抛出原因 */
+/** 窗口里按 ⌘V：只引用已经进了历史的那条，剪切板里是图片（或图片文件）时返回它的参考图（按文件拆开），用不上的为空数组。
+ *  暂停记录时、这次没进历史时抛出原因 */
+export const memePasteImage = () => invoke<RefKey[]>('meme_paste_image');
+/** 拖进窗口的文件：只收真实存在的图片文件，拼成一条记录进历史，按文件拆成参考图。暂停记录时抛出原因 */
 export const memeAddFiles = (paths: string[]) => invoke<RefKey[]>('meme_add_files', { paths });
 /** 拖文件进窗口松开时：文件的路径 */
 export const onMemeFileDrop = (cb: (paths: string[]) => void): Promise<UnlistenFn> =>

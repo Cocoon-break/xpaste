@@ -319,9 +319,13 @@ pub(crate) async fn write_then_paste(
     } else {
         format!("n={}", ids.len())
     };
-    write_marked(state, || xpaste_platform::write(flavors)).inspect_err(|_| {
+    let seq = write_marked(state, || xpaste_platform::write(flavors)).inspect_err(|_| {
         log::warn!("写入剪切板失败 {label} bytes={bytes}");
     })?;
+    // 采集管道跳过自身写入：剪切板里此刻是这一条，替它记上（表情包制作窗口里按 ⌘V 认它）
+    if let [id] = ids {
+        crate::clipboard::seen(seq, Some(*id));
+    }
     let move_to_top = state.settings().move_to_top;
     for &id in ids {
         state.store().bump_use(id, move_to_top, now_ms())?;

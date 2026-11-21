@@ -152,7 +152,7 @@ fn target_name(front: Option<xpaste_core::AppInfo>, is_self: bool) -> Option<Str
 /// 选中的一条记录里做表情包用得上的部分
 pub enum Item {
     Image(i64),
-    /// 文件记录和它的文件（按文件拆，只取图片文件）
+    /// 带文件的图片、文件记录和它的文件（按文件拆，只取图片文件）
     Files(i64, Vec<PathBuf>),
     Text(String),
     /// 视频、链接、代码、片段、表情包、已删除
@@ -242,15 +242,27 @@ fn gather(state: &AppState, ids: &[i64]) -> Vec<Item> {
                 }
             };
             match s.kind {
-                Kind::Image => Item::Image(id),
+                Kind::Image | Kind::File => media(&store, id, s.kind),
                 Kind::Text => store.text(id).ok().flatten().map_or(Item::Skip, Item::Text),
-                Kind::File => store.detail(id).ok().flatten().map_or(Item::Skip, |d| {
-                    Item::Files(id, d.files.into_iter().map(|f| f.path.into()).collect())
-                }),
                 Kind::Code | Kind::Link | Kind::Video => Item::Skip,
             }
         })
         .collect()
+}
+
+/// 图片、文件记录里的图：带文件的（复制的图片文件也存成图片记录）按文件拆，位图记录是它自己。
+/// 图片文件存成的图片记录没有 `images/<id>.png`，只能按文件读
+fn media(store: &xpaste_core::Store, id: i64, kind: Kind) -> Item {
+    let paths: Vec<PathBuf> = store
+        .detail(id)
+        .ok()
+        .flatten()
+        .map(|d| d.files.into_iter().map(|f| f.path.into()).collect())
+        .unwrap_or_default();
+    match kind {
+        Kind::Image if paths.is_empty() => Item::Image(id),
+        _ => Item::Files(id, paths),
+    }
 }
 
 /// 带着这些记录打开制作窗口（`ids` 为空 = 空白打开，新窗口时带上草稿）。已开着时参考图追加、满了提示；面板开着就收起。
@@ -526,21 +538,10 @@ pub fn recent_images(state: &AppState) -> Result<Vec<RefKey>, AppError> {
         if s.snippet_body.is_some() || s.meme.is_some() {
             continue;
         }
-        match s.kind {
-            Kind::Image => out.push(RefKey {
-                id: s.id,
-                file: None,
-            }),
-            Kind::File => {
-                let paths = store
-                    .detail(s.id)?
-                    .map(|d| d.files.into_iter().map(|f| f.path.into()).collect())
-                    .unwrap_or_default();
-                if let Ok((refs, _)) = from_selection(vec![Item::Files(s.id, paths)]) {
-                    out.extend(refs);
-                }
-            }
-            _ => {}
+        if matches!(s.kind, Kind::Image | Kind::File)
+            && let Ok((refs, _)) = from_selection(vec![media(&store, s.id, s.kind)])
+        {
+            out.extend(refs);
         }
     }
     out.truncate(REFS_MAX);
@@ -548,85 +549,88 @@ pub fn recent_images(state: &AppState) -> Result<Vec<RefKey>, AppError> {
 }
 
 const PASTE_PAUSED: &str = "暂停记录时加不了剪切板里的图";
+const PASTE_MISSING: &str = "这张图没进历史（暂停记录、被忽略的应用或敏感内容时不收），加不了";
 const DROP_PAUSED: &str = "暂停记录时加不了拖进来的图";
 
-/// 窗口里按 ⌘V：剪切板里是图片时按采集规则让它成为一条历史记录（内容相同的就用已有的那条），返回它；
-/// 不是图片、采集规则跳过（敏感内容、忽略的应用等）时为 None。暂停记录时不入库，返回原因。
-pub fn paste_image(app: &AppHandle) -> Result<Option<RefKey>, String> {
+/// 这条记录能当参考图的部分（同从面板带进来时的拆法）；记录没了、不是图片时为空
+fn record_refs(state: &AppState, id: i64) -> Vec<RefKey> {
+    from_selection(gather(state, &[id])).map_or_else(|_| Vec::new(), |(refs, _)| refs)
+}
+
+/// 窗口里按 ⌘V：只引用采集管道已经收下的那条记录，自己不入库。剪切板里是图片（或图片文件）时返回它的参考图，
+/// 文件记录按文件拆开；是文字等用不上的、是 xPaste 自己写进去又对应不到记录的，为空。
+/// 暂停记录时、这次没进历史（没收、监听还没处理到、启动前复制的）时返回给用户看的原因
+pub fn paste_image(app: &AppHandle) -> Result<Vec<RefKey>, String> {
+    use std::sync::atomic::Ordering::SeqCst;
+    let state = app.state::<AppState>();
+    let r = paste_refs(
+        xpaste_platform::change_count(),
+        crate::clipboard::last_seen(),
+        state.last_write_seq.load(SeqCst),
+        state.paused.load(SeqCst),
+        |id| record_refs(&state, id),
+    );
+    match &r {
+        Ok(refs) => log::info!("表情包 剪切板里的图加成参考图 {} 张", refs.len()),
+        Err(_) => log::info!("表情包 剪切板里的这次没进历史，不加"),
+    }
+    r.map_err(Into::into)
+}
+
+/// ⌘V 的判断：`now` 是剪切板此刻的序号，`last` 是采集管道最后处理的那次（序号、收下的记录 id），
+/// `own` 是 xPaste 自己最后写入的序号。只有此刻就是管道收下的那次时才取那条记录的参考图（`refs_of`）
+fn paste_refs(
+    now: u64,
+    last: Option<(u64, Option<i64>)>,
+    own: u64,
+    paused: bool,
+    refs_of: impl FnOnce(i64) -> Vec<RefKey>,
+) -> Result<Vec<RefKey>, &'static str> {
+    if paused {
+        return Err(PASTE_PAUSED);
+    }
+    match last {
+        Some((seq, Some(id))) if seq == now => Ok(refs_of(id)),
+        // 自己写进去的、又没记下是哪条记录（比如刚复制的表情包）：当作没有图
+        _ if now == own => Ok(Vec::new()),
+        _ => Err(PASTE_MISSING),
+    }
+}
+
+/// 拖进窗口的文件：只收真实存在的图片文件，拼成一条记录按采集规则入库（全是图片文件时存成图片记录），
+/// 按文件拆成参考图（同从面板带进来时的拆法）。暂停记录时不入库，返回原因
+pub fn add_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<Vec<RefKey>, String> {
     let state = app.state::<AppState>();
     if state.paused.load(std::sync::atomic::Ordering::SeqCst) {
-        return Err(PASTE_PAUSED.into());
-    }
-    // 当初复制时采集管道就没收（忽略的应用、敏感内容等）：这里也不收
-    if crate::clipboard::refused_now() {
-        log::info!("表情包 剪切板里的这次当初没进历史，不加");
-        return Ok(None);
-    }
-    let skip_sensitive = state.settings().skip_sensitive;
-    let snap = match xpaste_platform::read_snapshot(skip_sensitive) {
-        Ok(Some(s)) => s,
-        Ok(None) => return Ok(None),
-        Err(e) => {
-            log::warn!("表情包 读剪切板失败：{e}");
-            return Ok(None);
-        }
-    };
-    let bytes = snap.bitmap.as_ref().map_or(0, Vec::len);
-    let r = image_ref(snap, |s| crate::clipboard::record(app, s));
-    match r {
-        Some(k) => log::info!("表情包 剪切板里的图加成参考图 id={} {bytes} 字节", k.id),
-        None => log::info!("表情包 剪切板里不是能用的图"),
-    }
-    Ok(r)
-}
-
-/// 剪切板快照是图片时交给 `record` 入库（返回记录 id），成为一张参考图
-fn image_ref(
-    snap: xpaste_core::Snapshot,
-    record: impl FnOnce(xpaste_core::Snapshot) -> Option<i64>,
-) -> Option<RefKey> {
-    if xpaste_core::detect::kind(&snap) != Kind::Image {
-        return None;
-    }
-    record(snap).map(|id| RefKey { id, file: None })
-}
-
-/// 拖进窗口的文件：只收图片文件，作为一条文件记录按采集规则入库，按文件拆成参考图。暂停记录时不入库，返回原因
-pub fn add_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<Vec<RefKey>, String> {
-    if app
-        .state::<AppState>()
-        .paused
-        .load(std::sync::atomic::Ordering::SeqCst)
-    {
         return Err(DROP_PAUSED.into());
     }
     let n = paths.len();
-    let refs = files_refs(paths, |s| crate::clipboard::record(app, s));
+    let refs = files_refs(&state, paths, |s| {
+        crate::clipboard::record(app, s).map(|(id, _)| id)
+    });
     log::info!("表情包 拖进来 {n} 个文件，加成参考图 {} 张", refs.len());
     Ok(refs)
 }
 
-/// 图片文件拼成一条文件记录的快照交给 `record` 入库（返回记录 id），按文件拆开；没有图片文件、没入库时为空
+/// 图片文件拼成一个快照交给 `record` 入库（返回记录 id），再按那条记录拆成参考图；没有图片文件、没入库时为空
 fn files_refs(
+    state: &AppState,
     paths: Vec<PathBuf>,
     record: impl FnOnce(xpaste_core::Snapshot) -> Option<i64>,
 ) -> Vec<RefKey> {
     let files: Vec<PathBuf> = paths
         .into_iter()
-        .filter(|p| xpaste_core::detect::is_image_file(p))
+        .filter(|p| p.is_file() && xpaste_core::detect::is_image_file(p))
         .collect();
     if files.is_empty() {
         return Vec::new();
     }
-    let n = files.len() as u32;
     let snap = xpaste_core::Snapshot {
         flavors: file_flavors(&files),
         file_paths: files,
         ..Default::default()
     };
-    record(snap).map_or_else(Vec::new, |id| {
-        (0..n).map(|i| RefKey { id, file: Some(i) }).collect()
-    })
+    record(snap).map_or_else(Vec::new, |id| record_refs(state, id))
 }
 
 /// 几个文件的剪切板格式（同复制文件时系统给的），记录粘贴、复制时原样写回：Windows 一个 `CF_HDROP`
@@ -764,31 +768,67 @@ mod tests {
 
     #[test]
     fn dropped_files_only_images() {
-        let mut got = None;
-        let refs = files_refs(vec!["/tmp/a.png".into(), "/tmp/b.pdf".into()], |s| {
-            got = Some(s.file_paths.clone());
-            Some(5)
-        });
-        assert_eq!(refs, vec![r(5, Some(0))]);
-        assert_eq!(got, Some(vec![PathBuf::from("/tmp/a.png")]));
-        // 一张图片都没有：不入库
-        assert!(files_refs(vec!["/tmp/b.pdf".into()], |_| panic!("不该入库")).is_empty());
-        // 采集规则跳过了（比如忽略的应用）：没有参考图
-        assert!(files_refs(vec!["/tmp/a.png".into()], |_| None).is_empty());
+        let dir = std::env::temp_dir().join(format!("xpaste-meme-drop-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("夹子.png")).unwrap();
+        for f in ["a.png", "b.pdf"] {
+            std::fs::write(dir.join(f), b"x").unwrap();
+        }
+        let state = AppState::for_test();
+        let save = |snap: xpaste_core::Snapshot| {
+            let kind = xpaste_core::detect::kind(&snap);
+            let rec = xpaste_core::capture::build_record(snap, kind, 0);
+            match state.store().insert_or_merge(&rec, 0, 500).unwrap().0 {
+                xpaste_core::store::Upsert::Added(id) | xpaste_core::store::Upsert::Merged(id) => {
+                    Some(id)
+                }
+            }
+        };
+        // PDF、不存在的、名字像图片的文件夹都不收
+        let paths = ["a.png", "b.pdf", "没有.png", "夹子.png"].map(|f| dir.join(f));
+        let refs = files_refs(&state, paths.to_vec(), save);
+        assert_eq!(refs.len(), 1);
+        // 和从面板带同一条记录进来时的键一样（同一张图不会有两个键）
+        assert_eq!(refs, record_refs(&state, refs[0].id));
+        assert_eq!(refs[0].file, Some(0));
+        // 一张图片都没有：不入库；采集规则跳过了：没有参考图
+        assert!(files_refs(&state, vec![dir.join("b.pdf")], |_| panic!("不该入库")).is_empty());
+        assert!(files_refs(&state, vec![dir.join("a.png")], |_| None).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn pasted_image_only() {
-        let img = xpaste_core::Snapshot {
-            bitmap: Some(vec![1, 2, 3]),
-            ..Default::default()
-        };
-        assert_eq!(image_ref(img, |_| Some(9)), Some(r(9, None)));
-        let text = xpaste_core::Snapshot {
-            text: Some("不想上班".into()),
-            ..Default::default()
-        };
-        assert_eq!(image_ref(text, |_| panic!("文字不入库")), None);
+    fn paste_only_what_history_took() {
+        let pic = |id| vec![r(id, None)];
+        // 此刻就是管道收下的那次：用那条记录
+        assert_eq!(
+            paste_refs(7, Some((7, Some(3))), u64::MAX, false, pic),
+            Ok(pic(3))
+        );
+        // 收下的是文字：没有图，不提示
+        assert_eq!(
+            paste_refs(7, Some((7, Some(3))), u64::MAX, false, |_| vec![]),
+            Ok(vec![])
+        );
+        // 那次没收（暂停、忽略的应用、敏感）、管道还没处理到、启动前复制的：不入库，说原因
+        assert_eq!(
+            paste_refs(7, Some((7, None)), u64::MAX, false, pic),
+            Err(PASTE_MISSING)
+        );
+        assert_eq!(
+            paste_refs(8, Some((7, Some(3))), u64::MAX, false, pic),
+            Err(PASTE_MISSING)
+        );
+        assert_eq!(
+            paste_refs(8, None, u64::MAX, false, pic),
+            Err(PASTE_MISSING)
+        );
+        // 暂停记录时
+        assert_eq!(
+            paste_refs(7, Some((7, Some(3))), u64::MAX, true, pic),
+            Err(PASTE_PAUSED)
+        );
+        // xPaste 自己写的、对应不到记录：当作没有图
+        assert_eq!(paste_refs(9, Some((7, Some(3))), 9, false, pic), Ok(vec![]));
     }
 
     #[test]
