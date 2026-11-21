@@ -20,7 +20,7 @@ export const onPanelHideRequested = (cb: () => void): Promise<UnlistenFn> => lis
 /** 引导或对话框打开时按下快捷键，面板保持显示：`panel` 唤起（引导据此推进），`shot` 截图、`rec` 录屏、`translate` 翻译（只在对话框开着且面板有焦点时发）。 */
 export const HOTKEY_PRESSED = 'hotkey-pressed';
 
-export type HotkeyRole = 'panel' | 'shot' | 'rec' | 'translate';
+export type HotkeyRole = 'panel' | 'shot' | 'rec' | 'translate' | 'meme';
 export const onHotkeyPressed = (cb: (role: HotkeyRole) => void): Promise<UnlistenFn> =>
   listen<HotkeyRole>(HOTKEY_PRESSED, (e) => cb(e.payload));
 

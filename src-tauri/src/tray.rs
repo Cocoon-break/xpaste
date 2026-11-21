@@ -19,6 +19,9 @@ struct Handles {
     /// “停止录制”：只在录制中插在第一项（M24）
     rec_stop: MenuItem<Wry>,
     version: MenuItem<Wry>,
+    translate: MenuItem<Wry>,
+    /// “表情包制作…”：表情包开着时插在“翻译…”后面
+    meme: MenuItem<Wry>,
     /// “下载新版本…”：发现新版本后插在版本号上面（M28 规则 4）
     update: MenuItem<Wry>,
 }
@@ -45,6 +48,15 @@ pub fn rec_stop_label(hotkey_label: &str) -> String {
         "停止录制".into()
     } else {
         format!("停止录制（{hotkey_label}）")
+    }
+}
+
+/// 菜单“表情包制作…（<快捷键>）”；没设快捷键时不带括号。
+pub fn meme_label(hotkey_label: &str) -> String {
+    if hotkey_label.is_empty() {
+        "表情包制作…".into()
+    } else {
+        format!("表情包制作…（{hotkey_label}）")
     }
 }
 
@@ -143,6 +155,42 @@ pub fn show_update(v: &str) {
     }
 }
 
+/// 表情包开着（含此构建带 Pro）时显示“表情包制作…”并带上快捷键，关着时移除。启动和保存设置后调用。
+pub fn refresh_menu(app: &AppHandle) {
+    let Some(h) = TRAY.get() else {
+        return;
+    };
+    let (on, key) = {
+        let state = app.state::<AppState>();
+        let s = state.settings();
+        (
+            crate::meme::enabled() && s.meme_enabled,
+            hotkey::label(s.effective_meme_hotkey()),
+        )
+    };
+    let shown = h.menu.get(h.meme.id()).is_some();
+    let r = if on {
+        h.meme.set_text(meme_label(&key)).and_then(|()| {
+            if shown {
+                return Ok(());
+            }
+            let at = h
+                .menu
+                .items()?
+                .iter()
+                .position(|i| i.id() == h.translate.id());
+            h.menu.insert(&h.meme, at.map_or(0, |i| i + 1))
+        })
+    } else if shown {
+        h.menu.remove(&h.meme)
+    } else {
+        Ok(())
+    };
+    if let Err(e) = r {
+        log::warn!("更新托盘“表情包制作”失败：{e}");
+    }
+}
+
 /// 快捷键改成功后更新第一项文字，并恢复“打开 xPaste”的点击行为。
 pub fn set_hotkey_label(shortcut: &str) {
     HOTKEY_FAILED.store(false, Ordering::SeqCst);
@@ -184,6 +232,7 @@ pub fn setup(app: &App) -> tauri::Result<()> {
         false,
         None::<&str>,
     )?;
+    let meme = MenuItem::with_id(app, "meme", meme_label(""), true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出 xPaste", true, None::<&str>)?;
     let rec_stop = MenuItem::with_id(app, "rec-stop", rec_stop_label(""), true, None::<&str>)?;
     let update = MenuItem::with_id(app, "update", update_label(""), true, None::<&str>)?;
@@ -234,6 +283,7 @@ pub fn setup(app: &App) -> tauri::Result<()> {
             // 输入卡片（M26 规则 20）
             "translate" => crate::trcard::open_input(app),
             "rec-stop" => crate::rec::stop(app),
+            "meme" => crate::meme::open(app, &[]),
             "update" => crate::update::open(app),
             // 录制中退出由 ExitRequested 里的 rec::hold_exit 先停止、写完文件再退出（M24 规则 8）
             "quit" => app.exit(0),
@@ -257,8 +307,11 @@ pub fn setup(app: &App) -> tauri::Result<()> {
         pause,
         rec_stop,
         version,
+        translate,
+        meme,
         update,
     });
+    refresh_menu(app.handle());
     Ok(())
 }
 
@@ -275,6 +328,8 @@ mod tests {
         assert_eq!(update_label("0.8.0"), "下载新版本 0.8.0…");
         assert_eq!(rec_stop_label("⌥ + Shift + R"), "停止录制（⌥ + Shift + R）");
         assert_eq!(rec_stop_label(""), "停止录制");
+        assert_eq!(meme_label("⌥ + Shift + E"), "表情包制作…（⌥ + Shift + E）");
+        assert_eq!(meme_label(""), "表情包制作…");
     }
 
     // 托盘未建时 set_text 不做事，只验失败标志；本文件外的测试不碰 HOTKEY_FAILED

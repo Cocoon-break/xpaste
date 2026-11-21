@@ -116,3 +116,23 @@ export const baseUrlError = (v: string): string | null => {
   const t = v.trim();
   return t === '' || /^https?:\/\//i.test(t) ? null : '请输入 http:// 或 https:// 开头的地址';
 };
+
+export type MemeFormat = 'openai' | 'ark' | 'gemini';
+export interface MemePreset { key: string; label: string; format: MemeFormat; baseUrl: string; model: string }
+
+// 预设待按官方文档核实：地址、模型 ID 和接口形态取自第三方资料，核不实的先去掉
+export const MEME_PRESETS: MemePreset[] = [
+  { key: 'openai', label: 'OpenAI', format: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-image-2' },
+  { key: 'gemini', label: 'Gemini', format: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-3-pro-image-preview' },
+  { key: 'ark', label: '豆包（火山方舟）', format: 'ark', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-seedream-4-0-250828' },
+  { key: 'qwen', label: '通义（阿里云百炼）', format: 'openai', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-image' },
+];
+export const memePreset = (key: string): MemePreset | undefined => MEME_PRESETS.find((p) => p.key === key);
+
+export type MemeField = 'format' | 'baseUrl' | 'model' | 'apiKey';
+/** 改了格式、地址或模型 ID 以后，服务商变成“自定义”；只改 Key 不变。 */
+export const providerAfterEdit = (prev: string, field: MemeField): string => (field === 'apiKey' ? prev : 'custom');
+
+/** 设置页底部一行：表情包库的个数与占用。 */
+export const memeStatsText = (count: number, bytes: number): string =>
+  `表情包库：${count} 个，占 ${(bytes / 1048576).toFixed(1)} MB`;

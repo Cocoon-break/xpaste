@@ -19,6 +19,7 @@ mod imagegen;
 mod license;
 mod line;
 mod longshot;
+mod meme;
 mod mixer;
 mod mixer_window;
 mod ocr;
@@ -117,6 +118,7 @@ pub fn run() {
             let first_run = matches!(store.kv_get("onboarded"), Ok(None));
             let mut settings = store.load_settings();
             mixer::normalize_settings(&mut settings);
+            meme::normalize_settings(&mut settings);
             let (
                 hotkey,
                 shot_hotkey,
@@ -125,6 +127,7 @@ pub fn run() {
                 line_hotkey,
                 belt_hotkey,
                 mixer_hotkey,
+                meme_hotkey,
                 appearance,
             ) = (
                 settings.hotkey.clone(),
@@ -134,6 +137,7 @@ pub fn run() {
                 settings.effective_line_hotkey().to_owned(),
                 settings.effective_belt_hotkey().to_owned(),
                 settings.effective_mixer_hotkey().to_owned(),
+                settings.effective_meme_hotkey().to_owned(),
                 settings.appearance,
             );
             line::configure(
@@ -174,20 +178,29 @@ pub fn run() {
                 &line_hotkey,
                 &belt_hotkey,
                 &mixer_hotkey,
+                &meme_hotkey,
             ) {
                 log::warn!("快捷键注册失败：{e}");
                 // register 只报第一个失败，截图、录屏、翻译、便签、传送带、搅拌机是否注册上另查；它们失败只提示，不标记托盘
                 let panel_failed = matches!(e, error::AppError::HotkeyTaken);
-                let (shot_failed, rec_failed, tr_failed, line_failed, belt_failed, mixer_failed) =
-                    hotkey::unregistered(
-                        app.handle(),
-                        &shot_hotkey,
-                        &rec_hotkey,
-                        &tr_hotkey,
-                        &line_hotkey,
-                        &belt_hotkey,
-                        &mixer_hotkey,
-                    );
+                let (
+                    shot_failed,
+                    rec_failed,
+                    tr_failed,
+                    line_failed,
+                    belt_failed,
+                    mixer_failed,
+                    meme_failed,
+                ) = hotkey::unregistered(
+                    app.handle(),
+                    &shot_hotkey,
+                    &rec_hotkey,
+                    &tr_hotkey,
+                    &line_hotkey,
+                    &belt_hotkey,
+                    &mixer_hotkey,
+                    &meme_hotkey,
+                );
                 if let Some(body) = hotkey::failure_notice(
                     panel_failed,
                     shot_failed,
@@ -196,6 +209,7 @@ pub fn run() {
                     line_failed,
                     belt_failed,
                     mixer_failed,
+                    meme_failed,
                 ) {
                     notify(app.handle(), &body);
                 }
@@ -263,7 +277,7 @@ pub fn run() {
                     if belt::back_pressed(app, shortcut) {
                         return;
                     }
-                    let (p, s, r, t, l, b, m) = {
+                    let (p, s, r, t, l, b, m, e) = {
                         let st = app.state::<AppState>();
                         let s = st.settings();
                         (
@@ -274,9 +288,10 @@ pub fn run() {
                             s.effective_line_hotkey().to_owned(),
                             s.effective_belt_hotkey().to_owned(),
                             s.effective_mixer_hotkey().to_owned(),
+                            s.effective_meme_hotkey().to_owned(),
                         )
                     };
-                    match hotkey::role_of(shortcut, &p, &s, &r, &t, &l, &b, &m) {
+                    match hotkey::role_of(shortcut, &p, &s, &r, &t, &l, &b, &m, &e) {
                         Some(hotkey::Role::Panel) => {
                             panel::toggle(app, timing.then(now_unix_ms), panel::Trigger::Hotkey)
                         }
@@ -286,6 +301,7 @@ pub fn run() {
                         Some(hotkey::Role::Line) => line::hotkey_pressed(app),
                         Some(hotkey::Role::Belt) => belt::hotkey_pressed(app),
                         Some(hotkey::Role::Mixer) => mixer::hotkey_pressed(app),
+                        Some(hotkey::Role::Meme) => meme::hotkey_pressed(app),
                         None => {}
                     }
                 })
@@ -514,7 +530,9 @@ pub fn run() {
             commands::mixer::mixer_put_back,
             commands::mixer::mixer_again,
             commands::mixer::mixer_save_recipe,
-            commands::mixer::mixer_settings
+            commands::mixer::mixer_settings,
+            commands::meme::meme_test_image,
+            commands::meme::meme_library_stats
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

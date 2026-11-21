@@ -196,6 +196,20 @@ pub struct Settings {
     /// 配方列表；空表示还没存过，运行时补齐自带配方。解析不了的项逐个丢掉
     #[serde(deserialize_with = "tolerant_recipes")]
     pub mixer_recipes: Vec<Recipe>,
+    /// 表情包制作总开关；关掉后表情包快捷键不注册、托盘入口不显示
+    pub meme_enabled: bool,
+    /// 打开表情包制作窗口的全局快捷键；空字符串表示不启用
+    pub meme_hotkey: String,
+    /// 生图服务商：预设键名（openai | gemini | ark | qwen）或 custom；只影响设置页的显示，请求只看格式、地址和模型 ID
+    pub meme_image_provider: String,
+    /// 生图接口格式：openai | ark | gemini
+    pub meme_image_format: String,
+    pub meme_image_base_url: Secret,
+    pub meme_image_api_key: Secret,
+    pub meme_image_model: String,
+    /// 风格库“一次用过的”与“自定义的”，整理规则在应用层（Pro）
+    pub meme_styles_used: Vec<String>,
+    pub meme_styles_custom: Vec<String>,
 }
 
 /// 搅拌机的配方：名字、提示词、是否在杯口显示；`builtin` 是自带配方的键名，自定义的为空
@@ -275,6 +289,15 @@ impl Settings {
     pub fn effective_mixer_hotkey(&self) -> &str {
         if self.mixer_enabled {
             &self.mixer_hotkey
+        } else {
+            ""
+        }
+    }
+
+    /// 实际该注册的表情包快捷键：总开关关着时为空串（不注册）
+    pub fn effective_meme_hotkey(&self) -> &str {
+        if self.meme_enabled {
+            &self.meme_hotkey
         } else {
             ""
         }
@@ -378,6 +401,15 @@ impl Default for Settings {
             mixer_enabled: true,
             mixer_hotkey: "Alt+Shift+M".into(),
             mixer_recipes: Vec::new(),
+            meme_enabled: true,
+            meme_hotkey: "Alt+Shift+E".into(),
+            meme_image_provider: "openai".into(),
+            meme_image_format: "openai".into(),
+            meme_image_base_url: "https://api.openai.com/v1".into(),
+            meme_image_api_key: Secret::default(),
+            meme_image_model: "gpt-image-2".into(),
+            meme_styles_used: Vec::new(),
+            meme_styles_custom: Vec::new(),
         }
     }
 }
@@ -488,6 +520,7 @@ impl Settings {
         self.yield_line_hotkey();
         self.yield_belt_hotkeys();
         self.yield_mixer_hotkey();
+        self.yield_meme_hotkey();
     }
 
     /// 便签快捷键与别的快捷键冲突时停用它（读出设置时用；不含晾衣绳的版本保存设置时也用，用户看不到这一项）。
@@ -515,6 +548,41 @@ impl Settings {
         if self.mixer_hotkey_clash().is_some() {
             self.mixer_hotkey.clear();
         }
+    }
+
+    /// 表情包快捷键与别的快捷键冲突时停用它（读出设置时用）。
+    pub fn yield_meme_hotkey(&mut self) {
+        if self.meme_hotkey_clash().is_some() {
+            self.meme_hotkey.clear();
+        }
+    }
+
+    /// 表情包快捷键与哪个快捷键是同一组合（含搅拌机）；录屏只在 macOS 上比。
+    fn meme_hotkey_clash(&self) -> Option<&'static str> {
+        if self.meme_hotkey.is_empty() {
+            return None;
+        }
+        let key = hotkey_key(&self.meme_hotkey);
+        [
+            ("唤起", self.hotkey.as_str()),
+            ("截图", self.shot_hotkey.as_str()),
+            (
+                "录屏",
+                if cfg!(target_os = "macos") {
+                    self.rec_hotkey.as_str()
+                } else {
+                    ""
+                },
+            ),
+            ("翻译", self.translate_hotkey.as_str()),
+            ("便签", self.line_hotkey.as_str()),
+            ("传送带", self.belt_hotkey.as_str()),
+            ("退回", self.belt_back_hotkey.as_str()),
+            ("搅拌机", self.mixer_hotkey.as_str()),
+        ]
+        .into_iter()
+        .find(|(_, c)| !c.is_empty() && hotkey_key(c) == key)
+        .map(|(name, _)| name)
     }
 
     /// 搅拌机快捷键与哪个快捷键是同一组合（含传送带的两个）；录屏只在 macOS 上比。
@@ -627,6 +695,14 @@ impl Settings {
             *f = f.trim().to_owned();
         }
         self.translate_base_url = self.translate_base_url.trim_end_matches('/').into();
+        for f in [
+            &mut self.meme_image_base_url.0,
+            &mut self.meme_image_api_key.0,
+            &mut self.meme_image_model,
+        ] {
+            *f = f.trim().to_owned();
+        }
+        self.meme_image_base_url = self.meme_image_base_url.trim_end_matches('/').into();
     }
 
     /// 按顺序检查，返回第一条不满足的规则。
@@ -685,6 +761,19 @@ impl Settings {
         }
         if let Some(name) = self.mixer_hotkey_clash() {
             return fail(&format!("搅拌机快捷键不能与{name}快捷键相同"));
+        }
+        if !self.meme_hotkey.is_empty() && !has_modifier(&self.meme_hotkey) {
+            return fail("表情包快捷键至少需要包含 Mod 或 Alt");
+        }
+        if let Some(name) = self.meme_hotkey_clash() {
+            return fail(&format!("表情包快捷键不能与{name}快捷键相同"));
+        }
+        let url = self.meme_image_base_url.to_ascii_lowercase();
+        if !url.is_empty() && !url.starts_with("http://") && !url.starts_with("https://") {
+            return fail("请输入 http:// 或 https:// 开头的地址");
+        }
+        if !matches!(self.meme_image_format.as_str(), "openai" | "ark" | "gemini") {
+            return fail("生图接口格式只能是 OpenAI 兼容、火山方舟或 Gemini");
         }
         if !matches!(self.translate_engine.as_str(), "" | "system" | "openai") {
             return fail("翻译引擎只能是系统翻译或 OpenAI 兼容接口");
@@ -1648,6 +1737,64 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(invalid(&s), "搅拌机快捷键至少需要包含 Mod 或 Alt");
+    }
+
+    #[test]
+    fn meme_defaults_and_old_settings() {
+        let s: Settings = serde_json::from_str(r#"{"maxRecords":1000}"#).unwrap();
+        assert!(s.meme_enabled);
+        assert_eq!(s.meme_hotkey, "Alt+Shift+E");
+        assert_eq!(s.meme_image_provider, "openai");
+        assert_eq!(s.meme_image_format, "openai");
+        assert!(s.meme_styles_used.is_empty() && s.meme_styles_custom.is_empty());
+        assert_eq!(s.effective_meme_hotkey(), "Alt+Shift+E");
+        let s = Settings {
+            meme_enabled: false,
+            ..Default::default()
+        };
+        assert_eq!(s.effective_meme_hotkey(), "");
+    }
+
+    #[test]
+    fn meme_url_validation() {
+        assert_eq!(
+            invalid(&Settings {
+                meme_image_base_url: "ftp://x".into(),
+                ..Default::default()
+            }),
+            "请输入 http:// 或 https:// 开头的地址"
+        );
+        let mut s = Settings {
+            meme_image_base_url: " https://a/v1/ ".into(),
+            meme_image_api_key: " k ".into(),
+            meme_image_model: " m ".into(),
+            ..Default::default()
+        };
+        s.normalize();
+        assert_eq!(s.meme_image_base_url.as_str(), "https://a/v1");
+        assert_eq!(s.meme_image_api_key.as_str(), "k");
+        assert_eq!(s.meme_image_model, "m");
+        assert!(s.validate().is_ok());
+        let dbg = format!("{s:?}");
+        assert!(!dbg.contains("https://a/v1"));
+    }
+
+    #[test]
+    fn meme_hotkey_clash() {
+        let s = Settings {
+            meme_hotkey: "Alt+Shift+M".into(),
+            ..Default::default()
+        };
+        assert_eq!(invalid(&s), "表情包快捷键不能与搅拌机快捷键相同");
+        let mut s = s;
+        s.yield_meme_hotkey();
+        assert_eq!(s.meme_hotkey, "");
+        assert_eq!(s.mixer_hotkey, "Alt+Shift+M");
+        let s = Settings {
+            meme_hotkey: "E".into(),
+            ..Default::default()
+        };
+        assert_eq!(invalid(&s), "表情包快捷键至少需要包含 Mod 或 Alt");
     }
 
     #[test]

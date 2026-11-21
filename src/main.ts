@@ -24,6 +24,7 @@ import {
 import { lineDragDrop, lineDragHover, lineHangFromPanel, lineHide, lineSideHint, onLineChanged, onLineHangSelected, onProLink, proActivate, proBuy, proDeactivate, proStatus, proTakeLink, proUnbind, type LineView } from './api/line';
 import { beltPut, onBeltPutSelected } from './api/belt';
 import { mixerDefaults, mixerPut, onMixerPutSelected } from './api/mixer';
+import { memeLibraryStats, memeTestImage } from './api/meme';
 import { mountRecipes } from './recipes';
 import { deviceLine, proCard, proControls, proLine } from './pro-status';
 import { popSelect } from './select-pop';
@@ -48,7 +49,7 @@ import {
   centerWin, clampWin, DAY, followNow, HOUR, layoutBars, minorDayTicks, miniWin, panWin, sameColumns, spanOf, spectrumStat, staggerIndex,
   ticks as winTicks, winLabel, xOf, zoomWin, type Layout, type Win,
 } from './spectrum';
-import { addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFrequent, parseLimit, pickerOptions, removeIgnored } from './settings-form';
+import { MEME_PRESETS, type MemeField, type MemeFormat, memePreset, memeStatsText, providerAfterEdit, addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFrequent, parseLimit, pickerOptions, removeIgnored } from './settings-form';
 import { composing, justComposed } from './ime';
 import { errorControl, revealsFocus, shownTabTarget } from './settings-tabs';
 import {
@@ -1943,6 +1944,7 @@ const trKey = optHotkey('trHotkey', '在任何应用里选中文字后按下，�
 const lineKey = optHotkey('lineHotkey', '把最近复制的一条挂到晾衣绳上；面板开着时挂选中的那条');
 const beltKey = optHotkey('beltHotkey', '打开或关闭传送带；面板开着时，把选中的记录放上去（多选则按选中的先后）');
 const beltBackKey = optHotkey('beltBackHotkey', '退回上一件：带子往回走一格');
+const memeKey = optHotkey('memeHotkey', '打开空白的表情包制作窗口；面板里选中记录时按 ⌘E 带着它打开');
 const mixerKey = optHotkey('mixerHotkey', '打开或关闭搅拌机；面板开着时，把选中的记录放进去');
 
 // “Pro”标签（只在含晾衣绳的版本里显示）：状态行、联网激活、设备满员时解绑、购买入口、在本机停用。
@@ -2236,6 +2238,9 @@ function paintProHome() {
   featSummary($('#proSumBelt'), beltOnIn.checked, beltKey.pending, beltAutoIn.value === 'auto' ? '自动开启' : '手动开启');
   mixerOnQuick.checked = mixerOnIn.checked;
   paintMixerSum();
+  memeOnQuick.checked = memeOnIn.checked;
+  paintMemeSum();
+  $('#proFeatMeme').classList.toggle('off', !memeOnIn.checked);
   $('#proFeatLine').classList.toggle('off', !draftLineEnabled);
   $('#proFeatBelt').classList.toggle('off', !beltOnIn.checked);
   $('#proFeatMixer').classList.toggle('off', !mixerOnIn.checked);
@@ -2245,6 +2250,10 @@ function paintProHome() {
   for (const el of document.querySelectorAll<HTMLElement>('#proMixerPage > .line, #proMixerPage > .field, #proMixerPage > .recipes')) {
     el.classList.toggle('line-off', !mixerOnIn.checked);
     el.inert = !mixerOnIn.checked;
+  }
+  for (const el of document.querySelectorAll<HTMLElement>('#proMemePage > .line, #proMemePage > .field, #proMemePage > .help')) {
+    el.classList.toggle('line-off', !memeOnIn.checked);
+    el.inert = !memeOnIn.checked;
   }
 }
 $('#st-pro').addEventListener('click', (e) => {
@@ -2269,6 +2278,105 @@ mixerOnQuick.addEventListener('change', () => {
 });
 mixerOnIn.addEventListener('change', paintProHome);
 $('#mixerTrGo').addEventListener('click', () => showStControl(trBaseIn));
+// 表情包制作：开关、快捷键与生图接口都是草稿，保存时写回
+const memeOnIn = $<HTMLInputElement>('#memeOn'), memeOnQuick = $<HTMLInputElement>('#memeOnQuick');
+const memeProvEl = $('#memeProv'), memeFmtEl = $('#memeFmt');
+const memeUrlIn = $<HTMLInputElement>('#memeBaseUrl'), memeKeyIn = $<HTMLInputElement>('#memeApiKey'), memeModelIn = $<HTMLInputElement>('#memeModel');
+const memeUrlErr = $('#memeBaseUrlErr'), memeResult = $('#memeTestResult'), memeTestBtn = $<HTMLButtonElement>('#memeTestBtn'), memeImg = $<HTMLImageElement>('#memeTestImg');
+let memeProvider = 'openai', memeFormat: MemeFormat = 'openai';
+const paintMemeSum = () => featSummary($('#proSumMeme'), memeOnIn.checked, memeKey.pending, memeModelIn.value.trim() ? memeModelIn.value.trim() : '生图接口未配置');
+memeProvEl.replaceChildren(...[...MEME_PRESETS.map((p) => [p.key, p.label]), ['custom', '自定义']].map(([k, t]) => {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.setAttribute('role', 'radio');
+  b.dataset.prov = k;
+  b.textContent = t;
+  return b;
+}));
+function paintMemeIface() {
+  for (const b of memeProvEl.querySelectorAll<HTMLElement>('[data-prov]')) {
+    const on = b.dataset.prov === memeProvider;
+    b.setAttribute('aria-checked', String(on));
+    b.tabIndex = on ? 0 : -1;
+  }
+  for (const b of memeFmtEl.querySelectorAll<HTMLElement>('[data-fmt]')) {
+    const on = b.dataset.fmt === memeFormat;
+    b.setAttribute('aria-checked', String(on));
+    b.tabIndex = on ? 0 : -1;
+  }
+}
+const memeEdited = (f: MemeField) => {
+  memeProvider = providerAfterEdit(memeProvider, f);
+  paintMemeIface();
+};
+const paintMemeUrlErr = (msg: string | null) => {
+  memeUrlErr.textContent = msg ?? '';
+  memeUrlErr.hidden = !msg;
+  memeUrlIn.setAttribute('aria-invalid', String(!!msg));
+  paintStErr();
+};
+memeProvEl.addEventListener('click', (e) => {
+  const k = (e.target as Element).closest<HTMLElement>('[data-prov]')?.dataset.prov;
+  if (!k) return;
+  const p = memePreset(k);
+  memeProvider = k;
+  if (p) {
+    memeFormat = p.format;
+    memeUrlIn.value = p.baseUrl;
+    memeModelIn.value = p.model;
+    paintMemeUrlErr(null);
+    paintMemeSum();
+  }
+  paintMemeIface();
+});
+memeFmtEl.addEventListener('click', (e) => {
+  const f = (e.target as Element).closest<HTMLElement>('[data-fmt]')?.dataset.fmt as MemeFormat | undefined;
+  if (!f) return;
+  memeFormat = f;
+  memeEdited('format');
+});
+memeUrlIn.addEventListener('input', () => {
+  memeEdited('baseUrl');
+  if (!memeUrlErr.hidden && baseUrlError(memeUrlIn.value) === null) paintMemeUrlErr(null);
+});
+memeModelIn.addEventListener('input', () => {
+  memeEdited('model');
+  paintMemeSum();
+});
+$('#memeKeyBtn').addEventListener('click', () => {
+  const show = memeKeyIn.type === 'password';
+  memeKeyIn.type = show ? 'text' : 'password';
+  $('#memeKeyBtn').textContent = show ? '隐藏' : '显示';
+});
+const setMemeResult = (t: string, cls = '') => {
+  memeResult.textContent = t;
+  memeResult.className = `help tr-result ${cls}`;
+  if (memeImg.src.startsWith('blob:')) URL.revokeObjectURL(memeImg.src);
+  memeImg.hidden = true;
+};
+// 用当前（未保存）的接口配置生成一张小图；期间按钮不可再点
+memeTestBtn.addEventListener('click', () => {
+  const baseUrl = memeUrlIn.value.trim().replace(/\/+$/, ''), model = memeModelIn.value.trim();
+  const urlErr = baseUrlError(baseUrl);
+  if (urlErr) return paintMemeUrlErr(urlErr);
+  if (!baseUrl || !model) return setMemeResult('接口地址和模型 ID 都要填', 'is-err');
+  memeTestBtn.disabled = true;
+  setMemeResult('测试中…');
+  void memeTestImage({ format: memeFormat, baseUrl, apiKey: memeKeyIn.value.trim(), model }).then(
+    (png) => {
+      setMemeResult('✓ 能生成');
+      memeImg.src = URL.createObjectURL(new Blob([png], { type: 'image/png' }));
+      memeImg.hidden = false;
+    },
+    (e: unknown) => setMemeResult(typeof e === 'string' ? e : (e as AppError).message ?? '生成失败', 'is-err'),
+  ).finally(() => (memeTestBtn.disabled = false));
+});
+memeOnQuick.addEventListener('change', () => {
+  memeOnIn.checked = memeOnQuick.checked;
+  paintProHome();
+});
+memeOnIn.addEventListener('change', paintProHome);
+$('#memeTrGo').addEventListener('click', () => showStControl(trBaseIn));
 proLicCode.addEventListener('click', () => proGo('proLicPage', proCodeIn));
 proLicManage.addEventListener('click', () => proGo('proLicPage'));
 proLicBuy.addEventListener('click', () => void proBuy().catch((err: AppError) => {
@@ -2685,6 +2793,21 @@ function openSettings() {
   beltBackKey.reset(st.beltBackHotkey);
   beltOnIn.checked = st.beltEnabled;
   beltAutoIn.value = st.beltAuto ? 'auto' : 'manual';
+  memeKey.reset(st.memeHotkey);
+  memeOnIn.checked = st.memeEnabled;
+  memeProvider = st.memeImageProvider;
+  memeFormat = st.memeImageFormat;
+  memeUrlIn.value = st.memeImageBaseUrl;
+  memeKeyIn.value = st.memeImageApiKey;
+  memeKeyIn.type = 'password';
+  $('#memeKeyBtn').textContent = '显示';
+  memeModelIn.value = st.memeImageModel;
+  paintMemeUrlErr(null);
+  setMemeResult('');
+  memeTestBtn.disabled = false;
+  paintMemeIface();
+  $('#memeStats').textContent = '';
+  void memeLibraryStats().then(([n, b]) => ($('#memeStats').textContent = memeStatsText(n, b)), (e: AppError) => void info(`读取表情包库统计失败 kind=${e.kind}`));
   mixerKey.reset(st.mixerHotkey);
   mixerOnIn.checked = st.mixerEnabled;
   draftRecipes = st.mixerRecipes;
@@ -2730,6 +2853,7 @@ function openSettings() {
     if (h.line && S.line.available) lineKey.setHelp(taken('便签'), true);
     if (h.belt && S.line.available) beltKey.setHelp(taken('传送带'), true);
     if (h.mixer && S.line.available) mixerKey.setHelp(taken('搅拌机'), true);
+    if (h.meme && S.line.available) memeKey.setHelp(taken('表情包'), true);
   }, (e: AppError) => void info(`读取快捷键状态失败 kind=${e.kind}`));
   shotDir.pending = st.shotDir;
   shotDir.paint();
@@ -2854,8 +2978,10 @@ async function submitSettings() {
   // 接口地址不论默认用哪种都校验：“AI 翻译”一组常驻显示（M26 规则 6）
   const urlErr = baseUrlError(trBaseIn.value);
   paintTrUrlErr(urlErr);
+  const memeUrlBad = baseUrlError(memeUrlIn.value);
+  paintMemeUrlErr(memeUrlBad);
   // 切到第一个出错的标签（按标签顺序），聚焦其中出错的控件
-  if (limit === null || frequent === null || urlErr) return showStControl(stPanes.map((p) => p.querySelector<HTMLElement>('[aria-invalid="true"]')).find(Boolean)!);
+  if (limit === null || frequent === null || urlErr || memeUrlBad) return showStControl(stPanes.map((p) => p.querySelector<HTMLElement>('[aria-invalid="true"]')).find(Boolean)!);
   const s = formToSettings(S.settings, {
     hotkey: pendingHotkey, retain: retainIn.value, limit, frequent, ignored: addIgnored(draftIgnored, ignoreIn.value), skipSensitive: sensitiveIn.checked,
     moveToTop: moveTopIn.checked, launchAtLogin: autostartIn.checked, updateCheck: updCheckIn.checked, ocrEnabled: ocrOnIn.checked, ocrBackfill: ocrBackfillIn.checked, searchFileText: fileTextIn.checked,
@@ -2870,6 +2996,8 @@ async function submitSettings() {
     translateEngine: trSave(), translateBaseUrl: trBaseIn.value.trim(), translateApiKey: trKeyIn.value, translateModel: trModelIn.value.trim(), translateLang: trLangIn.value,
     translateHotkey: trKey.pending, lineStyle: draftLineStyle, lineEnabled: draftLineEnabled, lineSide: draftLineSide, linePinned: draftLinePinned,
     lineAppear: draftPace.lineAppear, lineLeave: draftPace.lineLeave,
+    memeEnabled: memeOnIn.checked, memeHotkey: memeKey.pending, memeImageProvider: memeProvider, memeImageFormat: memeFormat,
+    memeImageBaseUrl: memeUrlIn.value.trim(), memeImageApiKey: memeKeyIn.value, memeImageModel: memeModelIn.value.trim(),
   });
   saving = true;
   try {
@@ -2913,7 +3041,7 @@ async function submitSettings() {
       showStControl(hotkeyIn);
       setHotkeyHelp(err.message, true);
     } else if (at) {
-      const f = { shotHotkey: shotKey, recHotkey: recKey, trHotkey: trKey, lineHotkey: lineKey, beltHotkey: beltKey, beltBackHotkey: beltBackKey, mixerHotkey: mixerKey }[at];
+      const f = { shotHotkey: shotKey, recHotkey: recKey, trHotkey: trKey, lineHotkey: lineKey, beltHotkey: beltKey, beltBackHotkey: beltBackKey, mixerHotkey: mixerKey, memeHotkey: memeKey }[at];
       showStControl(f.input);
       f.setHelp(err.message, true);
     } else toast(err.message);
@@ -3432,17 +3560,19 @@ await onShotNeedPermission(({ pane, mode }) =>
 // 只认面板有焦点时的按键：失焦时后端不发到这里，这里再防一道
 const hkOn = (el: Element) => document.activeElement === el && document.hasFocus();
 const hkOpts = [[shotKey, '截图', 'shot'], [recKey, '录屏', 'rec'], [trKey, '翻译', 'translate'], [lineKey, '便签', 'line'], [beltKey, '传送带', 'belt'],
-  [beltBackKey, '退回', 'beltBack'], [mixerKey, '搅拌机', 'mixer']] as const;
+  [beltBackKey, '退回', 'beltBack'], [mixerKey, '搅拌机', 'mixer'], [memeKey, '表情包', 'meme']] as const;
 await onHotkeyPressed((role) => {
   // 被自己的全局快捷键拦下的组合也算收到了主键，松开修饰键时不报“没收到组合键”
   hotkeyGot = true;
   if (role !== 'panel') {
     const [self, name] = hkOpts.find((o) => o[2] === role)!;
     const other = hkOpts.find(([f]) => f !== self && hkOn(f.input));
-    const pressed = { shot: S.settings.shotHotkey, rec: S.settings.recHotkey, translate: S.settings.translateHotkey }[role];
+    const pressed = { shot: S.settings.shotHotkey, rec: S.settings.recHotkey, translate: S.settings.translateHotkey, meme: S.settings.memeHotkey }[role];
     if (hkOn(self.input)) self.record(pressed);
     else if (hkOn(hotkeyIn)) setHotkeyHelp(`不能与${name}快捷键相同`, true);
     else if (other) other[0].setHelp(`${other[1]}快捷键不能与${name}快捷键相同`, true);
+    // 表情包：焦点不在任何录制框里时，制作窗口随后接上（现在什么也不做）
+    else if (role === 'meme') return;
     else void (role === 'translate' ? trcardPress() : overlayBegin(role === 'rec')).catch((err: AppError) => toast(err.message));
     return;
   }

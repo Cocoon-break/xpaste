@@ -54,6 +54,8 @@ export const settings: Settings = {
   lineLeave: 'normal',
   beltEnabled: true, beltAuto: false, beltHotkey: 'Alt+Shift+B', beltBackHotkey: 'Alt+Shift+Z',
   mixerEnabled: true, mixerHotkey: 'Alt+Shift+M', mixerRecipes: [],
+  memeEnabled: true, memeHotkey: 'Alt+Shift+E', memeImageProvider: 'openai', memeImageFormat: 'openai',
+  memeImageBaseUrl: 'https://api.openai.com/v1', memeImageApiKey: '', memeImageModel: 'gpt-image-2', memeStylesUsed: [], memeStylesCustom: [],
 };
 
 const byId = (id: number) => RECORDS.find((r) => r.id === id);

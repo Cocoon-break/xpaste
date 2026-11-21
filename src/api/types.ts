@@ -80,6 +80,18 @@ export interface Settings {
   mixerHotkey: string;
   /** 配方列表；空表示还没存过，运行时补齐自带配方 */
   mixerRecipes: Recipe[];
+  /** 表情包制作总开关 */
+  memeEnabled: boolean;
+  /** 打开表情包制作窗口的全局快捷键；'' 表示不启用 */
+  memeHotkey: string;
+  /** 生图服务商预设键名，或 custom */
+  memeImageProvider: string;
+  memeImageFormat: 'openai' | 'ark' | 'gemini';
+  memeImageBaseUrl: string;
+  memeImageApiKey: string;
+  memeImageModel: string;
+  memeStylesUsed: string[];
+  memeStylesCustom: string[];
 }
 
 /** 搅拌机的配方；builtin 是自带配方的键名，自定义的为 null */
@@ -201,6 +213,7 @@ export interface AppError {
     | 'lineHotkeyTaken'
     | 'beltHotkeyTaken'
     | 'mixerHotkeyTaken'
+    | 'memeHotkeyTaken'
     | 'invalidSettings'
     | 'invalid'
     | 'internal'

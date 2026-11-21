@@ -371,6 +371,10 @@
                   <button type="button" data-pro-go="proMixerPage" aria-describedby="proSumMixer"><span class="ic2" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M5.5 4h9l-1.2 8.5H6.7z"/><path d="M6.7 12.5h6.6l.7 3.5H6z"/><path d="M8 8.5h4"/></svg></span><span class="t"><b>搅拌机</b><small id="proSumMixer"></small></span><svg class="chev" viewBox="0 0 20 20" aria-hidden="true"><path d="m8 5 5 5-5 5"/></svg></button>
                   <label class="switch"><input type="checkbox" id="mixerOnQuick" aria-label="搅拌机"></label>
                 </div>
+                <div class="pro-feat" id="proFeatMeme">
+                  <button type="button" data-pro-go="proMemePage" aria-describedby="proSumMeme"><span class="ic2" aria-hidden="true"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7"/><path d="M7.2 11.5c.7 1.2 1.7 1.8 2.8 1.8s2.1-.6 2.8-1.8"/><path d="M7.5 8h.01M12.5 8h.01"/></svg></span><span class="t"><b>表情包制作</b><small id="proSumMeme"></small></span><svg class="chev" viewBox="0 0 20 20" aria-hidden="true"><path d="m8 5 5 5-5 5"/></svg></button>
+                  <label class="switch"><input type="checkbox" id="memeOnQuick" aria-label="表情包制作"></label>
+                </div>
               </div>
             </div>
             <div class="pro-page" id="proLicPage" style="--i:0" aria-label="授权" hidden>
@@ -469,6 +473,54 @@
               <p class="help">打开的配方按这个顺序出现在搅拌机上：前三个是底座上的按键，其余在 ⋯ 里。拖左边的把手调整顺序</p>
               <div id="mixerRecipes"></div>
             </div>
+            </div>
+            <div class="pro-page" id="proMemePage" style="--i:0" aria-label="表情包制作" hidden>
+              <button type="button" class="pro-back" data-pro-back><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m12 5-5 5 5 5"/></svg>Pro</button>
+            <div class="switches">
+              <label class="switch"><span><b>表情包制作</b><small>把复制过的图、一句话或一张草图做成表情包，存进表情包库，在面板的“表情包”分类里随取随贴</small></span><input type="checkbox" id="memeOn"></label>
+            </div>
+            <div class="field">
+              <label for="memeHotkey">表情包制作快捷键</label>
+              <input id="memeHotkey" readonly autocomplete="off" spellcheck="false" placeholder="未启用" aria-describedby="memeHotkeyHelp">
+              <p class="help" id="memeHotkeyHelp"></p>
+            </div>
+            <div class="line">
+              <span><b>文案</b><small>用“翻译”里配置的 AI 接口；有参考图时会把图一起发过去，模型要能看图</small></span>
+              <button class="btn sm" type="button" id="memeTrGo">去翻译设置</button>
+            </div>
+            <div class="field">
+              <span class="lbl" id="memeProvLabel">服务商</span>
+              <div class="seg text" id="memeProv" role="radiogroup" aria-labelledby="memeProvLabel" style="flex-wrap:wrap"></div>
+              <p class="help">服务商只帮你填好接口格式、地址和模型 ID，填完照样能改</p>
+            </div>
+            <div class="field">
+              <span class="lbl" id="memeFmtLabel">接口格式</span>
+              <div class="seg text" id="memeFmt" role="radiogroup" aria-labelledby="memeFmtLabel" style="flex-wrap:wrap">
+                <button type="button" role="radio" data-fmt="openai">OpenAI 兼容</button>
+                <button type="button" role="radio" data-fmt="ark">火山方舟</button>
+                <button type="button" role="radio" data-fmt="gemini">Gemini</button>
+              </div>
+            </div>
+            <div class="field">
+              <label for="memeBaseUrl">接口地址</label>
+              <input id="memeBaseUrl" autocomplete="off" spellcheck="false" aria-describedby="memeBaseUrlErr">
+              <p class="err" id="memeBaseUrlErr" hidden></p>
+            </div>
+            <div class="field">
+              <label for="memeApiKey">API Key</label>
+              <div class="pick"><input id="memeApiKey" type="password" autocomplete="off" spellcheck="false" aria-describedby="memeApiKeyHelp"><button class="btn" type="button" id="memeKeyBtn" aria-controls="memeApiKey">显示</button></div>
+              <p class="help" id="memeApiKeyHelp">只保存在本机；生成和“测试生成”时，提示词和参考图会发到上面的地址</p>
+            </div>
+            <div class="field">
+              <label for="memeModel">模型 ID</label>
+              <input id="memeModel" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="line">
+              <span class="help tr-result" id="memeTestResult" role="status" aria-live="polite"></span>
+              <img id="memeTestImg" alt="" hidden width="40" height="40" style="border-radius:6px">
+              <button class="btn" type="button" id="memeTestBtn">测试生成</button>
+            </div>
+            <p class="help" id="memeStats"></p>
             </div>
           </section>
         </div>

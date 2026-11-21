@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Settings } from './api/types';
 import {
-  addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFrequent, parseIgnored, parseLimit, pickerOptions, removeIgnored, retentionFromOption,
+  memeStatsText, MEME_PRESETS, memePreset, providerAfterEdit, addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFrequent, parseIgnored, parseLimit, pickerOptions, removeIgnored, retentionFromOption,
 } from './settings-form.ts';
 
 test('parseLimit 只接受 50–5000 的 50 倍数', () => {
@@ -62,6 +62,8 @@ test('formToSettings 只改表单字段，其余（含外观：点选即保存�
     linePinned: false, lineAppear: 'normal', lineLeave: 'normal',
     beltEnabled: true, beltAuto: false, beltHotkey: 'Alt+Shift+B', beltBackHotkey: 'Alt+Shift+Z',
     mixerEnabled: true, mixerHotkey: 'Alt+Shift+M', mixerRecipes: [],
+    memeEnabled: true, memeHotkey: 'Alt+Shift+E', memeImageProvider: 'openai', memeImageFormat: 'openai',
+    memeImageBaseUrl: 'https://api.openai.com/v1', memeImageApiKey: '', memeImageModel: 'gpt-image-2', memeStylesUsed: [], memeStylesCustom: [],
   };
   assert.deepEqual(
     formToSettings(base, {
@@ -89,6 +91,8 @@ test('formToSettings 只改表单字段，其余（含外观：点选即保存�
       linePinned: false, lineAppear: 'normal', lineLeave: 'normal',
       beltEnabled: false, beltAuto: true, beltHotkey: 'Alt+Shift+J', beltBackHotkey: 'Alt+Shift+K',
       mixerEnabled: false, mixerHotkey: 'Alt+Shift+H', mixerRecipes: [{ name: 'a', prompt: 'p', show: true, builtin: null }],
+      memeEnabled: true, memeHotkey: 'Alt+Shift+E', memeImageProvider: 'openai', memeImageFormat: 'openai',
+      memeImageBaseUrl: 'https://api.openai.com/v1', memeImageApiKey: '', memeImageModel: 'gpt-image-2', memeStylesUsed: [], memeStylesCustom: [],
     },
   );
 });
@@ -99,3 +103,18 @@ test('Base URL 校验', () => {
   assert.equal(baseUrlError('HTTP://localhost:11434/v1'), null);
   assert.equal(baseUrlError('api.openai.com/v1'), '请输入 http:// 或 https:// 开头的地址');
 });
+
+test('provider switches to custom when edited', () => {
+  const p = memePreset('ark')!;
+  // 选“豆包”后改模型 ID：服务商变 custom，格式和地址由调用方保持不变
+  assert.equal(providerAfterEdit('ark', 'model'), 'custom');
+  assert.equal(providerAfterEdit('ark', 'format'), 'custom');
+  assert.equal(providerAfterEdit('ark', 'baseUrl'), 'custom');
+  assert.equal(providerAfterEdit('ark', 'apiKey'), 'ark');
+  assert.equal(providerAfterEdit('custom', 'model'), 'custom');
+  assert.equal(p.format, 'ark');
+  assert.equal(memePreset('custom'), undefined);
+  assert.deepEqual(MEME_PRESETS.map((x) => x.key), ['openai', 'gemini', 'ark', 'qwen']);
+});
+
+test('memeStatsText 写个数和 MB', () => assert.equal(memeStatsText(3, 5 * 1048576 + 52429), '表情包库：3 个，占 5.1 MB'));

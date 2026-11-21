@@ -1,5 +1,6 @@
 pub mod belt;
 pub mod line;
+pub mod meme;
 pub mod mixer;
 pub mod panel;
 pub mod records;

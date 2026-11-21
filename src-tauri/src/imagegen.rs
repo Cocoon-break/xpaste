@@ -1,9 +1,6 @@
 //! 生图接口客户端：OpenAI 兼容、火山方舟、Gemini 三种格式。
 //! 参考图由调用方先用 `encode_ref` 编好；结果统一转成 PNG 字节返回。
 
-// 调用方（表情包的生成与“测试生成”）在后续任务里接入
-#![allow(dead_code)]
-
 use std::io::Cursor;
 use std::time::Duration;
 
@@ -45,7 +42,10 @@ const TIMEOUTS: Timeouts = Timeouts {
     read: Duration::from_secs(180),
 };
 
+// 参考图的编码在制作窗口接上生成时才用到
+#[allow(dead_code)]
 const REF_EDGE: u32 = 1024;
+#[allow(dead_code)]
 const REF_MAX_BYTES: usize = 4_194_304;
 
 pub fn unconfigured(c: &ImageCfg) -> bool {
@@ -206,6 +206,7 @@ pub fn reason(f: &ImgFail) -> String {
 }
 
 /// 参考图：长边缩到 1024，PNG 超过 4 MB 改质量 85 的 JPEG（透明处铺白）。
+#[allow(dead_code)]
 pub fn encode_ref(png_or_any: &[u8]) -> Option<Vec<u8>> {
     let img = image::load_from_memory(png_or_any).ok()?;
     crate::mixer::encode_image_within(img, REF_EDGE, REF_MAX_BYTES)
