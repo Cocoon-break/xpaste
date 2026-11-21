@@ -284,6 +284,10 @@ pub fn meme_caption_body(
     serde_json::Value::Null
 }
 
+pub fn meme_base_emotion(_text: &str) -> &'static str {
+    "happy"
+}
+
 pub fn meme_parse_captions(_text: &str) -> Vec<String> {
     Vec::new()
 }

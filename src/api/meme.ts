@@ -43,6 +43,8 @@ export interface MemeStyles { styles: MemeStyle[]; used: string[]; custom: strin
 export const memeStyles = () => invoke<MemeStyles>('meme_styles');
 /** 挑过的、自己写的风格变了：后端去重、限个数后写回设置 */
 export const memePrefsSet = (p: MemePrefs) => invoke<void>('meme_prefs_set', { ...p });
+/** 没有参考图时，按文字挑内置角色的表情键名（BASE_EMOS 之一） */
+export const memeBaseEmotion = (text: string) => invoke<string>('meme_base_emotion', { text });
 export const memeStylesTouch = (used: string[], custom: string[]) => invoke<void>('meme_styles_touch', { used, custom });
 
 /** 出文案：5 条候选（翻译里配置的 AI 接口）。`sketch` 是第一张为草图时它的文件名，`avoid` 是“换一批”前给过的；失败时抛出原因 */

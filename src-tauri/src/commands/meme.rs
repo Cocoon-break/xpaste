@@ -144,6 +144,12 @@ pub fn meme_styles(state: State<'_, AppState>) -> StylesDto {
     }
 }
 
+/// 没有参考图时，按文字挑内置角色的表情键名
+#[tauri::command]
+pub fn meme_base_emotion(text: String) -> String {
+    xpaste_pro::meme_base_emotion(&text).to_string()
+}
+
 /// 记住这次的风格、文字样式、位置、“更多调整”是否展开，下次打开默认用上
 #[tauri::command(async)]
 pub fn meme_prefs_set(

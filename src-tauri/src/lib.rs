@@ -559,6 +559,7 @@ pub fn run() {
             commands::meme::meme_styles,
             commands::meme::meme_styles_touch,
             commands::meme::meme_prefs_set,
+            commands::meme::meme_base_emotion,
             commands::meme::meme_recent_images,
             commands::meme::meme_test_image,
             commands::meme::meme_library_stats,
