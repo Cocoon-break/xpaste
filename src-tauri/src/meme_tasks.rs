@@ -209,7 +209,13 @@ impl Queue {
             Err(e) => {
                 v.state = TaskState::Fail;
                 v.error = e;
-                format!("“{}”没画出来：{}", v.title, v.error)
+                // 参考图编不了码的内部写法不露给用户（页面的 reasonText 同一说法）
+                let why = if v.error.starts_with(meme_gen::UNREADABLE) {
+                    "这张参考图读不出来"
+                } else {
+                    &v.error
+                };
+                format!("“{}”没画出来：{}", v.title, why)
             }
         })
     }
@@ -461,6 +467,16 @@ mod tests {
         assert_eq!(state(&q, a), None);
         assert_eq!(q.next(), Some(d));
         assert_eq!(state(&q, b), Some(TaskState::Run));
+    }
+
+    #[test]
+    fn unreadable_ref_note_hides_internal_reason() {
+        let mut q = Queue::new();
+        let a = push(&mut q);
+        q.next();
+        let note = q.finish(a, Err("unreadable:5:0".into())).unwrap();
+        assert!(note.ends_with("没画出来：这张参考图读不出来"));
+        assert!(!note.contains("unreadable"));
     }
 
     #[test]

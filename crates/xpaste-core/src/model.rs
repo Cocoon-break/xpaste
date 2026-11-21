@@ -299,7 +299,6 @@ impl Settings {
         }
     }
 
-    /// 实际该注册的表情包快捷键：总开关关着时为空串（不注册）
     /// 记住制作窗口的选择：风格不校验（自定义风格是任意文字），只截到 40 字；样式、位置不认识的按默认存
     pub fn set_meme_prefs(&mut self, style: &str, ts: &str, pos: &str, more: bool) {
         let style: String = style.trim().chars().take(40).collect();
@@ -317,6 +316,7 @@ impl Settings {
         self.meme_more_open = more;
     }
 
+    /// 实际该注册的表情包快捷键：总开关关着时为空串（不注册）
     pub fn effective_meme_hotkey(&self) -> &str {
         if self.meme_enabled {
             &self.meme_hotkey
