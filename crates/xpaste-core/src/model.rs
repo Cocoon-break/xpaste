@@ -984,8 +984,8 @@ impl fmt::Debug for MemeInfo {
 
 /// `Store::add_meme` 的入参。不派生 `Debug`：带名字与路径。
 pub struct NewMeme {
-    /// 数据目录 `memes/` 下的绝对路径
-    pub file: std::path::PathBuf,
+    /// `memes/` 下的文件名（不带目录）：读的时候按当前数据目录拼出路径，数据目录换了也找得到
+    pub file: String,
     pub info: MemeInfo,
     /// 搜索文本（名字、梗文字等），由调用方拼好
     pub search: String,

@@ -390,9 +390,20 @@ impl Store {
             }
             t => (t, false),
         };
-        let paths: Vec<String> = match paths {
-            Some(p) => serde_json::from_str(&p)?,
-            None => Vec::new(),
+        let paths: Vec<String> = if summary.meme.is_some() {
+            // 表情包按当前数据目录找文件，不认存下的路径
+            let meme: Option<String> =
+                self.conn
+                    .query_row("SELECT meme FROM records WHERE id = ?1", [id], |r| r.get(0))?;
+            meme.and_then(|m| meme_path(&self.dir, &m, paths.as_deref()))
+                .map(|p| p.display().to_string())
+                .into_iter()
+                .collect()
+        } else {
+            match paths {
+                Some(p) => serde_json::from_str(&p)?,
+                None => Vec::new(),
+            }
         };
         let files: Vec<FileEntry> = paths
             .into_iter()
@@ -1140,25 +1151,19 @@ impl Store {
         Ok(ids)
     }
 
-    /// 存一个表情包（库里按置顶存、豁免所有清理）：文件已由调用方写到 `memes/` 下，
-    /// `flavors` 同剪切板里的文件记录，直接可以粘贴。插入失败时 `memes/` 里的文件由调用方清理。
-    pub fn add_meme(
-        &mut self,
-        m: NewMeme,
-        flavors: &[Flavor],
-        now_ms: i64,
-    ) -> Result<i64, CoreError> {
-        let paths = serde_json::to_string(&[m.file.display().to_string()])?;
-        let meme = serde_json::json!({ "info": m.info, "scene": m.scene }).to_string();
+    /// 存一个表情包（库里按置顶存、豁免所有清理）：文件已由调用方写到 `memes/` 下。
+    /// 只记文件名（在 meme JSON 的 `file` 里），不存路径和剪切板格式：粘贴时按当前数据目录现拼。
+    /// 插入失败时 `memes/` 里的文件由调用方清理。
+    pub fn add_meme(&mut self, m: NewMeme, now_ms: i64) -> Result<i64, CoreError> {
+        let meme =
+            serde_json::json!({ "info": m.info, "scene": m.scene, "file": m.file }).to_string();
         let meta = serde_json::json!({ "w": m.width, "h": m.height }).to_string();
-        let tx = self.conn.transaction()?;
-        tx.execute(
-            "INSERT INTO records(hash, kind, title, paths, size, meta, search_text, py_text, copied_at,
+        self.conn.execute(
+            "INSERT INTO records(hash, kind, title, size, meta, search_text, py_text, copied_at,
                pinned, ocr_state, meme)
-             VALUES (randomblob(16), 'image', ?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9)",
+             VALUES (randomblob(16), 'image', ?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?8)",
             params![
                 m.info.name,
-                paths,
                 m.bytes as i64,
                 meta,
                 m.search.to_lowercase(),
@@ -1168,14 +1173,7 @@ impl Store {
                 meme
             ],
         )?;
-        let id = tx.last_insert_rowid();
-        let writes = insert_flavors(&tx, &self.dir, id, flavors, "")?;
-        let written = write_all(&writes).and_then(|()| tx.commit().map_err(CoreError::from));
-        if let Err(e) = written {
-            self.delete_files(id);
-            return Err(e);
-        }
-        Ok(id)
+        Ok(self.conn.last_insert_rowid())
     }
 
     /// 表情包的做法 JSON（原样，公开侧不解析）；不是表情包时为 None。
@@ -1411,23 +1409,32 @@ fn reindex_snippet(tx: &Connection, id: i64) -> Result<(), CoreError> {
     Ok(())
 }
 
-/// 这些记录里表情包指向的文件：只认数据目录 `memes/` 下的（挡掉 `..`），其余一律不碰。
-fn meme_files(conn: &Connection, dir: &Path, ids: &[i64]) -> Result<Vec<PathBuf>, CoreError> {
+/// 表情包文件在当前数据目录下的路径：meme JSON 里的 `file`；早先写的行没有它，取 `paths` 里那个路径的文件名。
+/// 只认 `memes/` 下的一个文件名（挡掉 `..` 和带目录的），其余为 None。
+fn meme_path(dir: &Path, meme: &str, paths: Option<&str>) -> Option<PathBuf> {
+    let file = serde_json::from_str::<Value>(meme)
+        .ok()
+        .and_then(|v| v.get("file")?.as_str().map(str::to_owned))
+        .or_else(|| {
+            let list: Vec<String> = serde_json::from_str(paths?).ok()?;
+            let p = Path::new(list.first()?);
+            Some(p.file_name()?.to_str()?.to_owned())
+        })?;
     // memes/ 由应用自己维护，不解析符号链接
-    let root = dir.join("memes");
+    let plain = Path::new(&file).file_name().and_then(|n| n.to_str()) == Some(file.as_str());
+    plain.then(|| dir.join("memes").join(file))
+}
+
+/// 这些记录里表情包指向的文件（按当前数据目录拼出）。
+fn meme_files(conn: &Connection, dir: &Path, ids: &[i64]) -> Result<Vec<PathBuf>, CoreError> {
     let mut out = Vec::new();
-    let mut stmt = conn.prepare("SELECT paths FROM records WHERE id = ?1 AND meme IS NOT NULL")?;
+    let mut stmt =
+        conn.prepare("SELECT meme, paths FROM records WHERE id = ?1 AND meme IS NOT NULL")?;
     for &id in ids {
-        let paths: Option<String> = stmt.query_row([id], |r| r.get(0)).optional()?.flatten();
-        let list: Vec<String> = paths
-            .and_then(|p| serde_json::from_str(&p).ok())
-            .unwrap_or_default();
-        out.extend(list.into_iter().map(PathBuf::from).filter(|p| {
-            p.starts_with(&root)
-                && !p
-                    .components()
-                    .any(|c| matches!(c, std::path::Component::ParentDir))
-        }));
+        let row: Option<(String, Option<String>)> = stmt
+            .query_row([id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()?;
+        out.extend(row.and_then(|(m, p)| meme_path(dir, &m, p.as_deref())));
     }
     Ok(out)
 }
@@ -2788,9 +2795,9 @@ pub(crate) mod tests {
         assert_eq!((d.translation, d.translation_lang), (None, None));
     }
 
-    fn new_meme(dir: &Path, name: &str, search: &str) -> NewMeme {
+    fn new_meme(name: &str, search: &str) -> NewMeme {
         NewMeme {
-            file: dir.join("memes").join("1.gif"),
+            file: "1.gif".into(),
             info: MemeInfo {
                 source: "ai".into(),
                 name: name.into(),
@@ -2831,9 +2838,8 @@ pub(crate) mod tests {
     #[test]
     fn memes_survive_cleanup() {
         let mut s = mem();
-        let dir = s.dir.clone();
-        let a = s.add_meme(new_meme(&dir, "甲", "甲"), &[], 0).unwrap();
-        let b = s.add_meme(new_meme(&dir, "乙", "乙"), &[], 0).unwrap();
+        let a = s.add_meme(new_meme("甲", "甲"), 0).unwrap();
+        let b = s.add_meme(new_meme("乙", "乙"), 0).unwrap();
         added(&mut s, &rec("h"), 1);
         assert_eq!(s.count_unpinned().unwrap(), 1);
         assert_eq!(s.prune_preview(Some(1), 1, 10 * DAY_MS).unwrap(), 1);
@@ -2857,9 +2863,8 @@ pub(crate) mod tests {
     #[test]
     fn meme_search_by_name_and_pinyin() {
         let mut s = mem();
-        let dir = s.dir.clone();
         let id = s
-            .add_meme(new_meme(&dir, "无语", "无语 我谢谢你 Q 版贴纸"), &[], 0)
+            .add_meme(new_meme("无语", "无语 我谢谢你 Q 版贴纸"), 0)
             .unwrap();
         added(&mut s, &rec("other"), 1);
         for q in ["wy", "谢谢"] {
@@ -2877,10 +2882,10 @@ pub(crate) mod tests {
         std::fs::write(&inside, b"g").unwrap();
         let outside = dir.join("images").join("keep.gif");
         std::fs::write(&outside, b"g").unwrap();
-        let a = s.add_meme(new_meme(&dir, "甲", "甲"), &[], 0).unwrap();
-        let mut m = new_meme(&dir, "乙", "乙");
-        m.file = outside.clone();
-        let b = s.add_meme(m, &[], 0).unwrap();
+        let a = s.add_meme(new_meme("甲", "甲"), 0).unwrap();
+        let mut m = new_meme("乙", "乙");
+        m.file = "../images/keep.gif".into();
+        let b = s.add_meme(m, 0).unwrap();
         s.soft_delete(&[a, b], 5).unwrap();
         assert!(s.purge_if_deleted_at(a, 5).unwrap());
         assert!(!inside.exists());
@@ -2888,11 +2893,51 @@ pub(crate) mod tests {
         assert!(outside.exists());
     }
 
+    /// 数据目录换了（整个搬走）：表情包照样能预览、能删掉文件；早先存了绝对路径、没存文件名的行也一样
+    #[test]
+    fn meme_file_follows_data_dir() {
+        let a = tmp();
+        let mut s = Store::open(&a).unwrap();
+        let id = s.add_meme(new_meme("甲", "甲"), 0).unwrap();
+        // 早先的写法：paths 里是旧数据目录下的绝对路径，meme JSON 里没有 file
+        let old_abs =
+            serde_json::to_string(&[a.join("memes").join("2.png").display().to_string()]).unwrap();
+        s.conn
+            .execute(
+                "INSERT INTO records(hash, kind, title, paths, size, search_text, copied_at, pinned, meme)
+                 VALUES (x'02', 'image', '乙', ?1, 1, '', 0, 1, '{\"info\":{\"source\":\"final\",\"name\":\"乙\",\"style\":null},\"scene\":\"\"}')",
+                [old_abs],
+            )
+            .unwrap();
+        let old = s.conn.last_insert_rowid();
+        drop(s);
+        let b = tmp();
+        std::fs::rename(&a, &b).unwrap();
+        for f in ["1.gif", "2.png"] {
+            std::fs::write(b.join("memes").join(f), b"g").unwrap();
+        }
+        let mut s = Store::open(&b).unwrap();
+        for (id, f) in [(id, "1.gif"), (old, "2.png")] {
+            let d = s.detail(id).unwrap().unwrap();
+            assert_eq!(d.files.len(), 1);
+            assert_eq!(
+                d.files[0].path,
+                b.join("memes").join(f).display().to_string()
+            );
+            assert!(d.files[0].exists);
+        }
+        // 不再存剪切板格式：粘贴时现拼
+        assert!(s.flavors(id).unwrap().is_empty());
+        s.soft_delete(&[id, old], 5).unwrap();
+        s.purge_all_soft_deleted().unwrap();
+        assert!(!b.join("memes").join("1.gif").exists());
+        assert!(!b.join("memes").join("2.png").exists());
+    }
+
     #[test]
     fn summary_carries_meme_info() {
         let mut s = mem();
-        let dir = s.dir.clone();
-        let id = s.add_meme(new_meme(&dir, "无语", "无语"), &[], 0).unwrap();
+        let id = s.add_meme(new_meme("无语", "无语"), 0).unwrap();
         let sum = &s.list_summaries().unwrap()[0];
         assert_eq!(
             sum.meme,
@@ -2910,8 +2955,7 @@ pub(crate) mod tests {
     #[test]
     fn ocr_skips_memes() {
         let mut s = mem();
-        let dir = s.dir.clone();
-        s.add_meme(new_meme(&dir, "甲", "甲"), &[], 0).unwrap();
+        s.add_meme(new_meme("甲", "甲"), 0).unwrap();
         let states = [ocr_state::PENDING, ocr_state::SKIPPED];
         assert!(s.ocr_pending_ids(&states, 10).unwrap().is_empty());
         assert_eq!(s.ocr_progress().unwrap(), (0, 0));
@@ -2920,9 +2964,8 @@ pub(crate) mod tests {
     #[test]
     fn latest_live_id_skips_memes() {
         let mut s = mem();
-        let dir = s.dir.clone();
         let a = added(&mut s, &rec("h"), 1);
-        let m = s.add_meme(new_meme(&dir, "甲", "甲"), &[], 99).unwrap();
+        let m = s.add_meme(new_meme("甲", "甲"), 99).unwrap();
         assert_eq!(s.latest_live_id().unwrap(), Some(a));
         assert!(s.save_snippet(m, "n", 100).is_err());
     }
@@ -2930,8 +2973,7 @@ pub(crate) mod tests {
     #[test]
     fn bump_use_updates_meme_last_used() {
         let mut s = mem();
-        let dir = s.dir.clone();
-        let id = s.add_meme(new_meme(&dir, "甲", "甲"), &[], 100).unwrap();
+        let id = s.add_meme(new_meme("甲", "甲"), 100).unwrap();
         s.bump_use(id, false, 900).unwrap();
         let sum = s.summary(id).unwrap().unwrap();
         assert_eq!((sum.uses, sum.copied_at), (1, 900));

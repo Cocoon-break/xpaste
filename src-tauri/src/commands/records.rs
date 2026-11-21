@@ -394,7 +394,13 @@ pub(crate) fn precheck(state: &AppState, id: i64) -> Result<Vec<Flavor>, AppErro
     if detail.files.iter().any(|f| !f.exists) {
         return Err(AppError::FileMissing);
     }
-    let flavors = store.flavors(id)?;
+    // 表情包不存剪切板格式：按文件现拼（数据目录换了也对）
+    let flavors = match detail.files.first() {
+        Some(f) if detail.summary.meme.is_some() => {
+            crate::meme_store::flavors(std::path::Path::new(&f.path))
+        }
+        _ => store.flavors(id)?,
+    };
     if flavors.is_empty() {
         return Err(AppError::ClipboardWrite);
     }

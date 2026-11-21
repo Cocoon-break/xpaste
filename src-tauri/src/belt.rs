@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
-use xpaste_core::Kind;
+use xpaste_core::{Kind, RecordSummary};
 use xpaste_pro::{BELT_MAX, Belt, BeltError, BeltItem, Cleared, Pro, Removed, split_offer};
 
 use crate::collect::{self, Taker, Toggle};
@@ -628,7 +628,7 @@ fn put_record(
     id: i64,
     offer: bool,
 ) -> Option<u64> {
-    let read = || -> Result<Option<(Kind, String, Option<String>)>, xpaste_core::CoreError> {
+    let read = || -> Result<Option<(RecordSummary, Option<String>)>, xpaste_core::CoreError> {
         let store = state.store();
         let Some(s) = store.live_summary(id)? else {
             return Ok(None);
@@ -637,10 +637,14 @@ fn put_record(
             Kind::Text | Kind::Code | Kind::Link => store.text(id)?,
             _ => None,
         };
-        Ok(Some((s.kind, s.title, text)))
+        Ok(Some((s, text)))
     };
     let (kind, title, text) = match read() {
-        Ok(Some(r)) => r,
+        Ok(Some((s, _))) if s.meme.is_some() => {
+            fx.toasts.push(toast("表情包放不上传送带", &[], None));
+            return None;
+        }
+        Ok(Some((s, text))) => (s.kind, s.title, text),
         Ok(None) => {
             log::info!("传送带 记录已删除，不放上 id={id}");
             return None;
@@ -1253,6 +1257,17 @@ pub fn begin_now(app: &AppHandle) {
 mod tests {
     use super::*;
     use xpaste_pro::Pro;
+
+    #[test]
+    fn meme_not_put() {
+        let state = AppState::for_test();
+        let id = crate::meme_store::test_meme(&state);
+        let mut fx = Fx::default();
+        let n = rt().belt.items().len();
+        assert_eq!(put_record(&state, &mut rt(), &mut fx, id, false), None);
+        assert_eq!(rt().belt.items().len(), n);
+        assert_eq!(fx.toasts[0].text, "表情包放不上传送带");
+    }
 
     #[test]
     fn finish_is_quiet_when_mini() {

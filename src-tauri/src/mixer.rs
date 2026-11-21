@@ -205,6 +205,7 @@ fn blending_toast() -> Toast {
 #[derive(Debug, PartialEq)]
 enum Refuse {
     Video,
+    Meme,
     /// 文件夹、PDF、Office 文档、二进制文件、解不出来的文本
     Unsupported,
     /// 超过字数上限（`Some(字数)`），或文件太大没读（`None`）
@@ -217,6 +218,7 @@ impl Refuse {
     fn text(&self) -> String {
         match self {
             Refuse::Video => "视频放不进搅拌机".into(),
+            Refuse::Meme => "表情包放不进搅拌机".into(),
             Refuse::Unsupported => "这种文件放不进搅拌机，可以复制里面的文字再放".into(),
             Refuse::TooLong(Some(n)) => {
                 format!("文件太长（{n} 字），最多 {MAX_CHARS} 字，可以复制其中一段再放")
@@ -695,6 +697,9 @@ fn read_record(state: &AppState, id: i64) -> Result<Option<Vec<Piece>>, xpaste_c
         let Some(s) = store.live_summary(id)? else {
             return Ok(None);
         };
+        if s.meme.is_some() {
+            return Ok(Some(vec![Err(Refuse::Meme)]));
+        }
         let (text, paths): (Option<String>, Vec<PathBuf>) = match s.kind {
             Kind::Text | Kind::Code | Kind::Link => (store.text(id)?, Vec::new()),
             Kind::File => (
@@ -1554,6 +1559,15 @@ fn pasted(app: &AppHandle, at_press: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn meme_refused() {
+        let state = AppState::for_test();
+        let id = crate::meme_store::test_meme(&state);
+        let p = read_record(&state, id).unwrap().unwrap();
+        assert!(matches!(p.as_slice(), [Err(Refuse::Meme)]));
+        assert_eq!(Refuse::Meme.text(), "表情包放不进搅拌机");
+    }
 
     #[test]
     fn paste_closes_when_mini() {

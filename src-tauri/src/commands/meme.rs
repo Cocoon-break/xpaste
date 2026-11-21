@@ -266,7 +266,15 @@ pub async fn meme_encode(request: Request<'_>) -> Result<crate::meme_store::Enco
     .map_err(|_| "编码失败".to_string())?
 }
 
-/// 存进表情包库（做好的），`copy` 时同时放进剪切板（自身写入，不进历史）。返回库里的 id
+/// `meme_store` 的结果：库里的 id；放剪切板失败时带提示（这时已进库）
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoreOut {
+    id: i64,
+    clip_error: Option<&'static str>,
+}
+
+/// 存进表情包库（做好的），`copy` 时同时放进剪切板（自身写入，不进历史）
 #[tauri::command(async)]
 pub fn meme_store(
     app: AppHandle,
@@ -276,7 +284,7 @@ pub fn meme_store(
     scene: String,
     search_parts: crate::meme_store::SearchParts,
     copy: bool,
-) -> Result<i64, String> {
+) -> Result<StoreOut, String> {
     let f = crate::meme_store::Final {
         token,
         name,
@@ -284,17 +292,15 @@ pub fn meme_store(
         parts: search_parts,
     };
     let mut write = |f: &[xpaste_core::Flavor]| xpaste_platform::write(f);
-    let id = crate::meme_store::store(
+    let (id, clip_error) = crate::meme_store::store(
         &state,
         &crate::meme_store::LAST,
         f,
         copy.then_some(&mut write as crate::meme_store::Write<'_>),
-    );
+    )?;
     // 进了库就让面板刷新（复制失败时也已进库）
-    if let Ok(id) = id {
-        crate::events::emit_summary(&app, crate::events::RECORD_ADDED, id);
-    }
-    id
+    crate::events::emit_summary(&app, crate::events::RECORD_ADDED, id);
+    Ok(StoreOut { id, clip_error })
 }
 
 /// 和上次存的一样：把库里那一个放进剪切板（自身写入，不进历史）。不在了时返回 "gone"

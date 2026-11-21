@@ -262,9 +262,9 @@ const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id ===
             <span class="qa" aria-hidden="true">
               ${isSnip(r) ? `<button type="button" tabindex="-1" data-qa="edit" title="编辑片段">${svg('pencil')}</button>`
                 : isMeme(r) ? '' : `<button type="button" tabindex="-1" data-qa="pin" title="${r.pinned ? '取消置顶' : '置顶'}">${svg(r.pinned ? 'pinFill' : 'pin')}</button>`}
-              ${lineOn() ? `<button type="button" tabindex="-1" data-qa="hang" title="挂到晾衣绳">${svg('hang')}</button>` : ''}
-              ${beltOn() ? `<button type="button" tabindex="-1" data-qa="belt" title="放上传送带">${svg('belt')}</button>` : ''}
-              ${mixerOn() && r.kind !== 'video' ? `<button type="button" tabindex="-1" data-qa="mixer" data-tip="放进搅拌机">${svg('cup')}</button>` : ''}
+              ${lineOn() && !isMeme(r) ? `<button type="button" tabindex="-1" data-qa="hang" title="挂到晾衣绳">${svg('hang')}</button>` : ''}
+              ${beltOn() && !isMeme(r) ? `<button type="button" tabindex="-1" data-qa="belt" title="放上传送带">${svg('belt')}</button>` : ''}
+              ${mixerOn() && r.kind !== 'video' && !isMeme(r) ? `<button type="button" tabindex="-1" data-qa="mixer" data-tip="放进搅拌机">${svg('cup')}</button>` : ''}
               ${memeOn() && memeable(r) ? `<button type="button" tabindex="-1" data-qa="meme" data-tip="做表情包">${svg('smile')}</button>` : ''}
               <button type="button" tabindex="-1" data-qa="copy" title="${copyVerb(S.canPaste)}">${svg('copy')}</button>
             </span>
@@ -3885,7 +3885,8 @@ const memeable = (r: RecordSummary) =>
 // 做表情包：有多选带多选（按选中的先后），否则带 id；都没有就空白打开。面板由后端收起。
 // 全都做不了时提示；`blank`（全局快捷键）时改成空白打开
 function makeMeme(id: number | null, multi = [...S.multi], blank = false) {
-  void memeOpen(putOrder(id, multi)).catch((err: AppError) => (blank ? memeOpen([]) : toast(err.message)));
+  const fail = (err: AppError) => toast(err.message);
+  void memeOpen(putOrder(id, multi)).catch((err: AppError) => (blank ? memeOpen([]).catch(fail) : fail(err)));
 }
 // 接着改：按库里的做法打开制作窗口；试用过期时由制作窗口提示
 function editMeme(id: number) {

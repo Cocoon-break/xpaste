@@ -59,6 +59,8 @@ pub struct OpenPayload {
     /// 接着改：做法 JSON 和它是库里哪一个（复制时做法没变就不重复进库）
     pub scene: Option<String>,
     pub scene_id: Option<i64>,
+    /// 接着改的是做好的成品：做法没变时复制只放剪切板。AI 原图不算（复制要导出 240 的成品）
+    pub scene_final: bool,
     /// 空白打开新窗口时的草稿
     pub draft: Option<String>,
     /// 本机能抠主体
@@ -194,15 +196,15 @@ pub fn open_scene(app: &AppHandle, id: i64) -> Result<(), AppError> {
     open_with(
         app,
         &[],
-        Some((crate::meme_store::scene_for_open(scene, id, ai), id)),
+        Some((crate::meme_store::scene_for_open(scene, id, ai), id, !ai)),
     )
 }
 
-/// `again`：接着改的做法（可能没有）和库里的 id
+/// `again`：接着改的做法（可能没有）、库里的 id、是不是做好的成品
 fn open_with(
     app: &AppHandle,
     ids: &[i64],
-    again: Option<(Option<String>, i64)>,
+    again: Option<(Option<String>, i64, bool)>,
 ) -> Result<(), AppError> {
     if !on(app) {
         return Ok(());
@@ -235,9 +237,9 @@ fn open_with(
     let draft = blank
         .then(|| crate::meme_store::draft_get(&app.state::<AppState>().data_dir))
         .flatten();
-    let (scene, scene_id) = match again.filter(|_| !expired) {
-        Some((s, id)) => (s, Some(id)),
-        None => (None, None),
+    let (scene, scene_id, scene_final) = match again.filter(|_| !expired) {
+        Some((s, id, fin)) => (s, Some(id), fin),
+        None => (None, None, false),
     };
     log::info!(
         "表情包 打开 {} 参考图 {} 张{}{}{}",
@@ -256,6 +258,7 @@ fn open_with(
         idea,
         scene,
         scene_id,
+        scene_final,
         draft,
         cutout: xpaste_platform::foreground_supported(),
         expired,

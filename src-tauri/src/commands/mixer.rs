@@ -31,17 +31,41 @@ pub fn mixer_put(app: AppHandle, ids: Vec<i64>) {
     mixer::put(&app, &ids);
 }
 
-/// 杯子上“＋”列出的候选：最近 8 条记录，视频不收、不列
+/// 杯子上“＋”列出的候选：最近 8 条记录，视频、表情包不收、不列
 #[tauri::command(async)]
 pub fn mixer_recent(state: State<'_, AppState>) -> Result<Vec<RecordSummary>, AppError> {
+    recent(&state)
+}
+
+fn recent(state: &AppState) -> Result<Vec<RecordSummary>, AppError> {
     // ponytail: 读出全部摘要再取前 8 条；记录多到点开明显变慢时换成带 LIMIT 的查询
     Ok(state
         .store()
         .list_summaries()?
         .into_iter()
-        .filter(|r| r.kind != Kind::Video)
+        .filter(|r| r.kind != Kind::Video && r.meme.is_none())
         .take(8)
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recent_skips_memes() {
+        let state = AppState::for_test();
+        crate::meme_store::test_meme(&state);
+        assert!(recent(&state).unwrap().iter().all(|r| r.meme.is_none()));
+        assert!(
+            state
+                .store()
+                .list_summaries()
+                .unwrap()
+                .iter()
+                .any(|r| r.meme.is_some())
+        );
+    }
 }
 
 /// 从别的应用拖进杯子：`paths` 是拖进来的文件，空表示拖的是文字（`text` 是页面拿到的，没有时后端读拖拽剪切板）

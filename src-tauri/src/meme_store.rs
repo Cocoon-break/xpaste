@@ -102,8 +102,7 @@ pub fn encode(last: &Last, body: &[u8]) -> Result<EncodeOut, String> {
     Ok(out)
 }
 
-/// 写 `memes/<uuid>.<ext>` 并存进表情包库。返回 id 和这个文件的剪切板格式（文件路径，macOS 的 GIF 另附一份数据）。
-/// 进库失败时删掉刚写的文件
+/// 写 `memes/<uuid>.<ext>` 并存进表情包库，返回 id。进库失败时删掉刚写的文件
 pub fn put(
     state: &AppState,
     bytes: &[u8],
@@ -112,26 +111,16 @@ pub fn put(
     info: MemeInfo,
     search: String,
     scene: String,
-) -> Result<(i64, Vec<Flavor>), String> {
+) -> Result<i64, String> {
     let dir = state.data_dir.join("memes");
-    let path = dir.join(format!("{}.{ext}", crate::meme_gen::uuid()));
+    let file = format!("{}.{ext}", crate::meme_gen::uuid());
+    let path = dir.join(&file);
     if let Err(e) = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, bytes)) {
         log::warn!("表情包 写文件失败：{e}");
         return Err("存进表情包失败".into());
     }
-    #[allow(unused_mut)]
-    let mut flavors = xpaste_platform::file_flavors(&path);
-    // Mac 微信要有文件路径才收动图；另附一份 GIF 数据
-    #[cfg(target_os = "macos")]
-    if ext == "gif" {
-        flavors.push(Flavor {
-            item: 0,
-            format: "com.compuserve.gif".into(),
-            data: bytes.to_vec(),
-        });
-    }
     let meme = NewMeme {
-        file: path.clone(),
+        file,
         info,
         search,
         scene,
@@ -139,10 +128,7 @@ pub fn put(
         height,
         bytes: bytes.len() as u64,
     };
-    match state
-        .store()
-        .add_meme(meme, &flavors, crate::clock::now_ms())
-    {
+    match state.store().add_meme(meme, crate::clock::now_ms()) {
         Ok(id) => {
             // 面板网格的格子用静态缩略图；动图只在预览里播
             if state
@@ -152,7 +138,7 @@ pub fn put(
             {
                 log::warn!("补全线程已退出");
             }
-            Ok((id, flavors))
+            Ok(id)
         }
         Err(e) => {
             log::warn!("表情包 进库失败：{e}");
@@ -160,6 +146,25 @@ pub fn put(
             Err("存进表情包失败".into())
         }
     }
+}
+
+/// 表情包文件的剪切板格式，粘贴、复制时现拼（库里不存，数据目录换了也对）：文件路径，macOS 的 GIF 另附一份数据。
+/// 读不到 GIF 时只给文件路径
+pub fn flavors(path: &Path) -> Vec<Flavor> {
+    #[allow(unused_mut)]
+    let mut flavors = xpaste_platform::file_flavors(path);
+    // Mac 微信要有文件路径才收动图；另附一份 GIF 数据
+    #[cfg(target_os = "macos")]
+    if path.extension().is_some_and(|e| e == "gif")
+        && let Ok(data) = std::fs::read(path)
+    {
+        flavors.push(Flavor {
+            item: 0,
+            format: "com.compuserve.gif".into(),
+            data,
+        });
+    }
+    flavors
 }
 
 /// 参与搜索的几段：想表达什么、文字、情绪名、风格名。带用户写的话，不派生 Debug
@@ -183,15 +188,19 @@ pub struct Final {
 /// 写剪切板的函数（测试里换成假的）
 pub type Write<'a> = &'a mut dyn FnMut(&[Flavor]) -> Result<u64, PlatformError>;
 
-/// 存进表情包库（做好的）；`copy` 时再按自身写入放进剪切板，不进历史
+/// 已进库、但没能放进剪切板时给页面的话
+pub const CLIP_FAILED: &str = "存进表情包了，但没能放进剪切板，再点一次复制";
+
+/// 存进表情包库（做好的）；`copy` 时再按自身写入放进剪切板，不进历史。
+/// 返回 id，以及放剪切板失败时的提示（这时已进库，页面照样记下“最后一次存的”）
 pub fn store(
     state: &AppState,
     last: &Last,
     f: Final,
     copy: Option<Write<'_>>,
-) -> Result<i64, String> {
+) -> Result<(i64, Option<&'static str>), String> {
     let e = last.take(f.token).ok_or("成品已过期，再点一次")?;
-    let name: String = f.name.trim().chars().take(12).collect();
+    let name: String = f.name.trim().chars().take(16).collect();
     let name = if name.is_empty() {
         "表情包".to_owned()
     } else {
@@ -206,7 +215,7 @@ pub fn store(
         style: None,
         gif: e.ext == "gif",
     };
-    let (id, flavors) = put(
+    let id = put(
         state,
         &e.bytes,
         e.ext,
@@ -221,11 +230,12 @@ pub fn store(
         e.bytes.len(),
         if copy.is_some() { " 并复制" } else { "" }
     );
-    if let Some(w) = copy {
-        crate::commands::records::write_marked(state, || w(&flavors))
-            .map_err(|_| "存进表情包了，但没能放进剪切板，再点一次复制")?;
-    }
-    Ok(id)
+    let Some(w) = copy else {
+        return Ok((id, None));
+    };
+    let clip = crate::commands::records::precheck(state, id)
+        .and_then(|f| crate::commands::records::write_marked(state, || w(&f)));
+    Ok((id, clip.is_err().then_some(CLIP_FAILED)))
 }
 
 /// 和上次存的一样：把库里那一个按自身写入放进剪切板（不进历史）。不在了时返回 "gone"
@@ -324,6 +334,18 @@ pub fn clean_orphans(state: &AppState) {
     }
 }
 
+/// 测试用：库里放一个做好的表情包（文件写在数据目录的 `memes/` 下），返回 id
+#[cfg(test)]
+pub fn test_meme(state: &AppState) -> i64 {
+    let info = MemeInfo {
+        source: "final".into(),
+        name: "甲".into(),
+        style: None,
+        gif: false,
+    };
+    put(state, b"x", "png", (1, 1), info, String::new(), "{}".into()).unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -389,7 +411,7 @@ mod tests {
         let before = history(&state);
         let out = encode(&last, &body(8, 80, 256, &[[1, 2, 3, 255], [4, 5, 6, 255]])).unwrap();
         let mut seen = Vec::new();
-        let id = store(
+        let (id, clip) = store(
             &state,
             &last,
             Final {
@@ -405,6 +427,7 @@ mod tests {
             }),
         )
         .unwrap();
+        assert_eq!(clip, None);
         // 库里多一个做好的，剪切板写入带自身写入标记，历史不变
         assert_eq!(state.store().meme_bytes().unwrap().0, 1);
         let m = state
@@ -441,13 +464,114 @@ mod tests {
         );
     }
 
+    fn state_at(store: xpaste_core::Store, dir: &Path) -> AppState {
+        AppState::new(
+            xpaste_core::Settings::default(),
+            store,
+            std::sync::mpsc::channel().0,
+            crate::ocr::Handle::new(false),
+            dir.to_path_buf(),
+        )
+    }
+
+    fn fin(token: u64, name: &str) -> Final {
+        Final {
+            token,
+            name: name.into(),
+            scene: "{}".into(),
+            parts: parts(),
+        }
+    }
+
+    /// 已进库、放剪切板失败：照样返回 id（页面记下“最后一次存的”，再点复制不会再存一个），带上提示
+    #[test]
+    fn store_clip_failure_still_returns_id() {
+        let state = AppState::for_test();
+        let last = Last::default();
+        let out = encode(&last, &body(8, 80, 256, &[[1, 2, 3, 255]])).unwrap();
+        let (id, clip) = store(
+            &state,
+            &last,
+            fin(out.token, "甲"),
+            Some(&mut |_: &[Flavor]| Err(PlatformError::Clipboard("x".into()))),
+        )
+        .unwrap();
+        assert_eq!(clip, Some(CLIP_FAILED));
+        assert!(
+            state
+                .store()
+                .live_summary(id)
+                .unwrap()
+                .unwrap()
+                .meme
+                .is_some()
+        );
+    }
+
+    /// 名字按文字截，最多 16 字（同文字的上限）
+    #[test]
+    fn store_name_up_to_16() {
+        let state = AppState::for_test();
+        let last = Last::default();
+        let out = encode(&last, &body(8, 80, 256, &[[1, 2, 3, 255]])).unwrap();
+        let (id, _) = store(
+            &state,
+            &last,
+            fin(out.token, "一二三四五六七八九十甲乙丙丁戊己庚"),
+            None,
+        )
+        .unwrap();
+        let m = state
+            .store()
+            .live_summary(id)
+            .unwrap()
+            .unwrap()
+            .meme
+            .unwrap();
+        assert_eq!(m.name, "一二三四五六七八九十甲乙丙丁戊己");
+    }
+
+    /// 整个数据目录搬走后：表情包照样能粘贴（剪切板格式按新位置现拼）、能读帧、能复制，删掉时删的是新位置的文件
+    #[test]
+    fn meme_follows_moved_data_dir() {
+        let base =
+            std::env::temp_dir().join(format!("xpaste-meme-move-{}", crate::meme_gen::uuid()));
+        let (a, b) = (base.join("a"), base.join("b"));
+        let open = |d: &Path| state_at(xpaste_core::Store::open(d).unwrap(), d);
+        let state = open(&a);
+        let last = Last::default();
+        let out = encode(&last, &body(8, 80, 256, &[[1, 2, 3, 255], [4, 5, 6, 255]])).unwrap();
+        let (id, _) = store(&state, &last, fin(out.token, "甲"), None).unwrap();
+        drop(state);
+        std::fs::rename(&a, &b).unwrap();
+        let state = open(&b);
+        let d = state.store().detail(id).unwrap().unwrap();
+        let file = std::path::PathBuf::from(&d.files[0].path);
+        assert!(file.starts_with(&b) && file.exists());
+        let f = crate::commands::records::precheck(&state, id).unwrap();
+        assert!(!f.is_empty());
+        #[cfg(target_os = "macos")]
+        {
+            let url = f.iter().find(|f| f.format == "public.file-url").unwrap();
+            let url = String::from_utf8(url.data.clone()).unwrap();
+            assert!(url.ends_with(file.file_name().unwrap().to_str().unwrap()));
+            assert!(!url.contains("/a/memes/"));
+            let gif = f.iter().find(|f| f.format == "com.compuserve.gif").unwrap();
+            assert!(gif.data.starts_with(b"GIF89a"));
+        }
+        assert!(crate::meme_gen::frame_png(&state, id, 1).is_some());
+        copy(&state, id, &mut |_| Ok(1)).unwrap();
+        state.store().soft_delete(&[id], 5).unwrap();
+        state.store().purge_all_soft_deleted().unwrap();
+        assert!(!file.exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn orphans_cleaned() {
         // 别的测试共用 for_test 的数据目录，这里另开一个，免得删到它们的文件
-        let mut state = AppState::for_test();
-        state.data_dir = state
-            .data_dir
-            .join(format!("orphans-{}", crate::meme_gen::uuid()));
+        let dir = std::env::temp_dir().join(format!("xpaste-orphans-{}", crate::meme_gen::uuid()));
+        let state = state_at(xpaste_core::Store::open_in_memory(&dir).unwrap(), &dir);
         let dir = state.data_dir.join("memes");
         let sk = dir.join("sketch");
         std::fs::create_dir_all(&sk).unwrap();
@@ -456,7 +580,7 @@ mod tests {
         let out = encode(&last, &body(8, 80, 256, &[[1, 2, 3, 255]])).unwrap();
         let used_sketch = format!("{}.png", "a".repeat(32));
         let draft_sketch = format!("{}.png", "b".repeat(32));
-        let id = store(
+        let (id, _) = store(
             &state,
             &last,
             Final {

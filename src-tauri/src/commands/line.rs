@@ -408,6 +408,19 @@ pub fn line_hang_record(
     hang_record(&app, &state, id, at)
 }
 
+/// 能挂上的记录：还在，不是表情包（表情包只在面板和制作窗口里用）
+fn hangable(state: &AppState, id: i64) -> Result<xpaste_core::RecordDetail, AppError> {
+    // 先读 store 再锁 line，两把锁不同时持有
+    let store = state.store();
+    match store.live_summary(id)? {
+        Some(s) if s.meme.is_some() => Err(AppError::Invalid("表情包挂不上晾衣绳".into())),
+        Some(_) => store
+            .detail(id)?
+            .ok_or_else(|| AppError::Invalid("记录不存在".into())),
+        None => Err(AppError::Invalid("记录不存在".into())),
+    }
+}
+
 /// `line_hang_record` 与便签快捷键共用：读出记录、挂上、通知面板
 pub fn hang_record(
     app: &AppHandle,
@@ -415,15 +428,7 @@ pub fn hang_record(
     id: i64,
     at: Option<usize>,
 ) -> Result<NoteDto, AppError> {
-    // 先读 store 再锁 line，两把锁不同时持有
-    let d = {
-        let store = state.store();
-        match store.live_summary(id)? {
-            Some(_) => store.detail(id)?,
-            None => None,
-        }
-    }
-    .ok_or_else(|| AppError::Invalid("记录不存在".into()))?;
+    let d = hangable(state, id)?;
     let source = d.summary.app.as_ref().map(|a| a.name.clone());
     let mut note = add(state, note_from_detail(&d, source), at)?;
     note.truncated = clipped(&d);
@@ -1272,6 +1277,14 @@ mod tests {
             LineStyle::default()
         );
         assert_eq!(effective_style(&Pro::Trial { days_left: 3 }, &mine), mine);
+    }
+
+    #[test]
+    fn meme_not_hangable() {
+        let state = AppState::for_test();
+        let id = crate::meme_store::test_meme(&state);
+        let e = hangable(&state, id).err().unwrap();
+        assert_eq!(e.to_string(), "表情包挂不上晾衣绳");
     }
 
     #[test]

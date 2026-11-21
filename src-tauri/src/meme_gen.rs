@@ -255,8 +255,26 @@ pub async fn generate(env: &Env<'_>, cfg: &ImageCfg, req: GenReq) -> Result<GenO
         Err(_) if late() => return Err(LATE.into()),
         Err(e) => return Err(imagegen::reason(&e)),
     };
-    // ponytail: 抠图、切格、编码在异步线程上直接做（约一两秒）；卡到别的命令时挪进 spawn_blocking
-    let out = store_result(env, cfg, &req, what, act.map(|a| a.1), &style_name, &png);
+    // AI 动作的名字带上底图的情绪名：读库在这里做，抠图、切格、编码挪到阻塞线程上
+    let base = match what {
+        MemeGen::Act(_) => req.base.and_then(|b| {
+            env.state
+                .store()
+                .live_summary(b)
+                .ok()
+                .flatten()?
+                .meme
+                .map(|m| m.name)
+        }),
+        _ => None,
+    };
+    let (cutout, act_name) = (env.cutout, act.map(|a| a.1));
+    let out = tauri::async_runtime::spawn_blocking(move || {
+        cut_result(cutout, &png, what, act_name, base)
+    })
+    .await
+    .unwrap_or_else(|_| Err(imagegen::reason(&ImgFail::Base(Fail::Bad))))
+    .and_then(|c| save_cut(env, cfg, &req, what, &style_name, c));
     match &out {
         Ok(GenOut::Done { ids }) => log::info!("表情包 进库 {ids:?}"),
         Ok(GenOut::Irregular { id }) => log::info!("表情包 网格没画规整 进库 {id}"),
@@ -269,105 +287,125 @@ pub async fn generate(env: &Env<'_>, cfg: &ImageCfg, req: GenReq) -> Result<GenO
     out
 }
 
-/// 收到的图：抠白底、按种类切开、存进库
-fn store_result(
-    env: &Env<'_>,
-    cfg: &ImageCfg,
-    req: &GenReq,
+/// 切好、编好码、等着存的一张：字节、扩展名、尺寸、名字、情绪名
+struct Piece {
+    bytes: Vec<u8>,
+    ext: &'static str,
+    size: (u32, u32),
+    name: String,
+    emotions: Vec<&'static str>,
+}
+
+/// 切开的结果：一张或按网格切开的几张；网格没画规整时是整张
+enum Cut {
+    Done(Vec<Piece>),
+    Whole(Piece),
+}
+
+/// 收到的图：抠白底、按种类切开、编码（重活，在阻塞线程上跑）。`base` 是 AI 动作底图的名字
+fn cut_result(
+    cutout: Cutout,
+    png: &[u8],
     what: MemeGen,
     act_name: Option<&str>,
-    style_name: &str,
-    png: &[u8],
-) -> Result<GenOut, String> {
+    base: Option<String>,
+) -> Result<Cut, String> {
     let img = image::load_from_memory(png)
         .map_err(|_| imagegen::reason(&ImgFail::Base(Fail::Bad)))?
         .to_rgba8();
-    let (img, cut) = clear_white(env.cutout, png, img);
+    let (img, cut) = clear_white(cutout, png, img);
     let (w, h) = img.dimensions();
-    let save = |img: &RgbaImage, name: &str, emotions: &[&str]| {
-        let (w, h) = img.dimensions();
-        save_meme(
-            env,
-            req,
-            &png_of(img),
-            "png",
-            (w, h),
-            name,
-            emotions,
-            style_name,
-        )
+    let piece = |img: &RgbaImage, name: &str, emotions: Vec<&'static str>| Piece {
+        bytes: png_of(img),
+        ext: "png",
+        size: img.dimensions(),
+        name: name.into(),
+        emotions,
     };
     let emo = xpaste_pro::meme_emotions();
-    let cells = |n: u32, names: &[&str]| -> Result<Option<Vec<i64>>, String> {
+    let whole = || Cut::Whole(piece(&img, "表情包", vec![]));
+    let cells = |n: u32, names: &[&'static str]| {
         let Some(boxes) = xpaste_pro::meme_split_grid(img.as_raw(), w, h, n) else {
-            return Ok(None);
+            return whole();
         };
-        boxes
-            .iter()
-            .zip(names)
-            .map(|(&[x, y, cw, ch], name)| {
-                save(
-                    &image::imageops::crop_imm(&img, x, y, cw, ch).to_image(),
-                    name,
-                    &[name],
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map(Some)
+        Cut::Done(
+            boxes
+                .iter()
+                .zip(names)
+                .map(|(&[x, y, cw, ch], &name)| {
+                    let cell = image::imageops::crop_imm(&img, x, y, cw, ch).to_image();
+                    piece(&cell, name, vec![name])
+                })
+                .collect(),
+        )
     };
-    let done = |ids: Vec<i64>| -> Result<GenOut, String> { Ok(GenOut::Done { ids }) };
-    let whole = || save(&img, "表情包", &[]).map(|id| GenOut::Irregular { id });
-    match what {
-        MemeGen::One => done(vec![save(&img, "表情包", &[])?]),
-        MemeGen::Set => {
-            let ids = cells(4, &emo)?;
-            GRID_OK
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .insert(provider(cfg), ids.is_some());
-            ids.map_or_else(whole, done)
-        }
+    Ok(match what {
+        MemeGen::One => Cut::Done(vec![piece(&img, "表情包", vec![])]),
+        MemeGen::Set => cells(4, &emo),
         MemeGen::SetPart(k) => {
             let k = usize::from(k) * 4;
-            cells(2, &emo[k..k + 4])?.map_or_else(whole, done)
+            cells(2, &emo[k..k + 4])
         }
         MemeGen::Act(_) => {
             let Some(boxes) = xpaste_pro::meme_split_grid(img.as_raw(), w, h, 2) else {
-                return whole();
+                return Ok(whole());
             };
             let (side, frames) = act_frames(&img, &boxes, cut);
-            let gif = crate::meme_gif::encode_gif(&frames, side, 200, 256);
-            let base = req.base.and_then(|b| {
-                env.state
-                    .store()
-                    .live_summary(b)
-                    .ok()
-                    .flatten()?
-                    .meme
-                    .map(|m| m.name)
-            });
             let act = act_name.unwrap_or_default();
             let name = match base.filter(|n| emo.contains(&n.as_str())) {
                 Some(e) => format!("{e} · {act}"),
                 None => act.to_owned(),
             };
-            let emotions: Vec<&str> = emo
+            let emotions = emo
                 .iter()
                 .copied()
                 .filter(|e| name.starts_with(e))
                 .collect();
-            save_meme(
-                env,
-                req,
-                &gif,
-                "gif",
-                (side, side),
-                &name,
-                &emotions,
-                style_name,
-            )
-            .map(|id| GenOut::Done { ids: vec![id] })
+            Cut::Done(vec![Piece {
+                bytes: crate::meme_gif::encode_gif(&frames, side, 200, 256),
+                ext: "gif",
+                size: (side, side),
+                name,
+                emotions,
+            }])
         }
+    })
+}
+
+/// 切好的存进库；一套 16 张时记下这个服务商这次画规整了没有
+fn save_cut(
+    env: &Env<'_>,
+    cfg: &ImageCfg,
+    req: &GenReq,
+    what: MemeGen,
+    style_name: &str,
+    cut: Cut,
+) -> Result<GenOut, String> {
+    let save = |p: &Piece| {
+        save_meme(
+            env,
+            req,
+            &p.bytes,
+            p.ext,
+            p.size,
+            &p.name,
+            &p.emotions,
+            style_name,
+        )
+    };
+    if what == MemeGen::Set {
+        GRID_OK
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(provider(cfg), matches!(cut, Cut::Done(_)));
+    }
+    match cut {
+        Cut::Done(ps) => ps
+            .iter()
+            .map(save)
+            .collect::<Result<Vec<_>, _>>()
+            .map(|ids| GenOut::Done { ids }),
+        Cut::Whole(p) => save(&p).map(|id| GenOut::Irregular { id }),
     }
 }
 
@@ -508,7 +546,7 @@ fn save_meme(
         style: Some(style_name.into()),
         gif: ext == "gif",
     };
-    let (id, _) = crate::meme_store::put(
+    let id = crate::meme_store::put(
         env.state,
         bytes,
         ext,
@@ -765,6 +803,9 @@ mod tests {
         assert!(!grid_shaky(&c));
     }
 
+    /// 抠图在哪个线程上跑（抠图、切格、编码不占调用方的异步线程）
+    static CUT_ON: Mutex<Option<std::thread::ThreadId>> = Mutex::new(None);
+
     #[test]
     fn irregular_grid_kept() {
         let state = AppState::for_test();
@@ -772,7 +813,10 @@ mod tests {
         let env = Env {
             state: &state,
             seq: &seq,
-            cutout: |_| None,
+            cutout: |_| {
+                *CUT_ON.lock().unwrap() = Some(std::thread::current().id());
+                None
+            },
             added: &|_| {},
         };
         // 中间一整块：找不到格间留白
@@ -790,6 +834,8 @@ mod tests {
         assert!(matches!(out, GenOut::Irregular { .. }));
         assert_eq!(memes(&state), 1);
         assert!(grid_shaky(&c));
+        let on = CUT_ON.lock().unwrap().expect("抠过图");
+        assert_ne!(on, std::thread::current().id());
     }
 
     #[test]
@@ -926,8 +972,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let refs: Vec<serde_json::Value> = (0..6)
             .map(|i| {
-                let f = dir.join(format!("{}.png", uuid()));
-                std::fs::write(&f, grid(1)).unwrap();
+                let f = format!("{}.png", uuid());
+                std::fs::write(dir.join(&f), grid(1)).unwrap();
                 let id = state
                     .store()
                     .add_meme(
@@ -945,7 +991,6 @@ mod tests {
                             height: 1024,
                             bytes: 1,
                         },
-                        &[],
                         0,
                     )
                     .unwrap();

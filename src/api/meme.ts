@@ -19,7 +19,7 @@ export type RefKey = { id: number; file: number | null };
  *  `scene` 是接着改的做法，`sceneId` 是它在库里的 id；`draft` 是空白打开新窗口时的草稿；
  *  `expired` 时试用已结束，不带参考图和文字，页面只显示过期提示 */
 export interface MemeOpen {
-  refs: RefKey[]; idea: string; scene: string | null; sceneId: number | null; draft: string | null; cutout: boolean; expired: boolean;
+  refs: RefKey[]; idea: string; scene: string | null; sceneId: number | null; sceneFinal: boolean; draft: string | null; cutout: boolean; expired: boolean;
 }
 
 /** 面板的笑脸按钮、Mod+E：带着这些记录打开（空 = 空白打开）；全都做不了表情包时抛出 AppError */
@@ -86,9 +86,10 @@ export function memeEncode(frames: Uint8Array[], step: MemeStep) {
 }
 /** 参与搜索的几段（名字另传） */
 export interface SearchParts { idea: string; caption: string; emotions: string[]; styleName: string }
-/** 存进表情包库（做好的），copy 时同时放进剪切板（不进历史）；返回库里的 id，失败时抛出原因 */
+/** 存进表情包库（做好的），copy 时同时放进剪切板（不进历史）；返回库里的 id，失败时抛出原因。
+ *  `clipError`：已进库、但没能放进剪切板时的提示 */
 export const memeStore = (token: number, name: string, scene: string, searchParts: SearchParts, copy: boolean) =>
-  invoke<number>('meme_store', { token, name, scene, searchParts, copy });
+  invoke<{ id: number; clipError: string | null }>('meme_store', { token, name, scene, searchParts, copy });
 /** 把库里这一个放进剪切板（和上次存的一样时）；不在了时抛出 "gone" */
 export const memeCopy = (id: number) => invoke<void>('meme_copy', { id });
 /** 接着改：按库里这个表情包的做法打开制作窗口 */
