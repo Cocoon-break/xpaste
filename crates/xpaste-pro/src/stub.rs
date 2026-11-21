@@ -263,6 +263,87 @@ pub fn chat_body(
     serde_json::Value::Null
 }
 
+pub fn meme_styles() -> &'static [MemeStyle] {
+    &[]
+}
+
+pub fn meme_emotions() -> [&'static str; 16] {
+    [""; 16]
+}
+
+pub fn meme_image_prompt(_p: &MemePrompt) -> String {
+    String::new()
+}
+
+pub fn meme_caption_body(
+    _model: &str,
+    _idea: &str,
+    _images: &[String],
+    _avoid: &[String],
+) -> serde_json::Value {
+    serde_json::Value::Null
+}
+
+pub fn meme_parse_captions(_text: &str) -> Vec<String> {
+    Vec::new()
+}
+
+pub fn meme_split_grid(_rgba: &[u8], _w: u32, _h: u32, _n: u32) -> Option<Vec<[u32; 4]>> {
+    None
+}
+
+/// 导出降级的顺序：两个构建都要用，所以空实现里也有
+pub const MEME_EXPORT_STEPS: [ExportStep; 6] = [
+    ExportStep {
+        delay_ms: 80,
+        colors: 256,
+        side: 240,
+    },
+    ExportStep {
+        delay_ms: 100,
+        colors: 256,
+        side: 240,
+    },
+    ExportStep {
+        delay_ms: 125,
+        colors: 256,
+        side: 240,
+    },
+    ExportStep {
+        delay_ms: 125,
+        colors: 128,
+        side: 240,
+    },
+    ExportStep {
+        delay_ms: 125,
+        colors: 64,
+        side: 240,
+    },
+    ExportStep {
+        delay_ms: 125,
+        colors: 64,
+        side: 200,
+    },
+];
+
+pub fn meme_normalize_styles(used: Vec<String>, custom: Vec<String>) -> (Vec<String>, Vec<String>) {
+    (used, custom)
+}
+
+pub fn meme_search_text(
+    _name: &str,
+    _idea: &str,
+    _caption: &str,
+    _emotions: &[&str],
+    _style_name: &str,
+) -> String {
+    String::new()
+}
+
+pub fn meme_scene_ok(_json: &str) -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

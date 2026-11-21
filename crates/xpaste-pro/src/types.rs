@@ -298,3 +298,47 @@ pub enum Material {
         data_url: String,
     },
 }
+
+/// 内置风格：键名、显示名、类别
+pub struct MemeStyle {
+    pub key: &'static str,
+    pub name: &'static str,
+    pub cat: &'static str,
+}
+
+/// 一次生图要什么：一张、一套 16 张（4 × 4 网格）、分 4 次里的第几次（2 × 2），或同一角色的 4 帧动作
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MemeGen {
+    One,
+    Set,
+    /// 0..4
+    SetPart(u8),
+    Act(MemeAct),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MemeAct {
+    Blink,
+    Nod,
+    Wave,
+    Cry,
+}
+
+/// 生图提示词的材料。不派生 `Debug`：里面有用户写的话。
+pub struct MemePrompt<'a> {
+    pub style_key: Option<&'a str>,
+    pub custom_style: Option<&'a str>,
+    pub idea: &'a str,
+    pub caption: &'a str,
+    pub r#gen: MemeGen,
+    pub has_photo: bool,
+    pub has_sketch: bool,
+}
+
+/// 导出 GIF 的一档：帧间隔、颜色数、边长
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ExportStep {
+    pub delay_ms: u16,
+    pub colors: u16,
+    pub side: u32,
+}
