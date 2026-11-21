@@ -16,8 +16,11 @@ export const memeLibraryStats = () => invoke<[number, number]>('meme_library_sta
 export type RefKey = { id: number; file: number | null };
 
 /** 打开或追加到制作窗口（后端发给页面）：`refs` 是追加之后窗口里的全部参考图；`idea` 只在“想表达什么”为空时放进去；
+ *  `scene` 是接着改的做法，`sceneId` 是它在库里的 id；`draft` 是空白打开新窗口时的草稿；
  *  `expired` 时试用已结束，不带参考图和文字，页面只显示过期提示 */
-export interface MemeOpen { refs: RefKey[]; idea: string; scene: string | null; draft: string | null; cutout: boolean; expired: boolean }
+export interface MemeOpen {
+  refs: RefKey[]; idea: string; scene: string | null; sceneId: number | null; draft: string | null; cutout: boolean; expired: boolean;
+}
 
 /** 面板的笑脸按钮、Mod+E：带着这些记录打开（空 = 空白打开）；全都做不了表情包时抛出 AppError */
 export const memeOpen = (ids: number[]) => invoke<void>('meme_open', { ids });
@@ -69,6 +72,31 @@ export const memeFrame = (id: number, n: number) => invoke<ArrayBuffer>('meme_fr
 
 /** 库里这几个表情包的名字（一套 16 张时是各格的情绪名）；读不到的为空串 */
 export const memeNames = (ids: number[]) => invoke<string[]>('meme_names', { ids });
+
+/** 导出的一级：帧间隔、颜色数、边长 */
+export type MemeStep = { delayMs: number; colors: number; side: number };
+/** 编码一级（一帧为 PNG，多帧为 GIF），后端只留最近一次；返回它的序号和字节数 */
+export function memeEncode(frames: Uint8Array[], step: MemeStep) {
+  const head = new TextEncoder().encode(JSON.stringify({ ...step, count: frames.length }) + '\n');
+  const body = new Uint8Array(head.length + frames.reduce((n, f) => n + f.length, 0));
+  body.set(head);
+  let at = head.length;
+  for (const f of frames) { body.set(f, at); at += f.length; }
+  return invoke<{ token: number; bytes: number }>('meme_encode', body);
+}
+/** 参与搜索的几段（名字另传） */
+export interface SearchParts { idea: string; caption: string; emotions: string[]; styleName: string }
+/** 存进表情包库（做好的），copy 时同时放进剪切板（不进历史）；返回库里的 id，失败时抛出原因 */
+export const memeStore = (token: number, name: string, scene: string, searchParts: SearchParts, copy: boolean) =>
+  invoke<number>('meme_store', { token, name, scene, searchParts, copy });
+/** 把库里这一个放进剪切板（和上次存的一样时）；不在了时抛出 "gone" */
+export const memeCopy = (id: number) => invoke<void>('meme_copy', { id });
+/** 接着改：按库里这个表情包的做法打开制作窗口 */
+export const memeOpenScene = (id: number) => invoke<void>('meme_open_scene', { id });
+/** 留草稿（替换旧的），null 时丢掉 */
+export const memeDraftSet = (scene: string | null) => invoke<void>('meme_draft_set', { scene });
+/** 做法里一张草图的 PNG；读不到时抛出 "gone" */
+export const memeSketchImage = (name: string) => invoke<ArrayBuffer>('meme_sketch_image', { name });
 
 /** 打开设置：meme 是 Pro → 表情包制作（生图接口），translate 是“翻译”（出文案用的 AI 接口） */
 export const openMemeSettings = (tab: 'meme' | 'translate') => invoke<void>('open_panel_settings', { tab });

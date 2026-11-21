@@ -62,7 +62,6 @@ pub fn encode_gif(frames: &[Vec<u8>], side: u32, delay_ms: u16, colors: u16) -> 
 }
 
 /// side × side 的 RGBA 编成 PNG（不动的成品）
-#[allow(dead_code)] // 导出成品接上后用
 pub fn encode_png(rgba: &[u8], side: u32) -> Vec<u8> {
     let mut out = Vec::new();
     image::RgbaImage::from_raw(side, side, rgba.to_vec())

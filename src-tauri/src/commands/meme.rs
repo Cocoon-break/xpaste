@@ -250,3 +250,79 @@ pub fn meme_frame(
 pub fn meme_names(state: State<'_, AppState>, ids: Vec<i64>) -> Vec<String> {
     meme_gen::names(&state, &ids)
 }
+
+/// 导出的一级：请求体是 JSON 帧头 {side, delayMs, colors, count} + `\n` + 各帧 RGBA。一帧编成 PNG，多帧编成 GIF；
+/// 只在内存里留最近一次的结果，返回它的序号和字节数（页面据此决定要不要再降一级）
+#[tauri::command]
+pub async fn meme_encode(request: Request<'_>) -> Result<crate::meme_store::EncodeOut, String> {
+    let InvokeBody::Raw(body) = request.body() else {
+        return Err("请求体应为帧数据".into());
+    };
+    let body = body.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::meme_store::encode(&crate::meme_store::LAST, &body)
+    })
+    .await
+    .map_err(|_| "编码失败".to_string())?
+}
+
+/// 存进表情包库（做好的），`copy` 时同时放进剪切板（自身写入，不进历史）。返回库里的 id
+#[tauri::command(async)]
+pub fn meme_store(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    token: u64,
+    name: String,
+    scene: String,
+    search_parts: crate::meme_store::SearchParts,
+    copy: bool,
+) -> Result<i64, String> {
+    let f = crate::meme_store::Final {
+        token,
+        name,
+        scene,
+        parts: search_parts,
+    };
+    let mut write = |f: &[xpaste_core::Flavor]| xpaste_platform::write(f);
+    let id = crate::meme_store::store(
+        &state,
+        &crate::meme_store::LAST,
+        f,
+        copy.then_some(&mut write as crate::meme_store::Write<'_>),
+    );
+    // 进了库就让面板刷新（复制失败时也已进库）
+    if let Ok(id) = id {
+        crate::events::emit_summary(&app, crate::events::RECORD_ADDED, id);
+    }
+    id
+}
+
+/// 和上次存的一样：把库里那一个放进剪切板（自身写入，不进历史）。不在了时返回 "gone"
+#[tauri::command(async)]
+pub fn meme_copy(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    crate::meme_store::copy(&state, id, &mut |f| xpaste_platform::write(f))
+}
+
+/// 接着改：按库里这个表情包的做法打开制作窗口
+#[tauri::command(async)]
+pub fn meme_open_scene(app: AppHandle, id: i64) -> Result<(), AppError> {
+    meme::open_scene(&app, id)
+}
+
+/// 关窗口时留草稿（替换旧的）；None 时丢掉
+#[tauri::command(async)]
+pub fn meme_draft_set(state: State<'_, AppState>, scene: Option<String>) {
+    crate::meme_store::draft_set(&state.data_dir, scene.as_deref());
+}
+
+/// 做法里一张草图的 PNG（`memes/sketch/` 下的文件名）。读不到时返回 "gone"
+#[tauri::command(async)]
+pub fn meme_sketch_image(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<tauri::ipc::Response, String> {
+    meme_gen::sketch_path(&state.data_dir, &name)
+        .and_then(|p| std::fs::read(p).ok())
+        .map(tauri::ipc::Response::new)
+        .ok_or_else(|| "gone".into())
+}

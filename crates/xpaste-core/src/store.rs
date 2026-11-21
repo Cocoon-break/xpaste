@@ -1189,6 +1189,15 @@ impl Store {
             .and_then(|v| v.get("scene")?.as_str().map(str::to_owned)))
     }
 
+    /// 每个表情包（含撤销期内已删的）指向的文件与做法，原样拼成一段文字：启动时据此找出 `memes/` 下没人指向的文件。
+    pub fn meme_refs(&self) -> Result<Vec<String>, CoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT COALESCE(paths, '') || meme FROM records WHERE meme IS NOT NULL")?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
     /// 未删除的表情包个数与文件字节数。
     pub fn meme_bytes(&self) -> Result<(u64, u64), CoreError> {
         let (n, b): (i64, i64) = self.conn.query_row(

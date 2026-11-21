@@ -56,7 +56,10 @@ pub struct OpenPayload {
     pub refs: Vec<RefKey>,
     /// 页面只在“想表达什么”为空时放进去
     pub idea: String,
+    /// 接着改：做法 JSON 和它是库里哪一个（复制时做法没变就不重复进库）
     pub scene: Option<String>,
+    pub scene_id: Option<i64>,
+    /// 空白打开新窗口时的草稿
     pub draft: Option<String>,
     /// 本机能抠主体
     pub cutout: bool,
@@ -169,9 +172,38 @@ fn gather(state: &AppState, ids: &[i64]) -> Vec<Item> {
         .collect()
 }
 
-/// 带着这些记录打开制作窗口（`ids` 为空 = 空白打开）。已开着时参考图追加、满了提示；面板开着就收起。
+/// 带着这些记录打开制作窗口（`ids` 为空 = 空白打开，新窗口时恢复草稿）。已开着时参考图追加、满了提示；面板开着就收起。
 /// 试用结束时照常打开，载荷标上过期、不带记录，页面只显示过期提示。选中的全都用不上时返回原因，面板提示。
 pub fn open(app: &AppHandle, ids: &[i64]) -> Result<(), AppError> {
+    open_with(app, ids, None)
+}
+
+/// 接着改：按库里这个表情包的做法打开（做法坏了：AI 出的只带它自己，做好的空白打开）。不恢复草稿，草稿也不丢
+pub fn open_scene(app: &AppHandle, id: i64) -> Result<(), AppError> {
+    if !on(app) {
+        return Ok(());
+    }
+    let (scene, ai) = {
+        let state = app.state::<AppState>();
+        let store = state.store();
+        let Some(m) = store.live_summary(id)?.and_then(|s| s.meme) else {
+            return Err(AppError::Invalid("这个表情包已经不在了".into()));
+        };
+        (store.meme_scene(id)?, m.source == "ai")
+    };
+    open_with(
+        app,
+        &[],
+        Some((crate::meme_store::scene_for_open(scene, id, ai), id)),
+    )
+}
+
+/// `again`：接着改的做法（可能没有）和库里的 id
+fn open_with(
+    app: &AppHandle,
+    ids: &[i64],
+    again: Option<(Option<String>, i64)>,
+) -> Result<(), AppError> {
     if !on(app) {
         return Ok(());
     }
@@ -186,8 +218,11 @@ pub fn open(app: &AppHandle, ids: &[i64]) -> Result<(), AppError> {
         let mut rt = rt();
         let fresh = !rt.open;
         if fresh {
-            rt.refs.clear();
             rt.back = xpaste_platform::foreground_window();
+        }
+        // 接着改换掉窗口里的全部（参考图由页面恢复后报来）
+        if fresh || again.is_some() {
+            rt.refs.clear();
         }
         let (refs, idea, full) = opening(expired, &rt.refs, add, idea);
         if !expired {
@@ -196,18 +231,32 @@ pub fn open(app: &AppHandle, ids: &[i64]) -> Result<(), AppError> {
         rt.open = true;
         (refs, idea, full, fresh)
     };
+    let blank = ids.is_empty() && again.is_none() && fresh && !expired;
+    let draft = blank
+        .then(|| crate::meme_store::draft_get(&app.state::<AppState>().data_dir))
+        .flatten();
+    let (scene, scene_id) = match again.filter(|_| !expired) {
+        Some((s, id)) => (s, Some(id)),
+        None => (None, None),
+    };
     log::info!(
-        "表情包 打开 {} 参考图 {} 张{}{}",
+        "表情包 打开 {} 参考图 {} 张{}{}{}",
         if fresh { "新窗口" } else { "追加" },
         refs.len(),
         if full { "（满了）" } else { "" },
-        if expired { "（试用已结束）" } else { "" }
+        if expired { "（试用已结束）" } else { "" },
+        match (scene_id, draft.is_some()) {
+            (Some(id), _) => format!("（接着改 {id}）"),
+            (None, true) => "（恢复草稿）".into(),
+            _ => String::new(),
+        }
     );
     let payload = OpenPayload {
         refs,
         idea,
-        scene: None,
-        draft: None,
+        scene,
+        scene_id,
+        draft,
         cutout: xpaste_platform::foreground_supported(),
         expired,
     };

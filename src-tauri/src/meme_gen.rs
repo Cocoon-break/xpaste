@@ -16,7 +16,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
-use xpaste_core::{MemeInfo, NewMeme, Settings};
+use xpaste_core::{MemeInfo, Settings};
 use xpaste_pro::{MemeAct, MemeGen, MemePrompt};
 
 use crate::imagegen::{self, Format, ImageCfg, ImgFail};
@@ -144,12 +144,12 @@ fn style_names(req: &GenReq) -> (String, String) {
     }
 }
 
-fn uuid() -> String {
+pub(crate) fn uuid() -> String {
     let s = RandomState::new();
     format!("{:016x}{:016x}", s.hash_one(0u8), s.hash_one(1u8))
 }
 
-fn sketch_path(data_dir: &Path, name: &str) -> Option<PathBuf> {
+pub(crate) fn sketch_path(data_dir: &Path, name: &str) -> Option<PathBuf> {
     let plain = Path::new(name).file_name().is_some_and(|f| f == name) && name.ends_with(".png");
     plain.then(|| data_dir.join("memes").join("sketch").join(name))
 }
@@ -455,9 +455,19 @@ fn ai_scene(req: &GenReq) -> String {
                 .map(|r| serde_json::json!({"id": r.id, "file": r.file})),
         )
         .collect();
+    scene_json(refs, req.idea.trim(), &style, &[])
+}
+
+/// AI 画面、文字和四类动效都空着的做法
+pub(crate) fn scene_json(
+    refs: Vec<serde_json::Value>,
+    idea: &str,
+    style: &str,
+    results: &[i64],
+) -> String {
     serde_json::json!({
-        "refs": refs, "idea": req.idea.trim(), "cands": [], "cap": "", "pos": "bottom", "ts": "stroke",
-        "bg": "none", "look": "ai", "style": style, "count": "one", "results": [], "pick": 0,
+        "refs": refs, "idea": idea, "cands": [], "cap": "", "pos": "bottom", "ts": "stroke",
+        "bg": "none", "look": "ai", "style": style, "count": "one", "results": results, "pick": 0,
         "fx": "none", "tfx": "none", "sfx": [], "act": "none",
     })
     .to_string()
@@ -479,7 +489,7 @@ pub fn names(state: &AppState, ids: &[i64]) -> Vec<String> {
         .collect()
 }
 
-/// 写 `memes/<uuid>.<ext>`，存一个 AI 出的表情包，通知面板。失败时删掉刚写的文件
+/// 存一个 AI 出的表情包，通知面板
 #[allow(clippy::too_many_arguments)]
 fn save_meme(
     env: &Env<'_>,
@@ -491,52 +501,23 @@ fn save_meme(
     emotions: &[&str],
     style_name: &str,
 ) -> Result<i64, String> {
-    let dir = env.state.data_dir.join("memes");
-    let path = dir.join(format!("{}.{ext}", uuid()));
-    if let Err(e) = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, bytes)) {
-        log::warn!("表情包 写文件失败：{e}");
-        return Err("存进表情包失败".into());
-    }
-    #[allow(unused_mut)]
-    let mut flavors = xpaste_platform::file_flavors(&path);
-    // Mac 微信要有文件路径才收动图；另附一份 GIF 数据
-    #[cfg(target_os = "macos")]
-    if ext == "gif" {
-        flavors.push(xpaste_core::Flavor {
-            item: 0,
-            format: "com.compuserve.gif".into(),
-            data: bytes.to_vec(),
-        });
-    }
     let search = xpaste_pro::meme_search_text(name, &req.idea, &req.caption, emotions, style_name);
-    let meme = NewMeme {
-        file: path.clone(),
-        info: MemeInfo {
-            source: "ai".into(),
-            name: name.into(),
-            style: Some(style_name.into()),
-        },
-        search,
-        scene: ai_scene(req),
-        width,
-        height,
-        bytes: bytes.len() as u64,
+    let info = MemeInfo {
+        source: "ai".into(),
+        name: name.into(),
+        style: Some(style_name.into()),
     };
-    let r = env
-        .state
-        .store()
-        .add_meme(meme, &flavors, crate::clock::now_ms());
-    match r {
-        Ok(id) => {
-            (env.added)(id);
-            Ok(id)
-        }
-        Err(e) => {
-            log::warn!("表情包 进库失败：{e}");
-            let _ = std::fs::remove_file(&path);
-            Err("存进表情包失败".into())
-        }
-    }
+    let (id, _) = crate::meme_store::put(
+        env.state,
+        bytes,
+        ext,
+        (width, height),
+        info,
+        search,
+        ai_scene(req),
+    )?;
+    (env.added)(id);
+    Ok(id)
 }
 
 /// 出文案：用翻译里配置的 AI 接口，带上前 4 张参考图（草图在最前），“换一批”时带上刚才给过的
@@ -688,6 +669,7 @@ mod tests {
     use crate::imagegen::tests::{b64, fake, json_reply};
     use serde_json::json;
     use std::sync::atomic::AtomicUsize;
+    use xpaste_core::NewMeme;
 
     fn run<T>(f: impl std::future::Future<Output = T>) -> T {
         tauri::async_runtime::block_on(f)

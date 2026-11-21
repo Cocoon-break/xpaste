@@ -22,6 +22,7 @@ mod longshot;
 mod meme;
 mod meme_gen;
 mod meme_gif;
+mod meme_store;
 mod meme_window;
 mod mixer;
 mod mixer_window;
@@ -234,6 +235,11 @@ pub fn run() {
             }
             if meme::enabled() {
                 meme_window::prewarm(app.handle());
+            }
+            // 表情包：删掉没有记录、也没有草稿指向的文件（不占启动时间）
+            {
+                let h = app.handle().clone();
+                std::thread::spawn(move || meme_store::clean_orphans(&h.state::<AppState>()));
             }
             if crate::line::enabled() {
                 line::start(app.handle());
@@ -561,7 +567,13 @@ pub fn run() {
             commands::meme::meme_cutout,
             commands::meme::meme_save_sketch,
             commands::meme::meme_frame,
-            commands::meme::meme_names
+            commands::meme::meme_names,
+            commands::meme::meme_encode,
+            commands::meme::meme_store,
+            commands::meme::meme_copy,
+            commands::meme::meme_open_scene,
+            commands::meme::meme_draft_set,
+            commands::meme::meme_sketch_image
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
