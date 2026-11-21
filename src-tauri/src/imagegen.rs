@@ -108,7 +108,15 @@ pub async fn generate(c: &ImageCfg, prompt: &str, refs: &[Vec<u8>]) -> Result<Ve
     };
     let resp = req.send().await.map_err(|e| ImgFail::Base(net(e)))?;
     let status = resp.status();
+    let html = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.to_ascii_lowercase().contains("text/html"));
     let bytes = resp.bytes().await.map_err(|e| ImgFail::Base(net(e)))?;
+    if status.is_success() && html {
+        return Err(ImgFail::Base(Fail::Html));
+    }
     if !status.is_success() {
         let s = status.as_u16();
         let text = String::from_utf8_lossy(&bytes);
@@ -196,6 +204,7 @@ pub fn reason(f: &ImgFail) -> String {
             Fail::Config => "生图接口还没配好".into(),
             Fail::Timeout => "生图接口超时".into(),
             Fail::Connect => "连不上生图接口，请检查网络或接口地址".into(),
+            Fail::Html => crate::translate::HTML_HINT.into(),
             Fail::Internal(e) => e.to_string(),
             _ => "生图接口返回的内容无法识别".into(),
         },
@@ -463,6 +472,17 @@ pub(crate) mod tests {
             reason(&e),
             "生图接口拒绝了这次请求（可能是内容审核），换个说法再试"
         );
+    }
+
+    #[test]
+    fn html_reply_is_html_fail() {
+        let (url, _h) = fake(1, |_| {
+            (200, "text/html; charset=utf-8", b"<!doctype html>".to_vec())
+        });
+        let e = run(generate(&cfg(Format::Openai, &url), "p", &[]))
+            .err()
+            .unwrap();
+        assert_eq!(reason(&e), crate::translate::HTML_HINT);
     }
 
     #[test]

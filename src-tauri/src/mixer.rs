@@ -912,6 +912,7 @@ pub fn reason(f: &Fail, has_images: bool) -> String {
         Fail::Config => "AI 接口还没配好".into(),
         Fail::Timeout => "AI 接口超时".into(),
         Fail::Connect => "连不上 AI 接口，请检查网络或接口地址".into(),
+        Fail::Html => crate::translate::HTML_HINT.into(),
         Fail::Internal(e) => e.to_string(),
         _ => "AI 接口返回的内容无法识别".into(),
     }
@@ -1589,6 +1590,7 @@ mod tests {
         assert_eq!(reason(&Fail::Http(401), false), "API Key 无效或没有权限");
         assert_eq!(reason(&Fail::Http(500), false), "AI 接口出错（HTTP 500）");
         assert_eq!(reason(&Fail::Timeout, false), "AI 接口超时");
+        assert_eq!(reason(&Fail::Html, false), crate::translate::HTML_HINT);
         assert_eq!(
             reason(&Fail::Http(400), true),
             "这个模型看不了图片，换一个能看图的模型，或拿掉图片再搅"

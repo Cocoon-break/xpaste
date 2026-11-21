@@ -121,6 +121,9 @@ impl Coalescer {
     }
 }
 
+/// 接口回了网页而不是数据时的提示（翻译、搅拌机、生图共用）。
+pub const HTML_HINT: &str = "这个地址返回的是网页，不是接口。接口地址是不是少了 /v1？";
+
 /// 失败原因：转成 `AppError` 给前端，`tag` 写日志。
 #[derive(Debug)]
 pub enum Fail {
@@ -130,6 +133,8 @@ pub enum Fail {
     Timeout,
     Connect,
     Bad,
+    /// 状态码成功但回的是网页（多半接口地址少了 /v1）
+    Html,
     /// 系统翻译缺语言包：识别出的源语言代码与目标语言
     Pack {
         source: String,
@@ -152,6 +157,7 @@ impl Fail {
             Fail::Timeout => "timeout".into(),
             Fail::Connect => "connect".into(),
             Fail::Bad => "bad".into(),
+            Fail::Html => "html".into(),
             // 语言代码不是剪切板内容，记下来便于排查“缺语言包 / 语言包不对”
             Fail::Pack { source, target } => format!("pack {source}→{}", target.code()),
             Fail::Os => "os".into(),
@@ -173,6 +179,7 @@ impl From<Fail> for AppError {
             Fail::Timeout => t("翻译超时"),
             Fail::Connect => t("连不上翻译接口，请检查网络或接口地址"),
             Fail::Bad => t("翻译服务返回的内容无法识别"),
+            Fail::Html => t(HTML_HINT),
             Fail::Pack { source, target } => AppError::TranslatePack {
                 msg: format!(
                     "系统翻译还没有{}和{}的语言包",
@@ -406,11 +413,16 @@ pub async fn chat_stream(
     if !status.is_success() {
         return Err(Fail::Http(status.as_u16()));
     }
-    let sse = resp
+    let ctype = resp
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.contains("text/event-stream"));
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if ctype.contains("text/html") {
+        return Err(Fail::Html);
+    }
+    let sse = ctype.contains("text/event-stream");
     if !sse {
         // 忽略 stream 直接回整段 JSON 的兼容服务：当作一段一次性给出
         let body = resp.bytes().await.map_err(net)?;
@@ -560,6 +572,24 @@ pub(crate) mod tests {
         assert_eq!(r.unwrap(), "abcd");
         let got: serde_json::Value = serde_json::from_str(&h.join().unwrap()).unwrap();
         assert_eq!(got, body);
+    }
+
+    #[test]
+    fn chat_stream_html_reply() {
+        let (url, _h) = serve(
+            vec![(
+                0,
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: 15\r\nConnection: close\r\n\r\n<!doctype html>"
+                    .to_vec(),
+            )],
+            false,
+        );
+        let body = serde_json::json!({"model":"m","stream":true});
+        let r =
+            tauri::async_runtime::block_on(chat_stream(&url, "k", &body, Some(FAST), &mut |_| {
+                true
+            }));
+        assert!(matches!(r, Err(Fail::Html)));
     }
 
     #[test]
