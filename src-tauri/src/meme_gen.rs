@@ -30,8 +30,8 @@ const GONE: &str = "原记录已删除，拿掉了一张";
 const CAPTION_UNCONFIGURED: &str = "AI 接口还没配好";
 /// 交给系统抠主体的图，长边上限：平台层解码不设上限，超过的不抠
 const CUT_EDGE: u32 = 2048;
-/// 出文案最多带几张图
-const CAPTION_IMAGES: usize = 4;
+/// 出文案、生图最多带几张参考图（草图算一张）：张数多了费用高，有的服务商也收不下
+const REFS_SENT: usize = 4;
 
 /// 系统抠主体：返回与输入同尺寸的 RGBA，没抠到为 None
 pub type Cutout = fn(&[u8]) -> Option<(u32, u32, Vec<u8>)>;
@@ -173,12 +173,20 @@ pub fn save_sketch(data_dir: &Path, png: &[u8]) -> Result<String, String> {
     Ok(name)
 }
 
-/// 参考图（草图排最前，页面的负数 id 跳过），各自编码好。原记录没了时返回给用户看的原因
+/// 参考图读得出、编不了码：原因写成 `unreadable:<id>:<文件序号>`（后半同页面的 refKey），页面据此拿掉这一张
+pub const UNREADABLE: &str = "unreadable:";
+fn encode_one(r: RefKey, png: &[u8]) -> Result<Vec<u8>, String> {
+    imagegen::encode_ref(png).ok_or_else(|| {
+        let file = r.file.map_or_else(String::new, |f| f.to_string());
+        format!("{UNREADABLE}{}:{file}", r.id)
+    })
+}
+
+/// 参考图（草图排最前，页面的负数 id 跳过，最多 `REFS_SENT` 张），各自编码好。原记录没了时返回给用户看的原因
 fn read_refs(
     state: &AppState,
     refs: &[RefKey],
     sketch: Option<&str>,
-    max: usize,
 ) -> Result<Vec<Vec<u8>>, String> {
     let mut out = Vec::new();
     if let Some(name) = sketch {
@@ -188,11 +196,11 @@ fn read_refs(
         out.push(imagegen::encode_ref(&png).ok_or("草图读不出来，重新画一张再试")?);
     }
     for r in refs.iter().filter(|r| r.id >= 0) {
-        if out.len() >= max {
+        if out.len() >= REFS_SENT {
             break;
         }
         let png = crate::record_image::read_record_image(state, r.id, r.file).ok_or(GONE)?;
-        out.push(imagegen::encode_ref(&png).ok_or(GONE)?);
+        out.push(encode_one(*r, &png)?);
     }
     Ok(out)
 }
@@ -219,7 +227,7 @@ pub async fn generate(env: &Env<'_>, cfg: &ImageCfg, req: GenReq) -> Result<GenO
                 .ok_or("这张图已经不在表情包里了")?;
             vec![imagegen::encode_ref(&png).ok_or("这张图已经不在表情包里了")?]
         }
-        _ => read_refs(env.state, &req.refs, req.sketch.as_deref(), usize::MAX)?,
+        _ => read_refs(env.state, &req.refs, req.sketch.as_deref())?,
     };
     let has_sketch = req.sketch.is_some() && !matches!(what, MemeGen::Act(_));
     let prompt = xpaste_pro::meme_image_prompt(&MemePrompt {
@@ -543,7 +551,7 @@ pub async fn captions(
     if cfg.base_url.trim().is_empty() || cfg.model.trim().is_empty() {
         return Err(CAPTION_UNCONFIGURED.into());
     }
-    let images: Vec<String> = read_refs(state, refs, sketch, CAPTION_IMAGES)?
+    let images: Vec<String> = read_refs(state, refs, sketch)?
         .iter()
         .map(|b| {
             let mime = if b.starts_with(&[0xFF, 0xD8]) {
@@ -907,6 +915,70 @@ mod tests {
             names(&state, &[ids[0], 999]),
             vec!["表情包".to_string(), String::new()]
         );
+    }
+
+    #[test]
+    fn unreadable_ref_named() {
+        let r = RefKey {
+            id: 7,
+            file: Some(2),
+        };
+        assert_eq!(encode_one(r, b"junk"), Err(format!("{UNREADABLE}7:2")));
+        let r = RefKey { id: 8, file: None };
+        assert_eq!(encode_one(r, b"junk"), Err(format!("{UNREADABLE}8:")));
+    }
+
+    #[test]
+    fn at_most_4_refs_sent() {
+        let state = AppState::for_test();
+        let seq = AtomicU64::new(0);
+        let env = Env {
+            state: &state,
+            seq: &seq,
+            cutout: |_| None,
+            added: &|_| {},
+        };
+        // 库里 6 张图当参考图，外加一张草图
+        let dir = state.data_dir.join("memes");
+        std::fs::create_dir_all(&dir).unwrap();
+        let refs: Vec<serde_json::Value> = (0..6)
+            .map(|i| {
+                let f = dir.join(format!("{}.png", uuid()));
+                std::fs::write(&f, grid(1)).unwrap();
+                let id = state
+                    .store()
+                    .add_meme(
+                        NewMeme {
+                            file: f,
+                            info: MemeInfo {
+                                source: "ai".into(),
+                                name: format!("{i}"),
+                                style: None,
+                            },
+                            search: String::new(),
+                            scene: String::new(),
+                            width: 1024,
+                            height: 1024,
+                            bytes: 1,
+                        },
+                        &[],
+                        0,
+                    )
+                    .unwrap();
+                json!({"id": id, "file": 0})
+            })
+            .collect();
+        let sketch = save_sketch(&state.data_dir, &grid(1)).unwrap();
+        let (url, h) = fake(1, reply_with(grid(1)));
+        run(generate(
+            &env,
+            &cfg(&url),
+            req(json!({"refs": refs, "sketch": sketch})),
+        ))
+        .unwrap();
+        let seen = h.join().unwrap();
+        let body = String::from_utf8_lossy(&seen[0].body);
+        assert_eq!(body.matches("name=\"image[]\"").count(), 4);
     }
 
     #[test]
