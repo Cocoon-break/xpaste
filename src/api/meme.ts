@@ -38,6 +38,38 @@ export const memeStyles = () => invoke<MemeStyles>('meme_styles');
 /** 挑过的、自己写的风格变了：后端去重、限个数后写回设置 */
 export const memeStylesTouch = (used: string[], custom: string[]) => invoke<void>('meme_styles_touch', { used, custom });
 
+/** 出文案：5 条候选（翻译里配置的 AI 接口）。`sketch` 是第一张为草图时它的文件名，`avoid` 是“换一批”前给过的；失败时抛出原因 */
+export const memeCaptions = (idea: string, refs: RefKey[], sketch: string | null, avoid: string[]) =>
+  invoke<string[]>('meme_captions', { idea, refs, sketch, avoid });
+
+/** 生成请求：one 一张、set 一套 16 张、set_part 分 4 次里的第 part 次（0–3）、act 以库里 base 那张为底的 AI 动作 */
+export interface GenReq {
+  kind: 'one' | 'set' | 'set_part' | 'act'; part: number | null; act: string | null;
+  /** 内置风格的键名，自定义时为空串 */
+  style: string; custom: string | null;
+  idea: string; caption: string;
+  /** 草图（负数 id）由页面滤掉，另经 `sketch` 带文件名 */
+  refs: RefKey[]; sketch: string | null; base: number | null;
+}
+/** done：库里新存的那几张；irregular：网格没画规整，整张图已存成 id 这一张 */
+export type GenOut = { status: 'done'; ids: number[] } | { status: 'irregular'; id: number };
+/** 取消或关窗口之后才回来的结果：已进库，页面不显示、不提示 */
+export const MEME_LATE = '已取消';
+/** 生成，结果立刻进库；失败时抛出给用户看的原因（字符串） */
+export const memeGenerate = (req: GenReq) => invoke<GenOut>('meme_generate', { req });
+export const memeCancel = () => invoke<void>('meme_cancel');
+/** 生图接口配好了没有；这个服务商上次的一套没画规整（数量旁边提示） */
+export const memeGenInfo = () => invoke<{ ready: boolean; shaky: boolean }>('meme_gen_info');
+/** 抠图贴纸：抠出主体加白边的 PNG；没抠出主体时抛出原因 */
+export const memeCutout = (png: Uint8Array) => invoke<ArrayBuffer>('meme_cutout', png);
+/** 存草图，返回文件名 */
+export const memeSaveSketch = (png: Uint8Array) => invoke<string>('meme_save_sketch', png);
+/** 库里一个表情包的第 n 帧 PNG（AI 动作的 GIF）；读不到时抛出 "gone" */
+export const memeFrame = (id: number, n: number) => invoke<ArrayBuffer>('meme_frame', { id, n });
+
+/** 打开设置：meme 是 Pro → 表情包制作（生图接口），translate 是“翻译”（出文案用的 AI 接口） */
+export const openMemeSettings = (tab: 'meme' | 'translate') => invoke<void>('open_panel_settings', { tab });
+
 export const onMemeOpen = (cb: (p: MemeOpen) => void): Promise<UnlistenFn> =>
   listen<MemeOpen>('meme-open', (e) => cb(e.payload));
 export const onMemeToast = (cb: (text: string) => void): Promise<UnlistenFn> =>

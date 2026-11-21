@@ -1,0 +1,900 @@
+//! 表情包制作的出文案与生成：读参考图、调生图接口、抠掉白底、切网格，每张结果立刻存进表情包库；
+//! 另有抠图贴纸（抠主体加白边）与草图存盘。
+//!
+//! 每次生成带一个序号；取消、关窗口只把当前序号改掉，请求照常等它回来：
+//! 结果照样进库（花了的钱不白花），但不交给页面，页面也不提示。
+
+use std::collections::HashMap;
+use std::hash::{BuildHasher, RandomState};
+use std::io::Cursor;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{LazyLock, Mutex, PoisonError};
+use std::time::Instant;
+
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as B64;
+use image::RgbaImage;
+use serde::{Deserialize, Serialize};
+use xpaste_core::{MemeInfo, NewMeme, Settings};
+use xpaste_pro::{MemeAct, MemeGen, MemePrompt};
+
+use crate::imagegen::{self, Format, ImageCfg, ImgFail};
+use crate::meme::RefKey;
+use crate::state::AppState;
+use crate::translate::Fail;
+
+/// 晚到的结果（已取消、窗口已关）：页面收到这个原因时什么都不显示
+pub const LATE: &str = "已取消";
+const GONE: &str = "原记录已删除，拿掉了一张";
+const CAPTION_UNCONFIGURED: &str = "AI 接口还没配好";
+/// 交给系统抠主体的图，长边上限：平台层解码不设上限，超过的不抠
+const CUT_EDGE: u32 = 2048;
+/// 出文案最多带几张图
+const CAPTION_IMAGES: usize = 4;
+
+/// 系统抠主体：返回与输入同尺寸的 RGBA，没抠到为 None
+pub type Cutout = fn(&[u8]) -> Option<(u32, u32, Vec<u8>)>;
+
+/// 当前这次生成的序号（应用里只有这一个；测试各用各的）
+pub static SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// 取消、关窗口：让进行中的那次变成“晚到”
+pub fn cancel() {
+    SEQ.fetch_add(1, Ordering::SeqCst);
+}
+
+/// 页面发来的生成请求。带用户写的话，不派生 Debug。
+#[derive(Deserialize)]
+pub struct GenReq {
+    /// one | set | set_part | act
+    pub kind: String,
+    /// set_part：第几次（0–3）
+    pub part: Option<u8>,
+    /// act：blink | nod | wave | cry
+    pub act: Option<String>,
+    /// 内置风格的键名；自定义时为空
+    pub style: String,
+    pub custom: Option<String>,
+    pub idea: String,
+    pub caption: String,
+    /// 页面里的草图用负数 id 占位，这里不读，草图走 `sketch`
+    pub refs: Vec<RefKey>,
+    /// `memes/sketch/` 下的文件名
+    pub sketch: Option<String>,
+    /// act：以库里哪张为底
+    pub base: Option<i64>,
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+#[serde(tag = "status", rename_all = "lowercase")]
+pub enum GenOut {
+    Done {
+        ids: Vec<i64>,
+    },
+    /// 网格没画规整：整张图已存成一个表情包
+    Irregular {
+        id: i64,
+    },
+}
+
+/// 生成要用到的外部：状态、序号、抠主体（测试里换掉）、存进库后通知面板
+pub struct Env<'a> {
+    pub state: &'a AppState,
+    pub seq: &'a AtomicU64,
+    pub cutout: Cutout,
+    pub added: &'a (dyn Fn(i64) + Sync),
+}
+
+/// 设置里的生图接口
+pub fn image_cfg(s: &Settings) -> ImageCfg {
+    ImageCfg {
+        format: match s.meme_image_format.as_str() {
+            "ark" => Format::Ark,
+            "gemini" => Format::Gemini,
+            _ => Format::Openai,
+        },
+        base_url: s
+            .meme_image_base_url
+            .trim()
+            .trim_end_matches('/')
+            .to_owned(),
+        api_key: s.meme_image_api_key.trim().to_owned(),
+        model: s.meme_image_model.trim().to_owned(),
+    }
+}
+
+/// 每个服务商（地址加模型 ID）上次一套 16 张画规整了没有。只在内存里，只用来提示
+static GRID_OK: LazyLock<Mutex<HashMap<String, bool>>> = LazyLock::new(Default::default);
+
+fn provider(c: &ImageCfg) -> String {
+    format!("{}\n{}", c.base_url, c.model)
+}
+
+/// 这个服务商上次的一套没画规整：在“数量”旁边提示“这个模型画网格不太稳，可能要分 4 次”
+pub fn grid_shaky(c: &ImageCfg) -> bool {
+    GRID_OK
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(&provider(c))
+        == Some(&false)
+}
+
+fn act_of(s: Option<&str>) -> Option<(MemeAct, &'static str)> {
+    Some(match s? {
+        "blink" => (MemeAct::Blink, "眨眼"),
+        "nod" => (MemeAct::Nod, "点头"),
+        "wave" => (MemeAct::Wave, "挥手"),
+        "cry" => (MemeAct::Cry, "哭"),
+        _ => return None,
+    })
+}
+
+/// 风格的显示名（存进库、参与搜索）与写日志用的名字（内置键名或“自定义”）
+fn style_names(req: &GenReq) -> (String, String) {
+    match xpaste_pro::meme_styles()
+        .iter()
+        .find(|s| s.key == req.style)
+    {
+        Some(s) => (s.name.to_owned(), s.key.to_owned()),
+        None => (
+            format!("自定义：{}", req.custom.as_deref().unwrap_or("").trim()),
+            "自定义".into(),
+        ),
+    }
+}
+
+fn uuid() -> String {
+    let s = RandomState::new();
+    format!("{:016x}{:016x}", s.hash_one(0u8), s.hash_one(1u8))
+}
+
+fn sketch_path(data_dir: &Path, name: &str) -> Option<PathBuf> {
+    let plain = Path::new(name).file_name().is_some_and(|f| f == name) && name.ends_with(".png");
+    plain.then(|| data_dir.join("memes").join("sketch").join(name))
+}
+
+/// 草图存成 `memes/sketch/<uuid>.png`，返回文件名（生成、出文案时带回来）
+pub fn save_sketch(data_dir: &Path, png: &[u8]) -> Result<String, String> {
+    if !png.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err("草图不是 PNG".into());
+    }
+    let name = format!("{}.png", uuid());
+    let p = sketch_path(data_dir, &name).expect("自己起的名字");
+    let written = p
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(&p, png));
+    if let Err(e) = written {
+        log::warn!("表情包 存草图失败：{e}");
+        return Err("存草图失败".into());
+    }
+    log::info!("表情包 存草图 {} 字节", png.len());
+    Ok(name)
+}
+
+/// 参考图（草图排最前，页面的负数 id 跳过），各自编码好。原记录没了时返回给用户看的原因
+fn read_refs(
+    state: &AppState,
+    refs: &[RefKey],
+    sketch: Option<&str>,
+    max: usize,
+) -> Result<Vec<Vec<u8>>, String> {
+    let mut out = Vec::new();
+    if let Some(name) = sketch {
+        let png = sketch_path(&state.data_dir, name)
+            .and_then(|p| std::fs::read(p).ok())
+            .ok_or("草图读不出来，重新画一张再试")?;
+        out.push(imagegen::encode_ref(&png).ok_or("草图读不出来，重新画一张再试")?);
+    }
+    for r in refs.iter().filter(|r| r.id >= 0) {
+        if out.len() >= max {
+            break;
+        }
+        let png = crate::record_image::read_record_image(state, r.id, r.file).ok_or(GONE)?;
+        out.push(imagegen::encode_ref(&png).ok_or(GONE)?);
+    }
+    Ok(out)
+}
+
+/// 生成一张 / 一套 / 一套里的一部分 / AI 动作。结果立刻进库；晚到时返回 `LATE`。
+pub async fn generate(env: &Env<'_>, cfg: &ImageCfg, req: GenReq) -> Result<GenOut, String> {
+    let seq = env.seq.fetch_add(1, Ordering::SeqCst) + 1;
+    let late = || env.seq.load(Ordering::SeqCst) != seq;
+    let act = act_of(req.act.as_deref());
+    let what = match (req.kind.as_str(), act) {
+        ("one", _) => MemeGen::One,
+        ("set", _) => MemeGen::Set,
+        ("set_part", _) => MemeGen::SetPart(req.part.unwrap_or(0).min(3)),
+        ("act", Some((a, _))) if req.base.is_some() => MemeGen::Act(a),
+        _ => return Err("不认识的生成方式".into()),
+    };
+    if imagegen::unconfigured(cfg) {
+        return Err(imagegen::reason(&ImgFail::Base(Fail::Config)));
+    }
+    // AI 动作只拿库里那张当参考图
+    let refs = match req.base {
+        Some(base) if matches!(what, MemeGen::Act(_)) => {
+            let png = crate::record_image::read_record_image(env.state, base, Some(0))
+                .ok_or("这张图已经不在表情包里了")?;
+            vec![imagegen::encode_ref(&png).ok_or("这张图已经不在表情包里了")?]
+        }
+        _ => read_refs(env.state, &req.refs, req.sketch.as_deref(), usize::MAX)?,
+    };
+    let has_sketch = req.sketch.is_some() && !matches!(what, MemeGen::Act(_));
+    let prompt = xpaste_pro::meme_image_prompt(&MemePrompt {
+        style_key: (!req.style.is_empty()).then_some(req.style.as_str()),
+        custom_style: req.custom.as_deref(),
+        idea: &req.idea,
+        caption: &req.caption,
+        r#gen: what,
+        has_photo: refs.len() > usize::from(has_sketch),
+        has_sketch,
+    });
+    let (style_name, style_log) = style_names(&req);
+    let started = Instant::now();
+    let r = imagegen::generate(cfg, &prompt, &refs).await;
+    log::info!(
+        "表情包 生成 {} 参考图 {} 张 {} 字节 风格 {style_log} {} 耗时 {} ms",
+        req.kind,
+        refs.len(),
+        refs.iter().map(Vec::len).sum::<usize>(),
+        if r.is_ok() { "成功" } else { "失败" },
+        started.elapsed().as_millis()
+    );
+    let png = match r {
+        Ok(p) => p,
+        Err(_) if late() => return Err(LATE.into()),
+        Err(e) => return Err(imagegen::reason(&e)),
+    };
+    // ponytail: 抠图、切格、编码在异步线程上直接做（约一两秒）；卡到别的命令时挪进 spawn_blocking
+    let out = store_result(env, cfg, &req, what, act.map(|a| a.1), &style_name, &png);
+    match &out {
+        Ok(GenOut::Done { ids }) => log::info!("表情包 进库 {ids:?}"),
+        Ok(GenOut::Irregular { id }) => log::info!("表情包 网格没画规整 进库 {id}"),
+        Err(_) => {}
+    }
+    if late() {
+        log::info!("表情包 生成结果晚到（已取消或窗口已关），只进库");
+        return Err(LATE.into());
+    }
+    out
+}
+
+/// 收到的图：抠白底、按种类切开、存进库
+fn store_result(
+    env: &Env<'_>,
+    cfg: &ImageCfg,
+    req: &GenReq,
+    what: MemeGen,
+    act_name: Option<&str>,
+    style_name: &str,
+    png: &[u8],
+) -> Result<GenOut, String> {
+    let img = image::load_from_memory(png)
+        .map_err(|_| imagegen::reason(&ImgFail::Base(Fail::Bad)))?
+        .to_rgba8();
+    let (img, cut) = clear_white(env.cutout, png, img);
+    let (w, h) = img.dimensions();
+    let save = |img: &RgbaImage, name: &str, emotions: &[&str]| {
+        let (w, h) = img.dimensions();
+        save_meme(
+            env,
+            req,
+            &png_of(img),
+            "png",
+            (w, h),
+            name,
+            emotions,
+            style_name,
+        )
+    };
+    let emo = xpaste_pro::meme_emotions();
+    let cells = |n: u32, names: &[&str]| -> Result<Option<Vec<i64>>, String> {
+        let Some(boxes) = xpaste_pro::meme_split_grid(img.as_raw(), w, h, n) else {
+            return Ok(None);
+        };
+        boxes
+            .iter()
+            .zip(names)
+            .map(|(&[x, y, cw, ch], name)| {
+                save(
+                    &image::imageops::crop_imm(&img, x, y, cw, ch).to_image(),
+                    name,
+                    &[name],
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(Some)
+    };
+    let done = |ids: Vec<i64>| -> Result<GenOut, String> { Ok(GenOut::Done { ids }) };
+    let whole = || save(&img, "表情包", &[]).map(|id| GenOut::Irregular { id });
+    match what {
+        MemeGen::One => done(vec![save(&img, "表情包", &[])?]),
+        MemeGen::Set => {
+            let ids = cells(4, &emo)?;
+            GRID_OK
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(provider(cfg), ids.is_some());
+            ids.map_or_else(whole, done)
+        }
+        MemeGen::SetPart(k) => {
+            let k = usize::from(k) * 4;
+            cells(2, &emo[k..k + 4])?.map_or_else(whole, done)
+        }
+        MemeGen::Act(_) => {
+            let Some(boxes) = xpaste_pro::meme_split_grid(img.as_raw(), w, h, 2) else {
+                return whole();
+            };
+            let (side, frames) = act_frames(&img, &boxes, cut);
+            let gif = crate::meme_gif::encode_gif(&frames, side, 200, 256);
+            let base = req.base.and_then(|b| {
+                env.state
+                    .store()
+                    .live_summary(b)
+                    .ok()
+                    .flatten()?
+                    .meme
+                    .map(|m| m.name)
+            });
+            let act = act_name.unwrap_or_default();
+            let name = match base.filter(|n| emo.contains(&n.as_str())) {
+                Some(e) => format!("{e} · {act}"),
+                None => act.to_owned(),
+            };
+            let emotions: Vec<&str> = emo
+                .iter()
+                .copied()
+                .filter(|e| name.starts_with(e))
+                .collect();
+            save_meme(
+                env,
+                req,
+                &gif,
+                "gif",
+                (side, side),
+                &name,
+                &emotions,
+                style_name,
+            )
+            .map(|id| GenOut::Done { ids: vec![id] })
+        }
+    }
+}
+
+/// macOS 14+ 用系统抠主体去掉白底；抠不出来、图太大时保留原图。第二项为抠过没有
+fn clear_white(cutout: Cutout, png: &[u8], img: RgbaImage) -> (RgbaImage, bool) {
+    if img.width().max(img.height()) > CUT_EDGE {
+        return (img, false);
+    }
+    match cutout(png).and_then(|(w, h, rgba)| RgbaImage::from_raw(w, h, rgba)) {
+        Some(c) => (c, true),
+        None => (img, false),
+    }
+}
+
+/// AI 动作的 4 帧：按 2 × 2 的格子（不是各格的外接框，免得帧间跳位置）切开，居中补成同样大的正方形。
+/// 背景抠掉了就补透明，否则补白
+fn act_frames(img: &RgbaImage, boxes: &[[u32; 4]], cut: bool) -> (u32, Vec<Vec<u8>>) {
+    let (w, h) = img.dimensions();
+    // 格线取左右（上下）两格外接框之间的中点
+    let mid = |a: &[usize], b: &[usize], pos: usize, len: usize| {
+        let end = a
+            .iter()
+            .map(|&i| boxes[i][pos] + boxes[i][pos + 2])
+            .max()
+            .unwrap_or(0);
+        let start = b.iter().map(|&i| boxes[i][pos]).min().unwrap_or(len as u32);
+        ((end + start) / 2).clamp(1, len as u32 - 1)
+    };
+    let xm = mid(&[0, 2], &[1, 3], 0, w as usize);
+    let ym = mid(&[0, 1], &[2, 3], 1, h as usize);
+    let rects = [
+        [0, 0, xm, ym],
+        [xm, 0, w - xm, ym],
+        [0, ym, xm, h - ym],
+        [xm, ym, w - xm, h - ym],
+    ];
+    let side = rects.iter().map(|r| r[2].max(r[3])).max().unwrap_or(1);
+    let bg = if cut {
+        [0, 0, 0, 0]
+    } else {
+        [255, 255, 255, 255]
+    };
+    let frames = rects
+        .iter()
+        .map(|&[x, y, cw, ch]| {
+            let mut f = RgbaImage::from_pixel(side, side, image::Rgba(bg));
+            let cell = image::imageops::crop_imm(img, x, y, cw, ch).to_image();
+            image::imageops::replace(
+                &mut f,
+                &cell,
+                i64::from((side - cw) / 2),
+                i64::from((side - ch) / 2),
+            );
+            f.into_raw()
+        })
+        .collect();
+    (side, frames)
+}
+
+fn png_of(img: &RgbaImage) -> Vec<u8> {
+    let mut out = Vec::new();
+    img.write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png)
+        .expect("写进内存不会失败");
+    out
+}
+
+/// 写 `memes/<uuid>.<ext>`，存一个 AI 出的表情包，通知面板。失败时删掉刚写的文件
+#[allow(clippy::too_many_arguments)]
+fn save_meme(
+    env: &Env<'_>,
+    req: &GenReq,
+    bytes: &[u8],
+    ext: &str,
+    (width, height): (u32, u32),
+    name: &str,
+    emotions: &[&str],
+    style_name: &str,
+) -> Result<i64, String> {
+    let dir = env.state.data_dir.join("memes");
+    let path = dir.join(format!("{}.{ext}", uuid()));
+    if let Err(e) = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, bytes)) {
+        log::warn!("表情包 写文件失败：{e}");
+        return Err("存进表情包失败".into());
+    }
+    #[allow(unused_mut)]
+    let mut flavors = xpaste_platform::file_flavors(&path);
+    // Mac 微信要有文件路径才收动图；另附一份 GIF 数据
+    #[cfg(target_os = "macos")]
+    if ext == "gif" {
+        flavors.push(xpaste_core::Flavor {
+            item: 0,
+            format: "com.compuserve.gif".into(),
+            data: bytes.to_vec(),
+        });
+    }
+    let search = xpaste_pro::meme_search_text(name, &req.idea, &req.caption, emotions, style_name);
+    let meme = NewMeme {
+        file: path.clone(),
+        info: MemeInfo {
+            source: "ai".into(),
+            name: name.into(),
+            style: Some(style_name.into()),
+        },
+        search,
+        // 做法由页面存成品时带上；AI 原图没有
+        scene: String::new(),
+        width,
+        height,
+        bytes: bytes.len() as u64,
+    };
+    let r = env
+        .state
+        .store()
+        .add_meme(meme, &flavors, crate::clock::now_ms());
+    match r {
+        Ok(id) => {
+            (env.added)(id);
+            Ok(id)
+        }
+        Err(e) => {
+            log::warn!("表情包 进库失败：{e}");
+            let _ = std::fs::remove_file(&path);
+            Err("存进表情包失败".into())
+        }
+    }
+}
+
+/// 出文案：用翻译里配置的 AI 接口，带上前 4 张参考图（草图在最前），“换一批”时带上刚才给过的
+pub async fn captions(
+    state: &AppState,
+    cfg: &crate::translate::Cfg,
+    idea: &str,
+    refs: &[RefKey],
+    sketch: Option<&str>,
+    avoid: &[String],
+) -> Result<Vec<String>, String> {
+    if cfg.base_url.trim().is_empty() || cfg.model.trim().is_empty() {
+        return Err(CAPTION_UNCONFIGURED.into());
+    }
+    let images: Vec<String> = read_refs(state, refs, sketch, CAPTION_IMAGES)?
+        .iter()
+        .map(|b| {
+            let mime = if b.starts_with(&[0xFF, 0xD8]) {
+                "image/jpeg"
+            } else {
+                "image/png"
+            };
+            format!("data:{mime};base64,{}", B64.encode(b))
+        })
+        .collect();
+    let body = xpaste_pro::meme_caption_body(cfg.model.trim(), idea, &images, avoid);
+    let started = Instant::now();
+    let r = crate::translate::chat_stream(&cfg.base_url, &cfg.api_key, &body, None, &mut |_| true)
+        .await;
+    let list = r
+        .as_ref()
+        .map(|t| xpaste_pro::meme_parse_captions(t))
+        .unwrap_or_default();
+    log::info!(
+        "表情包 出文案 参考图 {} 张 {} 字节 换一批 {} {} 条 {} 耗时 {} ms",
+        images.len(),
+        images.iter().map(String::len).sum::<usize>(),
+        !avoid.is_empty(),
+        list.len(),
+        r.as_ref().map_or_else(|f| f.tag(), |_| "成功".into()),
+        started.elapsed().as_millis()
+    );
+    match r {
+        Err(f) => Err(crate::mixer::reason(&f, false)),
+        Ok(_) if list.is_empty() => Err(crate::mixer::reason(&Fail::Bad, false)),
+        Ok(_) => Ok(list),
+    }
+}
+
+/// 抠图贴纸：抠出主体，外加一圈白边（宽为边长的 2.5%），背景透明。没抠出主体时为 None
+pub fn sticker(cutout: Cutout, png: &[u8]) -> Option<Vec<u8>> {
+    let img = image::load_from_memory(png).ok()?;
+    let bounded;
+    let png = if img.width().max(img.height()) > CUT_EDGE {
+        bounded = png_of(
+            &img.resize(CUT_EDGE, CUT_EDGE, image::imageops::FilterType::Triangle)
+                .to_rgba8(),
+        );
+        &bounded
+    } else {
+        png
+    };
+    let (w, h, rgba) = cutout(png)?;
+    let cut = RgbaImage::from_raw(w, h, rgba)?;
+    Some(png_of(&white_border(&cut, w.max(h) as f32 * 0.025)))
+}
+
+/// 主体（alpha ≥ 128）外 `r` 像素内铺白，边缘抗锯齿，主体叠在上面
+fn white_border(cut: &RgbaImage, r: f32) -> RgbaImage {
+    let (w, h) = (cut.width() as usize, cut.height() as usize);
+    // 每个像素到同一行最近主体像素的横向距离
+    let mut hd = vec![u32::MAX; w * h];
+    for y in 0..h {
+        let row = &mut hd[y * w..(y + 1) * w];
+        let inside = |x: usize| cut.as_raw()[(y * w + x) * 4 + 3] >= 128;
+        let mut last = None;
+        for (x, d) in row.iter_mut().enumerate() {
+            if inside(x) {
+                last = Some(x);
+            }
+            if let Some(l) = last {
+                *d = (x - l) as u32;
+            }
+        }
+        last = None;
+        for x in (0..w).rev() {
+            if inside(x) {
+                last = Some(x);
+            }
+            if let Some(l) = last {
+                row[x] = row[x].min((l - x) as u32);
+            }
+        }
+    }
+    let ri = r.ceil() as i64;
+    let mut out = RgbaImage::new(w as u32, h as u32);
+    for y in 0..h {
+        for x in 0..w {
+            let mut best = f32::MAX;
+            for dy in -ri..=ri {
+                let yy = y as i64 + dy;
+                if !(0..h as i64).contains(&yy) {
+                    continue;
+                }
+                let d = hd[yy as usize * w + x];
+                if d != u32::MAX {
+                    best = best.min((d as f32).powi(2) + (dy * dy) as f32);
+                }
+            }
+            let white = (r + 0.5 - best.sqrt()).clamp(0.0, 1.0);
+            let p = cut.get_pixel(x as u32, y as u32).0;
+            let sa = f32::from(p[3]) / 255.0;
+            let a = sa + white * (1.0 - sa);
+            let px = if a <= 0.0 {
+                [0, 0, 0, 0]
+            } else {
+                let c =
+                    |s: u8| ((f32::from(s) * sa + 255.0 * white * (1.0 - sa)) / a).round() as u8;
+                [c(p[0]), c(p[1]), c(p[2]), (a * 255.0).round() as u8]
+            };
+            out.put_pixel(x as u32, y as u32, image::Rgba(px));
+        }
+    }
+    out
+}
+
+/// 库里一个表情包的第 `n` 帧（PNG）：AI 动作的 GIF 给页面预览用。不是动图时只有第 0 帧
+pub fn frame_png(state: &AppState, id: i64, n: usize) -> Option<Vec<u8>> {
+    use image::AnimationDecoder as _;
+    let file = state.store().detail(id).ok()??.files.into_iter().next()?;
+    if file.ext != "gif" {
+        return (n == 0)
+            .then(|| crate::record_image::read_record_image(state, id, Some(0)))
+            .flatten();
+    }
+    crate::record_image::path(state, id, Some(Path::new(&file.path)))?;
+    let f = std::io::BufReader::new(std::fs::File::open(&file.path).ok()?);
+    let frame = image::codecs::gif::GifDecoder::new(f)
+        .ok()?
+        .into_frames()
+        .nth(n)?
+        .ok()?;
+    Some(png_of(frame.buffer()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::imagegen::tests::{b64, fake, json_reply};
+    use serde_json::json;
+    use std::sync::atomic::AtomicUsize;
+
+    fn run<T>(f: impl std::future::Future<Output = T>) -> T {
+        tauri::async_runtime::block_on(f)
+    }
+
+    fn cfg(base: &str) -> ImageCfg {
+        ImageCfg {
+            format: Format::Openai,
+            base_url: base.into(),
+            api_key: "k".into(),
+            model: "m".into(),
+        }
+    }
+
+    fn req(v: serde_json::Value) -> GenReq {
+        let mut base = json!({"kind": "one", "style": "q", "idea": "", "caption": "", "refs": []});
+        base.as_object_mut()
+            .unwrap()
+            .extend(v.as_object().unwrap().clone());
+        serde_json::from_value(base).unwrap()
+    }
+
+    fn png(img: &RgbaImage) -> Vec<u8> {
+        png_of(img)
+    }
+
+    /// 白底上 n × n 个色块，格间留白
+    fn grid(n: u32) -> Vec<u8> {
+        let cell = 1024 / n;
+        let pad = cell / 8;
+        png(&RgbaImage::from_fn(1024, 1024, |x, y| {
+            let (cx, cy) = (x % cell, y % cell);
+            if (pad..cell - pad).contains(&cx) && (pad..cell - pad).contains(&cy) {
+                image::Rgba([200, (x / cell * 40) as u8, (y / cell * 40) as u8, 255])
+            } else {
+                image::Rgba([255, 255, 255, 255])
+            }
+        }))
+    }
+
+    fn reply_with(
+        p: Vec<u8>,
+    ) -> impl Fn(&crate::imagegen::tests::Req) -> crate::imagegen::tests::Reply + Send + 'static
+    {
+        move |_| json_reply(json!({"data": [{"b64_json": b64(&p)}]}))
+    }
+
+    fn memes(state: &AppState) -> u64 {
+        state.store().meme_bytes().unwrap().0
+    }
+
+    #[test]
+    fn set_splits_into_16() {
+        if !xpaste_pro::AVAILABLE {
+            return eprintln!("这个构建不含 Pro，跳过");
+        }
+        let state = AppState::for_test();
+        let seq = AtomicU64::new(0);
+        let added = AtomicUsize::new(0);
+        let on_added = |_| {
+            added.fetch_add(1, Ordering::SeqCst);
+        };
+        let env = Env {
+            state: &state,
+            seq: &seq,
+            cutout: |_| None,
+            added: &on_added,
+        };
+        let (url, _h) = fake(1, reply_with(grid(4)));
+        let c = cfg(&url);
+        let out = run(generate(&env, &c, req(json!({"kind": "set"})))).unwrap();
+        let GenOut::Done { ids } = out else {
+            panic!("应切成 16 张")
+        };
+        assert_eq!(ids.len(), 16);
+        assert_eq!(memes(&state), 16);
+        assert_eq!(added.load(Ordering::SeqCst), 16);
+        let names: Vec<String> = ids
+            .iter()
+            .map(|&id| {
+                state
+                    .store()
+                    .live_summary(id)
+                    .unwrap()
+                    .unwrap()
+                    .meme
+                    .unwrap()
+                    .name
+            })
+            .collect();
+        assert_eq!(names, xpaste_pro::meme_emotions());
+        assert!(!grid_shaky(&c));
+    }
+
+    #[test]
+    fn irregular_grid_kept() {
+        let state = AppState::for_test();
+        let seq = AtomicU64::new(0);
+        let env = Env {
+            state: &state,
+            seq: &seq,
+            cutout: |_| None,
+            added: &|_| {},
+        };
+        // 中间一整块：找不到格间留白
+        let blob = png(&RgbaImage::from_fn(512, 512, |x, y| {
+            let c = if (64..448).contains(&x) && (64..448).contains(&y) {
+                30
+            } else {
+                255
+            };
+            image::Rgba([c, c, c, 255])
+        }));
+        let (url, _h) = fake(1, reply_with(blob));
+        let c = cfg(&url);
+        let out = run(generate(&env, &c, req(json!({"kind": "set"})))).unwrap();
+        assert!(matches!(out, GenOut::Irregular { .. }));
+        assert_eq!(memes(&state), 1);
+        assert!(grid_shaky(&c));
+    }
+
+    #[test]
+    fn late_result_saved_not_shown() {
+        static SEQ_T: AtomicU64 = AtomicU64::new(0);
+        let state = AppState::for_test();
+        let added = AtomicUsize::new(0);
+        let on_added = |_| {
+            added.fetch_add(1, Ordering::SeqCst);
+        };
+        let env = Env {
+            state: &state,
+            seq: &SEQ_T,
+            cutout: |_| None,
+            added: &on_added,
+        };
+        let p = grid(1);
+        // 请求进行中用户点了取消
+        let (url, _h) = fake(1, move |_| {
+            SEQ_T.fetch_add(1, Ordering::SeqCst);
+            json_reply(json!({"data": [{"b64_json": b64(&p)}]}))
+        });
+        let r = run(generate(&env, &cfg(&url), req(json!({}))));
+        // 页面收不到结果（LATE 不显示、不提示）；库里照样多一条，面板照样刷新
+        assert_eq!(r, Err(LATE.to_string()));
+        assert_eq!(memes(&state), 1);
+        assert_eq!(added.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn unconfigured_no_request() {
+        let state = AppState::for_test();
+        let seq = AtomicU64::new(0);
+        let env = Env {
+            state: &state,
+            seq: &seq,
+            cutout: |_| None,
+            added: &|_| {},
+        };
+        let r = run(generate(&env, &cfg(""), req(json!({}))));
+        assert_eq!(r, Err("生图接口还没配好".to_string()));
+        assert_eq!(memes(&state), 0);
+    }
+
+    #[test]
+    fn gone_ref_dropped() {
+        let state = AppState::for_test();
+        let seq = AtomicU64::new(0);
+        let env = Env {
+            state: &state,
+            seq: &seq,
+            cutout: |_| None,
+            added: &|_| {},
+        };
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.set_nonblocking(true).unwrap();
+        let url = format!("http://127.0.0.1:{}", l.local_addr().unwrap().port());
+        let r = run(generate(
+            &env,
+            &cfg(&url),
+            req(json!({"refs": [{"id": 999, "file": null}, {"id": -1, "file": null}]})),
+        ));
+        assert_eq!(r, Err(GONE.to_string()));
+        assert!(l.accept().is_err(), "不应发出请求");
+    }
+
+    #[test]
+    fn captions_unconfigured() {
+        let state = AppState::for_test();
+        let c = crate::translate::cfg(&Settings::default());
+        let r = run(captions(&state, &c, "无语", &[], None, &[]));
+        assert_eq!(r, Err(CAPTION_UNCONFIGURED.to_string()));
+    }
+
+    #[test]
+    fn act_makes_one_gif() {
+        if !xpaste_pro::AVAILABLE {
+            return eprintln!("这个构建不含 Pro，跳过");
+        }
+        let state = AppState::for_test();
+        let seq = AtomicU64::new(0);
+        let env = Env {
+            state: &state,
+            seq: &seq,
+            cutout: |_| None,
+            added: &|_| {},
+        };
+        // 先有一张 AI 出的当底；AI 动作带着它当参考图，走 /images/edits，回一张 2 × 2
+        let (url, _h) = fake(2, {
+            let (one, four) = (grid(1), grid(2));
+            move |r| {
+                let p = if r.path == "/images/edits" {
+                    &four
+                } else {
+                    &one
+                };
+                json_reply(json!({"data": [{"b64_json": b64(p)}]}))
+            }
+        });
+        let c = cfg(&url);
+        let GenOut::Done { ids } = run(generate(&env, &c, req(json!({})))).unwrap() else {
+            panic!()
+        };
+        let base = ids[0];
+        let out = run(generate(
+            &env,
+            &c,
+            req(json!({"kind": "act", "act": "wave", "base": base})),
+        ))
+        .unwrap();
+        let GenOut::Done { ids } = out else {
+            panic!("应画成 4 帧")
+        };
+        let s = state.store().live_summary(ids[0]).unwrap().unwrap();
+        assert_eq!(s.meme.unwrap().name, "挥手");
+        assert!(frame_png(&state, ids[0], 3).is_some());
+        assert!(frame_png(&state, ids[0], 4).is_none());
+    }
+
+    #[test]
+    fn sticker_has_white_border() {
+        // 假抠图：100 × 100 中间 20 × 20 的红色主体
+        let cut: Cutout = |_| {
+            let img = RgbaImage::from_fn(100, 100, |x, y| {
+                if (40..60).contains(&x) && (40..60).contains(&y) {
+                    image::Rgba([255, 0, 0, 255])
+                } else {
+                    image::Rgba([0, 0, 0, 0])
+                }
+            });
+            Some((100, 100, img.into_raw()))
+        };
+        let src = png(&RgbaImage::new(100, 100));
+        let out = image::load_from_memory(&sticker(cut, &src).unwrap())
+            .unwrap()
+            .to_rgba8();
+        assert_eq!(out.get_pixel(50, 50).0, [255, 0, 0, 255]);
+        // 白边 2.5 px
+        assert_eq!(out.get_pixel(61, 50).0, [255, 255, 255, 255]);
+        assert_eq!(out.get_pixel(70, 50).0[3], 0);
+        assert!(sticker(|_| None, &src).is_none());
+    }
+}

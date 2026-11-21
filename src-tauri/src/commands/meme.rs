@@ -1,11 +1,13 @@
-//! 表情包制作的命令：打开、关闭制作窗口，读参考图，风格库，设置页的“测试生成”与表情包库统计。
+//! 表情包制作的命令：打开、关闭制作窗口，读参考图，风格库，出文案、生成、抠图贴纸、存草图，设置页的“测试生成”与表情包库统计。
 
 use serde::{Deserialize, Serialize};
+use tauri::ipc::{InvokeBody, Request};
 use tauri::{AppHandle, State};
 
 use crate::error::AppError;
 use crate::imagegen::{self, Format, ImageCfg};
 use crate::meme::{self, RefKey};
+use crate::meme_gen::{self, GenOut, GenReq};
 use crate::state::AppState;
 
 /// 设置页表单里（未保存）的生图接口配置。带 Key 与地址，不派生 Debug。
@@ -135,4 +137,110 @@ pub fn meme_styles_touch(
     let saved = state.settings().clone();
     crate::events::emit_to(&app, "panel", crate::events::SETTINGS_CHANGED, saved);
     Ok(())
+}
+
+/// 出文案：用翻译里配置的 AI 接口给 5 条候选。`sketch` 是第一张为草图时它的文件名；`avoid` 是“换一批”前给过的
+#[tauri::command]
+pub async fn meme_captions(
+    state: State<'_, AppState>,
+    idea: String,
+    refs: Vec<RefKey>,
+    sketch: Option<String>,
+    avoid: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let cfg = crate::translate::cfg(&state.settings());
+    meme_gen::captions(&state, &cfg, &idea, &refs, sketch.as_deref(), &avoid).await
+}
+
+/// 生成一张 / 一套 / 一套里的一部分 / AI 动作，结果立刻进库。取消或关窗口后才回来的，返回 `meme_gen::LATE`
+#[tauri::command]
+pub async fn meme_generate(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    req: GenReq,
+) -> Result<GenOut, String> {
+    let cfg = meme_gen::image_cfg(&state.settings());
+    let added = |id| crate::events::emit_summary(&app, crate::events::RECORD_ADDED, id);
+    let env = meme_gen::Env {
+        state: &state,
+        seq: &meme_gen::SEQ,
+        cutout: xpaste_platform::foreground_cutout,
+        added: &added,
+    };
+    meme_gen::generate(&env, &cfg, req).await
+}
+
+/// 取消生成：请求不打断，回来的结果照样进库，只是不交给页面
+#[tauri::command(async)]
+pub fn meme_cancel() {
+    meme_gen::cancel();
+    log::info!("表情包 取消生成");
+}
+
+/// 页面要的生图接口状态：配好了没有，这个服务商上次的一套画规整了没有
+#[derive(Serialize)]
+pub struct GenInfo {
+    ready: bool,
+    shaky: bool,
+}
+
+#[tauri::command(async)]
+pub fn meme_gen_info(state: State<'_, AppState>) -> GenInfo {
+    let cfg = meme_gen::image_cfg(&state.settings());
+    GenInfo {
+        ready: !imagegen::unconfigured(&cfg),
+        shaky: meme_gen::grid_shaky(&cfg),
+    }
+}
+
+/// 抠图贴纸：请求体是图片的 PNG，返回抠出主体加白边的 PNG。没抠出主体时返回原因
+#[tauri::command]
+pub async fn meme_cutout(request: Request<'_>) -> Result<tauri::ipc::Response, String> {
+    let InvokeBody::Raw(png) = request.body() else {
+        return Err("请求体应为 PNG 字节".into());
+    };
+    let png = png.clone();
+    let started = std::time::Instant::now();
+    // 系统抠主体是阻塞调用
+    let out = tauri::async_runtime::spawn_blocking(move || {
+        meme_gen::sticker(xpaste_platform::foreground_cutout, &png)
+    })
+    .await
+    .ok()
+    .flatten();
+    log::info!(
+        "表情包 抠图贴纸 {} 耗时 {} ms",
+        if out.is_some() {
+            "成功"
+        } else {
+            "没抠出主体"
+        },
+        started.elapsed().as_millis()
+    );
+    out.map(tauri::ipc::Response::new)
+        .ok_or_else(|| "没找到能抠出来的主体".into())
+}
+
+/// 存草图：请求体是 PNG，存到 `memes/sketch/`，返回文件名
+#[tauri::command]
+pub async fn meme_save_sketch(
+    state: State<'_, AppState>,
+    request: Request<'_>,
+) -> Result<String, String> {
+    let InvokeBody::Raw(png) = request.body() else {
+        return Err("请求体应为 PNG 字节".into());
+    };
+    meme_gen::save_sketch(&state.data_dir, png)
+}
+
+/// 库里一个表情包的第 `n` 帧 PNG（AI 动作的 GIF 给预览用；不是动图时只有第 0 帧）。读不到时返回 "gone"
+#[tauri::command(async)]
+pub fn meme_frame(
+    state: State<'_, AppState>,
+    id: i64,
+    n: usize,
+) -> Result<tauri::ipc::Response, String> {
+    meme_gen::frame_png(&state, id, n)
+        .map(tauri::ipc::Response::new)
+        .ok_or_else(|| "gone".into())
 }

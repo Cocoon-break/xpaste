@@ -6075,7 +6075,9 @@ version = "0.8.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
+ "color_quant",
  "embed-resource",
+ "gif",
  "image",
  "log",
  "reqwest",

@@ -42,10 +42,7 @@ const TIMEOUTS: Timeouts = Timeouts {
     read: Duration::from_secs(180),
 };
 
-// 参考图的编码在制作窗口接上生成时才用到
-#[allow(dead_code)]
 const REF_EDGE: u32 = 1024;
-#[allow(dead_code)]
 const REF_MAX_BYTES: usize = 4_194_304;
 
 pub fn unconfigured(c: &ImageCfg) -> bool {
@@ -206,7 +203,6 @@ pub fn reason(f: &ImgFail) -> String {
 }
 
 /// 参考图：长边缩到 1024，PNG 超过 4 MB 改质量 85 的 JPEG（透明处铺白）。
-#[allow(dead_code)]
 pub fn encode_ref(png_or_any: &[u8]) -> Option<Vec<u8>> {
     let img = image::load_from_memory(png_or_any).ok()?;
     crate::mixer::encode_image_within(img, REF_EDGE, REF_MAX_BYTES)
@@ -215,16 +211,16 @@ pub fn encode_ref(png_or_any: &[u8]) -> Option<Vec<u8>> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::thread;
 
-    struct Req {
-        path: String,
+    pub(crate) struct Req {
+        pub(crate) path: String,
         head: String,
-        body: Vec<u8>,
+        pub(crate) body: Vec<u8>,
     }
     impl Req {
         fn json(&self) -> Value {
@@ -232,10 +228,10 @@ mod tests {
         }
     }
 
-    type Reply = (u16, &'static str, Vec<u8>);
+    pub(crate) type Reply = (u16, &'static str, Vec<u8>);
 
     /// 假服务：依次接 `n` 个连接，`handler` 按请求给 (状态码, Content-Type, 体)。返回 Base URL 与收到的请求。
-    fn fake(
+    pub(crate) fn fake(
         n: usize,
         handler: impl Fn(&Req) -> Reply + Send + 'static,
     ) -> (String, thread::JoinHandle<Vec<Req>>) {
@@ -296,7 +292,7 @@ mod tests {
         v
     }
 
-    fn b64(b: &[u8]) -> String {
+    pub(crate) fn b64(b: &[u8]) -> String {
         base64::engine::general_purpose::STANDARD.encode(b)
     }
 
@@ -309,7 +305,7 @@ mod tests {
         }
     }
 
-    fn json_reply(v: Value) -> Reply {
+    pub(crate) fn json_reply(v: Value) -> Reply {
         (200, "application/json", v.to_string().into_bytes())
     }
 

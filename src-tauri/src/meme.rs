@@ -229,7 +229,8 @@ pub fn close(app: &AppHandle) {
         rt.refs.clear();
         rt.back.take()
     };
-    // 进行中的生成请求在接上生成之后一并中止
+    // 进行中的生成不打断：回来的结果照样进库，只是不再交给页面
+    crate::meme_gen::cancel();
     log::info!("表情包 关闭窗口");
     crate::meme_window::hide(app, back);
 }

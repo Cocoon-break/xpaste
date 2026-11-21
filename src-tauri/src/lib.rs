@@ -20,6 +20,8 @@ mod license;
 mod line;
 mod longshot;
 mod meme;
+mod meme_gen;
+mod meme_gif;
 mod meme_window;
 mod mixer;
 mod mixer_window;
@@ -551,7 +553,14 @@ pub fn run() {
             commands::meme::meme_styles_touch,
             commands::meme::meme_recent_images,
             commands::meme::meme_test_image,
-            commands::meme::meme_library_stats
+            commands::meme::meme_library_stats,
+            commands::meme::meme_captions,
+            commands::meme::meme_generate,
+            commands::meme::meme_cancel,
+            commands::meme::meme_gen_info,
+            commands::meme::meme_cutout,
+            commands::meme::meme_save_sketch,
+            commands::meme::meme_frame
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

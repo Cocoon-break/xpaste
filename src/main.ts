@@ -3543,6 +3543,13 @@ await onOpenSettings((tab) => {
     if (tab !== 'mixer') recipes.edit(tab.slice('mixer:'.length));
     return;
   }
+  // 表情包制作窗口里的“生图接口还没配好［去设置］”：打开 Pro → 表情包制作
+  if (tab === 'meme' && S.line.available) {
+    openSettingsAt('st-tab-pro');
+    if (!dlg.open) return;
+    selectStTab(stTabs.findIndex((t) => t.id === 'st-tab-pro'), false);
+    return proGo('proMemePage');
+  }
   if (tab !== 'pro' || !S.line.available) return openSettings();
   openSettingsAt('st-tab-pro');
   showStControl(proActField.hidden ? proOffBtn : proCodeIn);
