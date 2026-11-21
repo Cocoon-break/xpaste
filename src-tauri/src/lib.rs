@@ -15,6 +15,7 @@ mod float_hide;
 mod focus_check;
 mod hotkey;
 mod housekeeping;
+mod imagegen;
 mod license;
 mod line;
 mod longshot;

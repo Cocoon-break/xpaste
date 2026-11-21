@@ -914,20 +914,25 @@ pub fn reason(f: &Fail, has_images: bool) -> String {
 
 /// 长边缩到 `IMAGE_EDGE` 以内，编成 PNG；超过 `IMAGE_MAX_BYTES` 时改成 JPEG（透明处铺白）。返回 (mime, 字节)。
 pub fn encode_image(img: image::DynamicImage) -> Result<(&'static str, Vec<u8>), AppError> {
+    encode_image_within(img, IMAGE_EDGE, IMAGE_MAX_BYTES)
+}
+
+/// `encode_image` 的参数化版本：长边上限与 PNG 字节上限由调用方给（生图参考图用 1024 / 4 MB）。
+pub fn encode_image_within(
+    img: image::DynamicImage,
+    edge: u32,
+    max_bytes: usize,
+) -> Result<(&'static str, Vec<u8>), AppError> {
     let bad = |e: image::ImageError| AppError::Invalid(format!("图片编码失败：{e}"));
-    let img = if img.width().max(img.height()) > IMAGE_EDGE {
-        img.resize(
-            IMAGE_EDGE,
-            IMAGE_EDGE,
-            image::imageops::FilterType::Triangle,
-        )
+    let img = if img.width().max(img.height()) > edge {
+        img.resize(edge, edge, image::imageops::FilterType::Triangle)
     } else {
         img
     };
     let mut png = Vec::new();
     img.write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
         .map_err(bad)?;
-    if png.len() <= IMAGE_MAX_BYTES {
+    if png.len() <= max_bytes {
         return Ok(("image/png", png));
     }
     let rgba = img.to_rgba8();

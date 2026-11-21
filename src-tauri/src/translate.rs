@@ -328,7 +328,7 @@ async fn system(text: &str, from: Option<Lang>, target: Lang) -> Result<String, 
     })
 }
 
-fn build_client(loopback: bool, t: Timeouts) -> Result<reqwest::Client, Fail> {
+pub(crate) fn build_client(loopback: bool, t: Timeouts) -> Result<reqwest::Client, Fail> {
     let b = reqwest::Client::builder()
         .connect_timeout(t.connect)
         .read_timeout(t.read);
@@ -356,7 +356,7 @@ fn client(loopback: bool) -> Result<reqwest::Client, Fail> {
 
 /// 连接阶段的失败（含 10 秒内连不上的连接超时）算连不上；连上之后的读超时算超时；
 /// 其余（DNS 失败、读到一半连接断开）也算连不上（M26 规则 13）。
-fn net(e: reqwest::Error) -> Fail {
+pub(crate) fn net(e: reqwest::Error) -> Fail {
     if !e.is_connect() && e.is_timeout() {
         Fail::Timeout
     } else {
