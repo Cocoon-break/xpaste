@@ -560,7 +560,8 @@ pub fn run() {
             commands::meme::meme_gen_info,
             commands::meme::meme_cutout,
             commands::meme::meme_save_sketch,
-            commands::meme::meme_frame
+            commands::meme::meme_frame,
+            commands::meme::meme_names
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

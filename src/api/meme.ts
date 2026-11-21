@@ -67,6 +67,9 @@ export const memeSaveSketch = (png: Uint8Array) => invoke<string>('meme_save_ske
 /** 库里一个表情包的第 n 帧 PNG（AI 动作的 GIF）；读不到时抛出 "gone" */
 export const memeFrame = (id: number, n: number) => invoke<ArrayBuffer>('meme_frame', { id, n });
 
+/** 库里这几个表情包的名字（一套 16 张时是各格的情绪名）；读不到的为空串 */
+export const memeNames = (ids: number[]) => invoke<string[]>('meme_names', { ids });
+
 /** 打开设置：meme 是 Pro → 表情包制作（生图接口），translate 是“翻译”（出文案用的 AI 接口） */
 export const openMemeSettings = (tab: 'meme' | 'translate') => invoke<void>('open_panel_settings', { tab });
 

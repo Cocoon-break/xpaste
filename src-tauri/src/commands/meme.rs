@@ -244,3 +244,9 @@ pub fn meme_frame(
         .map(tauri::ipc::Response::new)
         .ok_or_else(|| "gone".into())
 }
+
+/// 库里这几个表情包的名字（一套 16 张时是各格的情绪名）；读不到的为空串
+#[tauri::command(async)]
+pub fn meme_names(state: State<'_, AppState>, ids: Vec<i64>) -> Vec<String> {
+    meme_gen::names(&state, &ids)
+}

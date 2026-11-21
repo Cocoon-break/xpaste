@@ -426,6 +426,51 @@ fn png_of(img: &RgbaImage) -> Vec<u8> {
     out
 }
 
+/// AI 原图的做法（字段同页面的做法，`接着改`时照它恢复）：画面是 AI，文字和四类动效都空着。
+/// 约定：`results` 为空数组、`look` 为 "ai" 表示“AI 结果就是这一张自己”（进库前还不知道自己的 id），
+/// 读做法的一方把它换成这个表情包的 id。参考图是历史记录的 {id, file}；草图排最前，
+/// 写成 {id: -1, file: null, sketch: "<memes/sketch/ 下的文件名>"}（负数 id 同页面里草图的占位）
+fn ai_scene(req: &GenReq) -> String {
+    let style = match req.custom.as_deref() {
+        Some(c) if req.style.is_empty() => format!("自定义：{}", c.trim()),
+        _ => req.style.clone(),
+    };
+    let sketch = req
+        .sketch
+        .iter()
+        .map(|s| serde_json::json!({"id": -1, "file": null, "sketch": s}));
+    let refs: Vec<serde_json::Value> = sketch
+        .chain(
+            req.refs
+                .iter()
+                .filter(|r| r.id >= 0)
+                .map(|r| serde_json::json!({"id": r.id, "file": r.file})),
+        )
+        .collect();
+    serde_json::json!({
+        "refs": refs, "idea": req.idea.trim(), "cands": [], "cap": "", "pos": "bottom", "ts": "stroke",
+        "bg": "none", "look": "ai", "style": style, "count": "one", "results": [], "pick": 0,
+        "fx": "none", "tfx": "none", "sfx": [], "act": "none",
+    })
+    .to_string()
+}
+
+/// 库里这几个表情包的名字（AI 出的一套是各格的情绪名）；读不到的为空串
+pub fn names(state: &AppState, ids: &[i64]) -> Vec<String> {
+    let store = state.store();
+    ids.iter()
+        .map(|&id| {
+            store
+                .live_summary(id)
+                .ok()
+                .flatten()
+                .and_then(|s| s.meme)
+                .map(|m| m.name)
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
 /// 写 `memes/<uuid>.<ext>`，存一个 AI 出的表情包，通知面板。失败时删掉刚写的文件
 #[allow(clippy::too_many_arguments)]
 fn save_meme(
@@ -464,8 +509,7 @@ fn save_meme(
             style: Some(style_name.into()),
         },
         search,
-        // 做法由页面存成品时带上；AI 原图没有
-        scene: String::new(),
+        scene: ai_scene(req),
         width,
         height,
         bytes: bytes.len() as u64,
@@ -827,6 +871,42 @@ mod tests {
         let c = crate::translate::cfg(&Settings::default());
         let r = run(captions(&state, &c, "无语", &[], None, &[]));
         assert_eq!(r, Err(CAPTION_UNCONFIGURED.to_string()));
+    }
+
+    #[test]
+    fn ai_item_has_valid_scene() {
+        let state = AppState::for_test();
+        let seq = AtomicU64::new(0);
+        let env = Env {
+            state: &state,
+            seq: &seq,
+            cutout: |_| None,
+            added: &|_| {},
+        };
+        let sketch = save_sketch(&state.data_dir, &grid(1)).unwrap();
+        let (url, _h) = fake(1, reply_with(grid(1)));
+        let GenOut::Done { ids } = run(generate(
+            &env,
+            &cfg(&url),
+            req(json!({"style": "", "custom": "毛线", "idea": "无语", "caption": "行吧", "sketch": sketch})),
+        ))
+        .unwrap() else {
+            panic!()
+        };
+        let scene = state.store().meme_scene(ids[0]).unwrap().unwrap();
+        if xpaste_pro::AVAILABLE {
+            assert!(xpaste_pro::meme_scene_ok(&scene), "{scene}");
+        }
+        let v: serde_json::Value = serde_json::from_str(&scene).unwrap();
+        assert_eq!(v["look"], "ai");
+        assert_eq!(v["results"], json!([]));
+        assert_eq!(v["style"], "自定义：毛线");
+        assert_eq!(v["cap"], "");
+        assert_eq!(v["refs"][0]["sketch"], sketch);
+        assert_eq!(
+            names(&state, &[ids[0], 999]),
+            vec!["表情包".to_string(), String::new()]
+        );
     }
 
     #[test]
