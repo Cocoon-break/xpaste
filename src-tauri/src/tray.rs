@@ -283,7 +283,10 @@ pub fn setup(app: &App) -> tauri::Result<()> {
             // 输入卡片（M26 规则 20）
             "translate" => crate::trcard::open_input(app),
             "rec-stop" => crate::rec::stop(app),
-            "meme" => crate::meme::open(app, &[]),
+            "meme" => {
+                // 空白打开不读库，也不会失败
+                let _ = crate::meme::open(app, &[]);
+            }
             "update" => crate::update::open(app),
             // 录制中退出由 ExitRequested 里的 rec::hold_exit 先停止、写完文件再退出（M24 规则 8）
             "quit" => app.exit(0),

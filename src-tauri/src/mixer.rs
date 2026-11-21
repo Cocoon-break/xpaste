@@ -253,7 +253,7 @@ impl Fx {
     }
 }
 
-fn pro(app: &AppHandle) -> Pro {
+pub(crate) fn pro(app: &AppHandle) -> Pro {
     app.state::<AppState>()
         .line()
         .status(crate::clock::now_ms() / 1000)
@@ -332,6 +332,11 @@ fn with(app: &AppHandle, f: impl FnOnce(&Pro, &mut Runtime, &mut Fx)) {
     let mut fx = Fx::default();
     f(&pro, &mut rt(), &mut fx);
     apply(app, fx);
+}
+
+/// 借搅拌机的提示条说一句（表情包制作试用结束时用，同搅拌机的过期提示）：收着时先显示窗口，提示消失后页面放手再藏。
+pub fn notice(app: &AppHandle, text: &str, actions: &[&'static str]) {
+    with(app, |_, _, fx| fx.toasts.push(toast(text, actions)));
 }
 
 /// 开着时返回打开时的戳
@@ -567,7 +572,7 @@ pub fn put(app: &AppHandle, ids: &[i64]) {
 }
 
 /// 从别的应用拖进来的原料不对应历史记录：图片按路径读，不看原记录在不在
-const DROPPED: i64 = 0;
+const DROPPED: i64 = crate::record_image::NO_RECORD;
 
 /// 从别的应用拖进杯子：文件按文件记录的规则逐个判断；没有文件时拖的是文字，读拖拽剪切板（Windows 读不到）
 pub fn drop_in(app: &AppHandle, paths: Vec<PathBuf>, text: Option<String>) {
@@ -1004,18 +1009,6 @@ fn title(recipe: Option<&str>, extra: &str) -> String {
     }
 }
 
-/// 图片原料的原图：原记录还在、文件也在时返回路径（位图记录在 `images/<id>.png`）。不要在持有 `RT` 时调用。
-fn image_file(state: &AppState, record_id: i64, path: Option<&Path>) -> Option<PathBuf> {
-    let live = record_id == DROPPED || matches!(state.store().live_summary(record_id), Ok(Some(_)));
-    let p = path.map(Path::to_path_buf).unwrap_or_else(|| {
-        state
-            .data_dir
-            .join("images")
-            .join(format!("{record_id}.png"))
-    });
-    (live && p.exists()).then_some(p)
-}
-
 /// 读出、编码图片，拼成请求的材料；返回材料、图片张数、图片字节数，或读不出来的那几样的 id。
 /// ponytail: 解不开的图片也按“原记录没了”拿掉；要区分时给它单独一句提示
 fn materials(state: &AppState, srcs: Vec<Src>) -> Result<(Vec<Material>, usize, usize), Vec<u64>> {
@@ -1032,15 +1025,7 @@ fn materials(state: &AppState, srcs: Vec<Src>) -> Result<(Vec<Material>, usize, 
                 path,
             } => (id, record_id, path),
         };
-        let encoded = image_file(state, record_id, path.as_deref())
-            .and_then(|p| {
-                image::ImageReader::open(&p)
-                    .ok()?
-                    .with_guessed_format()
-                    .ok()?
-                    .decode()
-                    .ok()
-            })
+        let encoded = crate::record_image::decode(state, record_id, path.as_deref())
             .and_then(|img| encode_image(img).ok());
         match encoded {
             Some((mime, data)) => {
@@ -1129,7 +1114,7 @@ pub fn blend(app: &AppHandle, recipe: Option<String>, extra: String) -> Result<(
     let state = app.state::<AppState>();
     let missing: Vec<u64> = images
         .into_iter()
-        .filter(|(_, rid, p)| image_file(&state, *rid, p.as_deref()).is_none())
+        .filter(|(_, rid, p)| crate::record_image::path(&state, *rid, p.as_deref()).is_none())
         .map(|(id, ..)| id)
         .collect();
     with(app, |_, rt, fx| {

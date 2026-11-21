@@ -24,7 +24,7 @@ import {
 import { lineDragDrop, lineDragHover, lineHangFromPanel, lineHide, lineSideHint, onLineChanged, onLineHangSelected, onProLink, proActivate, proBuy, proDeactivate, proStatus, proTakeLink, proUnbind, type LineView } from './api/line';
 import { beltPut, onBeltPutSelected } from './api/belt';
 import { mixerDefaults, mixerPut, onMixerPutSelected } from './api/mixer';
-import { memeLibraryStats, memeTestImage } from './api/meme';
+import { memeLibraryStats, memeOpen, memeTestImage } from './api/meme';
 import { mountRecipes } from './recipes';
 import { deviceLine, proCard, proControls, proLine } from './pro-status';
 import { popSelect } from './select-pop';
@@ -98,6 +98,8 @@ const I = {
   belt: '<rect x="2.5" y="12.5" width="15" height="4" rx="2"/><rect x="4.5" y="6" width="4.5" height="4" rx="1"/><rect x="11" y="6" width="4.5" height="4" rx="1"/>',
   // 放进搅拌机：量杯
   cup: '<path d="M5.5 4h9l-1.2 8.5H6.7z"/><path d="M6.7 12.5h6.6l.7 3.5H6z"/><path d="M8 8.5h4"/>',
+  // 做表情包：笑脸
+  smile: '<circle cx="10" cy="10" r="7"/><path d="M7 11.8c.8 1 1.8 1.5 3 1.5s2.2-.5 3-1.5"/><path d="M7.6 8h.01M12.4 8h.01" stroke-width="2.2"/>',
 };
 const svg = (n: keyof typeof I, cls = '') =>
   `<svg class="ic ${cls}" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n]}</svg>`;
@@ -250,6 +252,7 @@ const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id ===
               ${lineOn() ? `<button type="button" tabindex="-1" data-qa="hang" title="挂到晾衣绳">${svg('hang')}</button>` : ''}
               ${beltOn() ? `<button type="button" tabindex="-1" data-qa="belt" title="放上传送带">${svg('belt')}</button>` : ''}
               ${mixerOn() && r.kind !== 'video' ? `<button type="button" tabindex="-1" data-qa="mixer" data-tip="放进搅拌机">${svg('cup')}</button>` : ''}
+              ${memeOn() && memeable(r) ? `<button type="button" tabindex="-1" data-qa="meme" data-tip="做表情包">${svg('smile')}</button>` : ''}
               <button type="button" tabindex="-1" data-qa="copy" title="${copyVerb(S.canPaste)}">${svg('copy')}</button>
             </span>
           </div>
@@ -3427,6 +3430,7 @@ document.addEventListener('keydown', (e) => {
       compact: S.settings.panelStyle === 'compact',
       peek: win.dataset.peek === 'true',
       filtered: S.filter !== 'all',
+      meme: memeOn(),
     },
   );
   if (!a) return;
@@ -3463,6 +3467,7 @@ document.addEventListener('keydown', (e) => {
     // 片段（M25 规则 5、6）
     case 'saveSnippet': return void (sel !== null && openSnippet('save', sel));
     case 'editSnippet': return void (sel !== null && openSnippet('edit', sel));
+    case 'makeMeme': return makeMeme(sel);
     case 'newSnippet': return void openSnippet('new');
     case 'translate': return void (sel !== null && doTranslate(sel));
     // 精简模式（M27 规则 7–9）
@@ -3577,8 +3582,8 @@ await onHotkeyPressed((role) => {
     if (hkOn(self.input)) self.record(pressed);
     else if (hkOn(hotkeyIn)) setHotkeyHelp(`不能与${name}快捷键相同`, true);
     else if (other) other[0].setHelp(`${other[1]}快捷键不能与${name}快捷键相同`, true);
-    // 表情包：焦点不在任何录制框里时，制作窗口随后接上（现在什么也不做）
-    else if (role === 'meme') return;
+    // 表情包：焦点不在任何录制框里时带着选中的（多选按先后）打开制作窗口，同 Mod+E；没有选中就空白打开
+    else if (role === 'meme') makeMeme(S.sel);
     else void (role === 'translate' ? trcardPress() : overlayBegin(role === 'rec')).catch((err: AppError) => toast(err.message));
     return;
   }
@@ -3758,8 +3763,8 @@ list.addEventListener('click', (e) => {
   const qa = t.closest<HTMLElement>('[data-qa]')?.dataset.qa;
   const mod = S.platform.os === 'macos' ? e.metaKey : e.ctrlKey;
   if (!qa && (mod || e.shiftKey)) return multiTo(id, e.shiftKey);
-  // 点的是多选里某一行的“放上传送带”“放进搅拌机”：整组按选中的先后放进去，退出多选前先记下
-  const group = (qa === 'belt' || qa === 'mixer') && S.multi.has(id) ? [...S.multi] : [];
+  // 点的是多选里某一行的“放上传送带”“放进搅拌机”“做表情包”：整组按选中的先后放进去，退出多选前先记下
+  const group = (qa === 'belt' || qa === 'mixer' || qa === 'meme') && S.multi.has(id) ? [...S.multi] : [];
   // 不带修饰键的单击退出多选（M25 规则 6）
   if (S.multi.size) {
     S.multi.clear();
@@ -3774,6 +3779,7 @@ list.addEventListener('click', (e) => {
   if (qa === 'hang') hangRecord(id);
   if (qa === 'belt') putOnBelt(id, group);
   if (qa === 'mixer') putInMixer(id, group);
+  if (qa === 'meme') makeMeme(id, group);
 });
 // 吸顶栏在列表外，上面的列表委托收不到它的点击（空列表里的同名按钮仍走上面）
 $('#newSnipBtn').addEventListener('click', () => openSnippet('new'));
@@ -3815,6 +3821,18 @@ function mixerOn() {
 function putInMixer(id: number | null, multi = [...S.multi]) {
   const ids = putOrder(id ?? S.sel, multi);
   if (ids.length) void mixerPut(ids).catch((err: AppError) => toast(err.message));
+}
+// 表情包制作在这个构建里、且用户开着：图片、图片文件、文字记录上才有笑脸按钮。试用结束照常显示，点了由后端提示过期
+function memeOn() {
+  return S.line.available && S.settings.memeEnabled;
+}
+// 文件记录看有没有图片文件：识别状态不为 0 的文件记录夹着图片（同预览里的“识别文字”）。
+// ponytail: 刚复制、还排着队识别的图片文件记录暂时没有按钮；要准时给摘要加一个“有图片文件”的字段
+const memeable = (r: RecordSummary) =>
+  !isSnip(r) && !r.meme && (r.kind === 'image' || r.kind === 'text' || (r.kind === 'file' && r.ocrState !== 0));
+// 做表情包：有多选带多选（按选中的先后），否则带 id；都没有就空白打开。面板由后端收起，全都做不了时提示
+function makeMeme(id: number | null, multi = [...S.multi]) {
+  void memeOpen(putOrder(id, multi)).catch((err: AppError) => toast(err.message));
 }
 // 挂到晾衣绳：绳子放下亮一下；没挂成（重复、挂满、试用结束）的提示在晾衣绳上
 function hangRecord(id: number | null) {

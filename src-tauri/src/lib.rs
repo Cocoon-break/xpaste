@@ -20,11 +20,13 @@ mod license;
 mod line;
 mod longshot;
 mod meme;
+mod meme_window;
 mod mixer;
 mod mixer_window;
 mod ocr;
 mod panel;
 mod rec;
+mod record_image;
 mod remind;
 mod shot;
 pub mod state;
@@ -102,7 +104,7 @@ pub fn run() {
             if isolated {
                 log::info!("数据目录已由 XPASTE_DATA_DIR 覆盖，不启用单实例");
                 // tauri.conf.json 的 assetProtocol.scope 只覆盖默认数据目录
-                for sub in ["images", "thumbs", "icons", "pins", "line"] {
+                for sub in ["images", "thumbs", "icons", "pins", "line", "memes"] {
                     if let Err(e) = app
                         .asset_protocol_scope()
                         .allow_directory(data_dir.join(sub), true)
@@ -228,6 +230,9 @@ pub fn run() {
             if mixer::enabled() {
                 mixer::start(app.handle());
             }
+            if meme::enabled() {
+                meme_window::prewarm(app.handle());
+            }
             if crate::line::enabled() {
                 line::start(app.handle());
                 #[cfg(debug_assertions)]
@@ -322,6 +327,13 @@ pub fn run() {
                 api.prevent_close();
                 let app = window.app_handle();
                 trcard::close(app, trcard::current(app));
+            }
+            // 表情包制作窗口同理，Alt+F4 当作 Esc：关掉，窗口留着下次用
+            if window.label() == meme::LABEL
+                && let WindowEvent::CloseRequested { api, .. } = event
+            {
+                api.prevent_close();
+                meme::close(window.app_handle());
             }
             // 晾衣绳同理，Alt+F4 当作 Esc：收起；一直显示时不收，只交还键盘
             if window.label() == line::LABEL
@@ -531,6 +543,11 @@ pub fn run() {
             commands::mixer::mixer_again,
             commands::mixer::mixer_save_recipe,
             commands::mixer::mixer_settings,
+            commands::meme::meme_open,
+            commands::meme::meme_close,
+            commands::meme::meme_set_refs,
+            commands::meme::meme_ref_image,
+            commands::meme::meme_recent_images,
             commands::meme::meme_test_image,
             commands::meme::meme_library_stats
         ])

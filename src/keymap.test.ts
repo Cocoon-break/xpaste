@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { keyAction, type KeyCtx, type KeyEv } from './keymap.ts';
 
 const ctx = (o: Partial<KeyCtx> = {}): KeyCtx => ({
-  inSearch: true, onControl: false, searchHasText: false, menuOpen: false, hasSel: true, canUndo: false, dialogOpen: false, selIsSnip: false, inSnip: false, multi: 0, selTranslatable: false, selPlain: false, app: false, sug: false, compact: false, peek: false, filtered: false, ...o,
+  inSearch: true, onControl: false, searchHasText: false, menuOpen: false, hasSel: true, canUndo: false, dialogOpen: false, selIsSnip: false, inSnip: false, multi: 0, selTranslatable: false, selPlain: false, app: false, sug: false, compact: false, peek: false, filtered: false, meme: false, ...o,
 });
 const ev = (o: Partial<KeyEv>): KeyEv => ({ key: '', code: '', mod: false, alt: false, shift: false, repeat: false, ...o });
 
@@ -79,7 +79,7 @@ test('Mod+, 打开设置', () => assert.deepEqual(keyAction(ev({ key: ',', mod: 
 
 test('⌃ + 字母不进搜索框，⌃ + Enter 不复制（macOS 上 ⌃ 不是 Mod）', () => {
   const base = { key: '', code: '', mod: false, alt: false, shift: false, repeat: false };
-  const ctx = { inSearch: false, onControl: false, searchHasText: false, menuOpen: false, hasSel: true, canUndo: false, dialogOpen: false, selIsSnip: false, inSnip: false, multi: 0, selTranslatable: false, selPlain: false, app: false, sug: false, compact: false, peek: false, filtered: false };
+  const ctx = { inSearch: false, onControl: false, searchHasText: false, menuOpen: false, hasSel: true, canUndo: false, dialogOpen: false, selIsSnip: false, inSnip: false, multi: 0, selTranslatable: false, selPlain: false, app: false, sug: false, compact: false, peek: false, filtered: false, meme: false };
   assert.equal(keyAction({ ...base, key: 'a', code: 'KeyA', ctrl: true }, ctx), null);
   assert.deepEqual(keyAction({ ...base, key: 'a', code: 'KeyA' }, ctx), { t: 'focusSearch' });
   assert.equal(keyAction({ ...base, key: 'Enter', code: 'Enter', ctrl: true }, ctx), null);
@@ -198,4 +198,15 @@ test('多选不再只限“片段”分类：Shift + ↑↓ 在任何分类里�
   assert.deepEqual(k({ key: 'ArrowUp', shift: true }, { inSnip: false }), { t: 'extend', d: -1 });
   // Mod + A 全选仍只在“片段”分类
   assert.equal(k({ key: 'a', mod: true }), null);
+});
+
+test('Mod+E: snippet edits, history record makes meme', () => {
+  const k = (c: Partial<KeyCtx>) => keyAction(ev({ key: 'e', mod: true }), ctx(c));
+  assert.deepEqual(k({ selIsSnip: true, meme: true }), { t: 'editSnippet' });
+  assert.deepEqual(k({ meme: true }), { t: 'makeMeme' });
+  // 多选时按选中的先后一起带过去
+  assert.deepEqual(k({ meme: true, multi: 3 }), { t: 'makeMeme' });
+  // 表情包制作关着、没有选中：不做事
+  assert.equal(k({}), null);
+  assert.equal(k({ meme: true, hasSel: false }), null);
 });

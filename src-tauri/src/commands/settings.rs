@@ -467,9 +467,12 @@ pub fn save_settings(
         let on = state.settings().mixer_enabled;
         crate::mixer::configure(&app, on);
     }
-    // 表情包：总开关关掉时托盘入口随即隐藏（制作窗口在下一步接上后一并收起）
+    // 表情包：总开关关掉时托盘入口随即隐藏，制作窗口开着就关掉
     if changed.contains(&"memeEnabled") || changed.contains(&"memeHotkey") {
         crate::tray::refresh_menu(&app);
+    }
+    if !state.settings().meme_enabled {
+        crate::meme::close(&app);
     }
     // 开关、位置与一直显示先生效，再收起或唤醒；设置锁只在取值时短暂持有
     // 改位置、改一直显示后的放下或收起：等页面拿到新的位置和 pinned 之后再做

@@ -74,6 +74,13 @@ pub const MIXER_SHOWN: &str = "mixer-shown";
 /// 搅拌机窗口失去键盘，只发给 `mixer`：无载荷。展开着的补一句收起，字留着。
 pub const MIXER_BLUR: &str = "mixer-blur";
 
+/// 打开或追加到制作窗口，载荷 `meme::OpenPayload`。只发给 `meme`。
+pub const MEME_OPEN: &str = "meme-open";
+/// 制作窗口的提示条，载荷是文案。只发给 `meme`。
+pub const MEME_TOAST: &str = "meme-toast";
+/// 制作窗口关掉了（Esc、关闭按钮、总开关关掉），无载荷。只发给 `meme`：页面清空。
+pub const MEME_CLOSED: &str = "meme-closed";
+
 /// 冻结完成，发给每块屏的遮罩 `shot-<i>`（载荷见 `shot::BeginPayload`）。
 pub const SHOT_BEGIN: &str = "shot-begin";
 /// 截图已结束，发给每块屏的遮罩；载荷是结束的那一次的代数，遮罩据此放掉冻结帧（M23 规则 11）。

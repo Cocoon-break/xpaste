@@ -27,6 +27,8 @@ export type KeyCtx = {
   compact: boolean;
   peek: boolean;
   filtered: boolean;
+  /** 表情包制作在这个构建里、且用户开着 */
+  meme: boolean;
 };
 
 /** `mod` 是平台的 Mod 键：macOS 只认 ⌘（metaKey），Windows 只认 Ctrl；`ctrl` 是字面的 Control 键（macOS 的 ⌃），
@@ -51,6 +53,7 @@ export type Action =
   | { t: 'settings' }
   | { t: 'saveSnippet' }
   | { t: 'editSnippet' }
+  | { t: 'makeMeme' }
   | { t: 'newSnippet' }
   | { t: 'selectAll' }
   | { t: 'extend'; d: 1 | -1 }
@@ -85,11 +88,13 @@ export const keyAction = (e: KeyEv, c: KeyCtx): Action => {
   if (k === 'Tab' && c.sug && c.inSearch && !e.shift && !e.mod && !e.ctrl && !e.alt) return { t: 'acceptSug' };
   if (c.app && emptyBack) return { t: 'clearApp' };
   if (c.compact && c.filtered && emptyBack) return { t: 'clearFilter' };
-  // 片段（M25 规则 5、6）；翻译（M26 规则 2，多选时不可翻译）
+  // 片段（M25 规则 5、6）；翻译（M26 规则 2，多选时不可翻译）；表情包制作
   if (e.mod && !e.shift && !e.alt && !e.repeat) {
     if (lk === 't' && c.selTranslatable && c.multi < 2) return { t: c.compact ? 'peekTranslate' : 'translate' };
     if (lk === 's' && c.hasSel && !c.selIsSnip) return { t: 'saveSnippet' };
     if (lk === 'e' && c.selIsSnip && c.multi < 2) return { t: 'editSnippet' };
+    // 历史记录上 Mod+E 带着选中的（多选按先后）打开表情包制作；片段上仍是编辑片段
+    if (lk === 'e' && c.meme && c.hasSel && !c.selIsSnip) return { t: 'makeMeme' };
     if (lk === 'n') return { t: 'newSnippet' };
     if (lk === 'a' && c.inSnip && !c.searchHasText) return { t: 'selectAll' };
   }
