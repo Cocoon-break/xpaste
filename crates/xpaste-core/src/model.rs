@@ -989,7 +989,8 @@ pub struct RecordSummary {
     pub meme: Option<MemeInfo>,
 }
 
-/// 表情包的展示信息：来源（`final` 成品 / `ai` 生成）、名字、风格、是不是动图（面板格子上的“GIF”角标）。`Debug` 脱敏（名字是内容）。
+/// 表情包的展示信息：来源（`final` 成品 / `ai` 生成）、名字、风格、是不是动图（面板格子上的“GIF”角标）、
+/// 套编号（AI 一次出的一套 16 张共用一个，面板里叠成一格；其余和旧数据为 None）。`Debug` 脱敏（名字是内容）。
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MemeInfo {
@@ -998,6 +999,8 @@ pub struct MemeInfo {
     pub style: Option<String>,
     #[serde(default)]
     pub gif: bool,
+    #[serde(default)]
+    pub set: Option<String>,
 }
 
 impl fmt::Debug for MemeInfo {
@@ -1174,6 +1177,14 @@ mod tests {
         let s: Settings =
             serde_json::from_str(r#"{"lineAppear":"slow","lineLeave":"turbo"}"#).unwrap();
         assert_eq!((s.line_appear, s.line_leave), (Pace::Slow, Pace::Normal));
+    }
+
+    #[test]
+    fn meme_info_without_set_is_none() {
+        let m: MemeInfo =
+            serde_json::from_str(r#"{"source":"ai","name":"开心","style":null,"gif":false}"#)
+                .unwrap();
+        assert_eq!(m.set, None);
     }
 
     #[test]

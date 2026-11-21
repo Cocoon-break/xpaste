@@ -380,6 +380,19 @@ mark { background: var(--mark-bg); color: var(--mark-fg); border-radius: 3px; pa
 .mcell .cp { position: absolute; left: 0; right: 0; bottom: 4px; text-align: center; font: 800 11px/1.1 var(--font-ui); color: #FFFFFF; -webkit-text-stroke: 3px #111111; paint-order: stroke fill; white-space: nowrap; overflow: hidden; }
 .mcell.add { display: grid; place-items: center; border-style: dashed; border-color: var(--line-2); background: none; color: var(--muted); font-size: 12px; line-height: 1.3; cursor: pointer; }
 @media (hover: hover) and (pointer: fine) { .mcell.add:hover { background: var(--hover); color: var(--fg); } }
+/* 一套 16 张收成一格：叠起来的边；摊开的一套带一圈浅色边 */
+.mcell.stack { box-shadow: 3px 3px 0 -1px var(--sheet), 3px 3px 0 0 var(--line-2), 6px 6px 0 -1px var(--sheet), 6px 6px 0 0 var(--line-2); }
+.mcell.stack[aria-selected="true"] { box-shadow: inset 0 0 0 1px var(--beam), 3px 3px 0 -1px var(--sheet), 3px 3px 0 0 var(--line-2), 6px 6px 0 -1px var(--sheet), 6px 6px 0 0 var(--line-2); }
+.mcell.inset:not([aria-selected="true"]) { border-color: color-mix(in srgb, var(--beam) 50%, transparent); }
+/* AI 任务格：在画是一把小尺子加秒数（尺子 2 秒跳一格，不过渡宽度），排队写前面几个，画好是结果缩略图加“新”，没画出来标红 */
+.mcell.gen { display: grid; place-items: center; align-content: center; gap: 4px; border: 1px dashed var(--beam); background: color-mix(in srgb, var(--beam) 8%, transparent); color: var(--muted); font: inherit; font-size: 11px; line-height: 1.3; text-align: center; font-variant-numeric: tabular-nums; cursor: pointer; }
+.mcell.gen.done { display: block; border-style: solid; background: repeating-conic-gradient(var(--glass-3) 0 25%, transparent 0 50%) 0 0 / 10px 10px; }
+.mcell.gen.fail { border-color: var(--danger); color: var(--danger); background: none; }
+.mcell.gen .ruler { position: relative; width: 48px; height: 8px; border-bottom: 1px solid var(--tick-base); background: repeating-linear-gradient(90deg, var(--line-2) 0 1px, transparent 1px 8px) left bottom / 100% 5px no-repeat; }
+.mcell.gen .ruler i { position: absolute; left: 0; bottom: -1px; height: 100%; background: repeating-linear-gradient(90deg, var(--cursor) 0 2px, transparent 2px 8px) left bottom / 100% 9px no-repeat; }
+.mcell.gen .ok { position: absolute; inset: 0; margin: auto; width: 26px; height: 26px; fill: none; stroke: var(--beam); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.mcell .tag.new { background: var(--beam); }
+#memeTasks { display: contents; }
 .mempty { grid-column: 1 / -1; margin: 0; padding: 40px 16px; text-align: center; color: var(--faint); font-size: 12.5px; line-height: 1.7; text-wrap: balance; }
 /* 表情包的预览：大图、名字、元信息，按钮压在底部 */
 .pbody:has(.mpv) { display: flex; flex-direction: column; }

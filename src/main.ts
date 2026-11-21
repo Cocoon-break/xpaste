@@ -24,8 +24,8 @@ import {
 import { lineDragDrop, lineDragHover, lineHangFromPanel, lineHide, lineSideHint, onLineChanged, onLineHangSelected, onProLink, proActivate, proBuy, proDeactivate, proStatus, proTakeLink, proUnbind, type LineView } from './api/line';
 import { beltPut, onBeltPutSelected } from './api/belt';
 import { mixerDefaults, mixerPut, onMixerPutSelected } from './api/mixer';
-import { memeLibraryStats, memeOpen, memeOpenScene, memeTestImage, onMemeBack, onMemeReveal } from './api/meme';
-import { cellHTML, gridMove, ofSource, previewHTML, type Arrow, type MemeSource } from './meme-grid';
+import { memeLibraryStats, memeOpen, memeOpenScene, memeTaskOpen, memeTasks, memeTestImage, onMemeBack, onMemeReveal, onMemeTasks, type TaskView } from './api/meme';
+import { cellHTML, foldSets, gridMove, ofSource, previewHTML, taskCellHTML, taskTick, type Arrow, type MemeSource } from './meme-grid';
 import { mountRecipes } from './recipes';
 import { deviceLine, proCard, proControls, proLine } from './pro-status';
 import { popSelect } from './select-pop';
@@ -141,7 +141,7 @@ const menu = $('#menu'), mOpen = $<HTMLButtonElement>('[data-m="open"]'), toastE
 const spBars = $('#spBars'), spTrack = $('#spTrack'), spBeam = $('#spBeam'), spTip = $('#spTip');
 const spMini = $('#spMini'), spPresets = $('#spPresets');
 // “表情包”分类的网格（列表区换成它）与状态栏
-const memesEl = $('#memes'), memeGridEl = $('#memeGrid'), memeAddEl = $<HTMLButtonElement>('#memeAdd'), memeSrcEl = $('#memeSrc'), statusbar = $('.statusbar');
+const memesEl = $('#memes'), memeGridEl = $('#memeGrid'), memeAddEl = $<HTMLButtonElement>('#memeAdd'), memeTasksEl = $('#memeTasks'), memeSrcEl = $('#memeSrc'), statusbar = $('.statusbar');
 
 // —— 状态 ——
 const S = {
@@ -179,6 +179,10 @@ const S = {
   total: 0,
   /** “表情包”网格上方的筛选：全部 / 做好的 / AI 出的 */
   memeSrc: 'all' as MemeSource,
+  /** 网格里摊开的那一套（套编号）；点套外的格子、切走分类、面板隐藏时收回 */
+  openSet: null as string | null,
+  /** AI 任务列表（后端整份发来，新的在前），网格里“＋ 做一个”后面每个一格 */
+  memeTasks: [] as TaskView[],
   /** 当前可见条数，供 aria-setsize */
   count: 0,
   /** 晾衣绳：不含晾衣绳的版本 available 为 false，挂钩按钮、已挂刻线与“Pro”标签都不出现 */
@@ -201,7 +205,11 @@ async function paintVerb() {
 const favMin = () => S.settings.frequentMinUses;
 // 关掉表情包制作时表情包整个不出现（搜索里也没有），数据保留；网格里再按“全部 / 做好的 / AI 出的”筛
 const memeShown = (r: RecordSummary) => !isMeme(r) || (memeOn() && (S.filter !== 'meme' || ofSource(r, S.memeSrc)));
-const vis = () => fromApp(visible(S.records, S.filter, S.matchIds, favMin()), S.app).filter(memeShown);
+const listed = () => fromApp(visible(S.records, S.filter, S.matchIds, favMin()), S.app).filter(memeShown);
+/** 网格里看得见的格子：一套收成一格（搜索时不叠） */
+const memeCells = (v: RecordSummary[]) => foldSets(v.map((r) => ({ id: r.id, set: r.meme?.set ?? null, r })), S.openSet, S.matchIds !== null);
+/** 看得见的记录；网格里是看得见的格子（方向键、Mod+1–9、↩ 都按它算，选中一叠就是显示的那一张） */
+const vis = () => (memeGrid() ? memeCells(listed()).map((c) => c.item.r) : listed());
 /** 当前分类下、不看搜索词的记录：建议的条数与胶囊下的总数都按它算（M29 规则 1、3） */
 const inCategory = () => [...S.records.values()].filter((r) => inFilter(r, S.filter, favMin(), false));
 const matches = (r: RecordSummary) => memeShown(r) && inFilter(r, S.filter, favMin(), S.matchIds !== null) && (S.matchIds === null || S.matchIds.has(r.id)) && (S.app === null || (r.app?.name === S.app && !isSnip(r)));
@@ -3406,6 +3414,8 @@ const shown = (t0: number | null, trigger?: PanelShown['trigger']) => {
 // 一次隐藏可能收到两次 panel-hidden，这里只写状态，重复调用无副作用
 const hidden = () => {
   S.shown = false;
+  S.openSet = null;
+  syncTaskTimer();
   // 每次唤起回到 24 小时（设计 §2 非目标）；shown() 的 runSearch('') 会重绘
   spWin = null;
   spectrum.classList.remove('smooth');
@@ -3610,14 +3620,25 @@ await onProLink(activateFromLink);
 await onMemeReveal((id) => {
   if (!memeOn()) return;
   S.memeSrc = 'all';
+  // 刚存的在一套里：摊开那一套，才选得中
+  S.openSet = S.records.get(id)?.meme?.set ?? null;
   setFilter('meme', true);
   renderList();
   if (S.records.has(id)) select(id, { scroll: true, instant: true });
 });
+// AI 任务：启动时取一次，之后跟着后端发来的整份列表；Pro 不可用时取不到，不显示任务格（官网演示里没有这个命令，取回空）
+void memeTasks().then((ts) => setMemeTasks(ts ?? []), () => {});
+await onMemeTasks(setMemeTasks);
 // 制作窗口关掉、后端已唤起面板：返回面板时分类不动、选回原来那一条，留了草稿提示一句；
 // 贴过去没成（没有辅助功能权限等）时照面板粘贴的降级提示
 await onMemeBack(({ draft, reason }) => {
   const id = selBeforeShown;
+  // 原来选中的在收回去的一套里：摊开它才选得回
+  const set = id === null ? null : (S.records.get(id)?.meme?.set ?? null);
+  if (memeGrid() && set !== null && !vis().some((r) => r.id === id)) {
+    S.openSet = set;
+    renderList();
+  }
   if (id !== null && S.records.has(id) && vis().some((r) => r.id === id)) select(id, { scroll: true, instant: true });
   if (reason) {
     const res = { result: 'copiedOnly', reason } as const;
@@ -3926,12 +3947,21 @@ function paintMemeMode() {
   memesEl.hidden = !on;
   statusbar.toggleAttribute('data-meme', on);
   q.setAttribute('aria-controls', on ? 'memeGrid' : 'list');
+  if (!on) {
+    S.openSet = null;
+    memeTasksEl.innerHTML = '';
+  }
+  syncTaskTimer();
   return on;
 }
 function renderMemes() {
-  const v = vis(), searching = S.matchIds !== null;
+  const all = listed(), searching = S.matchIds !== null;
+  // 摊开的那一套删光了（或筛掉了）就不再记着
+  if (S.openSet !== null && !all.some((r) => r.meme?.set === S.openSet)) S.openSet = null;
+  const cells = memeCells(all), v = cells.map((c) => c.item.r);
   S.count = v.length;
-  setCount(v.length);
+  // 个数是表情包的总个数，不是格子数
+  setCount(all.length);
   S.cells = [];
   S.total = 0;
   painted.clear();
@@ -3940,11 +3970,12 @@ function renderMemes() {
   indShown = false;
   S.multi.clear();
   memeSrcEl.querySelectorAll<HTMLElement>('[data-v]').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.v === S.memeSrc)));
-  $('#memeN').textContent = `${fmtInt(v.length)} 个`;
-  // 有搜索词时不显示“＋ 做一个”
+  $('#memeN').textContent = `${fmtInt(all.length)} 个`;
+  // 有搜索词时不显示“＋ 做一个”和任务格
   memeAddEl.hidden = searching;
+  paintTaskCells();
   const hk = S.settings.memeHotkey ? `，或按 ${hotkeyLabel(S.settings.memeHotkey, S.platform.os)} 做一个` : '';
-  memeGridEl.innerHTML = v.length ? v.map((r, i) => cellHTML(r, i, false, S.removing.has(r.id))).join('')
+  memeGridEl.innerHTML = v.length ? cells.map(({ item: { r }, count, folded, inSet }, i) => cellHTML(r, i, false, S.removing.has(r.id), folded ? count : 0, inSet)).join('')
     : `<p class="mempty">${searching || S.memeSrc !== 'all' ? '没有找到' : `还没有表情包。在图片上点笑脸${hk}`}</p>`;
   S.sel = ensureSelection(v, S.sel);
   markMemeSel();
@@ -3957,15 +3988,55 @@ function markMemeSel() {
   c?.scrollIntoView({ block: 'nearest' });
   q.setAttribute('aria-activedescendant', c ? c.id : '');
 }
-// 方向键在网格里移动：↑ / ↓ 按行，← / → 按格；落到“＋ 做一个”上时停在第一个（它是按钮，Tab 能到）
+// 方向键在网格里移动：↑ / ↓ 按行，← / → 按格；落到“＋ 做一个”或任务格上时停在第一个（它们是按钮，Tab 能到）
 function memeStep(key: Arrow) {
   const v = vis().filter((r) => !S.removing.has(r.id));
   if (!v.length) return;
-  const add = !memeAddEl.hidden ? 1 : 0;
+  const lead = (memeAddEl.hidden ? 0 : 1) + memeTasksEl.childElementCount;
   const cols = Math.max(1, getComputedStyle(memesEl.querySelector('.mgrid')!).gridTemplateColumns.split(' ').length);
-  const i = gridMove(v.findIndex((r) => r.id === S.sel) + add, v.length, cols, key, !!add);
-  select(v[Math.max(0, i - add)].id, { pan: 'instant' });
+  const i = gridMove(v.findIndex((r) => r.id === S.sel) + lead, v.length, cols, key, lead);
+  select(v[Math.max(0, i - lead)].id, { pan: 'instant' });
 }
+// —— 任务格：有搜索词时不显示；在画的秒数和尺子由这里每秒走（面板显示着才走），不重画整个网格 ——
+const taskThumb = (t: TaskView) => {
+  const id = t.ids[0] ?? t.irregular;
+  return (id === null || id === undefined ? null : S.records.get(id)?.thumb) ?? null;
+};
+function paintTaskCells() {
+  const on = memeGrid() && S.matchIds === null, now = Date.now();
+  memeTasksEl.innerHTML = on ? S.memeTasks.map((t) => taskCellHTML(t, now, taskThumb(t))).join('') : '';
+  syncTaskTimer();
+}
+let taskTimer = 0;
+function syncTaskTimer() {
+  const want = S.shown && !!memeTasksEl.querySelector('.ruler');
+  if (want === !!taskTimer) return;
+  if (want) taskTimer = window.setInterval(tickTasks, 1000);
+  else {
+    clearInterval(taskTimer);
+    taskTimer = 0;
+  }
+}
+function tickTasks() {
+  const now = Date.now();
+  for (const el of memeTasksEl.querySelectorAll<HTMLElement>('.mcell.gen')) {
+    const t = S.memeTasks.find((x) => x.id === Number(el.dataset.task));
+    const i = el.querySelector<HTMLElement>('.ruler i'), gt = el.querySelector<HTMLElement>('.gt');
+    if (!t || t.state !== 'run' || !i || !gt) continue;
+    const k = taskTick(t, now);
+    gt.innerHTML = k.html;
+    i.style.width = k.width;
+  }
+}
+function setMemeTasks(ts: TaskView[]) {
+  S.memeTasks = ts;
+  if (memeGrid()) paintTaskCells();
+}
+// 点任务格：回到那次（打开制作窗口，画好的随后从列表里拿掉）
+memeTasksEl.addEventListener('click', (e) => {
+  const id = Number((e.target as Element).closest<HTMLElement>('[data-task]')?.dataset.task ?? NaN);
+  if (!Number.isNaN(id)) void memeTaskOpen(id).catch((err: AppError) => toast(err.message));
+});
 memeAddEl.addEventListener('click', () => void memeOpen([]).catch((err: AppError) => toast(err.message)));
 memeSrcEl.addEventListener('click', (e) => {
   const v = (e.target as Element).closest<HTMLElement>('[data-v]')?.dataset.v as MemeSource | undefined;
@@ -3975,9 +4046,17 @@ memeSrcEl.addEventListener('click', (e) => {
   renderList();
 });
 const cellOf = (e: Event) => Number((e.target as Element).closest<HTMLElement>('.mcell')?.dataset.id ?? NaN);
+// 点一叠摊开这一套，点套外的格子收回
 memeGridEl.addEventListener('click', (e) => {
   const id = cellOf(e);
-  if (S.records.has(id)) select(id);
+  if (!S.records.has(id)) return;
+  const set = S.records.get(id)!.meme?.set ?? null;
+  if (set !== S.openSet) {
+    S.openSet = set;
+    S.sel = id;
+    renderMemes();
+  }
+  select(id);
 });
 memeGridEl.addEventListener('dblclick', (e) => {
   const id = cellOf(e);

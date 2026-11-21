@@ -1,13 +1,30 @@
 // 面板“表情包”分类：网格里按格移动、排序、格子与右侧预览的 HTML。纯函数，不碰 DOM。
+import type { TaskView } from './api/meme';
 import type { RecordSummary } from './api/types';
 import { esc, fmtInt, rel } from './format.ts';
 
 export type Arrow = 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight';
 
-/** 按方向键移到的格子序号。`hasAdd` 时“＋ 做一个”占第 0 格，表情包从第 1 格起；不越过首尾 */
-export function gridMove(index: number, count: number, cols: number, key: Arrow, hasAdd: boolean): number {
+/** 按方向键移到的格子序号。前面有 `lead` 格不是表情包（“＋ 做一个”和任务格），表情包从第 `lead` 格起；不越过首尾 */
+export function gridMove(index: number, count: number, cols: number, key: Arrow, lead: number): number {
   const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -cols, ArrowDown: cols }[key];
-  return Math.max(0, Math.min(count - (hasAdd ? 0 : 1), index + step));
+  return Math.max(0, Math.min(count + lead - 1, index + step));
+}
+
+/** 看得见的格子：同一套收成一格，显示这一套在排序里最靠前的那张，`count` 是这一套现有的张数；
+ *  `openSet` 那一套摊开（`inSet`）。搜索时不叠，只剩一张的套也不叠 */
+export function foldSets<T extends { id: number; set: string | null }>(list: T[], openSet: string | null, searching: boolean): { item: T; count: number; folded: boolean; inSet: boolean }[] {
+  const sizes = new Map<string, number>();
+  for (const it of list) if (it.set !== null) sizes.set(it.set, (sizes.get(it.set) ?? 0) + 1);
+  const out: { item: T; count: number; folded: boolean; inSet: boolean }[] = [], seen = new Set<string>();
+  for (const item of list) {
+    const count = item.set === null ? 1 : sizes.get(item.set)!, grouped = !searching && count > 1;
+    const inSet = grouped && item.set === openSet, folded = grouped && !inSet;
+    if (folded && seen.has(item.set!)) continue;
+    if (folded) seen.add(item.set!);
+    out.push({ item, count, folded, inSet });
+  }
+  return out;
 }
 
 /** 用过的次数从多到少；次数相同按上次使用（copiedAt）从新到旧，从没用过的 copiedAt 就是创建时间 */
@@ -21,17 +38,47 @@ const sourceLabel = (r: RecordSummary) => (r.meme?.source === 'ai' ? 'AI 出的'
 // 做好的没有文字时名字是“表情包”，这时下沿不写字
 const caption = (r: RecordSummary) => (r.meme?.source === 'final' && r.meme.name !== '表情包' ? [...r.meme.name].slice(0, 6).join('') : '');
 
-/** 一格：静态缩略图（格子不播动图），左上 Mod+1–9 的编号，右上“AI”或“GIF”，做好的下沿写文字 */
-export const cellHTML = (r: RecordSummary, i: number, sel: boolean, removing = false): string => {
-  const m = r.meme!, cap = caption(r), tag = m.source === 'ai' ? 'AI' : m.gif ? 'GIF' : '';
+/** 一格：静态缩略图（格子不播动图），左上 Mod+1–9 的编号，右上“AI”或“GIF”，做好的下沿写文字。
+ *  `stack` 不为 0 时是收着的一套（右上写“N 张”，带叠起来的边）；`inSet` 是摊开的一套里的一格（一圈浅色边） */
+export const cellHTML = (r: RecordSummary, i: number, sel: boolean, removing = false, stack = 0, inSet = false): string => {
+  const m = r.meme!, cap = caption(r), tag = stack ? `${stack} 张` : m.source === 'ai' ? 'AI' : m.gif ? 'GIF' : '';
+  const cls = (stack ? ' stack' : inSet ? ' inset' : '') + (removing ? ' is-removing' : '');
+  const title = stack ? `一套 ${stack} 张，点开挑` : m.name;
   // 选项不是按钮：焦点留在搜索框（aria-activedescendant 指向选中的格子），点格子不会把键盘抢走
-  return `<div class="mcell${removing ? ' is-removing' : ''}" role="option" id="mc-${r.id}" data-id="${r.id}" aria-selected="${sel}" aria-label="${esc(m.name)}，${sourceLabel(r)}" title="${esc(m.name)}">`
+  return `<div class="mcell${cls}" role="option" id="mc-${r.id}" data-id="${r.id}" aria-selected="${sel}" aria-label="${esc(m.name)}，${sourceLabel(r)}${stack ? `，一套 ${stack} 张` : ''}" title="${esc(title)}">`
     + (r.thumb ? `<img src="${esc(r.thumb)}" alt="" draggable="false">` : '')
     + (cap ? `<span class="cp">${esc(cap)}</span>` : '')
     + (i < 9 ? `<span class="no">${i + 1}</span>` : '')
     + (tag ? `<span class="tag">${tag}</span>` : '')
     + '</div>';
 };
+
+/** 在画的尺子：60 秒走满一遍后从头走，按 30 格（2 秒一格）取整（同制作窗口）；返回百分比 */
+const rulerPct = (ms: number) => (Math.floor(((ms / 1000) % 60) / 2) * 10) / 3;
+const waitedMs = (t: TaskView, nowMs: number) => (t.startedMs === null ? 0 : Math.max(0, nowMs - t.startedMs));
+
+/** 任务格上的字（换行是 \n）：在画写秒数，排队写前面几个，画好了只有缩略图和“新”（这句给读屏），没画出来叫人点开 */
+export function taskCellText(t: TaskView, nowMs: number): string {
+  if (t.state === 'run') return `AI 在画\n${Math.floor(waitedMs(t, nowMs) / 1000)} 秒`;
+  if (t.state === 'queue') return `排队中\n${t.ahead ? `前面 ${t.ahead} 个` : '下一个'}`;
+  return t.state === 'done' ? '画好了' : '没画出来\n点这里看';
+}
+const lines = (s: string) => esc(s).replace('\n', '<br>');
+const CHECK = '<svg class="ok" viewBox="0 0 20 20" aria-hidden="true"><path d="m4.5 10.5 3.5 3.5 7.5-8"/></svg>';
+
+/** 一个 AI 任务一格（按钮，不是选项）。`thumb` 是画好的结果的缩略图，拿不到时画一个对勾 */
+export const taskCellHTML = (t: TaskView, nowMs: number, thumb: string | null): string => {
+  const text = taskCellText(t, nowMs);
+  const body = t.state === 'done' ? (thumb ? `<img src="${esc(thumb)}" alt="" draggable="false">` : CHECK) + '<span class="tag new">新</span>'
+    : t.state === 'run' ? `<span class="ruler"><i style="width:${rulerPct(waitedMs(t, nowMs))}%"></i></span><span class="gt">${lines(text)}</span>`
+    : `<span class="gt">${lines(text)}</span>`;
+  const cls = t.state === 'done' ? ' done' : t.state === 'fail' ? ' fail' : '';
+  return `<button class="mcell gen${cls}" type="button" data-task="${t.id}" aria-label="${esc(t.title)}，${esc(text.replace('\n', '，'))}" title="${esc(t.title)}">${body}</button>`;
+};
+
+/** 在画的格子每秒更新的部分：字和尺子的宽度 */
+export const taskTick = (t: TaskView, nowMs: number): { html: string; width: string } =>
+  ({ html: lines(taskCellText(t, nowMs)), width: `${rulerPct(waitedMs(t, nowMs))}%` });
 
 /** 预览的元信息行：“做好的 · GIF · 240 × 240”或“AI 出的 · <风格> · PNG”；尺寸未知（0）时省略 */
 export const memeMeta = (r: RecordSummary, w: number, h: number): string => {

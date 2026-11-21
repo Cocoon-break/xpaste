@@ -64,6 +64,9 @@ pub struct GenReq {
     pub sketch: Option<String>,
     /// act：以库里哪张为底
     pub base: Option<i64>,
+    /// 套编号：分 4 次重画时由队列填，4 部分共用一个；页面不传
+    #[serde(skip)]
+    pub set: Option<String>,
 }
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -381,18 +384,13 @@ fn save_cut(
     style_name: &str,
     cut: Cut,
 ) -> Result<GenOut, String> {
-    let save = |p: &Piece| {
-        save_meme(
-            env,
-            req,
-            &p.bytes,
-            p.ext,
-            p.size,
-            &p.name,
-            &p.emotions,
-            style_name,
-        )
+    // 一套（含分 4 次重画的一部分）切开的几张共用一个套编号；整张、单张、AI 动作没有
+    let set = match (what, &cut) {
+        (MemeGen::Set, Cut::Done(_)) => Some(uuid()),
+        (MemeGen::SetPart(_), Cut::Done(_)) => Some(req.set.clone().unwrap_or_else(uuid)),
+        _ => None,
     };
+    let save = |p: &Piece| save_meme(env, req, p, set.clone(), style_name);
     if what == MemeGen::Set {
         GRID_OK
             .lock()
@@ -528,29 +526,27 @@ pub fn names(state: &AppState, ids: &[i64]) -> Vec<String> {
 }
 
 /// 存一个 AI 出的表情包，通知面板
-#[allow(clippy::too_many_arguments)]
 fn save_meme(
     env: &Env<'_>,
     req: &GenReq,
-    bytes: &[u8],
-    ext: &str,
-    (width, height): (u32, u32),
-    name: &str,
-    emotions: &[&str],
+    p: &Piece,
+    set: Option<String>,
     style_name: &str,
 ) -> Result<i64, String> {
-    let search = xpaste_pro::meme_search_text(name, &req.idea, &req.caption, emotions, style_name);
+    let search =
+        xpaste_pro::meme_search_text(&p.name, &req.idea, &req.caption, &p.emotions, style_name);
     let info = MemeInfo {
         source: "ai".into(),
-        name: name.into(),
+        name: p.name.clone(),
         style: Some(style_name.into()),
-        gif: ext == "gif",
+        gif: p.ext == "gif",
+        set,
     };
     let id = crate::meme_store::put(
         env.state,
-        bytes,
-        ext,
-        (width, height),
+        &p.bytes,
+        p.ext,
+        p.size,
         info,
         search,
         ai_scene(req),
@@ -801,6 +797,65 @@ mod tests {
             .collect();
         assert_eq!(names, xpaste_pro::meme_emotions());
         assert!(!grid_shaky(&c));
+        // 一套的 16 张带同一个套编号
+        let sets: std::collections::HashSet<Option<String>> = ids
+            .iter()
+            .map(|&id| {
+                state
+                    .store()
+                    .live_summary(id)
+                    .unwrap()
+                    .unwrap()
+                    .meme
+                    .unwrap()
+                    .set
+            })
+            .collect();
+        assert_eq!(sets.len(), 1);
+        assert!(sets.iter().all(Option::is_some));
+    }
+
+    /// 分 4 次重画的一部分用队列给的套编号；单张没有套编号
+    #[test]
+    fn set_part_uses_given_set() {
+        if !xpaste_pro::AVAILABLE {
+            return eprintln!("这个构建不含 Pro，跳过");
+        }
+        let state = AppState::for_test();
+        let seq = AtomicU64::new(0);
+        let env = Env {
+            state: &state,
+            seq: &seq,
+            cutout: |_| None,
+            added: &|_| {},
+        };
+        let set_of = |id: i64| {
+            state
+                .store()
+                .live_summary(id)
+                .unwrap()
+                .unwrap()
+                .meme
+                .unwrap()
+                .set
+        };
+        let (url, _h) = fake(1, reply_with(grid(2)));
+        let r = GenReq {
+            set: Some("s1".into()),
+            ..req(json!({"kind": "set_part", "part": 1}))
+        };
+        let GenOut::Done { ids } = run(generate(&env, &cfg(&url), r)).unwrap() else {
+            panic!("应切成 4 张")
+        };
+        assert_eq!(ids.len(), 4);
+        assert!(ids.iter().all(|&id| set_of(id).as_deref() == Some("s1")));
+        let (url, _h) = fake(1, reply_with(grid(1)));
+        let GenOut::Done { ids } =
+            run(generate(&env, &cfg(&url), req(json!({"kind": "one"})))).unwrap()
+        else {
+            panic!("应是一张")
+        };
+        assert_eq!(set_of(ids[0]), None);
     }
 
     /// 抠图在哪个线程上跑（抠图、切格、编码不占调用方的异步线程）
@@ -984,6 +1039,7 @@ mod tests {
                                 name: format!("{i}"),
                                 style: None,
                                 gif: false,
+                                set: None,
                             },
                             search: String::new(),
                             scene: String::new(),

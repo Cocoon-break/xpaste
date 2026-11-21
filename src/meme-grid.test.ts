@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { RecordSummary } from './api/types.ts';
-import { cellHTML, gridMove, memeMeta, memeOrder } from './meme-grid.ts';
+import type { TaskView } from './api/meme.ts';
+import { cellHTML, foldSets, gridMove, memeMeta, memeOrder, taskCellHTML, taskCellText } from './meme-grid.ts';
 
 const mk = (id: number, over: Partial<RecordSummary>): RecordSummary => ({
   id, kind: 'image', title: '', app: null, copiedAt: 0, uses: 0, pinned: false,
@@ -11,16 +12,20 @@ const mk = (id: number, over: Partial<RecordSummary>): RecordSummary => ({
 
 test('gridMove', () => {
   // 9 个表情包加“＋ 做一个”，5 列：做一个占第 0 格
-  assert.equal(gridMove(0, 9, 5, 'ArrowRight', true), 1);
-  assert.equal(gridMove(1, 9, 5, 'ArrowDown', true), 6);
-  assert.equal(gridMove(8, 9, 5, 'ArrowDown', true), 9);
-  assert.equal(gridMove(1, 9, 5, 'ArrowLeft', true), 0);
-  assert.equal(gridMove(9, 9, 5, 'ArrowRight', true), 9);
-  assert.equal(gridMove(6, 9, 5, 'ArrowUp', true), 1);
-  // 搜索时没有做一个：不会到 0 之前，也不会过最后一个
-  assert.equal(gridMove(0, 9, 5, 'ArrowLeft', false), 0);
-  assert.equal(gridMove(2, 9, 5, 'ArrowUp', false), 0);
-  assert.equal(gridMove(7, 9, 5, 'ArrowDown', false), 8);
+  assert.equal(gridMove(0, 9, 5, 'ArrowRight', 1), 1);
+  assert.equal(gridMove(1, 9, 5, 'ArrowDown', 1), 6);
+  assert.equal(gridMove(8, 9, 5, 'ArrowDown', 1), 9);
+  assert.equal(gridMove(1, 9, 5, 'ArrowLeft', 1), 0);
+  assert.equal(gridMove(9, 9, 5, 'ArrowRight', 1), 9);
+  assert.equal(gridMove(6, 9, 5, 'ArrowUp', 1), 1);
+  // 搜索时前面没有格子：不会到 0 之前，也不会过最后一个
+  assert.equal(gridMove(0, 9, 5, 'ArrowLeft', 0), 0);
+  assert.equal(gridMove(2, 9, 5, 'ArrowUp', 0), 0);
+  assert.equal(gridMove(7, 9, 5, 'ArrowDown', 0), 8);
+  // 做一个加 2 个任务格在前：表情包从第 3 格起，按行移动照样对齐列
+  assert.equal(gridMove(3, 9, 5, 'ArrowDown', 3), 8);
+  assert.equal(gridMove(11, 9, 5, 'ArrowDown', 3), 11);
+  assert.equal(gridMove(8, 9, 5, 'ArrowUp', 3), 3);
 });
 
 test('memeOrder', () => {
@@ -52,4 +57,76 @@ test('memeMeta：来源、风格或格式、尺寸', () => {
   assert.equal(memeMeta(mk(1, {}), 240, 240), '做好的 · GIF · 240 × 240');
   assert.equal(memeMeta(mk(1, { meme: { source: 'ai', name: '开心', style: '黏土', gif: false } }), 1024, 1024), 'AI 出的 · 黏土 · PNG');
   assert.equal(memeMeta(mk(1, { meme: { source: 'final', name: 'x', style: null, gif: false } }), 0, 0), '做好的 · PNG');
+});
+
+test('foldSets：一套收成一格、点开摊开、搜索时不叠、只剩一张不叠', () => {
+  const loose = [1, 2, 3].map((id) => ({ id, set: null as string | null }));
+  const set = Array.from({ length: 16 }, (_, i) => ({ id: 10 + i, set: 'a' as string | null }));
+  // 排序里散的和一套交错
+  const list = [loose[0], set[0], loose[1], ...set.slice(1), loose[2]];
+  const shut = foldSets(list, null, false);
+  assert.equal(shut.length, 4);
+  assert.deepEqual(shut.map((c) => c.item.id), [1, 10, 2, 3]);
+  const stack = shut[1];
+  assert.equal(stack.count, 16);
+  assert.equal(stack.folded, true);
+  assert.equal(stack.inSet, false);
+  assert.ok(shut.filter((c) => c !== stack).every((c) => !c.folded && !c.inSet));
+
+  const open = foldSets(list, 'a', false);
+  assert.equal(open.length, 19);
+  assert.equal(open.filter((c) => c.inSet).length, 16);
+  assert.ok(open.every((c) => !c.folded));
+
+  const found = foldSets(list, null, true);
+  assert.equal(found.length, 19);
+  assert.ok(found.every((c) => !c.folded && !c.inSet));
+
+  // 删得只剩一张：不叠
+  const one = foldSets([loose[0], set[5]], null, false);
+  assert.equal(one.length, 2);
+  assert.ok(one.every((c) => !c.folded && !c.inSet));
+});
+
+test('cellHTML：收着的一叠写“N 张”带叠起来的边；摊开的一套带浅色边', () => {
+  const r = mk(8, { meme: { source: 'ai', name: '开心', style: '黏土', gif: false, set: 'a' } });
+  const st = cellHTML(r, 0, false, false, 16);
+  assert.match(st, /class="mcell stack"/);
+  assert.match(st, /<span class="tag">16 张<\/span>/);
+  assert.doesNotMatch(st, />AI</);
+  assert.match(st, /title="一套 16 张，点开挑"/);
+  const ins = cellHTML(r, 0, false, false, 0, true);
+  assert.match(ins, /class="mcell inset"/);
+  assert.match(ins, /<span class="tag">AI<\/span>/);
+});
+
+const task = (over: Partial<TaskView>): TaskView => ({
+  id: 1, kind: 'set', state: 'run', title: '不想上班', style: '黏土', startedMs: 0, ahead: 0, ids: [], irregular: null, error: '', scene: '{}', ...over,
+});
+
+test('taskCellText：在画、排队、画好、没画出来', () => {
+  assert.equal(taskCellText(task({ state: 'run', startedMs: 1_000 }), 43_500), 'AI 在画\n42 秒');
+  assert.equal(taskCellText(task({ state: 'run', startedMs: null }), 43_500), 'AI 在画\n0 秒');
+  assert.equal(taskCellText(task({ state: 'queue', ahead: 2 }), 0), '排队中\n前面 2 个');
+  assert.equal(taskCellText(task({ state: 'queue', ahead: 0 }), 0), '排队中\n下一个');
+  assert.equal(taskCellText(task({ state: 'done', ids: [3] }), 0), '画好了');
+  assert.equal(taskCellText(task({ state: 'fail', error: '服务商限流' }), 0), '没画出来\n点这里看');
+});
+
+test('taskCellHTML：按钮、尺子、缩略图或对勾、新角标', () => {
+  const run = taskCellHTML(task({ id: 4, state: 'run', startedMs: 0 }), 30_000, null);
+  assert.match(run, /^<button class="mcell gen" type="button" data-task="4"/);
+  assert.match(run, /<i style="width:50%"><\/i>/);
+  assert.match(run, /AI 在画<br>30 秒/);
+  // 60 秒走满一遍后从头走
+  assert.match(taskCellHTML(task({ state: 'run', startedMs: 0 }), 72_000, null), /width:20%/);
+  assert.match(run, /aria-label="不想上班，AI 在画，30 秒"/);
+  const done = taskCellHTML(task({ state: 'done', ids: [3] }), 0, 'asset://t/3.png');
+  assert.match(done, /class="mcell gen done"/);
+  assert.match(done, /<img src="asset:\/\/t\/3.png"/);
+  assert.match(done, /<span class="tag new">新<\/span>/);
+  assert.match(taskCellHTML(task({ state: 'done', ids: [3] }), 0, null), /<svg/);
+  const fail = taskCellHTML(task({ state: 'fail' }), 0, null);
+  assert.match(fail, /class="mcell gen fail"/);
+  assert.match(fail, /没画出来<br>点这里看/);
 });

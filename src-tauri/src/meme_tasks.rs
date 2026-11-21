@@ -316,10 +316,13 @@ async fn run(app: AppHandle, id: u64, req: GenReq) {
         added: &added,
     };
     let r = if req.kind == SET_PARTS {
+        // 4 部分拼成的 16 张共用一个套编号
+        let set = Some(meme_gen::uuid());
         let part = |k| {
             let r = GenReq {
                 kind: "set_part".into(),
                 part: Some(k),
+                set: set.clone(),
                 ..req.clone()
             };
             meme_gen::generate(&env, &cfg, r)

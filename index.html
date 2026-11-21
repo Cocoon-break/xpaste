@@ -60,13 +60,13 @@
               <div id="rows"></div>
             </div>
           </div>
-          <!-- “表情包”分类：列表区换成网格；格子是 listbox 的选项，“＋ 做一个”是普通按钮，不算选项 -->
+          <!-- “表情包”分类：列表区换成网格；格子是 listbox 的选项，“＋ 做一个”和 AI 任务格是普通按钮，不算选项 -->
           <div class="memes" id="memes" hidden>
             <div class="mhead">
               <div class="seg text sm" id="memeSrc" role="radiogroup" aria-label="来源"><button type="button" role="radio" data-v="all" aria-checked="true">全部</button><button type="button" role="radio" data-v="final" aria-checked="false">做好的</button><button type="button" role="radio" data-v="ai" aria-checked="false">AI 出的</button></div>
               <span id="memeN"></span>
             </div>
-            <div class="mgrid"><button class="mcell add" type="button" id="memeAdd">＋<br>做一个</button><div id="memeGrid" role="listbox" aria-label="表情包"></div></div>
+            <div class="mgrid"><button class="mcell add" type="button" id="memeAdd">＋<br>做一个</button><div id="memeTasks"></div><div id="memeGrid" role="listbox" aria-label="表情包"></div></div>
           </div>
           <!-- 精简模式没有预览与状态栏：多选时列表底部一条操作栏（M09 规则 8、M27） -->
           <div class="multi-bar" id="multiBar" hidden><span id="multiBarText"></span><button class="btn sm primary" type="button" data-bulk="merge">合并粘贴<kbd>Enter</kbd></button><button class="btn sm" type="button" data-bulk="clear">取消<kbd>Esc</kbd></button></div>

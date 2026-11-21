@@ -230,6 +230,7 @@ pub fn store(state: &AppState, last: &Last, f: Final) -> Result<i64, String> {
         name,
         style: None,
         gif: e.ext == "gif",
+        set: None,
     };
     let id = put(
         state,
@@ -366,6 +367,7 @@ pub fn test_meme(state: &AppState) -> i64 {
         name: "甲".into(),
         style: None,
         gif: false,
+        set: None,
     };
     put(state, b"x", "png", (1, 1), info, String::new(), "{}".into()).unwrap()
 }

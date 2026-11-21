@@ -2803,6 +2803,7 @@ pub(crate) mod tests {
                 name: name.into(),
                 style: Some("q".into()),
                 gif: true,
+                set: None,
             },
             search: search.into(),
             scene: r#"{"k":1}"#.into(),
@@ -2945,7 +2946,8 @@ pub(crate) mod tests {
                 source: "ai".into(),
                 name: "无语".into(),
                 style: Some("q".into()),
-                gif: true
+                gif: true,
+                set: None
             })
         );
         assert!(!sum.pinned);
