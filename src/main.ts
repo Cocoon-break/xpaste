@@ -2518,6 +2518,8 @@ function openTranslateTab(st: Settings) {
   $('#trKeyBtn').textContent = '显示';
   trModelIn.value = st.translateModel;
   trLangIn.value = st.translateLang;
+  // 文案一组的状态读这里刚填好的值（paintProHome 在它之前跑过一次）
+  paintMemeCaption();
   trTouched = false;
   paintTrUrlErr(null);
   setTrResult('');
