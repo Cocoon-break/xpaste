@@ -701,12 +701,12 @@ impl Store {
         )?)
     }
 
-    /// 最近复制的那条记录：没有软删除、不是片段；没有时为 None。
+    /// 最近复制的那条记录：没有软删除、不是片段、不是表情包；没有时为 None。
     pub fn latest_live_id(&self) -> Result<Option<i64>, CoreError> {
         Ok(self
             .conn
             .query_row(
-                "SELECT id FROM records WHERE deleted_at IS NULL AND snippet_body IS NULL
+                "SELECT id FROM records WHERE deleted_at IS NULL AND snippet_body IS NULL AND meme IS NULL
                  ORDER BY copied_at DESC, id DESC LIMIT 1",
                 [],
                 |r| r.get(0),
@@ -794,7 +794,7 @@ impl Store {
             .query_row(
                 &format!(
                     "SELECT kind, ocr_state, {} FROM records
-                     WHERE id = ?1 AND snippet_body IS NULL AND deleted_at IS NULL",
+                     WHERE id = ?1 AND snippet_body IS NULL AND meme IS NULL AND deleted_at IS NULL",
                     ocr_eligible_sql()
                 ),
                 [src],
@@ -2892,6 +2892,16 @@ pub(crate) mod tests {
         );
         assert!(!sum.pinned);
         assert_eq!(s.meme_scene(id).unwrap().as_deref(), Some(r#"{"k":1}"#));
+    }
+
+    #[test]
+    fn latest_live_id_skips_memes() {
+        let mut s = mem();
+        let dir = s.dir.clone();
+        let a = added(&mut s, &rec("h"), 1);
+        let m = s.add_meme(new_meme(&dir, "甲", "甲"), &[], 99).unwrap();
+        assert_eq!(s.latest_live_id().unwrap(), Some(a));
+        assert!(s.save_snippet(m, "n", 100).is_err());
     }
 
     #[test]
