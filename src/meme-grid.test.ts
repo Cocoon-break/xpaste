@@ -2,12 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { RecordSummary } from './api/types.ts';
 import type { TaskView } from './api/meme.ts';
-import { cellHTML, foldSets, gridMove, memeMeta, memeOrder, taskCellHTML, taskCellText } from './meme-grid.ts';
+import { cellClick, cellHTML, foldSets, gridMove, memeMeta, memeOrder, taskCellHTML, taskCellText } from './meme-grid.ts';
 
 const mk = (id: number, over: Partial<RecordSummary>): RecordSummary => ({
   id, kind: 'image', title: '', app: null, copiedAt: 0, uses: 0, pinned: false,
   size: 0, lang: null, thumb: null, durationSec: null, ocrState: 0, snippetBody: null, lines: null, url: null, fileCount: null,
-  meme: { source: 'final', name: '无语', style: null, gif: true }, ...over,
+  meme: { source: 'final', name: '无语', style: null, gif: true, set: null }, ...over,
 });
 
 test('gridMove', () => {
@@ -37,26 +37,26 @@ test('memeOrder', () => {
 });
 
 test('cellHTML：编号、AI / GIF 角标、做好的显示文字（最多 6 个字）', () => {
-  const fin = cellHTML(mk(5, { thumb: 'asset://t/5.png', meme: { source: 'final', name: '收到！马上办好了', style: null, gif: true } }), 0, true);
+  const fin = cellHTML(mk(5, { thumb: 'asset://t/5.png', meme: { source: 'final', name: '收到！马上办好了', style: null, gif: true, set: null } }), 0, true);
   assert.match(fin, /role="option"/);
   assert.match(fin, /aria-selected="true"/);
   assert.match(fin, /<span class="no">1<\/span>/);
   assert.match(fin, /<span class="tag">GIF<\/span>/);
   assert.match(fin, /<span class="cp">收到！马上办<\/span>/);
-  const ai = cellHTML(mk(6, { meme: { source: 'ai', name: '开心', style: '黏土', gif: false } }), 9, false);
+  const ai = cellHTML(mk(6, { meme: { source: 'ai', name: '开心', style: '黏土', gif: false, set: null } }), 9, false);
   assert.match(ai, /<span class="tag">AI<\/span>/);
   assert.doesNotMatch(ai, /class="no"/);
   assert.doesNotMatch(ai, /class="cp"/);
   // 静态 PNG 的成品不标 GIF；没有文字时名字是默认的“表情包”，不当成文字
-  const png = cellHTML(mk(7, { meme: { source: 'final', name: '表情包', style: null, gif: false } }), 1, false);
+  const png = cellHTML(mk(7, { meme: { source: 'final', name: '表情包', style: null, gif: false, set: null } }), 1, false);
   assert.doesNotMatch(png, /class="tag"/);
   assert.doesNotMatch(png, /class="cp"/);
 });
 
 test('memeMeta：来源、风格或格式、尺寸', () => {
   assert.equal(memeMeta(mk(1, {}), 240, 240), '做好的 · GIF · 240 × 240');
-  assert.equal(memeMeta(mk(1, { meme: { source: 'ai', name: '开心', style: '黏土', gif: false } }), 1024, 1024), 'AI 出的 · 黏土 · PNG');
-  assert.equal(memeMeta(mk(1, { meme: { source: 'final', name: 'x', style: null, gif: false } }), 0, 0), '做好的 · PNG');
+  assert.equal(memeMeta(mk(1, { meme: { source: 'ai', name: '开心', style: '黏土', gif: false, set: null } }), 1024, 1024), 'AI 出的 · 黏土 · PNG');
+  assert.equal(memeMeta(mk(1, { meme: { source: 'final', name: 'x', style: null, gif: false, set: null } }), 0, 0), '做好的 · PNG');
 });
 
 test('foldSets：一套收成一格、点开摊开、搜索时不叠、只剩一张不叠', () => {
@@ -129,4 +129,19 @@ test('taskCellHTML：按钮、尺子、缩略图或对勾、新角标', () => {
   const fail = taskCellHTML(task({ state: 'fail' }), 0, null);
   assert.match(fail, /class="mcell gen fail"/);
   assert.match(fail, /没画出来<br>点这里看/);
+});
+
+test('cellClick：摊开着 a 套时点套外的格子收回并选中它；双击的第二下忽略，双击贴第一下那张', () => {
+  const b = { id: 7, set: null };
+  const first = cellClick(b, 'a', 1, null);
+  assert.deepEqual(first, { act: 'close', openSet: null, id: 7 });
+  // 第一下收回后网格重排，第二下落点下面是别的格子（这里是 a 套的 10）：忽略，仍记着 7
+  const second = cellClick({ id: 10, set: 'a' }, first.openSet, 2, first.id);
+  assert.deepEqual(second, { act: 'ignore', openSet: null, id: 7 });
+  // 点一叠摊开；摊开着 a 时点 b 那一叠换成 b
+  assert.deepEqual(cellClick({ id: 10, set: 'a' }, null, 1, null), { act: 'open', openSet: 'a', id: 10 });
+  assert.deepEqual(cellClick({ id: 20, set: 'b' }, 'a', 1, 10), { act: 'open', openSet: 'b', id: 20 });
+  // 同一套里、或都不在套里：只选中
+  assert.deepEqual(cellClick({ id: 11, set: 'a' }, 'a', 1, 10), { act: 'select', openSet: 'a', id: 11 });
+  assert.deepEqual(cellClick(b, null, 1, null), { act: 'select', openSet: null, id: 7 });
 });

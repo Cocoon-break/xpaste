@@ -25,7 +25,7 @@ import { lineDragDrop, lineDragHover, lineHangFromPanel, lineHide, lineSideHint,
 import { beltPut, onBeltPutSelected } from './api/belt';
 import { mixerDefaults, mixerPut, onMixerPutSelected } from './api/mixer';
 import { memeLibraryStats, memeOpen, memeOpenScene, memeTaskOpen, memeTasks, memeTestImage, onMemeBack, onMemeReveal, onMemeTasks, type TaskView } from './api/meme';
-import { cellHTML, foldSets, gridMove, ofSource, previewHTML, taskCellHTML, taskTick, type Arrow, type MemeSource } from './meme-grid';
+import { cellClick, cellHTML, foldSets, gridMove, ofSource, previewHTML, taskCellHTML, taskTick, type Arrow, type MemeSource } from './meme-grid';
 import { mountRecipes } from './recipes';
 import { deviceLine, proCard, proControls, proLine } from './pro-status';
 import { popSelect } from './select-pop';
@@ -207,7 +207,9 @@ const favMin = () => S.settings.frequentMinUses;
 const memeShown = (r: RecordSummary) => !isMeme(r) || (memeOn() && (S.filter !== 'meme' || ofSource(r, S.memeSrc)));
 const listed = () => fromApp(visible(S.records, S.filter, S.matchIds, favMin()), S.app).filter(memeShown);
 /** 网格里看得见的格子：一套收成一格（搜索时不叠） */
-const memeCells = (v: RecordSummary[]) => foldSets(v.map((r) => ({ id: r.id, set: r.meme?.set ?? null, r })), S.openSet, S.matchIds !== null);
+// 正在删的、属于一套的不画：删的是一叠显示的那一张时，这一叠立刻换成下一张
+const memeCells = (v: RecordSummary[]) =>
+  foldSets(v.filter((r) => !(r.meme?.set && S.removing.has(r.id))).map((r) => ({ id: r.id, set: r.meme?.set ?? null, r })), S.openSet, S.matchIds !== null);
 /** 看得见的记录；网格里是看得见的格子（方向键、Mod+1–9、↩ 都按它算，选中一叠就是显示的那一张） */
 const vis = () => (memeGrid() ? memeCells(listed()).map((c) => c.item.r) : listed());
 /** 当前分类下、不看搜索词的记录：建议的条数与胶囊下的总数都按它算（M29 规则 1、3） */
@@ -1529,7 +1531,10 @@ function remove(ids: number[]) {
   const v = vis().filter((x) => !S.removing.has(x.id));
   const at = new Map(v.map((x, i) => [x.id, i]));
   const last = ids.reduce((a, id) => ((at.get(id) ?? -1) > (at.get(a) ?? -1) ? id : a));
-  const next = nextSelection(v.filter((x) => x.id === last || !ids.includes(x.id)), last);
+  // 删的是收着的一叠显示的那一张、这一套还剩不止一张：选中留在这一叠（换成排在它后面的那张）
+  const stack = memeGrid() && ids.length === 1 ? memeCells(listed()).find((c) => c.folded && c.item.id === ids[0]) : undefined;
+  const keep = stack && stack.count > 2 ? listed().find((x) => x.id !== ids[0] && x.meme?.set === stack.item.set && !S.removing.has(x.id))?.id : undefined;
+  const next = keep ?? nextSelection(v.filter((x) => x.id === last || !ids.includes(x.id)), last);
   // 先退出多选再同步 p.h：之后的重绘与之相同，不会整行替换打断滑出
   S.multi.clear();
   for (const [i, id] of ids.entries()) {
@@ -1549,6 +1554,11 @@ function remove(ids: number[]) {
   }
   // 下方的行与 .item.is-removing 的收起同步上移（滚到底时整体按夹紧量修正，见 goneOf）
   paintRows({ glide: `transform 240ms ${EASE_MOVE} 100ms`, glideBusy: `transform 240ms ${EASE_MOVE}` });
+  // 一叠换代表：立刻重画网格（被删的那张已不画），选中留在原位
+  if (keep !== undefined) {
+    S.sel = keep;
+    renderList();
+  }
   // 光标目标是下一条补位后的位置：同组时就是被删行的位置，光标停住、下一条滑进来（原型 1384–1393）
   select(next, { scroll: true, indDur: 340 });
   deleteRecords(ids).then(
@@ -3620,15 +3630,20 @@ await onProLink(activateFromLink);
 await onMemeReveal((id) => {
   if (!memeOn()) return;
   S.memeSrc = 'all';
-  // 刚存的在一套里：摊开那一套，才选得中
+  // 防御：存进表情包的成品没有套编号，这里总是收回；万一刚存的在一套里，摊开它才选得中
   S.openSet = S.records.get(id)?.meme?.set ?? null;
   setFilter('meme', true);
   renderList();
   if (S.records.has(id)) select(id, { scroll: true, instant: true });
 });
-// AI 任务：启动时取一次，之后跟着后端发来的整份列表；Pro 不可用时取不到，不显示任务格（官网演示里没有这个命令，取回空）
-void memeTasks().then((ts) => setMemeTasks(ts ?? []), () => {});
-await onMemeTasks(setMemeTasks);
+// AI 任务：先订阅后端发来的整份列表，再取一次当前的；事件先到过就丢掉取回的快照（它可能更旧）。
+// Pro 不可用时取不到，不显示任务格（官网演示里没有这个命令，取回空）
+let tasksHeard = false;
+await onMemeTasks((ts) => {
+  tasksHeard = true;
+  setMemeTasks(ts);
+});
+void memeTasks().then((ts) => tasksHeard || setMemeTasks(ts ?? []), () => {});
 // 制作窗口关掉、后端已唤起面板：返回面板时分类不动、选回原来那一条，留了草稿提示一句；
 // 贴过去没成（没有辅助功能权限等）时照面板粘贴的降级提示
 await onMemeBack(({ draft, reason }) => {
@@ -4046,21 +4061,25 @@ memeSrcEl.addEventListener('click', (e) => {
   renderList();
 });
 const cellOf = (e: Event) => Number((e.target as Element).closest<HTMLElement>('.mcell')?.dataset.id ?? NaN);
-// 点一叠摊开这一套，点套外的格子收回
+// 点一叠摊开这一套，点套外的格子收回。双击的第一下可能重排了网格，第二下落点下面是别的格子：
+// 第二下不处理，双击贴第一下点到的那张
+let clickedCell: number | null = null;
 memeGridEl.addEventListener('click', (e) => {
   const id = cellOf(e);
   if (!S.records.has(id)) return;
-  const set = S.records.get(id)!.meme?.set ?? null;
-  if (set !== S.openSet) {
-    S.openSet = set;
+  const c = cellClick({ id, set: S.records.get(id)!.meme?.set ?? null }, S.openSet, e.detail, clickedCell);
+  clickedCell = c.id;
+  if (c.act === 'ignore') return;
+  if (c.act !== 'select') {
+    S.openSet = c.openSet;
     S.sel = id;
     renderMemes();
   }
   select(id);
 });
 memeGridEl.addEventListener('dblclick', (e) => {
-  const id = cellOf(e);
-  if (S.records.has(id)) copyRecord(id);
+  if (Number.isNaN(cellOf(e)) || clickedCell === null) return;
+  if (S.records.has(clickedCell)) copyRecord(clickedCell);
 });
 // 预览里的按钮（网格与搜索结果里的表情包行都是这一份）
 pbody.addEventListener('click', (e) => {

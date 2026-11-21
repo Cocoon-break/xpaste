@@ -38,6 +38,16 @@ const sourceLabel = (r: RecordSummary) => (r.meme?.source === 'ai' ? 'AI 出的'
 // 做好的没有文字时名字是“表情包”，这时下沿不写字
 const caption = (r: RecordSummary) => (r.meme?.source === 'final' && r.meme.name !== '表情包' ? [...r.meme.name].slice(0, 6).join('') : '');
 
+/** 点一格该做什么：`detail` > 1 是同一次双击的后几下，第一下可能已经摊开或收回、重排了网格，落点下面换了别的格子，
+ *  所以忽略，双击贴的是第一下那张（`id`，忽略时沿用 `last`）。点到的格子所属的套和摊开的不同就换过去：
+ *  属于一套就摊开它（open），不属于就收回（close）；相同时只选中 */
+export function cellClick(hit: { id: number; set: string | null }, openSet: string | null, detail: number, last: number | null):
+  { act: 'open' | 'close' | 'select' | 'ignore'; openSet: string | null; id: number | null } {
+  if (detail > 1) return { act: 'ignore', openSet, id: last };
+  if (hit.set === openSet) return { act: 'select', openSet, id: hit.id };
+  return { act: hit.set === null ? 'close' : 'open', openSet: hit.set, id: hit.id };
+}
+
 /** 一格：静态缩略图（格子不播动图），左上 Mod+1–9 的编号，右上“AI”或“GIF”，做好的下沿写文字。
  *  `stack` 不为 0 时是收着的一套（右上写“N 张”，带叠起来的边）；`inSet` 是摊开的一套里的一格（一圈浅色边） */
 export const cellHTML = (r: RecordSummary, i: number, sel: boolean, removing = false, stack = 0, inSet = false): string => {

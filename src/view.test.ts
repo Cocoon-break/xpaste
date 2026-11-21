@@ -162,7 +162,7 @@ test('putOrder：有多选按选中的先后，否则只放当前选中的', () 
 });
 
 const meme = (id: number, over: Partial<RecordSummary> = {}) =>
-  mk(id, { kind: 'image', meme: { source: 'final', name: '无语', style: null, gif: true }, ...over });
+  mk(id, { kind: 'image', meme: { source: 'final', name: '无语', style: null, gif: true, set: null }, ...over });
 
 test('meme filter and search group', () => {
   const now = new Date(2026, 10, 21, 12).getTime();

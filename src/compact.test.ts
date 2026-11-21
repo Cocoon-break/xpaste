@@ -90,11 +90,11 @@ test('分组：没有置顶与片段时只有一组、没有分隔', () => {
 });
 
 test('分组：搜索命中表情包时自成一组、排在片段后面，补充写来源', () => {
-  const m = r({ kind: 'image', title: '无语', meme: { source: 'ai', name: '无语', style: '黏土', gif: false } });
+  const m = r({ kind: 'image', title: '无语', meme: { source: 'ai', name: '无语', style: '黏土', gif: false, set: null } });
   const gs = compactGroups([r({ snippetBody: 'x' }), m, r()], 'all');
   assert.deepEqual(gs.map((g) => g.name), ['片段', '表情包', '记录']);
   assert.deepEqual(gs.map((_, i) => compactHeadH(gs, i)), [24, 24, 24]);
   assert.equal(compactHeadH(compactGroups([m, r()], 'all'), 0), 24);
   assert.equal(rowParts(m, { q: '' }).extra, 'AI 出的');
-  assert.equal(rowParts({ ...m, meme: { source: 'final', name: '无语', style: null, gif: true } }, { q: '' }).extra, '做好的');
+  assert.equal(rowParts({ ...m, meme: { source: 'final', name: '无语', style: null, gif: true, set: null } }, { q: '' }).extra, '做好的');
 });
