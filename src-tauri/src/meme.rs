@@ -16,7 +16,6 @@ pub const LABEL: &str = "meme";
 /// 参考图最多几张
 pub const REFS_MAX: usize = 8;
 
-const EXPIRED: &str = "试用已结束，表情包制作要 xPaste Pro";
 const UNUSABLE: &str = "这几条做不了表情包";
 pub const FULL: &str = "参考图满了（8 张）";
 
@@ -61,6 +60,7 @@ pub struct OpenPayload {
     pub draft: Option<String>,
     /// 本机能抠主体
     pub cutout: bool,
+    /// 试用已结束：不带参考图和文字，页面只显示过期提示
     pub expired: bool,
 }
 
@@ -111,6 +111,21 @@ pub fn merge_refs(have: &[RefKey], add: Vec<RefKey>) -> (Vec<RefKey>, bool) {
     (refs, full)
 }
 
+/// 这次打开窗口里放什么：试用结束时什么都不带（页面只显示过期提示，已有的参考图不动），
+/// 否则参考图追加到已有的后面。返回参考图、想表达什么、有没有因为满了没加进去的。
+pub fn opening(
+    expired: bool,
+    have: &[RefKey],
+    add: Vec<RefKey>,
+    idea: String,
+) -> (Vec<RefKey>, String, bool) {
+    if expired {
+        return (Vec::new(), String::new(), false);
+    }
+    let (refs, full) = merge_refs(have, add);
+    (refs, idea, full)
+}
+
 struct Runtime {
     open: bool,
     /// 窗口里此刻的参考图（镜像）
@@ -155,39 +170,38 @@ fn gather(state: &AppState, ids: &[i64]) -> Vec<Item> {
 }
 
 /// 带着这些记录打开制作窗口（`ids` 为空 = 空白打开）。已开着时参考图追加、满了提示；面板开着就收起。
-/// 试用结束时弹过期提示（同搅拌机），不打开。选中的全都用不上时返回原因，面板提示。
+/// 试用结束时照常打开，载荷标上过期、不带记录，页面只显示过期提示。选中的全都用不上时返回原因，面板提示。
 pub fn open(app: &AppHandle, ids: &[i64]) -> Result<(), AppError> {
     if !on(app) {
         return Ok(());
     }
-    if !crate::mixer::accepts_new(&crate::mixer::pro(app)) {
-        log::info!("表情包 试用已结束，不打开");
-        crate::mixer::notice(app, EXPIRED, &["license", "buy"]);
-        return Ok(());
-    }
-    let (add, idea) = if ids.is_empty() {
+    let expired = !crate::mixer::accepts_new(&crate::mixer::pro(app));
+    let (add, idea) = if ids.is_empty() || expired {
         (Vec::new(), String::new())
     } else {
         from_selection(gather(&app.state::<AppState>(), ids))
             .map_err(|e| AppError::Invalid(e.into()))?
     };
-    let (refs, full, fresh) = {
+    let (refs, idea, full, fresh) = {
         let mut rt = rt();
         let fresh = !rt.open;
         if fresh {
             rt.refs.clear();
             rt.back = xpaste_platform::foreground_window();
         }
-        let (refs, full) = merge_refs(&rt.refs, add);
-        rt.refs.clone_from(&refs);
+        let (refs, idea, full) = opening(expired, &rt.refs, add, idea);
+        if !expired {
+            rt.refs.clone_from(&refs);
+        }
         rt.open = true;
-        (refs, full, fresh)
+        (refs, idea, full, fresh)
     };
     log::info!(
-        "表情包 打开 {} 参考图 {} 张{}",
+        "表情包 打开 {} 参考图 {} 张{}{}",
         if fresh { "新窗口" } else { "追加" },
         refs.len(),
-        if full { "（满了）" } else { "" }
+        if full { "（满了）" } else { "" },
+        if expired { "（试用已结束）" } else { "" }
     );
     let payload = OpenPayload {
         refs,
@@ -195,7 +209,7 @@ pub fn open(app: &AppHandle, ids: &[i64]) -> Result<(), AppError> {
         scene: None,
         draft: None,
         cutout: xpaste_platform::foreground_supported(),
-        expired: false,
+        expired,
     };
     if crate::panel::visible(app) {
         crate::panel::hide(app);
@@ -313,6 +327,19 @@ mod tests {
         assert_eq!(
             from_selection(vec![Item::Files(2, vec!["x.pdf".into()])]).err(),
             Some(UNUSABLE)
+        );
+    }
+
+    #[test]
+    fn expired_opens_without_refs() {
+        let have = vec![r(1, None)];
+        assert_eq!(
+            opening(true, &have, vec![r(2, None)], "不想上班".into()),
+            (vec![], String::new(), false)
+        );
+        assert_eq!(
+            opening(false, &have, vec![r(2, None)], "不想上班".into()),
+            (vec![r(1, None), r(2, None)], "不想上班".into(), false)
         );
     }
 

@@ -334,11 +334,6 @@ fn with(app: &AppHandle, f: impl FnOnce(&Pro, &mut Runtime, &mut Fx)) {
     apply(app, fx);
 }
 
-/// 借搅拌机的提示条说一句（表情包制作试用结束时用，同搅拌机的过期提示）：收着时先显示窗口，提示消失后页面放手再藏。
-pub fn notice(app: &AppHandle, text: &str, actions: &[&'static str]) {
-    with(app, |_, _, fx| fx.toasts.push(toast(text, actions)));
-}
-
 /// 开着时返回打开时的戳
 pub fn open_stamp() -> Option<u64> {
     let rt = rt();

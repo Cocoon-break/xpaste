@@ -3582,8 +3582,8 @@ await onHotkeyPressed((role) => {
     if (hkOn(self.input)) self.record(pressed);
     else if (hkOn(hotkeyIn)) setHotkeyHelp(`不能与${name}快捷键相同`, true);
     else if (other) other[0].setHelp(`${other[1]}快捷键不能与${name}快捷键相同`, true);
-    // 表情包：焦点不在任何录制框里时带着选中的（多选按先后）打开制作窗口，同 Mod+E；没有选中就空白打开
-    else if (role === 'meme') makeMeme(S.sel);
+    // 表情包：焦点不在任何录制框里时带着选中的（多选按先后）打开制作窗口，同 Mod+E；没有选中、选中的都做不了就空白打开
+    else if (role === 'meme') makeMeme(S.sel, [...S.multi], true);
     else void (role === 'translate' ? trcardPress() : overlayBegin(role === 'rec')).catch((err: AppError) => toast(err.message));
     return;
   }
@@ -3830,9 +3830,10 @@ function memeOn() {
 // ponytail: 刚复制、还排着队识别的图片文件记录暂时没有按钮；要准时给摘要加一个“有图片文件”的字段
 const memeable = (r: RecordSummary) =>
   !isSnip(r) && !r.meme && (r.kind === 'image' || r.kind === 'text' || (r.kind === 'file' && r.ocrState !== 0));
-// 做表情包：有多选带多选（按选中的先后），否则带 id；都没有就空白打开。面板由后端收起，全都做不了时提示
-function makeMeme(id: number | null, multi = [...S.multi]) {
-  void memeOpen(putOrder(id, multi)).catch((err: AppError) => toast(err.message));
+// 做表情包：有多选带多选（按选中的先后），否则带 id；都没有就空白打开。面板由后端收起。
+// 全都做不了时提示；`blank`（全局快捷键）时改成空白打开
+function makeMeme(id: number | null, multi = [...S.multi], blank = false) {
+  void memeOpen(putOrder(id, multi)).catch((err: AppError) => (blank ? memeOpen([]) : toast(err.message)));
 }
 // 挂到晾衣绳：绳子放下亮一下；没挂成（重复、挂满、试用结束）的提示在晾衣绳上
 function hangRecord(id: number | null) {

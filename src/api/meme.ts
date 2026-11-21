@@ -15,8 +15,9 @@ export const memeLibraryStats = () => invoke<[number, number]>('meme_library_sta
 /** 一张参考图：历史记录的 id，文件记录里是第几个文件（位图记录为 null） */
 export type RefKey = { id: number; file: number | null };
 
-/** 打开或追加到制作窗口（后端发给页面）：`refs` 是追加之后窗口里的全部参考图；`idea` 只在“想表达什么”为空时放进去 */
-export interface MemeOpen { refs: RefKey[]; idea: string; scene: string | null; draft: string | null; cutout: boolean; expired: false }
+/** 打开或追加到制作窗口（后端发给页面）：`refs` 是追加之后窗口里的全部参考图；`idea` 只在“想表达什么”为空时放进去；
+ *  `expired` 时试用已结束，不带参考图和文字，页面只显示过期提示 */
+export interface MemeOpen { refs: RefKey[]; idea: string; scene: string | null; draft: string | null; cutout: boolean; expired: boolean }
 
 /** 面板的笑脸按钮、Mod+E：带着这些记录打开（空 = 空白打开）；全都做不了表情包时抛出 AppError */
 export const memeOpen = (ids: number[]) => invoke<void>('meme_open', { ids });
