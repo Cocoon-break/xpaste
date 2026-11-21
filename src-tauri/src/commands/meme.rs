@@ -109,6 +109,16 @@ pub struct StylesDto {
     styles: Vec<StyleDto>,
     used: Vec<String>,
     custom: Vec<String>,
+    prefs: PrefsDto,
+}
+
+/// 上次的选择：风格、文字样式、文字位置、“更多调整”是否展开
+#[derive(Serialize)]
+pub struct PrefsDto {
+    style: String,
+    ts: String,
+    pos: String,
+    more: bool,
 }
 
 #[tauri::command(async)]
@@ -125,7 +135,31 @@ pub fn meme_styles(state: State<'_, AppState>) -> StylesDto {
             .collect(),
         used: s.meme_styles_used.clone(),
         custom: s.meme_styles_custom.clone(),
+        prefs: PrefsDto {
+            style: s.meme_last_style.clone(),
+            ts: s.meme_last_text_style.clone(),
+            pos: s.meme_last_text_pos.clone(),
+            more: s.meme_more_open,
+        },
     }
+}
+
+/// 记住这次的风格、文字样式、位置、“更多调整”是否展开，下次打开默认用上
+#[tauri::command(async)]
+pub fn meme_prefs_set(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    style: String,
+    ts: String,
+    pos: String,
+    more: bool,
+) -> Result<(), String> {
+    let mut s = state.settings().clone();
+    s.set_meme_prefs(&style, &ts, &pos, more);
+    crate::commands::settings::save_settings_inner(&state, s).map_err(|e| e.to_string())?;
+    let saved = state.settings().clone();
+    crate::events::emit_to(&app, "panel", crate::events::SETTINGS_CHANGED, saved);
+    Ok(())
 }
 
 /// 挑过的风格、自己写的风格变了：整理（去重、限个数）后写回设置，下次打开还在

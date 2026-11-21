@@ -210,6 +210,11 @@ pub struct Settings {
     /// 风格库“一次用过的”与“自定义的”，整理规则在应用层（Pro）
     pub meme_styles_used: Vec<String>,
     pub meme_styles_custom: Vec<String>,
+    /// 制作窗口上次用的风格（内置键名或自定义文字）、文字样式、文字位置、“更多调整”是否展开
+    pub meme_last_style: String,
+    pub meme_last_text_style: String,
+    pub meme_last_text_pos: String,
+    pub meme_more_open: bool,
 }
 
 /// 搅拌机的配方：名字、提示词、是否在杯口显示；`builtin` 是自带配方的键名，自定义的为空
@@ -295,6 +300,23 @@ impl Settings {
     }
 
     /// 实际该注册的表情包快捷键：总开关关着时为空串（不注册）
+    /// 记住制作窗口的选择：风格不校验（自定义风格是任意文字），只截到 40 字；样式、位置不认识的按默认存
+    pub fn set_meme_prefs(&mut self, style: &str, ts: &str, pos: &str, more: bool) {
+        let style: String = style.trim().chars().take(40).collect();
+        self.meme_last_style = if style.is_empty() { "q".into() } else { style };
+        self.meme_last_text_style = match ts {
+            "color" | "bubble" => ts,
+            _ => "stroke",
+        }
+        .into();
+        self.meme_last_text_pos = match pos {
+            "top" | "mid" => pos,
+            _ => "bottom",
+        }
+        .into();
+        self.meme_more_open = more;
+    }
+
     pub fn effective_meme_hotkey(&self) -> &str {
         if self.meme_enabled {
             &self.meme_hotkey
@@ -410,6 +432,10 @@ impl Default for Settings {
             meme_image_model: "gpt-image-2".into(),
             meme_styles_used: Vec::new(),
             meme_styles_custom: Vec::new(),
+            meme_last_style: "q".into(),
+            meme_last_text_style: "stroke".into(),
+            meme_last_text_pos: "bottom".into(),
+            meme_more_open: false,
         }
     }
 }
@@ -1755,6 +1781,35 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(s.effective_meme_hotkey(), "");
+    }
+
+    #[test]
+    fn meme_prefs_defaults_and_set() {
+        let mut s: Settings = serde_json::from_str(r#"{"maxRecords":1000}"#).unwrap();
+        assert_eq!(s.meme_last_style, "q");
+        assert_eq!(s.meme_last_text_style, "stroke");
+        assert_eq!(s.meme_last_text_pos, "bottom");
+        assert!(!s.meme_more_open);
+        s.set_meme_prefs("clay", "color", "top", true);
+        let s2: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(
+            (
+                s2.meme_last_style.as_str(),
+                s2.meme_last_text_style.as_str(),
+                s2.meme_last_text_pos.as_str(),
+                s2.meme_more_open
+            ),
+            ("clay", "color", "top", true)
+        );
+        s.set_meme_prefs(&"字".repeat(60), "x", "y", false);
+        assert_eq!(s.meme_last_style.chars().count(), 40);
+        assert_eq!(
+            (
+                s.meme_last_text_style.as_str(),
+                s.meme_last_text_pos.as_str()
+            ),
+            ("stroke", "bottom")
+        );
     }
 
     #[test]

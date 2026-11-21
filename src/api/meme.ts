@@ -37,9 +37,12 @@ export const memeRecentImages = () => invoke<RefKey[]>('meme_recent_images');
 /** 一种内置风格：键名、显示名、类别 */
 export interface MemeStyle { key: string; name: string; cat: string }
 /** 风格库：内置风格，设置里挑过的（键名）和自己写的（描述） */
-export interface MemeStyles { styles: MemeStyle[]; used: string[]; custom: string[] }
+/** 上次的选择：风格、文字样式、文字位置、“更多调整”是否展开 */
+export interface MemePrefs { style: string; ts: 'stroke' | 'color' | 'bubble'; pos: 'top' | 'mid' | 'bottom'; more: boolean }
+export interface MemeStyles { styles: MemeStyle[]; used: string[]; custom: string[]; prefs: MemePrefs }
 export const memeStyles = () => invoke<MemeStyles>('meme_styles');
 /** 挑过的、自己写的风格变了：后端去重、限个数后写回设置 */
+export const memePrefsSet = (p: MemePrefs) => invoke<void>('meme_prefs_set', { ...p });
 export const memeStylesTouch = (used: string[], custom: string[]) => invoke<void>('meme_styles_touch', { used, custom });
 
 /** 出文案：5 条候选（翻译里配置的 AI 接口）。`sketch` 是第一张为草图时它的文件名，`avoid` 是“换一批”前给过的；失败时抛出原因 */

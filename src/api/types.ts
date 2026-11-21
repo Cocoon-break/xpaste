@@ -92,6 +92,10 @@ export interface Settings {
   memeImageModel: string;
   memeStylesUsed: string[];
   memeStylesCustom: string[];
+  memeLastStyle: string;
+  memeLastTextStyle: string;
+  memeLastTextPos: string;
+  memeMoreOpen: boolean;
 }
 
 /** 搅拌机的配方；builtin 是自带配方的键名，自定义的为 null */
