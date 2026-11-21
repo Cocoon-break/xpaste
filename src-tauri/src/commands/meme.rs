@@ -130,8 +130,9 @@ pub fn meme_styles_touch(
 ) -> Result<(), String> {
     let mut s = state.settings().clone();
     (s.meme_styles_used, s.meme_styles_custom) = xpaste_pro::meme_normalize_styles(used, custom);
-    crate::commands::settings::save_settings_inner(&state, s.clone()).map_err(|e| e.to_string())?;
-    // 设置页开着时跟着刷新，免得它保存时把旧列表写回去
-    crate::events::emit_to(&app, "panel", crate::events::SETTINGS_CHANGED, s);
+    crate::commands::settings::save_settings_inner(&state, s).map_err(|e| e.to_string())?;
+    // 设置页开着时跟着刷新，免得它保存时把旧列表写回去；发的是存好之后的设置
+    let saved = state.settings().clone();
+    crate::events::emit_to(&app, "panel", crate::events::SETTINGS_CHANGED, saved);
     Ok(())
 }
