@@ -53,6 +53,9 @@ pub fn unconfigured(c: &ImageCfg) -> bool {
 }
 
 pub async fn generate(c: &ImageCfg, prompt: &str, refs: &[Vec<u8>]) -> Result<Vec<u8>, ImgFail> {
+    if unconfigured(c) {
+        return Err(ImgFail::Base(Fail::Config));
+    }
     let client = build_client(is_loopback(&c.base_url), TIMEOUTS).map_err(ImgFail::Base)?;
     let base = c.base_url.trim().trim_end_matches('/');
     let model = c.model.trim();
@@ -96,12 +99,14 @@ pub async fn generate(c: &ImageCfg, prompt: &str, refs: &[Vec<u8>]) -> Result<Ve
                 ));
             client
                 .post(format!("{base}/models/{model}:generateContent"))
-                .header("x-goog-api-key", key)
-                .json(&json!({"contents": [{"parts": parts}]}))
+                .json(&json!({"contents": [{"parts": parts}],
+                    "generationConfig": {"responseModalities": ["IMAGE"]}}))
         }
     };
+    // Key 为空时不带认证头
     let req = match (c.format, key.is_empty()) {
-        (Format::Gemini, _) | (_, true) => req,
+        (_, true) => req,
+        (Format::Gemini, _) => req.header("x-goog-api-key", key),
         _ => req.bearer_auth(key),
     };
     let resp = req.send().await.map_err(|e| ImgFail::Base(net(e)))?;
@@ -110,10 +115,11 @@ pub async fn generate(c: &ImageCfg, prompt: &str, refs: &[Vec<u8>]) -> Result<Ve
     if !status.is_success() {
         let s = status.as_u16();
         let text = String::from_utf8_lossy(&bytes);
+        let lower = text.to_lowercase();
         let moderated = s == 400
-            && ["content_policy", "moderation", "safety", "SAFETY"]
+            && ["content_policy", "moderation", "safety", "sensitivecontent"]
                 .iter()
-                .any(|m| text.contains(m));
+                .any(|m| lower.contains(m));
         return Err(if moderated {
             ImgFail::Moderation
         } else if !refs.is_empty() && c.format == Format::Openai && matches!(s, 400 | 415 | 422) {
@@ -154,10 +160,11 @@ pub async fn generate(c: &ImageCfg, prompt: &str, refs: &[Vec<u8>]) -> Result<Ve
 
 fn gemini_image(v: &Value) -> Result<Vec<u8>, ImgFail> {
     let cand = &v["candidates"][0];
-    if matches!(
-        cand["finishReason"].as_str(),
-        Some("SAFETY" | "PROHIBITED_CONTENT")
-    ) {
+    let finish = cand["finishReason"].as_str().unwrap_or("");
+    if finish.contains("SAFETY")
+        || finish == "PROHIBITED_CONTENT"
+        || v["promptFeedback"]["blockReason"].is_string()
+    {
         return Err(ImgFail::Moderation);
     }
     cand["content"]["parts"]
@@ -425,6 +432,10 @@ mod tests {
                 .to_string()
                 .contains("inline_data")
         );
+        assert_eq!(
+            b["generationConfig"]["responseModalities"],
+            json!(["IMAGE"])
+        );
     }
 
     #[test]
@@ -497,6 +508,56 @@ mod tests {
             .ok()
             .unwrap();
         assert_eq!(&r[..4], b"\x89PNG");
+    }
+
+    #[test]
+    fn gemini_empty_key_no_header() {
+        let png = png_1x1();
+        let (url, h) = fake(1, move |_| {
+            json_reply(json!({"candidates":[{"content":{"parts":[
+                {"inline_data":{"mime_type":"image/png","data": b64(&png)}}]}}]}))
+        });
+        let mut c = cfg(Format::Gemini, &url);
+        c.api_key = " ".into();
+        run(generate(&c, "p", &[])).ok().unwrap();
+        assert!(!h.join().unwrap()[0].head.contains("x-goog-api-key"));
+    }
+
+    #[test]
+    fn gemini_prompt_blocked_is_moderation() {
+        for v in [
+            json!({"promptFeedback":{"blockReason":"SAFETY"}}),
+            json!({"candidates":[{"finishReason":"IMAGE_SAFETY"}]}),
+        ] {
+            let (url, _h) = fake(1, move |_| json_reply(v.clone()));
+            let e = run(generate(&cfg(Format::Gemini, &url), "p", &[]))
+                .err()
+                .unwrap();
+            assert!(matches!(e, ImgFail::Moderation));
+        }
+    }
+
+    #[test]
+    fn ark_sensitive_is_moderation() {
+        let (url, _h) = fake(1, |_| {
+            (
+                400,
+                "application/json",
+                br#"{"error":{"code":"OutputImageSensitiveContentDetected"}}"#.to_vec(),
+            )
+        });
+        let e = run(generate(&cfg(Format::Ark, &url), "p", &[]))
+            .err()
+            .unwrap();
+        assert!(matches!(e, ImgFail::Moderation));
+    }
+
+    #[test]
+    fn unconfigured_sends_nothing() {
+        let mut c = cfg(Format::Openai, "http://127.0.0.1:9");
+        c.model = "".into();
+        let e = run(generate(&c, "p", &[])).err().unwrap();
+        assert!(matches!(e, ImgFail::Base(Fail::Config)));
     }
 
     #[test]
