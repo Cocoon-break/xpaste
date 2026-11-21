@@ -24,7 +24,8 @@ import {
 import { lineDragDrop, lineDragHover, lineHangFromPanel, lineHide, lineSideHint, onLineChanged, onLineHangSelected, onProLink, proActivate, proBuy, proDeactivate, proStatus, proTakeLink, proUnbind, type LineView } from './api/line';
 import { beltPut, onBeltPutSelected } from './api/belt';
 import { mixerDefaults, mixerPut, onMixerPutSelected } from './api/mixer';
-import { memeLibraryStats, memeOpen, memeTestImage } from './api/meme';
+import { memeLibraryStats, memeOpen, memeOpenScene, memeTestImage } from './api/meme';
+import { cellHTML, gridMove, ofSource, previewHTML, type Arrow, type MemeSource } from './meme-grid';
 import { mountRecipes } from './recipes';
 import { deviceLine, proCard, proControls, proLine } from './pro-status';
 import { popSelect } from './select-pop';
@@ -34,7 +35,7 @@ import { appCounts, bestApp, freshSug, fromApp, type Sug } from './source';
 import { COMPACT, compactGroups, compactHeadH, rowParts } from './compact';
 import { copyToast, needsAccessibility } from './copy-status';
 import {
-  canInlinePlay, esc, FILTERS, FL, fmtBytes, fmtDateTime, fmtDur, fmtInt, hl, hlCode, host, isFav, isHttpUrl, isSnip, LABEL, rel, truncate, videoChips,
+  canInlinePlay, esc, FILTERS, FL, fmtBytes, fmtDateTime, fmtDur, fmtInt, hl, hlCode, host, isFav, isHttpUrl, isMeme, isSnip, LABEL, rel, truncate, videoChips,
   type Filter,
 } from './format';
 import { hotkeyFromEvent, hotkeyHint, hotkeyLabel } from './hotkey';
@@ -53,7 +54,7 @@ import { MEME_PRESETS, memeCaptionState, type MemeField, type MemeFormat, memePr
 import { composing, justComposed } from './ime';
 import { errorControl, revealsFocus, shownTabTarget } from './settings-tabs';
 import {
-  armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, isTextKind, extendRange, mergeable, nextSelection, pruneMulti, putOrder, snippetTextChange, UNDO_MS, visible, type UndoState,
+  armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, isTextKind, extendRange, memeCategory, mergeable, nextSelection, pruneMulti, putOrder, snippetTextChange, tabFilters, UNDO_MS, visible, type UndoState,
 } from './view';
 import { layout, range, ROW_H, scrollTo, topOf, type Cell } from './virtual-list';
 
@@ -131,7 +132,7 @@ const hf = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit'
 const win = $('#win'), list = $('#list'), rowsEl = $('#rows'), ind = $('#ind'), q = $<HTMLInputElement>('#q'), clearQ = $('#clearQ');
 const tabs = $('#tabs'), tabsBase = $('#tabsBase'), tabsOver = $('#tabsOver');
 const ptype = $('#ptype'), pbody = $('#pbody'), pmeta = $('#pmeta'), countEl = $('#count');
-const pinBtn = $<HTMLButtonElement>('#pinBtn'), copyBtn = $<HTMLButtonElement>('#copyBtn');
+const pinBtn = $<HTMLButtonElement>('#pinBtn'), copyBtn = $<HTMLButtonElement>('#copyBtn'), pactEl = $('.pact');
 const trBtn = $<HTMLButtonElement>('#trBtn');
 const delBtn = $<HTMLButtonElement>('#delBtn'), saveSnipBtn = $<HTMLButtonElement>('#saveSnipBtn'), editSnipBtn = $<HTMLButtonElement>('#editSnipBtn');
 const snipBar = $('#snipBar');
@@ -139,6 +140,8 @@ const moreMenu = $('#moreMenu'), moreBtn = $('#moreBtn'), qChip = $('#qChip'), p
 const menu = $('#menu'), mOpen = $<HTMLButtonElement>('[data-m="open"]'), toastEl = $('#toast'), toastMsg = $('#toastMsg'), undoBtn = $<HTMLButtonElement>('#undoBtn'), toastAct = $<HTMLButtonElement>('#toastAct'), pauseBtn = $('#pauseBtn');
 const spBars = $('#spBars'), spTrack = $('#spTrack'), spBeam = $('#spBeam'), spTip = $('#spTip');
 const spMini = $('#spMini'), spPresets = $('#spPresets');
+// “表情包”分类的网格（列表区换成它）与状态栏
+const memesEl = $('#memes'), memeGridEl = $('#memeGrid'), memeAddEl = $<HTMLButtonElement>('#memeAdd'), memeSrcEl = $('#memeSrc'), statusbar = $('.statusbar');
 
 // —— 状态 ——
 const S = {
@@ -174,6 +177,8 @@ const S = {
   engines: null as Engines | null,
   cells: [] as Cell[],
   total: 0,
+  /** “表情包”网格上方的筛选：全部 / 做好的 / AI 出的 */
+  memeSrc: 'all' as MemeSource,
   /** 当前可见条数，供 aria-setsize */
   count: 0,
   /** 晾衣绳：不含晾衣绳的版本 available 为 false，挂钩按钮、已挂刻线与“Pro”标签都不出现 */
@@ -194,14 +199,21 @@ async function paintVerb() {
 
 // —— 数据视图 ——
 const favMin = () => S.settings.frequentMinUses;
-const vis = () => fromApp(visible(S.records, S.filter, S.matchIds, favMin()), S.app);
+// 关掉表情包制作时表情包整个不出现（搜索里也没有），数据保留；网格里再按“全部 / 做好的 / AI 出的”筛
+const memeShown = (r: RecordSummary) => !isMeme(r) || (memeOn() && (S.filter !== 'meme' || ofSource(r, S.memeSrc)));
+const vis = () => fromApp(visible(S.records, S.filter, S.matchIds, favMin()), S.app).filter(memeShown);
 /** 当前分类下、不看搜索词的记录：建议的条数与胶囊下的总数都按它算（M29 规则 1、3） */
 const inCategory = () => [...S.records.values()].filter((r) => inFilter(r, S.filter, favMin(), false));
-const matches = (r: RecordSummary) => inFilter(r, S.filter, favMin(), S.matchIds !== null) && (S.matchIds === null || S.matchIds.has(r.id)) && (S.app === null || (r.app?.name === S.app && !isSnip(r)));
+const matches = (r: RecordSummary) => memeShown(r) && inFilter(r, S.filter, favMin(), S.matchIds !== null) && (S.matchIds === null || S.matchIds.has(r.id)) && (S.app === null || (r.app?.name === S.app && !isSnip(r)));
 const rowEl = (id: number | null) => (id === null ? null : document.getElementById('opt-' + id));
 const source = (r: RecordSummary) => r.app?.name || '未知来源';
-/** 行、选中光标与预览标签的类型色：片段统一用片段色（M25 规则 2） */
-const typeOf = (r: RecordSummary) => (isSnip(r) ? 'snip' : r.kind);
+/** 行、选中光标与预览标签的类型色：片段统一用片段色（M25 规则 2），表情包用同一个品红 */
+const typeOf = (r: RecordSummary) => (isSnip(r) ? 'snip' : isMeme(r) ? 'meme' : r.kind);
+/** 片段和表情包是用户自己的东西，不算历史：不画在频谱上 */
+const isLib = (r: RecordSummary) => isSnip(r) || isMeme(r);
+/** 分类栏里有“表情包”；在这个分类里列表区换成网格 */
+const memeTab = () => memeCategory(S.line.available, S.settings.memeEnabled, compact());
+const memeGrid = () => S.filter === 'meme' && memeTab();
 const modKey = () => (S.platform.os === 'macos' ? '⌘' : 'Ctrl');
 /** 精简模式（M27）：根元素 data-style 换布局，行更矮 */
 const compact = () => S.settings.panelStyle === 'compact';
@@ -226,6 +238,7 @@ const thumb = (r: RecordSummary) =>
 
 const metaLine = (r: RecordSummary) => {
   // 片段：内容摘要 + 用过 N 次，不显示来源与时间（M25 规则 2）
+  if (r.meme) return r.meme.source === 'ai' ? 'AI 出的' : '做好的';
   const parts = r.snippetBody !== null ? [`<span class="snip-of">${hl(r.snippetBody, S.q)}</span>`, `用过 ${fmtInt(r.uses)} 次`]
     : [...(S.app === null ? [esc(source(r))] : []), rel(r.copiedAt), r.kind === 'video' && r.durationSec !== null ? fmtDur(r.durationSec) : fmtBytes(r.size)];
   if (isFav(r, favMin())) parts.push(`<span class="uses">用过 ${fmtInt(r.uses)} 次</span>`);
@@ -237,7 +250,7 @@ const metaLine = (r: RecordSummary) => {
 
 const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id === S.newId, hung = lineOn() && S.line.hung.includes(r.id)) => `
     <div class="item${isNew ? ' is-new' : ''}${S.removing.has(r.id) ? ' is-removing' : ''}${S.multi.has(r.id) ? ' is-multi' : ''}${stagger && i < 12 ? ' stg' : ''}" data-id="${r.id}" style="--i:${i}">
-      <div class="row" role="option" id="opt-${r.id}" aria-selected="false" aria-posinset="${i + 1}" aria-label="${esc(r.title)}，${isSnip(r) ? '片段，' : ''}${LABEL[r.kind]}${S.snippets.has(r.id) ? `，识别文字中含“${esc(S.snippets.get(r.id))}”` : ''}${hung ? '，已挂在晾衣绳上' : ''}" data-type="${typeOf(r)}">
+      <div class="row" role="option" id="opt-${r.id}" aria-selected="false" aria-posinset="${i + 1}" aria-label="${esc(r.title)}，${isSnip(r) ? '片段，' : isMeme(r) ? '表情包，' : ''}${LABEL[r.kind]}${S.snippets.has(r.id) ? `，识别文字中含“${esc(S.snippets.get(r.id))}”` : ''}${hung ? '，已挂在晾衣绳上' : ''}" data-type="${typeOf(r)}">
         <div class="row-in">
           ${thumb(r)}
           <div class="main">
@@ -248,7 +261,7 @@ const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id ===
             ${hung ? '<span class="hung" role="img" aria-label="已挂在晾衣绳上"></span>' : ''}${r.pinned ? `<span class="pin-mark">${svg('pinFill')}</span>` : ''}${i < 9 ? `<kbd class="idx">${idxLabel(i)}</kbd>` : ''}
             <span class="qa" aria-hidden="true">
               ${isSnip(r) ? `<button type="button" tabindex="-1" data-qa="edit" title="编辑片段">${svg('pencil')}</button>`
-                : `<button type="button" tabindex="-1" data-qa="pin" title="${r.pinned ? '取消置顶' : '置顶'}">${svg(r.pinned ? 'pinFill' : 'pin')}</button>`}
+                : isMeme(r) ? '' : `<button type="button" tabindex="-1" data-qa="pin" title="${r.pinned ? '取消置顶' : '置顶'}">${svg(r.pinned ? 'pinFill' : 'pin')}</button>`}
               ${lineOn() ? `<button type="button" tabindex="-1" data-qa="hang" title="挂到晾衣绳">${svg('hang')}</button>` : ''}
               ${beltOn() ? `<button type="button" tabindex="-1" data-qa="belt" title="放上传送带">${svg('belt')}</button>` : ''}
               ${mixerOn() && r.kind !== 'video' ? `<button type="button" tabindex="-1" data-qa="mixer" data-tip="放进搅拌机">${svg('cup')}</button>` : ''}
@@ -264,7 +277,8 @@ const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id ===
 function setCount(n: number) {
   const c = counts(S.records, favMin());
   // 有来源胶囊时分母是这个应用在当前分类下的条数（M29 规则 3）
-  const total = S.app !== null ? fromApp(inCategory(), S.app).length : S.filter === 'snip' ? c.snip : S.filter === 'all' && S.matchIds ? c.all + c.snip : c.all;
+  const total = S.app !== null ? fromApp(inCategory(), S.app).length : S.filter === 'snip' ? c.snip : S.filter === 'meme' ? c.meme
+    : S.filter === 'all' && S.matchIds ? c.all + c.snip + (memeOn() ? c.meme : 0) : c.all;
   // 精简模式只在有搜索词或分类标签时显示“N 条”（M27 规则 7）
   const html = !compact() ? `${fmtInt(n)}<small>/ ${fmtInt(total)}</small>` : S.q.trim() || S.filter !== 'all' || S.app !== null ? `${fmtInt(n)} 条` : '';
   if (countEl.innerHTML === html) return;
@@ -396,6 +410,7 @@ rowsEl.addEventListener('transitionend', (e) => {
 
 // aria-activedescendant 只指向已渲染的行
 function markSel() {
+  if (memeGrid()) return markMemeSel();
   rowsEl.querySelectorAll('.row[aria-selected="true"]').forEach((r) => r.setAttribute('aria-selected', 'false'));
   const r = rowEl(S.sel);
   r?.setAttribute('aria-selected', 'true');
@@ -417,6 +432,7 @@ const schedulePaint = () => {
 };
 
 function renderList({ scroll = false, stagger = false, base = 0, glide = '' } = {}) {
+  if (paintMemeMode()) return renderMemes();
   const v = vis();
   S.count = v.length;
   setCount(v.length);
@@ -472,6 +488,10 @@ type SelectOpts = { scroll?: boolean; glide?: boolean; instant?: boolean; fade?:
 function select(id: number | null, { scroll = false, glide = true, instant = false, fade = true, indDur, indEase, pan }: SelectOpts = {}) {
   const changed = S.sel !== id;
   S.sel = id;
+  if (memeGrid()) {
+    markMemeSel();
+    return renderPreview(changed && fade && !instant);
+  }
   // 没有选中项（列表空了）时不留一块空的预览（M27 规则 8）
   if (id === null) setPeek(false);
   const top = id === null ? undefined : shownTop(id);
@@ -488,7 +508,7 @@ function select(id: number | null, { scroll = false, glide = true, instant = fal
   renderPreview(changed && fade && !instant);
   const r = id === null ? undefined : S.records.get(id);
   // 片段不在频谱上（M25 规则 8），不移窗口。24 小时外的记录不移窗口，光束隐藏。setWin 的重绘已按 smooth 摆好光束：再画一次会让同一帧里先 0ms 后 360ms，键盘出窗也滑
-  if (pan && spWin && r && !isSnip(r) && r.copiedAt >= spNow - DAY && xOf(spWin, r.copiedAt, spNow) === null) setWin(centerWin(r.copiedAt, spanOf(spWin), spNow), pan === 'smooth');
+  if (pan && spWin && r && !isLib(r) && r.copiedAt >= spNow - DAY && xOf(spWin, r.copiedAt, spNow) === null) setWin(centerWin(r.copiedAt, spanOf(spWin), spNow), pan === 'smooth');
   else paintSpectrumSel(!instant);
 }
 
@@ -517,6 +537,7 @@ function multiTo(id: number, range: boolean) {
 }
 // 键盘上下移动；extend（“片段”分类里 Shift + ↑ / ↓）把当前行和移到的那行加进多选，不带 Shift 的移动退出多选（M25 规则 6）
 function move(d: 1 | -1, instant: boolean, extend = false) {
+  if (memeGrid()) return memeStep(d > 0 ? 'ArrowDown' : 'ArrowUp');
   const v = vis().filter((r) => !S.removing.has(r.id));
   if (!v.length) return;
   const i = v.findIndex((r) => r.id === S.sel);
@@ -736,14 +757,18 @@ let detailSeq = 0, bodyFor: number | null = null;
 const details = new Map<number, RecordDetail>();
 // 片段的名字大字放在正文最上方，高亮与列表标题一致（M25 规则 4）
 const snipNameHTML = (r: RecordSummary) => `<h3 class="p-snip-name">${hl(r.title, S.marks.get(r.id) ?? S.q)}</h3>`;
+// 表情包的预览：大图用原文件（会动），按钮在正文里
+const memeBodyHTML = (r: RecordSummary, d: RecordDetail | null) =>
+  previewHTML(r, { nameHTML: hl(r.title, S.marks.get(r.id) ?? S.q), src: d?.image?.src ?? null, w: d?.image?.w ?? 0, h: d?.image?.h ?? 0, verb: copyVerb(S.canPaste), mod: modKey() });
 function showBody(d: RecordDetail | null, fade: boolean) {
   S.detail = d;
   pbody.style.opacity = pbody.style.filter = '';
   const cur = d && S.records.get(d.id);
   // 译文区块挂在正文最后：文本、代码在原文之后，图片、文件在图中文字之后（M26 规则 3）
-  pbody.innerHTML = d ? (cur && isSnip(cur) ? snipNameHTML(cur) : '') + bodyHTML(d) + `<div class="tr-slot">${trSlotHTML(d)}</div>` : '';
+  pbody.innerHTML = d && cur && isMeme(cur) ? memeBodyHTML(cur, d)
+    : d ? (cur && isSnip(cur) ? snipNameHTML(cur) : '') + bodyHTML(d) + `<div class="tr-slot">${trSlotHTML(d)}</div>` : '';
   pbody.scrollTop = 0;
-  if (cur) pmeta.innerHTML = metaHTML(cur, d);
+  if (cur) pmeta.innerHTML = isMeme(cur) ? '' : metaHTML(cur, d);
   if (fade) fx(pbody, [{ opacity: 0.35, transform: 'translateY(4px)', filter: 'blur(2px)' }, { opacity: 1, transform: 'none', filter: 'blur(0)' }], { duration: 180, easing: EASE_ENTER });
 }
 function renderPreview(fade = false) {
@@ -753,6 +778,8 @@ function renderPreview(fade = false) {
   const rs = bulk ? multiRecords() : [], canMerge = bulk && mergeable(rs);
   [pinBtn, copyBtn, delBtn, saveSnipBtn, editSnipBtn].forEach((b) => (b.disabled = !r || (bulk && b !== delBtn && !(b === copyBtn && canMerge))));
   pinBtn.hidden = saveSnipBtn.hidden = snip;
+  // 表情包的按钮（接着改、删除、粘贴）在预览正文里，没有信息栏；网格里没选中时也不放历史的按钮
+  pactEl.hidden = pmeta.hidden = memeGrid() || (!bulk && !!r && isMeme(r));
   // 翻译入口只对可翻译的单条记录出现（M26 规则 1）
   trBtn.hidden = $('#trHint').hidden = !r || bulk || !translatable(r);
   editSnipBtn.hidden = !snip;
@@ -784,12 +811,19 @@ function renderPreview(fade = false) {
     pbody.innerHTML = '<div class="p-empty">在左侧选择一条记录查看完整内容</div>';
     return;
   }
-  ptype.innerHTML = (snip ? `<span class="tchip" data-type="snip">${svg('snip')}片段</span>` : '')
+  ptype.innerHTML = isMeme(r) ? `<span class="tchip" data-type="meme">${svg('smile')}表情包</span>` : (snip ? `<span class="tchip" data-type="snip">${svg('snip')}片段</span>` : '')
     + `<span class="tchip" data-type="${r.kind}">${svg(r.kind)}${LABEL[r.kind]}</span>`
     + (isFav(r, favMin()) ? `<span class="tchip" data-type="fav">${svg('star')}常用</span>` : '')
     + (r.lang ? `<span class="chip">${esc(r.lang)}</span>` : '');
   setPin(r.pinned, true);
-  pmeta.innerHTML = metaHTML(r, S.detail?.id === r.id ? S.detail : null);
+  pmeta.innerHTML = isMeme(r) ? '' : metaHTML(r, S.detail?.id === r.id ? S.detail : null);
+  if (bodyFor === r.id && isMeme(r)) {
+    // 搜索词、用过次数变了：只换名字与元信息，大图不重载（动图不从头播）
+    const d = S.detail?.id === r.id ? S.detail : null, tmp = document.createElement('div');
+    tmp.innerHTML = memeBodyHTML(r, d);
+    for (const c of ['.mnm', '.mmt']) pbody.querySelector(c)?.replaceWith(tmp.querySelector(c)!);
+    return;
+  }
   if (bodyFor === r.id) {
     // 搜索词变了、选中没变：只换名字的高亮
     const nm = pbody.querySelector('.p-snip-name');
@@ -987,7 +1021,7 @@ function renderSpectrum(freshId?: number, stat = true) {
   if (spWin) spWin = spWin.pinned ? followNow(spWin, spNow) : clampWin(spWin.start, spWin.end, spNow);
   // 统计不依赖轨道宽度，收起时照常更新
   if (stat) {
-    const { count, peak } = spectrumStat([...S.records.values()].filter((r) => !isSnip(r)), spNow);
+    const { count, peak } = spectrumStat([...S.records.values()].filter((r) => !isLib(r)), spNow);
     $('#spStat').textContent = `24 小时内复制 ${fmtInt(count)} 次${peak ? ` · 最忙 ${peak.hour} 点（${peak.n} 次）` : ''}`;
   }
   $('#spDesc').textContent = spWin ? winLabel(spWin, hf.format) : SP_DESC;
@@ -995,8 +1029,8 @@ function renderSpectrum(freshId?: number, stat = true) {
   for (const b of spPresets.querySelectorAll<HTMLElement>('[data-span]')) b.classList.toggle('on', +b.dataset.span! === span);
   if (spCollapsed()) return;
   // 删除中的记录不参与布局，否则重绘会把正在收起的光柱拉回来
-  // 片段不画（M25 规则 8）
-  const recs = [...S.records.values()].filter((r) => !S.removing.has(r.id) && !isSnip(r));
+  // 片段、表情包不画（M25 规则 8）
+  const recs = [...S.records.values()].filter((r) => !S.removing.has(r.id) && !isLib(r));
   const next = layoutBars(recs, spNow, spTrack.clientWidth, matches, freshId, spWin);
   const base = (b: Layout['bars'][number]) => `bar${b.ids.length > 1 ? ' multi' : ''}${b.dim ? ' dim' : ''}`;
   const n = next.bars.length;
@@ -1066,7 +1100,7 @@ function paintMiniDots(recs: RecordSummary[]) {
 function paintSpectrumSel(animate = true) {
   if (spCollapsed()) return;
   // 片段不画在频谱上（M25 规则 8）：选中片段时光束隐藏
-  const sel = S.sel === null ? undefined : S.records.get(S.sel), r = sel && !isSnip(sel) ? sel : undefined;
+  const sel = S.sel === null ? undefined : S.records.get(S.sel), r = sel && !isLib(sel) ? sel : undefined;
   const col = r && sp.colOf.get(r.id);
   const b = col === undefined ? null : spBars.children[col] ?? null;
   if (b !== spOn) {
@@ -1228,10 +1262,13 @@ spMini.addEventListener('click', (e) => {
 // —— 分类标签 ——
 function renderTabs(instant: boolean) {
   const c = counts(S.records, favMin());
-  const html = (real: boolean) => FILTERS.map(([k, l]) => {
-    const mark = k === 'fav' ? svg('star', 'star') : k === 'snip' ? svg('snip', 'star') : '<i class="dot"></i>';
+  // 关掉表情包制作、换成精简模式后没有“表情包”分类：回到“全部”（调用方随后重绘列表）
+  const fs = tabFilters(memeTab());
+  if (!fs.includes(S.filter)) S.filter = 'all';
+  const html = (real: boolean) => FILTERS.filter(([k]) => fs.includes(k)).map(([k, l]) => {
+    const mark = k === 'fav' ? svg('star', 'star') : k === 'snip' ? svg('snip', 'star') : k === 'meme' ? svg('smile', 'star') : '<i class="dot"></i>';
     const tag = real ? `button type="button" class="tab" data-f="${k}" aria-pressed="${S.filter === k}"` : 'span class="tab"';
-    return `<${tag} data-type="${k}">${mark}${l}<span class="n">${c[k]}</span></${real ? 'button' : 'span'}>${k === 'snip' ? '<span class="tabs-sep"></span>' : ''}`;
+    return `<${tag} data-type="${k}">${mark}${l}<span class="n">${c[k]}</span></${real ? 'button' : 'span'}>${k === (fs.includes('meme') ? 'meme' : 'snip') ? '<span class="tabs-sep"></span>' : ''}`;
   }).join('');
   const ae = document.activeElement as HTMLElement | null;
   const refocus = ae?.classList.contains('tab') ? ae.dataset.f : undefined;
@@ -1429,8 +1466,8 @@ function copyRecord(id: number, plain = false) {
 // 乐观更新，失败回滚；鼠标操作时 FLIP 平移到新分组，起点或终点没渲染就直接到位
 function togglePin(id: number, animate: boolean) {
   const r = S.records.get(id);
-  // 片段不能置顶（M25 规则 8）
-  if (!r || isSnip(r) || S.removing.has(id)) return;
+  // 片段、表情包不能置顶（M25 规则 8）
+  if (!r || isLib(r) || S.removing.has(id)) return;
   const on = !r.pinned;
   const setLocal = (pinned: boolean) => {
     const cur = S.records.get(id);
@@ -1489,6 +1526,7 @@ function remove(ids: number[]) {
     const p = painted.get('r' + id), c = S.cells.find((c) => c.kind === 'row' && c.id === id);
     S.removing.add(id);
     ownEcho.add(id);
+    document.getElementById('mc-' + id)?.classList.add('is-removing');
     if (p && c?.kind === 'row') {
       // 直接加类让过渡播放；同步 p.h，避免下一次重绘整行替换
       p.el.querySelector('.item')?.classList.add('is-removing');
@@ -1514,7 +1552,7 @@ function remove(ids: number[]) {
         renderSpectrum();
       }, reduced.matches ? 0 : 360);
       const r = rs[0];
-      toast(ids.length > 1 ? `已删除 ${ids.length} ${multiUnit(rs)}` : `已删除${isSnip(r) ? '片段' : ''}“${truncate(r.title, 14)}”`, { undo: true, icon: 'trash' });
+      toast(ids.length > 1 ? `已删除 ${ids.length} ${multiUnit(rs)}` : isMeme(r) ? '已删除' : `已删除${isSnip(r) ? '片段' : ''}“${truncate(r.title, 14)}”`, { undo: true, icon: 'trash' });
       S.undo = armUndo(S.undo, ids, r.title, Date.now());
       paintUndoHint();
       setTimeout(paintUndoHint, UNDO_MS);
@@ -1526,6 +1564,7 @@ function remove(ids: number[]) {
       });
       // 重绘把光柱补回来：没重建过时原地路径取消收起动画，删除途中重建过时按新布局补上
       renderSpectrum();
+      if (memeGrid()) renderList();
       paintRows({ glide: ENTER_GLIDE });
       select(ids[0], { scroll: true, pan: 'smooth' });
       toast(err.message);
@@ -1579,9 +1618,8 @@ function openMenu(id: number, x: number, y: number, viaKb: boolean, detail = det
   $('[data-m="copy"]').hidden = bulk;
   $('[data-m="copyPlain"]').hidden = bulk || !plainable(r);
   $('[data-m="peek"]').hidden = bulk || !compact();
-  $('[data-m="pin"]').hidden = bulk || snip;
+  $('[data-m="pin"]').hidden = $('[data-m="saveSnippet"]').hidden = bulk || isLib(r);
   $('[data-m="editSnippet"]').hidden = bulk || !snip;
-  $('[data-m="saveSnippet"]').hidden = bulk || snip;
   $('[data-m="translate"]').hidden = bulk || !translatable(r);
   $('#menu .sep').hidden = bulk;
   $('#mDel').textContent = bulk ? `删除 ${S.multi.size} ${multiUnit(multiRecords())}` : '删除';
@@ -3028,7 +3066,8 @@ async function submitSettings() {
       if (n > 0 && !(await confirm({ title: '保存设置', body: `将删除 ${n} 条记录`, ok: '删除并保存' }))) return;
     }
     await saveSettings(s);
-    const favChanged = s.frequentMinUses !== S.settings.frequentMinUses;
+    // 表情包制作的开关也改分类栏：关掉时“表情包”分类和搜索里的表情包都不出现
+    const favChanged = s.frequentMinUses !== S.settings.frequentMinUses || s.memeEnabled !== S.settings.memeEnabled;
     const styleChanged = s.panelStyle !== S.settings.panelStyle;
     S.settings = s;
     refreshEngines();
@@ -3078,7 +3117,7 @@ function snipErr(el: HTMLInputElement | HTMLTextAreaElement, err: HTMLElement, m
 async function openSnippet(mode: SnipMode, id?: number) {
   if (snipDlg.classList.contains('is-shown')) return;
   const r = id === undefined ? undefined : S.records.get(id);
-  if (mode !== 'new' && (!r || S.removing.has(r.id) || isSnip(r) !== (mode === 'edit'))) return;
+  if (mode !== 'new' && (!r || S.removing.has(r.id) || isMeme(r) || isSnip(r) !== (mode === 'edit'))) return;
   // 文字内容、文件名与尺寸来自详情：没缓存时先取（本地调用，几毫秒），回来时已隐藏或对话框已开就作罢
   let d: RecordDetail | null = null;
   if (r) {
@@ -3431,6 +3470,8 @@ document.addEventListener('keydown', (e) => {
       peek: win.dataset.peek === 'true',
       filtered: S.filter !== 'all',
       meme: memeOn(),
+      inMeme: memeGrid(),
+      selIsMeme: !!selR && isMeme(selR),
     },
   );
   if (!a) return;
@@ -3456,7 +3497,7 @@ document.addEventListener('keydown', (e) => {
       return;
     }
     case 'pin': return void (sel !== null && togglePin(sel, false));
-    case 'filter': return setFilter(cycleFilter(S.filter, a.d), true);
+    case 'filter': return setFilter(cycleFilter(S.filter, a.d, memeTab()), true);
     case 'undo': return undo();
     case 'delete': return remove(S.multi.size >= 2 ? [...S.multi] : sel !== null ? [sel] : []);
     case 'clearSearch':
@@ -3468,6 +3509,8 @@ document.addEventListener('keydown', (e) => {
     case 'saveSnippet': return void (sel !== null && openSnippet('save', sel));
     case 'editSnippet': return void (sel !== null && openSnippet('edit', sel));
     case 'makeMeme': return makeMeme(sel);
+    case 'editMeme': return void (sel !== null && editMeme(sel));
+    case 'cell': return memeStep(a.d > 0 ? 'ArrowRight' : 'ArrowLeft');
     case 'newSnippet': return void openSnippet('new');
     case 'translate': return void (sel !== null && doTranslate(sel));
     // 精简模式（M27 规则 7–9）
@@ -3842,6 +3885,84 @@ const memeable = (r: RecordSummary) =>
 function makeMeme(id: number | null, multi = [...S.multi], blank = false) {
   void memeOpen(putOrder(id, multi)).catch((err: AppError) => (blank ? memeOpen([]) : toast(err.message)));
 }
+// 接着改：按库里的做法打开制作窗口；试用过期时由制作窗口提示
+function editMeme(id: number) {
+  if (S.records.get(id)?.meme) void memeOpenScene(id).catch((err: AppError) => toast(err.message));
+}
+
+// —— “表情包”分类：列表区换成网格，右边预览照常 ——
+/** 换到 / 离开网格：列表与网格二选一，状态栏换成网格的按键；返回现在是不是网格 */
+function paintMemeMode() {
+  const on = memeGrid();
+  list.hidden = on;
+  memesEl.hidden = !on;
+  statusbar.toggleAttribute('data-meme', on);
+  q.setAttribute('aria-controls', on ? 'memeGrid' : 'list');
+  return on;
+}
+function renderMemes() {
+  const v = vis(), searching = S.matchIds !== null;
+  S.count = v.length;
+  setCount(v.length);
+  S.cells = [];
+  S.total = 0;
+  painted.clear();
+  rowsEl.innerHTML = '';
+  ind.style.opacity = '0';
+  indShown = false;
+  S.multi.clear();
+  memeSrcEl.querySelectorAll<HTMLElement>('[data-v]').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.v === S.memeSrc)));
+  $('#memeN').textContent = `${fmtInt(v.length)} 个`;
+  // 有搜索词时不显示“＋ 做一个”
+  memeAddEl.hidden = searching;
+  const hk = S.settings.memeHotkey ? `，或按 ${hotkeyLabel(S.settings.memeHotkey, S.platform.os)} 做一个` : '';
+  memeGridEl.innerHTML = v.length ? v.map((r, i) => cellHTML(r, i, false, S.removing.has(r.id))).join('')
+    : `<p class="mempty">${searching || S.memeSrc !== 'all' ? '没有找到' : `还没有表情包。在图片上点笑脸${hk}`}</p>`;
+  S.sel = ensureSelection(v, S.sel);
+  markMemeSel();
+  renderPreview();
+}
+function markMemeSel() {
+  memeGridEl.querySelector('[aria-selected="true"]')?.setAttribute('aria-selected', 'false');
+  const c = S.sel === null ? null : document.getElementById('mc-' + S.sel);
+  c?.setAttribute('aria-selected', 'true');
+  c?.scrollIntoView({ block: 'nearest' });
+  q.setAttribute('aria-activedescendant', c ? c.id : '');
+}
+// 方向键在网格里移动：↑ / ↓ 按行，← / → 按格；落到“＋ 做一个”上时停在第一个（它是按钮，Tab 能到）
+function memeStep(key: Arrow) {
+  const v = vis().filter((r) => !S.removing.has(r.id));
+  if (!v.length) return;
+  const add = !memeAddEl.hidden ? 1 : 0;
+  const cols = Math.max(1, getComputedStyle(memesEl.querySelector('.mgrid')!).gridTemplateColumns.split(' ').length);
+  const i = gridMove(v.findIndex((r) => r.id === S.sel) + add, v.length, cols, key, !!add);
+  select(v[Math.max(0, i - add)].id, { pan: 'instant' });
+}
+memeAddEl.addEventListener('click', () => void memeOpen([]).catch((err: AppError) => toast(err.message)));
+memeSrcEl.addEventListener('click', (e) => {
+  const v = (e.target as Element).closest<HTMLElement>('[data-v]')?.dataset.v as MemeSource | undefined;
+  if (!v || v === S.memeSrc) return;
+  S.memeSrc = v;
+  S.sel = null;
+  renderList();
+});
+const cellOf = (e: Event) => Number((e.target as Element).closest<HTMLElement>('.mcell')?.dataset.id ?? NaN);
+memeGridEl.addEventListener('click', (e) => {
+  const id = cellOf(e);
+  if (S.records.has(id)) select(id);
+});
+memeGridEl.addEventListener('dblclick', (e) => {
+  const id = cellOf(e);
+  if (S.records.has(id)) copyRecord(id);
+});
+// 预览里的按钮（网格与搜索结果里的表情包行都是这一份）
+pbody.addEventListener('click', (e) => {
+  const a = (e.target as Element).closest<HTMLElement>('[data-mact]')?.dataset.mact, id = S.sel;
+  if (!a || id === null) return;
+  if (a === 'edit') editMeme(id);
+  if (a === 'del') remove([id]);
+  if (a === 'paste') copyRecord(id);
+});
 // 挂到晾衣绳：绳子放下亮一下；没挂成（重复、挂满、试用结束）的提示在晾衣绳上
 function hangRecord(id: number | null) {
   void lineHangFromPanel(id).catch((err: AppError) => toast(err.message));

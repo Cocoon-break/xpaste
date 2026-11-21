@@ -506,6 +506,7 @@ fn save_meme(
         source: "ai".into(),
         name: name.into(),
         style: Some(style_name.into()),
+        gif: ext == "gif",
     };
     let (id, _) = crate::meme_store::put(
         env.state,
@@ -936,6 +937,7 @@ mod tests {
                                 source: "ai".into(),
                                 name: format!("{i}"),
                                 style: None,
+                                gif: false,
                             },
                             search: String::new(),
                             scene: String::new(),

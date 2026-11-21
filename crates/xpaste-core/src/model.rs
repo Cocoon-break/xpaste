@@ -963,13 +963,15 @@ pub struct RecordSummary {
     pub meme: Option<MemeInfo>,
 }
 
-/// 表情包的展示信息：来源（`final` 成品 / `ai` 生成）、名字、风格。`Debug` 脱敏（名字是内容）。
+/// 表情包的展示信息：来源（`final` 成品 / `ai` 生成）、名字、风格、是不是动图（面板格子上的“GIF”角标）。`Debug` 脱敏（名字是内容）。
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MemeInfo {
     pub source: String,
     pub name: String,
     pub style: Option<String>,
+    #[serde(default)]
+    pub gif: bool,
 }
 
 impl fmt::Debug for MemeInfo {

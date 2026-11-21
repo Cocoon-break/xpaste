@@ -60,6 +60,14 @@
               <div id="rows"></div>
             </div>
           </div>
+          <!-- “表情包”分类：列表区换成网格；格子是 listbox 的选项，“＋ 做一个”是普通按钮，不算选项 -->
+          <div class="memes" id="memes" hidden>
+            <div class="mhead">
+              <div class="seg text sm" id="memeSrc" role="radiogroup" aria-label="来源"><button type="button" role="radio" data-v="all" aria-checked="true">全部</button><button type="button" role="radio" data-v="final" aria-checked="false">做好的</button><button type="button" role="radio" data-v="ai" aria-checked="false">AI 出的</button></div>
+              <span id="memeN"></span>
+            </div>
+            <div class="mgrid"><button class="mcell add" type="button" id="memeAdd">＋<br>做一个</button><div id="memeGrid" role="listbox" aria-label="表情包"></div></div>
+          </div>
           <!-- 精简模式没有预览与状态栏：多选时列表底部一条操作栏（M09 规则 8、M27） -->
           <div class="multi-bar" id="multiBar" hidden><span id="multiBarText"></span><button class="btn sm primary" type="button" data-bulk="merge">合并粘贴<kbd>Enter</kbd></button><button class="btn sm" type="button" data-bulk="clear">取消<kbd>Esc</kbd></button></div>
         </div>
@@ -87,14 +95,18 @@
       </div>
 
       <footer class="statusbar">
-        <span class="k" id="selHint"></span>
-        <span class="k"><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
-        <span class="k"><kbd class="mod"></kbd><kbd>1–9</kbd> <span data-verb="快速">快速复制</span></span>
-        <span class="k"><kbd class="mod"></kbd><kbd>P</kbd> 置顶</span>
-        <span class="k" id="trHint" hidden><kbd class="mod"></kbd><kbd>T</kbd> 翻译</span>
-        <span class="k"><kbd class="mod"></kbd><kbd>←→</kbd> 切换分类</span>
-        <span class="k" id="multiHint"><kbd class="mod"></kbd> 点击 多选</span>
+        <span class="k hk" id="selHint"></span>
+        <span class="k mk"><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> 选择</span>
+        <span class="k mk"><kbd>Enter</kbd> <span data-verb></span></span>
+        <span class="k mk"><kbd class="mod"></kbd><kbd>E</kbd> 接着改</span>
+        <span class="k hk"><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
+        <span class="k hk"><kbd class="mod"></kbd><kbd>1–9</kbd> <span data-verb="快速">快速复制</span></span>
+        <span class="k hk"><kbd class="mod"></kbd><kbd>P</kbd> 置顶</span>
+        <span class="k hk" id="trHint" hidden><kbd class="mod"></kbd><kbd>T</kbd> 翻译</span>
+        <span class="k hk"><kbd class="mod"></kbd><kbd>←→</kbd> 切换分类</span>
+        <span class="k hk" id="multiHint"><kbd class="mod"></kbd> 点击 多选</span>
         <span class="k"><kbd class="delmod" hidden>⌘</kbd><kbd class="del">Del</kbd> 删除</span>
+        <span class="k mk"><kbd class="mod"></kbd><kbd>1–9</kbd> <span data-verb="直接">直接复制</span></span>
         <span class="k" id="undoHint" hidden><kbd class="mod"></kbd><kbd>Z</kbd> 撤销</span>
         <span class="k"><kbd>Esc</kbd> <span id="escHint">隐藏</span></span>
       </footer>

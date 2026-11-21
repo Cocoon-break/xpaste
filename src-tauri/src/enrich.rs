@@ -13,9 +13,11 @@ use crate::state::AppState;
 
 const THUMB_MAX: u32 = 320;
 
+/// `MemeThumb`：表情包只做缩略图（面板网格里的静态格子），不识别文字
 pub enum Job {
     Bitmap { id: i64 },
     ImageFile { id: i64, path: PathBuf },
+    MemeThumb { id: i64, path: PathBuf },
     Video { id: i64, path: PathBuf },
     AppIcon { app_id: String },
 }
@@ -66,7 +68,7 @@ fn handle(app: &AppHandle, job: Job) {
                 thumb(app, &state.data_dir, id, &img);
             }
         }
-        Job::ImageFile { id, path } => {
+        Job::ImageFile { id, path } | Job::MemeThumb { id, path } => {
             if let Some(img) = decode(&path) {
                 thumb(app, &state.data_dir, id, &img);
             }

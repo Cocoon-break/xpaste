@@ -143,7 +143,17 @@ pub fn put(
         .store()
         .add_meme(meme, &flavors, crate::clock::now_ms())
     {
-        Ok(id) => Ok((id, flavors)),
+        Ok(id) => {
+            // 面板网格的格子用静态缩略图；动图只在预览里播
+            if state
+                .enrich
+                .send(crate::enrich::Job::MemeThumb { id, path })
+                .is_err()
+            {
+                log::warn!("补全线程已退出");
+            }
+            Ok((id, flavors))
+        }
         Err(e) => {
             log::warn!("表情包 进库失败：{e}");
             let _ = std::fs::remove_file(&path);
@@ -194,6 +204,7 @@ pub fn store(
         source: "final".into(),
         name,
         style: None,
+        gif: e.ext == "gif",
     };
     let (id, flavors) = put(
         state,

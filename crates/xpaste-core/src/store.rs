@@ -1259,7 +1259,8 @@ fn ocr_eligible_sql() -> String {
         .map(|e| format!("lower(paths) LIKE '%.{e}\"%'"))
         .collect::<Vec<_>>()
         .join(" OR ");
-    format!("(kind = 'image' OR (kind = 'file' AND ({exts})))")
+    // 表情包是自己做的图，不识别文字（搜索只认名字、文字、情绪和风格）
+    format!("meme IS NULL AND (kind = 'image' OR (kind = 'file' AND ({exts})))")
 }
 
 /// 关键词（已小写）在 `text` 中首次出现处前后各取 12 个字符，保留原文大小写；被截断的一侧加 `…`。
@@ -2794,6 +2795,7 @@ pub(crate) mod tests {
                 source: "ai".into(),
                 name: name.into(),
                 style: Some("q".into()),
+                gif: true,
             },
             search: search.into(),
             scene: r#"{"k":1}"#.into(),
@@ -2897,11 +2899,22 @@ pub(crate) mod tests {
             Some(MemeInfo {
                 source: "ai".into(),
                 name: "无语".into(),
-                style: Some("q".into())
+                style: Some("q".into()),
+                gif: true
             })
         );
         assert!(!sum.pinned);
         assert_eq!(s.meme_scene(id).unwrap().as_deref(), Some(r#"{"k":1}"#));
+    }
+
+    #[test]
+    fn ocr_skips_memes() {
+        let mut s = mem();
+        let dir = s.dir.clone();
+        s.add_meme(new_meme(&dir, "甲", "甲"), &[], 0).unwrap();
+        let states = [ocr_state::PENDING, ocr_state::SKIPPED];
+        assert!(s.ocr_pending_ids(&states, 10).unwrap().is_empty());
+        assert_eq!(s.ocr_progress().unwrap(), (0, 0));
     }
 
     #[test]

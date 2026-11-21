@@ -1,6 +1,6 @@
 // 精简模式（M27）：单行列表每行显示什么、怎么分组。纯函数，不碰 DOM。
 import type { RecordSummary } from './api/types';
-import { esc, fmtDur, hl, host, isHttpUrl, isSnip, type Filter } from './format.ts';
+import { esc, fmtDur, hl, host, isHttpUrl, isMeme, isSnip, type Filter } from './format.ts';
 
 /** 地址里原样的域名与其余部分：`URL.host` 会转小写、把中文域名转成 xn--，拿它去切原文会切错 */
 const splitUrl = (url: string): [string, string] => {
@@ -23,6 +23,7 @@ export const rowParts = (r: RecordSummary, { q, mark, snippet }: { q: string; ma
   if (snippet) return { title: snippetHTML(snippet, term), extra: '', ocr: true, rev: false };
   let title = hl(r.title, term), extra = '', rev = false;
   if (isSnip(r)) extra = esc(r.snippetBody!.split('\n')[0]);
+  else if (r.meme) extra = r.meme.source === 'ai' ? 'AI 出的' : '做好的';
   else if (r.kind === 'link' && r.url) {
     if (r.title === r.url && isHttpUrl(r.url)) {
       const [h, path] = splitUrl(r.url);
@@ -46,13 +47,13 @@ export const compactGroups = (vis: RecordSummary[], f: Filter): { name: string; 
   if (f === 'fav') return vis.length ? [{ name: '按使用次数排序', rows: vis }] : [];
   const out: { name: string; rows: RecordSummary[] }[] = [];
   for (const r of vis) {
-    const name = isSnip(r) ? '片段' : r.pinned ? '置顶' : '记录';
+    const name = isSnip(r) ? '片段' : isMeme(r) ? '表情包' : r.pinned ? '置顶' : '记录';
     if (out[out.length - 1]?.name !== name) out.push({ name, rows: [] });
     out[out.length - 1].rows.push(r);
   }
   return out;
 };
 
-/** 第 `gi` 组标题的高：有片段组时每组都有小标题；否则第一组没有，之后的是一条细线。 */
+/** 第 `gi` 组标题的高：有片段组或表情包组时每组都有小标题；否则第一组没有，之后的是一条细线。 */
 export const compactHeadH = (gs: { name: string }[], gi: number): number =>
-  gs.some((g) => g.name === '片段') ? COMPACT.label : gi === 0 ? 0 : COMPACT.rule;
+  gs.some((g) => g.name === '片段' || g.name === '表情包') ? COMPACT.label : gi === 0 ? 0 : COMPACT.rule;

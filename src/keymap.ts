@@ -29,6 +29,9 @@ export type KeyCtx = {
   filtered: boolean;
   /** 表情包制作在这个构建里、且用户开着 */
   meme: boolean;
+  /** 当前在“表情包”分类（网格）；选中的是表情包 */
+  inMeme: boolean;
+  selIsMeme: boolean;
 };
 
 /** `mod` 是平台的 Mod 键：macOS 只认 ⌘（metaKey），Windows 只认 Ctrl；`ctrl` 是字面的 Control 键（macOS 的 ⌃），
@@ -54,6 +57,8 @@ export type Action =
   | { t: 'saveSnippet' }
   | { t: 'editSnippet' }
   | { t: 'makeMeme' }
+  | { t: 'editMeme' }
+  | { t: 'cell'; d: 1 | -1 }
   | { t: 'newSnippet' }
   | { t: 'selectAll' }
   | { t: 'extend'; d: 1 | -1 }
@@ -91,6 +96,10 @@ export const keyAction = (e: KeyEv, c: KeyCtx): Action => {
   // 片段（M25 规则 5、6）；翻译（M26 规则 2，多选时不可翻译）；表情包制作
   if (e.mod && !e.shift && !e.alt && !e.repeat) {
     if (lk === 't' && c.selTranslatable && c.multi < 2) return { t: c.compact ? 'peekTranslate' : 'translate' };
+    // 表情包上 Mod+E 是“接着改”；表情包不能存为片段、不能置顶
+    if (lk === 'e' && c.selIsMeme && c.multi < 2) return { t: 'editMeme' };
+    if ((lk === 's' || lk === 'p') && c.selIsMeme) return null;
+    if (lk === 'e' && c.inMeme) return null;
     if (lk === 's' && c.hasSel && !c.selIsSnip) return { t: 'saveSnippet' };
     if (lk === 'e' && c.selIsSnip && c.multi < 2) return { t: 'editSnippet' };
     // 历史记录上 Mod+E 带着选中的（多选按先后）打开表情包制作；片段上仍是编辑片段
@@ -98,8 +107,10 @@ export const keyAction = (e: KeyEv, c: KeyCtx): Action => {
     if (lk === 'n') return { t: 'newSnippet' };
     if (lk === 'a' && c.inSnip && !c.searchHasText) return { t: 'selectAll' };
   }
-  // Shift + ↑↓ 连选在所有分类里都有效（合并粘贴，M09 规则 8）
-  if (vert && e.shift && !e.mod) return { t: 'extend', d: vert };
+  // “表情包”网格：← / → 在搜索框为空时按格移动，有字时留给输入光标
+  if (c.inMeme && (k === 'ArrowLeft' || k === 'ArrowRight') && !e.mod && !e.ctrl && !e.alt && !e.shift && !c.searchHasText && !c.onControl) return { t: 'cell', d: k === 'ArrowRight' ? 1 : -1 };
+  // Shift + ↑↓ 连选在所有分类里都有效（合并粘贴，M09 规则 8）；表情包网格里不连选
+  if (vert && e.shift && !e.mod && !c.inMeme) return { t: 'extend', d: vert };
   if (vert) return { t: 'move', d: vert, instant: e.repeat };
   // 按住不连发：删除、复制（次数 +1）、置顶（来回翻转）都只认第一次按下
   if (k === 'Enter' && e.shift && c.selPlain && c.multi < 2 && !e.mod && !e.ctrl && !c.onControl && !e.repeat) return { t: 'copyPlain' };
