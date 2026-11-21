@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Settings } from './api/types';
 import {
-  memeStatsText, MEME_PRESETS, memePreset, providerAfterEdit, addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFrequent, parseIgnored, parseLimit, pickerOptions, removeIgnored, retentionFromOption,
+  memeCaptionState, memeStatsText, MEME_PRESETS, memePreset, providerAfterEdit, addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFrequent, parseIgnored, parseLimit, pickerOptions, removeIgnored, retentionFromOption,
 } from './settings-form.ts';
 
 test('parseLimit 只接受 50–5000 的 50 倍数', () => {
@@ -118,3 +118,9 @@ test('provider switches to custom when edited', () => {
 });
 
 test('memeStatsText 写个数和 MB', () => assert.equal(memeStatsText(3, 5 * 1048576 + 52429), '表情包库：3 个，占 5.1 MB'));
+
+test('memeCaptionState 看翻译的地址和模型是否都填了', () => {
+  assert.equal(memeCaptionState(' https://a/v1 ', ' gpt-4o-mini '), '已配置：gpt-4o-mini');
+  assert.equal(memeCaptionState('', 'm'), '还没配好');
+  assert.equal(memeCaptionState('https://a', '  '), '还没配好');
+});

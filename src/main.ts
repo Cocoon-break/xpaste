@@ -49,7 +49,7 @@ import {
   centerWin, clampWin, DAY, followNow, HOUR, layoutBars, minorDayTicks, miniWin, panWin, sameColumns, spanOf, spectrumStat, staggerIndex,
   ticks as winTicks, winLabel, xOf, zoomWin, type Layout, type Win,
 } from './spectrum';
-import { MEME_PRESETS, type MemeField, type MemeFormat, memePreset, memeStatsText, providerAfterEdit, addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFrequent, parseLimit, pickerOptions, removeIgnored } from './settings-form';
+import { MEME_PRESETS, memeCaptionState, type MemeField, type MemeFormat, memePreset, memeStatsText, providerAfterEdit, addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFrequent, parseLimit, pickerOptions, removeIgnored } from './settings-form';
 import { composing, justComposed } from './ime';
 import { errorControl, revealsFocus, shownTabTarget } from './settings-tabs';
 import {
@@ -2240,6 +2240,7 @@ function paintProHome() {
   paintMixerSum();
   memeOnQuick.checked = memeOnIn.checked;
   paintMemeSum();
+  paintMemeCaption();
   $('#proFeatMeme').classList.toggle('off', !memeOnIn.checked);
   $('#proFeatLine').classList.toggle('off', !draftLineEnabled);
   $('#proFeatBelt').classList.toggle('off', !beltOnIn.checked);
@@ -2376,6 +2377,7 @@ memeOnQuick.addEventListener('change', () => {
   paintProHome();
 });
 memeOnIn.addEventListener('change', paintProHome);
+const paintMemeCaption = () => ($('#memeCaption').textContent = memeCaptionState(trBaseIn.value, trModelIn.value));
 $('#memeTrGo').addEventListener('click', () => showStControl(trBaseIn));
 proLicCode.addEventListener('click', () => proGo('proLicPage', proCodeIn));
 proLicManage.addEventListener('click', () => proGo('proLicPage'));
@@ -2492,6 +2494,8 @@ function paintTrUrlErr(msg: string | null) {
   trBaseIn.setAttribute('aria-invalid', String(!!msg));
   paintStErr();
 }
+trBaseIn.addEventListener('input', paintMemeCaption);
+trModelIn.addEventListener('input', paintMemeCaption);
 trBaseIn.addEventListener('input', () => !trBaseErr.hidden && baseUrlError(trBaseIn.value) === null && paintTrUrlErr(null));
 const setTrResult = (t: string, cls = '') => {
   trResult.textContent = t;

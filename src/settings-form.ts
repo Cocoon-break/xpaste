@@ -136,3 +136,7 @@ export const providerAfterEdit = (prev: string, field: MemeField): string => (fi
 /** 设置页底部一行：表情包库的个数与占用。 */
 export const memeStatsText = (count: number, bytes: number): string =>
   `表情包库：${count} 个，占 ${(bytes / 1048576).toFixed(1)} MB`;
+
+/** “文案”一组的状态：翻译的接口地址和模型 ID 都填了才算配好（取表单里未保存的值）。 */
+export const memeCaptionState = (baseUrl: string, model: string): string =>
+  baseUrl.trim() && model.trim() ? `已配置：${model.trim()}` : '还没配好';
