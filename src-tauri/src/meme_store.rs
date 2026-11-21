@@ -187,18 +187,34 @@ pub struct Final {
 
 /// 写剪切板的函数（测试里换成假的）
 pub type Write<'a> = &'a mut dyn FnMut(&[Flavor]) -> Result<u64, PlatformError>;
+/// 贴到原来的应用：关窗口、交还前台、模拟粘贴，返回贴过去没有（测试里换成假的）
+pub type Paste<'a> = &'a mut dyn FnMut() -> bool;
 
 /// 已进库、但没能放进剪切板时给页面的话
 pub const CLIP_FAILED: &str = "存进表情包了，但没能放进剪切板，再点一次复制";
+/// 库里那一个已经不在了（页面照常存一个新的）
+pub const GONE: &str = "gone";
 
-/// 存进表情包库（做好的）；`copy` 时再按自身写入放进剪切板，不进历史。
-/// 返回 id，以及放剪切板失败时的提示（这时已进库，页面照样记下“最后一次存的”）
-pub fn store(
-    state: &AppState,
-    last: &Last,
-    f: Final,
-    copy: Option<Write<'_>>,
-) -> Result<(i64, Option<&'static str>), String> {
+/// 做完之后去哪：贴到原来的应用、只放剪切板、只进库
+#[derive(Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Then {
+    Paste,
+    Copy,
+    Lib,
+}
+
+/// 做完的结果：库里的 id；放剪切板失败时带提示（这时已进库，窗口不关）；贴过去没有
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoreOut {
+    pub id: i64,
+    pub clip_error: Option<&'static str>,
+    pub pasted: bool,
+}
+
+/// 存进表情包库（做好的），返回 id
+pub fn store(state: &AppState, last: &Last, f: Final) -> Result<i64, String> {
     let e = last.take(f.token).ok_or("成品已过期，再点一次")?;
     let name: String = f.name.trim().chars().take(16).collect();
     let name = if name.is_empty() {
@@ -224,26 +240,34 @@ pub fn store(
         search,
         f.scene,
     )?;
-    log::info!(
-        "表情包 存成品 {id} {} {} 字节{}",
-        e.ext,
-        e.bytes.len(),
-        if copy.is_some() { " 并复制" } else { "" }
-    );
-    let Some(w) = copy else {
-        return Ok((id, None));
-    };
-    let clip = crate::commands::records::precheck(state, id)
-        .and_then(|f| crate::commands::records::write_marked(state, || w(&f)));
-    Ok((id, clip.is_err().then_some(CLIP_FAILED)))
+    log::info!("表情包 存成品 {id} {} {} 字节", e.ext, e.bytes.len());
+    Ok(id)
 }
 
-/// 和上次存的一样：把库里那一个按自身写入放进剪切板（不进历史）。不在了时返回 "gone"
-pub fn copy(state: &AppState, id: i64, write: Write<'_>) -> Result<(), String> {
-    let flavors = crate::commands::records::precheck(state, id).map_err(|_| "gone")?;
-    crate::commands::records::write_marked(state, || write(&flavors))
-        .map(drop)
-        .map_err(|e| e.to_string())
+/// 库里的 `id`（刚存的，或和上次存的一样时那一个）按 `then` 往下走：复制、贴过去时按自身写入放进剪切板（不进历史），
+/// 放好了再 `paste`；只进库时不碰剪切板。放剪切板失败时带提示、不去粘贴。库里那个不在了时返回 `GONE`
+pub fn deliver(
+    state: &AppState,
+    id: i64,
+    then: Then,
+    write: Write<'_>,
+    paste: Paste<'_>,
+) -> Result<StoreOut, &'static str> {
+    let flavors = crate::commands::records::precheck(state, id).map_err(|_| GONE)?;
+    let mut out = StoreOut {
+        id,
+        clip_error: None,
+        pasted: false,
+    };
+    if then == Then::Lib {
+        return Ok(out);
+    }
+    if crate::commands::records::write_marked(state, || write(&flavors)).is_err() {
+        out.clip_error = Some(CLIP_FAILED);
+        return Ok(out);
+    }
+    out.pasted = then == Then::Paste && paste();
+    Ok(out)
 }
 
 fn draft_path(data_dir: &Path) -> std::path::PathBuf {
@@ -411,7 +435,7 @@ mod tests {
         let before = history(&state);
         let out = encode(&last, &body(8, 80, 256, &[[1, 2, 3, 255], [4, 5, 6, 255]])).unwrap();
         let mut seen = Vec::new();
-        let (id, clip) = store(
+        let id = store(
             &state,
             &last,
             Final {
@@ -420,14 +444,21 @@ mod tests {
                 scene: "{}".into(),
                 parts: parts(),
             },
-            Some(&mut |f: &[xpaste_core::Flavor]| {
+        )
+        .unwrap();
+        let o = deliver(
+            &state,
+            id,
+            Then::Copy,
+            &mut |f: &[xpaste_core::Flavor]| {
                 assert!(state.writing.load(Ordering::SeqCst));
                 seen = f.iter().map(|f| f.format.clone()).collect();
                 Ok(42)
-            }),
+            },
+            &mut || panic!("复制不去粘贴"),
         )
         .unwrap();
-        assert_eq!(clip, None);
+        assert_eq!((o.id, o.clip_error, o.pasted), (id, None, false));
         // 库里多一个做好的，剪切板写入带自身写入标记，历史不变
         assert_eq!(state.store().meme_bytes().unwrap().0, 1);
         let m = state
@@ -458,7 +489,6 @@ mod tests {
                     scene: "{}".into(),
                     parts: parts(),
                 },
-                None,
             )
             .is_err()
         );
@@ -483,20 +513,25 @@ mod tests {
         }
     }
 
-    /// 已进库、放剪切板失败：照样返回 id（页面记下“最后一次存的”，再点复制不会再存一个），带上提示
+    /// 已进库、放剪切板失败：照样返回 id（页面记下“最后一次存的”，再点复制不会再存一个），带上提示，也不去粘贴
     #[test]
     fn store_clip_failure_still_returns_id() {
         let state = AppState::for_test();
         let last = Last::default();
         let out = encode(&last, &body(8, 80, 256, &[[1, 2, 3, 255]])).unwrap();
-        let (id, clip) = store(
+        let id = store(&state, &last, fin(out.token, "甲")).unwrap();
+        let o = deliver(
             &state,
-            &last,
-            fin(out.token, "甲"),
-            Some(&mut |_: &[Flavor]| Err(PlatformError::Clipboard("x".into()))),
+            id,
+            Then::Paste,
+            &mut |_: &[Flavor]| Err(PlatformError::Clipboard("x".into())),
+            &mut || panic!("没放进剪切板不去粘贴"),
         )
         .unwrap();
-        assert_eq!(clip, Some(CLIP_FAILED));
+        assert_eq!(
+            (o.id, o.clip_error, o.pasted),
+            (id, Some(CLIP_FAILED), false)
+        );
         assert!(
             state
                 .store()
@@ -508,17 +543,72 @@ mod tests {
         );
     }
 
+    /// 贴过去没成（没有辅助功能权限、目标窗口没了）：已进库、已在剪切板，pasted 为 false
+    #[test]
+    fn paste_failure_still_in_library_and_clipboard() {
+        let state = AppState::for_test();
+        let last = Last::default();
+        let out = encode(&last, &body(8, 80, 256, &[[1, 2, 3, 255]])).unwrap();
+        let id = store(&state, &last, fin(out.token, "甲")).unwrap();
+        let (mut wrote, mut tried) = (false, false);
+        let o = deliver(
+            &state,
+            id,
+            Then::Paste,
+            &mut |_: &[Flavor]| {
+                wrote = true;
+                Ok(43)
+            },
+            &mut || {
+                tried = true;
+                false
+            },
+        )
+        .unwrap();
+        assert_eq!((o.id, o.clip_error, o.pasted), (id, None, false));
+        assert!(wrote && tried);
+        assert_eq!(state.last_write_seq.load(Ordering::SeqCst), 43);
+        assert!(
+            state
+                .store()
+                .live_summary(id)
+                .unwrap()
+                .unwrap()
+                .meme
+                .is_some()
+        );
+        // 贴过去了
+        let o = deliver(&state, id, Then::Paste, &mut |_| Ok(44), &mut || true).unwrap();
+        assert!(o.pasted);
+        // 存进表情包：不碰剪切板
+        let o = deliver(
+            &state,
+            id,
+            Then::Lib,
+            &mut |_| panic!("不碰剪切板"),
+            &mut || panic!("不去粘贴"),
+        )
+        .unwrap();
+        assert_eq!((o.clip_error, o.pasted), (None, false));
+        // 库里那个不在了
+        state.store().soft_delete(&[id], 5).unwrap();
+        state.store().purge_all_soft_deleted().unwrap();
+        assert_eq!(
+            deliver(&state, id, Then::Lib, &mut |_| Ok(1), &mut || true).err(),
+            Some(GONE)
+        );
+    }
+
     /// 名字按文字截，最多 16 字（同文字的上限）
     #[test]
     fn store_name_up_to_16() {
         let state = AppState::for_test();
         let last = Last::default();
         let out = encode(&last, &body(8, 80, 256, &[[1, 2, 3, 255]])).unwrap();
-        let (id, _) = store(
+        let id = store(
             &state,
             &last,
             fin(out.token, "一二三四五六七八九十甲乙丙丁戊己庚"),
-            None,
         )
         .unwrap();
         let m = state
@@ -541,7 +631,7 @@ mod tests {
         let state = open(&a);
         let last = Last::default();
         let out = encode(&last, &body(8, 80, 256, &[[1, 2, 3, 255], [4, 5, 6, 255]])).unwrap();
-        let (id, _) = store(&state, &last, fin(out.token, "甲"), None).unwrap();
+        let id = store(&state, &last, fin(out.token, "甲")).unwrap();
         drop(state);
         std::fs::rename(&a, &b).unwrap();
         let state = open(&b);
@@ -560,7 +650,8 @@ mod tests {
             assert!(gif.data.starts_with(b"GIF89a"));
         }
         assert!(crate::meme_gen::frame_png(&state, id, 1).is_some());
-        copy(&state, id, &mut |_| Ok(1)).unwrap();
+        let o = deliver(&state, id, Then::Copy, &mut |_| Ok(1), &mut || false).unwrap();
+        assert_eq!(o.clip_error, None);
         state.store().soft_delete(&[id], 5).unwrap();
         state.store().purge_all_soft_deleted().unwrap();
         assert!(!file.exists());
@@ -580,7 +671,7 @@ mod tests {
         let out = encode(&last, &body(8, 80, 256, &[[1, 2, 3, 255]])).unwrap();
         let used_sketch = format!("{}.png", "a".repeat(32));
         let draft_sketch = format!("{}.png", "b".repeat(32));
-        let (id, _) = store(
+        let id = store(
             &state,
             &last,
             Final {
@@ -589,12 +680,11 @@ mod tests {
                 scene: format!(r#"{{"refs":[{{"id":-1,"file":null,"sketch":"{used_sketch}"}}]}}"#),
                 parts: parts(),
             },
-            None,
         )
         .unwrap();
         file(&sk.join(&used_sketch));
         file(&sk.join(&draft_sketch));
-        file(&sk.join("c.png"));
+        file(&sk.join("zz.png"));
         file(&dir.join("orphan.gif"));
         draft_set(
             &state.data_dir,
@@ -609,7 +699,7 @@ mod tests {
         assert!(sk.join(&used_sketch).exists());
         assert!(sk.join(&draft_sketch).exists());
         assert!(dir.join(DRAFT).exists());
-        assert!(!sk.join("c.png").exists());
+        assert!(!sk.join("zz.png").exists());
         assert!(!dir.join("orphan.gif").exists());
         draft_set(&state.data_dir, None);
         assert!(!dir.join(DRAFT).exists());

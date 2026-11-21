@@ -23,13 +23,18 @@ export type RefKey = { id: number; file: number | null };
 export interface MemeOpen {
   refs: RefKey[]; idea: string; scene: string | null; sceneId: number | null; sceneFinal: boolean; draft: string | null; cutout: boolean; expired: boolean;
   taskId: number | null; taskIds: number[];
+  /** 粘贴目标：打开窗口时前台应用的名字（主按钮“贴到<它>”）；从托盘打开、取不到时为 null */
+  target: string | null;
+  /** 这次窗口是从面板里打开的：标题前有“‹ 返回面板”，Esc 回面板 */
+  fromPanel: boolean;
 }
 
 /** 面板的笑脸按钮、Mod+E：带着这些记录打开（空 = 空白打开）；全都做不了表情包时抛出 AppError */
 export const memeOpen = (ids: number[]) => invoke<void>('meme_open', { ids });
-/** 页面的 Esc、关闭按钮 */
+/** 关闭圆点、不是从面板来时的 Esc：关窗口，键盘回到原来的应用 */
 export const memeClose = () => invoke<void>('meme_close');
-export const memeReveal = (id: number) => invoke<void>('meme_reveal', { id });
+/** “‹ 返回面板”、从面板来时的 Esc：关窗口，面板不切分类、不改选中；`draft` 为这次关窗口留了草稿（面板提示一句） */
+export const memeBack = (draft: boolean) => invoke<void>('meme_back', { draft });
 /** 页面的参考图变了：后端据此判断再从面板带进来时还能加几张 */
 export const memeSetRefs = (refs: RefKey[]) => invoke<void>('meme_set_refs', { refs });
 /** 一张参考图的 PNG（动图取第一帧）；原记录没了时抛出 "gone" */
@@ -118,12 +123,16 @@ export function memeEncode(frames: Uint8Array[], step: MemeStep) {
 }
 /** 参与搜索的几段（名字另传） */
 export interface SearchParts { idea: string; caption: string; emotions: string[]; styleName: string }
-/** 存进表情包库（做好的），copy 时同时放进剪切板（不进历史）；返回库里的 id，失败时抛出原因。
- *  `clipError`：已进库、但没能放进剪切板时的提示 */
-export const memeStore = (token: number, name: string, scene: string, searchParts: SearchParts, copy: boolean) =>
-  invoke<{ id: number; clipError: string | null }>('meme_store', { token, name, scene, searchParts, copy });
-/** 把库里这一个放进剪切板（和上次存的一样时）；不在了时抛出 "gone" */
-export const memeCopy = (id: number) => invoke<void>('meme_copy', { id });
+/** 做完之后去哪：paste 放进剪切板、关窗口贴回原来的应用；copy 放进剪切板、关窗口；lib 关窗口、面板选中它 */
+export type MemeThen = 'paste' | 'copy' | 'lib';
+/** 做完的结果：库里的 id；`clipError` 是已进库、但没能放进剪切板时的提示（这时窗口不关）；
+ *  `pasted` 为 false 时不用另外提示（后端已唤起面板，按面板粘贴的降级提示走） */
+export interface MemeStoreOut { id: number; clipError: string | null; pasted: boolean }
+/** 存进表情包库（做好的），再按 `then` 做完就走（放剪切板不进历史）；失败时抛出原因 */
+export const memeStore = (token: number, name: string, scene: string, searchParts: SearchParts, then: MemeThen) =>
+  invoke<MemeStoreOut>('meme_store', { token, name, scene, searchParts, then });
+/** 和上次存的一样时：不再进库，库里这一个按 `then` 做完就走；不在了时抛出 "gone" */
+export const memeCopy = (id: number, then: MemeThen) => invoke<MemeStoreOut>('meme_copy', { id, then });
 /** 接着改：按库里这个表情包的做法打开制作窗口 */
 export const memeOpenScene = (id: number) => invoke<void>('meme_open_scene', { id });
 /** 留草稿（替换旧的），null 时丢掉 */
@@ -141,5 +150,9 @@ export const onMemeToast = (cb: (text: string) => void): Promise<UnlistenFn> =>
 /** 制作窗口里存进了表情包（后端已唤起面板）：面板切到“表情包”分类选中这个 id */
 export const onMemeReveal = (cb: (id: number) => void): Promise<UnlistenFn> =>
   listen<number>('meme-reveal', (e) => cb(e.payload));
+/** 制作窗口关掉、唤起了面板（后端发给面板）：返回面板时 `draft` 为留了草稿；贴过去没成时 `reason` 是退成只复制的原因 */
+export interface MemeBack { draft: boolean; reason: 'needAccessibility' | 'elevated' | 'pasteFailed' | null }
+export const onMemeBack = (cb: (p: MemeBack) => void): Promise<UnlistenFn> =>
+  listen<MemeBack>('meme-back', (e) => cb(e.payload));
 /** 窗口关掉了（Esc、关闭按钮、设置里关掉开关）：页面清空 */
 export const onMemeClosed = (cb: () => void): Promise<UnlistenFn> => listen('meme-closed', () => cb());

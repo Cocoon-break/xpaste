@@ -8,6 +8,7 @@ use crate::error::AppError;
 use crate::imagegen::{self, Format, ImageCfg};
 use crate::meme::{self, RefKey};
 use crate::meme_gen::{self, GenOut, GenReq};
+use crate::meme_store::{StoreOut, Then};
 use crate::state::AppState;
 
 /// 设置页表单里（未保存）的生图接口配置。带 Key 与地址，不派生 Debug。
@@ -55,19 +56,19 @@ pub fn meme_library_stats(state: State<'_, AppState>) -> Result<(u64, u64), AppE
 /// 面板的笑脸按钮、`Mod+E`：带着这些记录打开（空 = 空白打开）。全都做不了表情包时返回原因。
 #[tauri::command(async)]
 pub fn meme_open(app: AppHandle, ids: Vec<i64>) -> Result<(), AppError> {
-    meme::open(&app, &ids)
+    meme::open(&app, &ids, meme::Entry::Panel)
 }
 
-/// 页面的 Esc、关闭按钮
+/// 页面的 Esc（不是从面板来的）、关闭圆点：关窗口，键盘回到原来的应用
 #[tauri::command(async)]
 pub fn meme_close(app: AppHandle) {
     meme::close(&app);
 }
 
-/// 页面的“存进表情包”存好之后：关窗口，面板切到“表情包”分类选中它
+/// 页面的“‹ 返回面板”、从面板来时的 Esc：关窗口，唤起面板，不切分类、不改选中。`draft`：这次留了草稿，面板提示一句
 #[tauri::command(async)]
-pub fn meme_reveal(app: AppHandle, id: i64) {
-    meme::reveal(&app, id);
+pub fn meme_back(app: AppHandle, draft: bool) {
+    meme::back(&app, draft);
 }
 
 /// 页面的参考图变了（拿掉、从历史添加、画草图）：后端据此判断再从面板带进来时还能加几张。
@@ -354,15 +355,8 @@ pub async fn meme_encode(request: Request<'_>) -> Result<crate::meme_store::Enco
     .map_err(|_| "编码失败".to_string())?
 }
 
-/// `meme_store` 的结果：库里的 id；放剪切板失败时带提示（这时已进库）
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct StoreOut {
-    id: i64,
-    clip_error: Option<&'static str>,
-}
-
-/// 存进表情包库（做好的），`copy` 时同时放进剪切板（自身写入，不进历史）
+/// 存进表情包库（做好的），再按 `then` 做完就走：`paste` 放进剪切板、关窗口贴回原来的应用；`copy` 放进剪切板、关窗口；
+/// `lib` 关窗口、唤起面板选中它。放剪切板失败时窗口不关，结果里带提示（这时已进库）
 #[tauri::command(async)]
 pub fn meme_store(
     app: AppHandle,
@@ -371,7 +365,7 @@ pub fn meme_store(
     name: String,
     scene: String,
     search_parts: crate::meme_store::SearchParts,
-    copy: bool,
+    then: Then,
 ) -> Result<StoreOut, String> {
     let f = crate::meme_store::Final {
         token,
@@ -379,22 +373,45 @@ pub fn meme_store(
         scene,
         parts: search_parts,
     };
-    let mut write = |f: &[xpaste_core::Flavor]| xpaste_platform::write(f);
-    let (id, clip_error) = crate::meme_store::store(
-        &state,
-        &crate::meme_store::LAST,
-        f,
-        copy.then_some(&mut write as crate::meme_store::Write<'_>),
-    )?;
-    // 进了库就让面板刷新（复制失败时也已进库）
+    let id = crate::meme_store::store(&state, &crate::meme_store::LAST, f)?;
+    // 进了库就让面板刷新（放剪切板失败时也已进库）
     crate::events::emit_summary(&app, crate::events::RECORD_ADDED, id);
-    Ok(StoreOut { id, clip_error })
+    finish(&app, &state, id, then).map_err(String::from)
 }
 
-/// 和上次存的一样：把库里那一个放进剪切板（自身写入，不进历史）。不在了时返回 "gone"
+/// 和上次存的一样（做法没变）：不再进库，库里那一个照 `then` 往下走（同 `meme_store`）。不在了时返回 "gone"，页面照常存一个新的
 #[tauri::command(async)]
-pub fn meme_copy(state: State<'_, AppState>, id: i64) -> Result<(), String> {
-    crate::meme_store::copy(&state, id, &mut |f| xpaste_platform::write(f))
+pub fn meme_copy(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+    then: Then,
+) -> Result<StoreOut, String> {
+    finish(&app, &state, id, then).map_err(String::from)
+}
+
+/// 放剪切板、贴过去，然后关窗口（只进库时唤起面板）；放剪切板失败时窗口不关
+fn finish(
+    app: &AppHandle,
+    state: &AppState,
+    id: i64,
+    then: Then,
+) -> Result<StoreOut, &'static str> {
+    let out = crate::meme_store::deliver(
+        state,
+        id,
+        then,
+        &mut |f| xpaste_platform::write(f),
+        &mut || meme::paste_back(app, id),
+    )?;
+    match then {
+        _ if out.clip_error.is_some() => {}
+        Then::Lib => meme::reveal(app, id),
+        Then::Copy => meme::close(app),
+        // 贴过去时 paste_back 已经关了窗口
+        Then::Paste => {}
+    }
+    Ok(out)
 }
 
 /// 接着改：按库里这个表情包的做法打开制作窗口

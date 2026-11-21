@@ -377,6 +377,11 @@ pub fn frontmost_app() -> Option<AppInfo> {
         .or_else(|| app_of_window(unsafe { GetForegroundWindow() }))
 }
 
+/// 窗口所属应用的名称（同 `frontmost_app().name` 的口径）；窗口失效、取不到时为 None
+pub fn window_app_name(hwnd: isize) -> Option<String> {
+    app_of_window(HWND(hwnd as *mut _)).map(|a| a.name)
+}
+
 fn app_of_window(hwnd: HWND) -> Option<AppInfo> {
     if hwnd.is_invalid() {
         return None;

@@ -285,7 +285,7 @@ pub fn setup(app: &App) -> tauri::Result<()> {
             "rec-stop" => crate::rec::stop(app),
             "meme" => {
                 // 空白打开不读库，也不会失败
-                let _ = crate::meme::open(app, &[]);
+                let _ = crate::meme::open(app, &[], crate::meme::Entry::Tray);
             }
             "update" => crate::update::open(app),
             // 录制中退出由 ExitRequested 里的 rec::hold_exit 先停止、写完文件再退出（M24 规则 8）

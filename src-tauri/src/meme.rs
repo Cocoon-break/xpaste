@@ -71,6 +71,73 @@ pub struct OpenPayload {
     pub task_id: Option<u64>,
     /// 那次已经画好的结果 id（网格没画规整的是整张那一个）；在画、排队、没画出来的为空
     pub task_ids: Vec<i64>,
+    /// 粘贴目标：打开窗口时前台应用的名字（主按钮写“贴到<它>”）；从托盘打开、取不到名字时为 None
+    pub target: Option<String>,
+    /// 这次窗口是从面板里打开的：标题前有“返回面板”，Esc 回面板
+    pub from_panel: bool,
+}
+
+/// 从哪打开的
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Entry {
+    /// 面板的笑脸、`Mod+E`、“接着改”、“＋ 做一个”、面板里的任务格
+    Panel,
+    /// 托盘菜单：没有粘贴目标（同面板从托盘唤起）
+    Tray,
+    /// 全局快捷键等其余入口
+    Other,
+}
+
+/// 打开窗口时记下的来处，关窗口时用
+#[derive(Clone, Debug, PartialEq)]
+pub struct Origin {
+    /// 打开前的前台窗口（只有 Windows 有），关掉时交还、贴过去时按它粘贴
+    pub back: Option<isize>,
+    /// 粘贴目标的应用名
+    pub target: Option<String>,
+    pub from_panel: bool,
+}
+
+const NOWHERE: Origin = Origin {
+    back: None,
+    target: None,
+    from_panel: false,
+};
+
+/// 这次打开之后的来处。新窗口按入口记下前台（`fg`：前台窗口和应用名；托盘打开不取，没有目标）；
+/// 已开着时目标不变，从面板带进来时记成从面板来的，快捷键、托盘再打开不改。
+pub fn arrive(
+    had: Option<Origin>,
+    entry: Entry,
+    fg: impl FnOnce() -> (Option<isize>, Option<String>),
+) -> Origin {
+    let panel = entry == Entry::Panel;
+    match had {
+        Some(o) => Origin {
+            from_panel: o.from_panel || panel,
+            ..o
+        },
+        None if entry == Entry::Tray => NOWHERE,
+        None => {
+            let (back, target) = fg();
+            Origin {
+                back,
+                target,
+                from_panel: panel,
+            }
+        }
+    }
+}
+
+/// 此刻的前台窗口和前台应用的名字（同采集时的来源应用名）
+fn foreground() -> (Option<isize>, Option<String>) {
+    let back = xpaste_platform::foreground_window();
+    // Windows 的 frontmost_app 先看剪切板所有者，这里要的是前台窗口所属的应用
+    #[cfg(windows)]
+    let name = back.and_then(xpaste_platform::window_app_name);
+    #[cfg(not(windows))]
+    let name = xpaste_platform::frontmost_app().map(|a| a.name);
+    (back, name)
 }
 
 /// 选中的一条记录里做表情包用得上的部分
@@ -139,14 +206,13 @@ struct Runtime {
     open: bool,
     /// 窗口里此刻的参考图（镜像）
     refs: Vec<RefKey>,
-    /// 打开前的前台窗口（只有 Windows 有），关掉时交还
-    back: Option<isize>,
+    origin: Origin,
 }
 
 static RT: Mutex<Runtime> = Mutex::new(Runtime {
     open: false,
     refs: Vec::new(),
-    back: None,
+    origin: NOWHERE,
 });
 
 fn rt() -> MutexGuard<'static, Runtime> {
@@ -180,8 +246,8 @@ fn gather(state: &AppState, ids: &[i64]) -> Vec<Item> {
 
 /// 带着这些记录打开制作窗口（`ids` 为空 = 空白打开，新窗口时恢复草稿）。已开着时参考图追加、满了提示；面板开着就收起。
 /// 试用结束时照常打开，载荷标上过期、不带记录，页面只显示过期提示。选中的全都用不上时返回原因，面板提示。
-pub fn open(app: &AppHandle, ids: &[i64]) -> Result<(), AppError> {
-    open_with(app, ids, None, None).map(|_| ())
+pub fn open(app: &AppHandle, ids: &[i64], entry: Entry) -> Result<(), AppError> {
+    open_with(app, ids, None, None, entry).map(|_| ())
 }
 
 /// 接着改：按库里这个表情包的做法打开（做法坏了：AI 出的只带它自己，做好的空白打开）。不恢复草稿，草稿也不丢
@@ -206,6 +272,7 @@ pub fn open_scene(app: &AppHandle, id: i64) -> Result<(), AppError> {
             !ai,
         )),
         None,
+        Entry::Panel,
     )
     .map(|_| ())
 }
@@ -217,11 +284,18 @@ pub fn open_task(
     scene: String,
     ids: Vec<i64>,
 ) -> Result<bool, AppError> {
+    // 面板里的任务格算从面板来；窗口自己的任务列表、系统通知不算
+    let entry = if crate::panel::visible(app) {
+        Entry::Panel
+    } else {
+        Entry::Other
+    };
     open_with(
         app,
         &[],
         Some((Some(scene), None, false)),
         Some((task, ids)),
+        entry,
     )
 }
 
@@ -237,6 +311,7 @@ fn open_with(
     ids: &[i64],
     again: Option<(Option<String>, Option<i64>, bool)>,
     task: Option<(u64, Vec<i64>)>,
+    entry: Entry,
 ) -> Result<bool, AppError> {
     if !on(app) {
         return Ok(false);
@@ -248,12 +323,11 @@ fn open_with(
         from_selection(gather(&app.state::<AppState>(), ids))
             .map_err(|e| AppError::Invalid(e.into()))?
     };
-    let (refs, idea, full, fresh) = {
+    let (refs, idea, full, fresh, origin) = {
         let mut rt = rt();
         let fresh = !rt.open;
-        if fresh {
-            rt.back = xpaste_platform::foreground_window();
-        }
+        let had = (!fresh).then(|| rt.origin.clone());
+        rt.origin = arrive(had, entry, foreground);
         // 接着改换掉窗口里的全部（参考图由页面恢复后报来）
         if fresh || again.is_some() {
             rt.refs.clear();
@@ -263,7 +337,7 @@ fn open_with(
             rt.refs.clone_from(&refs);
         }
         rt.open = true;
-        (refs, idea, full, fresh)
+        (refs, idea, full, fresh, rt.origin.clone())
     };
     let blank = ids.is_empty() && again.is_none() && fresh && !expired;
     let draft = blank
@@ -279,9 +353,15 @@ fn open_with(
         None => (None, Vec::new()),
     };
     log::info!(
-        "表情包 打开 {} 参考图 {} 张{}{}{}",
+        "表情包 打开 {} 参考图 {} 张{}{}{}{}",
         if fresh { "新窗口" } else { "追加" },
         refs.len(),
+        match (origin.from_panel, origin.target.is_some()) {
+            (true, true) => "（从面板，有粘贴目标）",
+            (true, false) => "（从面板）",
+            (false, true) => "（有粘贴目标）",
+            (false, false) => "",
+        },
         if full { "（满了）" } else { "" },
         if expired { "（试用已结束）" } else { "" },
         match (scene_id, task_id, draft.is_some()) {
@@ -302,6 +382,8 @@ fn open_with(
         expired,
         task_id,
         task_ids,
+        target: origin.target,
+        from_panel: origin.from_panel,
     };
     if crate::panel::visible(app) {
         crate::panel::hide(app);
@@ -310,44 +392,98 @@ fn open_with(
     Ok(restored)
 }
 
-/// 关掉制作窗口（Esc、关闭按钮、Alt+F4、总开关关掉）。没开着时不做事。
+/// 关掉制作窗口（关闭按钮、复制完、Alt+F4、总开关关掉），键盘回到原来的应用。没开着时不做事。
 pub fn close(app: &AppHandle) {
-    if let Some(back) = shut() {
+    if let Some(o) = shut() {
         log::info!("表情包 关闭窗口");
-        crate::meme_window::hide(app, back);
+        crate::meme_window::hide(app, o.back);
     }
 }
 
-/// 存进表情包之后（规则 10）：关掉窗口，唤起面板切到“表情包”分类、选中刚存的这个。
+/// 存进表情包之后：关掉窗口，唤起面板切到“表情包”分类、选中刚存的这个。
 /// 面板的粘贴目标是打开制作窗口前的应用，选中后按 ↩ 就贴回去。
 pub fn reveal(app: &AppHandle, id: i64) {
-    let Some(back) = shut() else { return };
+    let Some(o) = shut() else { return };
     log::info!("表情包 存进库后到面板 id={id}");
     crate::meme_window::hide(app, None);
+    to_panel(app, o.back, crate::events::MEME_REVEAL, id);
+}
+
+/// 发给面板的 `meme-back`：留了草稿没有；贴过去没成、退成只复制时是原因（同面板粘贴的 `CopyResult.reason`）
+#[derive(Clone, Serialize)]
+struct BackPayload {
+    draft: bool,
+    reason: Option<&'static str>,
+}
+
+/// 返回面板：关掉窗口，唤起面板，不切分类、不改选中。`draft`：这次关窗口留了草稿，面板提示一句
+pub fn back(app: &AppHandle, draft: bool) {
+    let Some(o) = shut() else { return };
+    log::info!("表情包 返回面板{}", if draft { "（留了草稿）" } else { "" });
+    crate::meme_window::hide(app, None);
+    let payload = BackPayload {
+        draft,
+        reason: None,
+    };
+    to_panel(app, o.back, crate::events::MEME_BACK, payload);
+}
+
+/// 贴到原来的应用（剪切板已写好）：关掉窗口、把前台交还给打开前的窗口，替用户按一次粘贴。
+/// 做不了模拟粘贴、粘贴失败时退成只复制，唤起面板给出面板粘贴同样的降级提示。返回贴过去没有；窗口已经关了时不粘贴
+pub fn paste_back(app: &AppHandle, id: i64) -> bool {
+    use crate::commands::records::{CopyResult, paste_blocking, paste_or_degrade};
+    let Some(o) = shut() else { return false };
+    crate::meme_window::hide(app, o.back);
+    let r = paste_or_degrade(
+        xpaste_platform::can_paste(o.back),
+        o.back,
+        &format!("表情包 id={id}"),
+        || {},
+        || paste_blocking(app, o.back),
+        || {},
+    );
+    let CopyResult::CopiedOnly { reason } = r else {
+        return true;
+    };
+    let payload = BackPayload {
+        draft: false,
+        reason: Some(reason),
+    };
+    to_panel(app, o.back, crate::events::MEME_BACK, payload);
+    false
+}
+
+/// 制作窗口关掉之后唤起面板：粘贴目标还是打开制作窗口前的那个，再把 `event` 发给面板
+fn to_panel<S: Serialize + Clone + Send + 'static>(
+    app: &AppHandle,
+    back: Option<isize>,
+    event: &'static str,
+    payload: S,
+) {
     app.state::<AppState>()
         .previous_window
         .store(back.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
     crate::panel::reshow(app);
     // 排在面板显示之后发：panel-shown 会把搜索清空、重画列表
     crate::panel::on_main(app, move |app| {
-        crate::events::emit_to(app, "panel", crate::events::MEME_REVEAL, id)
+        crate::events::emit_to(app, "panel", event, payload)
     });
 }
 
-/// 窗口记成关闭，返回打开前的前台窗口；本来就没开时返回 None
-fn shut() -> Option<Option<isize>> {
-    let back = {
+/// 窗口记成关闭，返回打开时记下的来处；本来就没开时返回 None
+fn shut() -> Option<Origin> {
+    let origin = {
         let mut rt = rt();
         if !rt.open {
             return None;
         }
         rt.open = false;
         rt.refs.clear();
-        rt.back.take()
+        std::mem::replace(&mut rt.origin, NOWHERE)
     };
     // 旧的“生成”命令：进行中的不打断，回来的结果照样进库，只是不再交给页面。AI 任务队列不受关窗口影响
     crate::meme_gen::cancel();
-    Some(back)
+    Some(origin)
 }
 
 /// 页面的参考图变了（拿掉、从历史添加、画草图）：更新镜像。
@@ -366,7 +502,7 @@ pub fn hotkey_pressed(app: &AppHandle) {
         return;
     }
     // 空白打开不读库，也不会失败
-    let _ = open(app, &[]);
+    let _ = open(app, &[], Entry::Other);
 }
 
 /// 最近 8 张能当参考图的（“从历史添加”）：图片记录，以及图片文件记录里的图片文件（按文件拆开）。
@@ -457,6 +593,44 @@ mod tests {
             opening(false, &have, vec![r(2, None)], "不想上班".into()),
             (vec![r(1, None), r(2, None)], "不想上班".into(), false)
         );
+    }
+
+    #[test]
+    fn origin_by_entry() {
+        let fg = || (Some(7), Some("微信".to_string()));
+        let o = arrive(None, Entry::Panel, fg);
+        assert!(o.from_panel);
+        assert_eq!(o.target.as_deref(), Some("微信"));
+        let o = arrive(None, Entry::Other, fg);
+        assert!(!o.from_panel);
+        assert_eq!((o.back, o.target.as_deref()), (Some(7), Some("微信")));
+        // 托盘打开没有粘贴目标，也不取前台
+        let o = arrive(None, Entry::Tray, || panic!("托盘打开不取前台"));
+        assert_eq!(o, NOWHERE);
+        // 取不到名字时没有目标（页面按没有目标处理）
+        assert_eq!(arrive(None, Entry::Other, || (Some(7), None)).target, None);
+    }
+
+    #[test]
+    fn origin_kept_while_open() {
+        let had = Origin {
+            back: Some(7),
+            target: Some("微信".into()),
+            from_panel: false,
+        };
+        let other = || (Some(9), Some("备忘录".to_string()));
+        // 已开着再打开：目标不变；快捷键、托盘不改“从面板来”
+        assert_eq!(arrive(Some(had.clone()), Entry::Other, other), had);
+        assert_eq!(arrive(Some(had.clone()), Entry::Tray, other), had);
+        // 从面板带图进来：变成从面板来的，目标还是原来的
+        let o = arrive(Some(had.clone()), Entry::Panel, other);
+        assert!(o.from_panel);
+        assert_eq!((o.back, o.target), (had.back, had.target.clone()));
+        let from_panel = Origin {
+            from_panel: true,
+            ..had
+        };
+        assert!(arrive(Some(from_panel), Entry::Other, other).from_panel);
     }
 
     #[test]

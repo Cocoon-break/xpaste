@@ -82,6 +82,9 @@ pub const MEME_TOAST: &str = "meme-toast";
 pub const MEME_CLOSED: &str = "meme-closed";
 /// 制作窗口里点了“存进表情包”，后端已关掉窗口、唤起面板。载荷是表情包的记录 id。只发给 `panel`：切到“表情包”分类选中它。
 pub const MEME_REVEAL: &str = "meme-reveal";
+/// 制作窗口关掉、唤起了面板，面板不切分类、不改选中，只给提示：返回面板（`draft` 为留了草稿），
+/// 或贴过去没成（`reason` 同 `CopyResult.reason`，退成只复制）。载荷 `{ draft, reason }`。只发给 `panel`。
+pub const MEME_BACK: &str = "meme-back";
 /// AI 任务列表变了，载荷是整份 `Vec<meme_tasks::TaskView>`（新的在前）。发给 `meme` 和 `panel`。
 pub const MEME_TASKS: &str = "meme-tasks";
 

@@ -24,7 +24,7 @@ import {
 import { lineDragDrop, lineDragHover, lineHangFromPanel, lineHide, lineSideHint, onLineChanged, onLineHangSelected, onProLink, proActivate, proBuy, proDeactivate, proStatus, proTakeLink, proUnbind, type LineView } from './api/line';
 import { beltPut, onBeltPutSelected } from './api/belt';
 import { mixerDefaults, mixerPut, onMixerPutSelected } from './api/mixer';
-import { memeLibraryStats, memeOpen, memeOpenScene, memeTestImage, onMemeReveal } from './api/meme';
+import { memeLibraryStats, memeOpen, memeOpenScene, memeTestImage, onMemeBack, onMemeReveal } from './api/meme';
 import { cellHTML, gridMove, ofSource, previewHTML, type Arrow, type MemeSource } from './meme-grid';
 import { mountRecipes } from './recipes';
 import { deviceLine, proCard, proControls, proLine } from './pro-status';
@@ -3376,8 +3376,11 @@ obDlg.addEventListener('click', (e) => {
 });
 
 // —— 面板显隐 ——
+/** 唤起前选中的那一条：从表情包制作窗口返回面板时选回它（唤起会清空搜索、重置选中） */
+let selBeforeShown: number | null = null;
 const shown = (t0: number | null, trigger?: PanelShown['trigger']) => {
   S.shown = true;
+  selBeforeShown = S.sel;
   // 授权可能在隐藏期间变化；bootstrap 之前平台未知，由 bootstrap 后那一次负责
   if (S.platform.os) void paintVerb();
   refreshEngines();
@@ -3610,6 +3613,20 @@ await onMemeReveal((id) => {
   setFilter('meme', true);
   renderList();
   if (S.records.has(id)) select(id, { scroll: true, instant: true });
+});
+// 制作窗口关掉、后端已唤起面板：返回面板时分类不动、选回原来那一条，留了草稿提示一句；
+// 贴过去没成（没有辅助功能权限等）时照面板粘贴的降级提示
+await onMemeBack(({ draft, reason }) => {
+  const id = selBeforeShown;
+  if (id !== null && S.records.has(id) && vis().some((r) => r.id === id)) select(id, { scroll: true, instant: true });
+  if (reason) {
+    const res = { result: 'copiedOnly', reason } as const;
+    toast(copyToast(res, S.platform.os, null)!, {
+      action: needsAccessibility(res)
+        ? { label: '前往授权', run: () => void requestAccessibility().catch((e: AppError) => toast(e.message, { icon: 'copy' })) }
+        : undefined,
+    });
+  } else if (draft) toast('刚才的改动留成了草稿，下次空白打开能接着做');
 });
 await onConfirmClear(() => {
   if (dlg.open) showStControl($('#clearBtn'));
