@@ -29,12 +29,18 @@ use objc2_core_graphics::{
     CGWindowListOption, kCGColorSpaceSRGB, kCGNullWindowID,
 };
 use objc2_core_media::{CMFormatDescription, CMTime};
+use objc2_core_video::{
+    CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow, CVPixelBufferGetHeight,
+    CVPixelBufferGetWidth, CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags,
+    CVPixelBufferUnlockBaseAddress,
+};
 use objc2_foundation::{
     NSArray, NSData, NSDictionary, NSFileManager, NSIndexSet, NSLocale, NSNumber,
     NSOperatingSystemVersion, NSPoint, NSProcessInfo, NSRect, NSSize, NSString, NSURL, ns_string,
 };
 use objc2_vision::{
-    VNImageRequestHandler, VNRecognizeTextRequest, VNRequest, VNRequestTextRecognitionLevel,
+    VNGenerateForegroundInstanceMaskRequest, VNImageRequestHandler, VNRecognizeTextRequest,
+    VNRequest, VNRequestTextRecognitionLevel,
 };
 use xpaste_core::{AppInfo, Flavor, Snapshot, VideoMeta};
 
@@ -799,6 +805,100 @@ pub fn ocr_png_bytes(png: &[u8], max_side_px: u32) -> Result<Option<OcrText>, Oc
             .unwrap_or_default();
         Ok(Some(crate::ocr_text(lines)))
     })
+}
+
+/// 前景分割（`VNGenerateForegroundInstanceMaskRequest`）要 macOS 14。
+pub fn foreground_supported() -> bool {
+    NSProcessInfo::processInfo().isOperatingSystemAtLeastVersion(NSOperatingSystemVersion {
+        majorVersion: 14,
+        minorVersion: 0,
+        patchVersion: 0,
+    })
+}
+
+/// 抠主体：返回与输入同尺寸的 RGBA，背景 alpha=0，主体 alpha 取自 Vision 的软边掩码。
+/// 系统低于 14、解码失败、没抠到主体都返回 `None`。阻塞，只在工作线程调用。
+pub fn foreground_cutout(png: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+    if !foreground_supported() {
+        return None;
+    }
+    let mut img = crate::load_rgba(png, u32::MAX).ok()?;
+    let (w, h) = (img.width() as usize, img.height() as usize);
+    let alpha = autoreleasepool(|_| {
+        let provider = CGDataProvider::with_cf_data(Some(&CFData::from_bytes(img.as_raw())))?;
+        let space = CGColorSpace::new_device_rgb()?;
+        // SAFETY: 尺寸与 RGBA8 缓冲一致；decode 传 null
+        let cg = unsafe {
+            CGImage::new(
+                w,
+                h,
+                8,
+                32,
+                w * 4,
+                Some(&space),
+                CGBitmapInfo(CGImageAlphaInfo::Last.0),
+                Some(&provider),
+                std::ptr::null(),
+                false,
+                CGColorRenderingIntent::RenderingIntentDefault,
+            )
+        }?;
+        // SAFETY: 空选项字典
+        let handler = unsafe {
+            VNImageRequestHandler::initWithCGImage_options(
+                VNImageRequestHandler::alloc(),
+                &cg,
+                &NSDictionary::new(),
+            )
+        };
+        // SAFETY: 无参数构造
+        let request = unsafe { VNGenerateForegroundInstanceMaskRequest::new() };
+        let base: &VNRequest = &request;
+        handler
+            .performRequests_error(&NSArray::from_slice(&[base]))
+            .ok()?;
+        // SAFETY: 请求已 perform，只读结果
+        let obs = unsafe { request.results() }?.firstObject()?;
+        // SAFETY: obs 来自本次请求；allInstances 不含背景，空集合时直接返回 None
+        let all = unsafe { obs.allInstances() };
+        if all.count() == 0 {
+            return None;
+        }
+        // 与原图同分辨率的 OneComponent32Float 掩码，值域 0..1
+        // SAFETY: handler 就是产生 obs 的那个
+        let buf = unsafe {
+            obs.generateScaledMaskForImageForInstances_fromRequestHandler_error(&all, &handler)
+        }
+        .ok()?;
+        // SAFETY: 加锁后按 bytesPerRow 读 w×h 个 f32，读完解锁；尺寸先校验
+        unsafe {
+            if CVPixelBufferGetWidth(&buf) != w || CVPixelBufferGetHeight(&buf) != h {
+                return None;
+            }
+            CVPixelBufferLockBaseAddress(&buf, CVPixelBufferLockFlags::ReadOnly);
+            let base = CVPixelBufferGetBaseAddress(&buf).cast::<u8>();
+            let stride = CVPixelBufferGetBytesPerRow(&buf);
+            let out = (!base.is_null()).then(|| {
+                let mut a = Vec::with_capacity(w * h);
+                for y in 0..h {
+                    let row = base.add(y * stride).cast::<f32>();
+                    a.extend((0..w).map(|x| {
+                        (row.add(x).read_unaligned().clamp(0.0, 1.0) * 255.0).round() as u8
+                    }));
+                }
+                a
+            });
+            CVPixelBufferUnlockBaseAddress(&buf, CVPixelBufferLockFlags::ReadOnly);
+            out
+        }
+    })?;
+    if alpha.iter().all(|&a| a == 0) {
+        return None;
+    }
+    for (px, a) in img.pixels_mut().zip(alpha) {
+        px.0[3] = a;
+    }
+    Some((w as u32, h as u32, img.into_raw()))
 }
 
 /// 系统翻译（`TranslationSession(installedSource:target:)`）需要 macOS 26（M26 规则 7）。

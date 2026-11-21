@@ -3064,6 +3064,7 @@ checksum = "bfc194758a2d5d7540b1ad283bfb9ca318ec608991892326e95b428230b2689b"
 dependencies = [
  "objc2",
  "objc2-core-graphics",
+ "objc2-core-video",
  "objc2-foundation",
 ]
 
@@ -6114,6 +6115,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-core-media",
+ "objc2-core-video",
  "objc2-foundation",
  "objc2-screen-capture-kit",
  "objc2-vision",

@@ -83,6 +83,24 @@ pub fn cf_html_fragment(bytes: &[u8]) -> Option<String> {
     Some(String::from_utf8_lossy(fragment).into_owned())
 }
 
+/// `CF_HDROP` 数据：20 字节 DROPFILES 头（fWide=1）+ UTF-16 路径逐个 NUL 结尾 + 结尾空串
+pub fn dropfiles(paths: &[PathBuf]) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend(20u32.to_le_bytes());
+    v.extend([0; 12]); // pt、fNC
+    v.extend(1u32.to_le_bytes()); // fWide
+    for p in paths {
+        v.extend(
+            p.to_string_lossy()
+                .encode_utf16()
+                .chain([0])
+                .flat_map(u16::to_le_bytes),
+        );
+    }
+    v.extend([0, 0]);
+    v
+}
+
 /// `CF_HDROP`（DROPFILES）：`pFiles` 处起逐个 NUL 结尾的路径，空串结束；`fWide` 决定 UTF-16LE 还是单字节。
 pub fn parse_hdrop(bytes: &[u8]) -> Vec<PathBuf> {
     let dword = |at: usize| {
@@ -469,7 +487,7 @@ mod tests {
     }
 
     /// 20 字节 DROPFILES 头 + 逐个 NUL 结尾的路径 + 结尾空串
-    fn dropfiles(wide: bool, names: &[&str]) -> Vec<u8> {
+    fn drop_raw(wide: bool, names: &[&str]) -> Vec<u8> {
         let mut v = Vec::new();
         v.extend(20u32.to_le_bytes());
         v.extend([0; 12]); // pt、fNC
@@ -542,13 +560,18 @@ mod tests {
         );
     }
     #[test]
+    fn dropfiles_roundtrip() {
+        let p = PathBuf::from(r"C:\a\表情包.gif");
+        assert_eq!(parse_hdrop(&dropfiles(std::slice::from_ref(&p))), [p]);
+    }
+    #[test]
     fn parse_hdrop_wide_and_ansi() {
         assert_eq!(
-            parse_hdrop(&dropfiles(true, &[r"C:\a b\图.png", r"D:\x"])),
+            parse_hdrop(&drop_raw(true, &[r"C:\a b\图.png", r"D:\x"])),
             [PathBuf::from(r"C:\a b\图.png"), PathBuf::from(r"D:\x")]
         );
         assert_eq!(
-            parse_hdrop(&dropfiles(false, &[r"C:\a"])),
+            parse_hdrop(&drop_raw(false, &[r"C:\a"])),
             [PathBuf::from(r"C:\a")]
         );
         assert!(parse_hdrop(&[0xFF, 0, 0, 0]).is_empty());

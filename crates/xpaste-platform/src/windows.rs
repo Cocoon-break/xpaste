@@ -1465,8 +1465,22 @@ pub fn window_number(_ns_window: *mut std::ffi::c_void) -> Option<u32> {
     None
 }
 
-pub fn file_flavors(_path: &Path) -> Vec<Flavor> {
-    Vec::new()
+/// 复制文件：一个 `CF_HDROP`（`write` 按格式名写回）
+pub fn file_flavors(path: &Path) -> Vec<Flavor> {
+    vec![Flavor {
+        item: 0,
+        format: "CF_HDROP".into(),
+        data: crate::winfmt::dropfiles(&[path.to_path_buf()]),
+    }]
+}
+
+/// 抠主体只有 macOS 14+ 有
+pub fn foreground_supported() -> bool {
+    false
+}
+
+pub fn foreground_cutout(_png: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+    None
 }
 
 /// 鼠标主键此刻是否按着。贴图据此判断拖动是否结束。
