@@ -58,6 +58,9 @@ pub struct GenReq {
     /// 套编号：分 4 次重画时由队列填，4 部分共用一个；页面不传
     #[serde(skip)]
     pub set: Option<String>,
+    /// 分 4 次重画时由队列填：这一套里先画好的一格，后面几次拿它当参考图，免得每次画成不同的角色；页面不传
+    #[serde(skip)]
+    pub anchor: Option<i64>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -220,14 +223,31 @@ pub async fn generate(env: &Env<'_>, cfg: &ImageCfg, req: GenReq) -> Result<GenO
         _ => read_refs(env.state, &req.refs, req.sketch.as_deref())?,
     };
     let has_sketch = req.sketch.is_some() && !matches!(what, MemeGen::Act(_));
+    let photos = match what {
+        MemeGen::Act(_) => 0,
+        _ => refs.len() - usize::from(has_sketch),
+    };
+    // 先画好的那一格排最后（提示词里就这么说）；读不出来就不带，照常画
+    let mut refs = refs;
+    let anchor = matches!(what, MemeGen::SetPart(_))
+        .then_some(req.anchor)
+        .flatten()
+        .and_then(|id| crate::record_image::read_record_image(env.state, id, Some(0)))
+        .and_then(|png| imagegen::encode_ref(&png));
+    let anchored = anchor.is_some();
+    if let Some(a) = anchor {
+        refs.truncate(REFS_SENT - 1);
+        refs.push(a);
+    }
     let prompt = xpaste_pro::meme_image_prompt(&MemePrompt {
         style_key: (!req.style.is_empty()).then_some(req.style.as_str()),
         custom_style: req.custom.as_deref(),
         idea: &req.idea,
         caption: &req.caption,
         r#gen: what,
-        has_photo: refs.len() > usize::from(has_sketch),
+        photos: photos.min(refs.len() - usize::from(has_sketch) - usize::from(anchored)),
         has_sketch,
+        anchor: anchored,
     });
     let (style_name, style_log) = style_names(&req);
     let started = Instant::now();

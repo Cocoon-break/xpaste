@@ -331,8 +331,11 @@ pub struct MemePrompt<'a> {
     pub idea: &'a str,
     pub caption: &'a str,
     pub r#gen: MemeGen,
-    pub has_photo: bool,
+    /// 草图以外的参考图有几张（不算 `anchor`）
+    pub photos: usize,
     pub has_sketch: bool,
+    /// 分次重画时，最后一张参考图是这一套里已经画好的一格
+    pub anchor: bool,
 }
 
 /// 导出 GIF 的一档：帧间隔、颜色数、边长

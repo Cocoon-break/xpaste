@@ -102,7 +102,7 @@ fn kind_of(req: &GenReq) -> Option<&'static str> {
 /// （已画好的几部分在生成时就进了库）；被取消了不再发后面的部分
 pub async fn run_parts<F, Fut>(mut part: F, cancelled: impl Fn() -> bool) -> Result<GenOut, String>
 where
-    F: FnMut(u8) -> Fut,
+    F: FnMut(u8, Option<i64>) -> Fut,
     Fut: std::future::Future<Output = Result<GenOut, String>>,
 {
     let mut ids = Vec::new();
@@ -110,7 +110,8 @@ where
         if cancelled() {
             return Err(meme_gen::LATE.into());
         }
-        match part(k).await? {
+        // 后面几次带上第一格，画同一个角色
+        match part(k, ids.first().copied()).await? {
             GenOut::Done { ids: got } => ids.extend(got),
             GenOut::Irregular { .. } => return Err(PART_SHAKY.into()),
         }
@@ -323,11 +324,12 @@ async fn run(app: AppHandle, id: u64, req: GenReq) {
     let r = if req.kind == SET_PARTS {
         // 4 部分拼成的 16 张共用一个套编号
         let set = Some(meme_gen::uuid());
-        let part = |k| {
+        let part = |k, anchor| {
             let r = GenReq {
                 kind: "set_part".into(),
                 part: Some(k),
                 set: set.clone(),
+                anchor,
                 ..req.clone()
             };
             meme_gen::generate(&env, &cfg, r)
@@ -585,8 +587,10 @@ mod tests {
         calls: &std::cell::Cell<u8>,
         fail_at: Option<u8>,
         shaky_at: Option<u8>,
-    ) -> impl FnMut(u8) -> std::future::Ready<Result<GenOut, String>> + '_ {
-        move |k| {
+    ) -> impl FnMut(u8, Option<i64>) -> std::future::Ready<Result<GenOut, String>> + '_ {
+        move |k, anchor| {
+            // 第一次没有可参考的，后面几次都带第一格
+            assert_eq!(anchor, (k > 0).then_some(0));
             calls.set(calls.get() + 1);
             std::future::ready(if Some(k) == fail_at {
                 Err("服务商限流".into())
