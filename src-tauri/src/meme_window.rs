@@ -1,6 +1,9 @@
 //! 表情包制作窗口：出现在光标所在屏的中央，拿键盘、能打字。
 //! macOS 上是不激活应用、能成为 key 的 NSPanel（做法同面板），前台应用不变；Windows 上是普通的可聚焦窗口，关掉时把前台交还给打开前的窗口。
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, PoisonError};
+
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use crate::events::{MEME_CLOSED, MEME_OPEN, MEME_TOAST, emit_to};
@@ -76,9 +79,36 @@ pub fn show(app: &AppHandle, payload: OpenPayload, fresh: bool, full: bool) {
         if let Err(e) = crate::trcard::front(app, &w, true) {
             log::warn!("显示表情包窗口失败：{e}");
         }
-        emit_to(app, LABEL, MEME_OPEN, payload);
-        if full {
-            emit_to(app, LABEL, MEME_TOAST, FULL);
+        // 页面还没把事件听上（应用刚启动）：先留着，等它说好了再发，不然窗口上了屏、拿了键盘却是空的
+        if !READY.load(Ordering::SeqCst) {
+            *PENDING.lock().unwrap_or_else(PoisonError::into_inner) = Some((payload, full));
+            return;
+        }
+        send(app, payload, full);
+    });
+}
+
+/// 页面把事件都听上了没有；没有时最近一次的打开载荷留在 `PENDING`（都只在主线程上读写）
+static READY: AtomicBool = AtomicBool::new(false);
+static PENDING: Mutex<Option<(OpenPayload, bool)>> = Mutex::new(None);
+
+fn send(app: &AppHandle, payload: OpenPayload, full: bool) {
+    emit_to(app, LABEL, MEME_OPEN, payload);
+    if full {
+        emit_to(app, LABEL, MEME_TOAST, FULL);
+    }
+}
+
+/// 页面说事件都听上了：补发留着的那次打开
+pub fn ready(app: &AppHandle) {
+    on_main(app, |app| {
+        READY.store(true, Ordering::SeqCst);
+        let held = PENDING
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some((payload, full)) = held {
+            send(app, payload, full);
         }
     });
 }

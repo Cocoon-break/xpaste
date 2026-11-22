@@ -132,9 +132,24 @@ impl Queue {
     }
 
     /// 入队，返回任务号；不认识的生成方式不入队
-    pub fn push(&mut self, req: GenReq, title: String, scene: String) -> Result<u64, String> {
-        let kind = kind_of(&req).ok_or("不认识的生成方式")?;
+    /// 领一个任务号：页面先领号、记成“这个窗口在等的”，再拿它入队，任务列表一来就认得是不是自己的
+    pub fn reserve(&mut self) -> u64 {
         self.last_id += 1;
+        self.last_id
+    }
+
+    /// 拿领来的号入队；不认识的生成方式、不是领来的号、这个号已经在队里都不入队
+    pub fn push(
+        &mut self,
+        id: u64,
+        req: GenReq,
+        title: String,
+        scene: String,
+    ) -> Result<(), String> {
+        let kind = kind_of(&req).ok_or("不认识的生成方式")?;
+        if id == 0 || id > self.last_id || self.at(id).is_some() {
+            return Err("任务号不对".into());
+        }
         let style = if req.style.is_empty() {
             "自定义".to_owned()
         } else {
@@ -142,7 +157,7 @@ impl Queue {
         };
         self.tasks.push(Task {
             view: TaskView {
-                id: self.last_id,
+                id,
                 kind,
                 state: TaskState::Queue,
                 title,
@@ -157,7 +172,7 @@ impl Queue {
             req,
             cancelled: false,
         });
-        Ok(self.last_id)
+        Ok(())
     }
 
     /// 在画的不到 `MAX_RUNNING` 个时，把最早排队的标成在画并返回它（取消了还没回来的也占名额）
@@ -210,12 +225,8 @@ impl Queue {
             Err(e) => {
                 v.state = TaskState::Fail;
                 v.error = e;
-                // 参考图编不了码的内部写法不露给用户（页面的 reasonText 同一说法）
-                let why = if v.error.starts_with(meme_gen::UNREADABLE) {
-                    "这张参考图读不出来"
-                } else {
-                    &v.error
-                };
+                // 内部的原因标记不露给用户（页面的 reasonText 同一说法）
+                let why = meme_gen::reason_text(&v.error);
                 format!("“{}”没画出来：{}", v.title, why)
             }
         })
@@ -234,16 +245,18 @@ impl Queue {
     }
 
     /// 没画出来的重试：回到队尾排队
-    pub fn retry(&mut self, id: u64) {
-        let Some(i) = self.at(id) else { return };
+    /// 返回重试上了没有：任务已经不在、不是没画出来的都不动
+    pub fn retry(&mut self, id: u64) -> bool {
+        let Some(i) = self.at(id) else { return false };
         if self.tasks[i].view.state != TaskState::Fail {
-            return;
+            return false;
         }
         let mut t = self.tasks.remove(i);
         t.view.state = TaskState::Queue;
         t.view.error.clear();
         t.view.started_ms = None;
         self.tasks.push(t);
+        true
     }
 
     /// 去掉画好的、没画出来的（在画、排队的用 `cancel`）
@@ -355,11 +368,21 @@ async fn run(app: AppHandle, id: u64, req: GenReq) {
     changed(&app);
 }
 
-pub fn start(app: &AppHandle, req: GenReq, title: String, scene: String) -> Result<u64, String> {
-    let id = q().push(req, title, scene)?;
+pub fn reserve() -> u64 {
+    q().reserve()
+}
+
+pub fn start(
+    app: &AppHandle,
+    id: u64,
+    req: GenReq,
+    title: String,
+    scene: String,
+) -> Result<(), String> {
+    q().push(id, req, title, scene)?;
     log::info!("表情包 任务 {id} 入队");
     changed(app);
-    Ok(id)
+    Ok(())
 }
 
 pub fn cancel(app: &AppHandle, id: u64) {
@@ -368,10 +391,14 @@ pub fn cancel(app: &AppHandle, id: u64) {
     changed(app);
 }
 
-pub fn retry(app: &AppHandle, id: u64) {
-    q().retry(id);
+/// 重试；任务已经不在（去掉了）或不是没画出来的时返回 `TASK_GONE`，页面据此不再等它
+pub fn retry(app: &AppHandle, id: u64) -> Result<(), String> {
+    if !q().retry(id) {
+        return Err(meme_gen::TASK_GONE.into());
+    }
     log::info!("表情包 任务 {id} 重试");
     changed(app);
+    Ok(())
 }
 
 pub fn dismiss(app: &AppHandle, id: u64) {
@@ -409,7 +436,21 @@ mod tests {
     }
 
     fn push(q: &mut Queue) -> u64 {
-        q.push(req("one"), "标题".into(), "{}".into()).unwrap()
+        let id = q.reserve();
+        q.push(id, req("one"), "标题".into(), "{}".into()).unwrap();
+        id
+    }
+
+    /// 入队只认领来的号，一个号只能用一次
+    #[test]
+    fn push_needs_a_reserved_id() {
+        let mut q = Queue::new();
+        let push = |q: &mut Queue, id| q.push(id, req("one"), "标题".into(), "{}".into());
+        assert!(push(&mut q, 1).is_err());
+        let id = q.reserve();
+        assert!(push(&mut q, id).is_ok());
+        assert!(push(&mut q, id).is_err());
+        assert!(!q.retry(99));
     }
 
     fn state(q: &Queue, id: u64) -> Option<TaskState> {
@@ -538,14 +579,17 @@ mod tests {
     #[test]
     fn title_scene_kept_not_logged() {
         let mut q = Queue::new();
-        let a = q
-            .push(
-                req("set_part"),
-                "不想上班".into(),
-                r#"{"secret":"做法"}"#.into(),
-            )
-            .unwrap();
+        let a = q.reserve();
         q.push(
+            a,
+            req("set_part"),
+            "不想上班".into(),
+            r#"{"secret":"做法"}"#.into(),
+        )
+        .unwrap();
+        let b = q.reserve();
+        q.push(
+            b,
             GenReq {
                 style: String::new(),
                 ..req("act")
@@ -571,9 +615,10 @@ mod tests {
     #[test]
     fn unknown_kind_not_queued() {
         let mut q = Queue::new();
-        assert!(q.push(req("blah"), "x".into(), "{}".into()).is_err());
+        let a = q.reserve();
+        assert!(q.push(a, req("blah"), "x".into(), "{}".into()).is_err());
         assert!(q.views().is_empty());
-        let a = q.push(req(SET_PARTS), "x".into(), "{}".into()).unwrap();
+        q.push(a, req(SET_PARTS), "x".into(), "{}".into()).unwrap();
         assert_eq!(q.views()[0].kind, "set");
         // 分 4 次重画只占一个名额
         q.next();

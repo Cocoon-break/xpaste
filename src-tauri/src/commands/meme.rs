@@ -78,16 +78,26 @@ pub fn meme_set_refs(refs: Vec<RefKey>) {
     meme::set_refs(refs);
 }
 
-/// 一张参考图的 PNG（动图取第一帧）。原记录没了、文件找不到时返回 "gone"，页面拿掉它并提示。
+/// 一张参考图的 PNG（动图取第一帧）。`short` 是短边上限：页面只拿它当缩略图和 480 的预览，不要原尺寸（一张照片原样转 PNG 有几十 MB）。
+/// 原记录没了、文件找不到时返回 "gone"，页面拿掉它并提示。
 #[tauri::command(async)]
 pub fn meme_ref_image(
     state: State<'_, AppState>,
     id: i64,
     file: Option<u32>,
+    short: Option<u32>,
 ) -> Result<tauri::ipc::Response, String> {
-    crate::record_image::read_record_image(&state, id, file)
+    crate::record_image::read_record_image_within(&state, id, file, short)
         .map(tauri::ipc::Response::new)
-        .ok_or_else(|| "gone".into())
+        .ok_or_else(|| meme_gen::GONE.into())
+}
+
+/// 这几张参考图的原记录、文件还在不在（只查记录和文件，不解码）
+#[tauri::command(async)]
+pub fn meme_refs_alive(state: State<'_, AppState>, refs: Vec<RefKey>) -> Vec<bool> {
+    refs.iter()
+        .map(|r| crate::record_image::exists(&state, r.id, r.file))
+        .collect()
 }
 
 /// “从历史添加”：最近 8 张图片（图片文件记录按文件拆开）
@@ -164,6 +174,14 @@ pub fn meme_base_emotion(text: String) -> String {
     xpaste_pro::meme_base_emotion(&text).to_string()
 }
 
+/// 制作窗口往设置里记东西的两个命令（偏好、风格列表）都是“读出整份、改、写回整份”，页面会一拍连发两个：
+/// 排着队来，免得后写的把先写的盖掉
+fn lock_prefs() -> std::sync::MutexGuard<'static, ()> {
+    static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    ONE.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// 记住这次的风格、文字样式、位置、“更多调整”是否展开，下次打开默认用上
 #[tauri::command(async)]
 pub fn meme_prefs_set(
@@ -174,6 +192,7 @@ pub fn meme_prefs_set(
     pos: String,
     more: bool,
 ) -> Result<(), String> {
+    let _one = lock_prefs();
     let mut s = state.settings().clone();
     s.set_meme_prefs(&style, &ts, &pos, more);
     crate::commands::settings::save_settings_inner(&state, s).map_err(|e| e.to_string())?;
@@ -190,6 +209,7 @@ pub fn meme_styles_touch(
     used: Vec<String>,
     custom: Vec<String>,
 ) -> Result<(), String> {
+    let _one = lock_prefs();
     let mut s = state.settings().clone();
     (s.meme_styles_used, s.meme_styles_custom) = xpaste_pro::meme_normalize_styles(used, custom);
     crate::commands::settings::save_settings_inner(&state, s).map_err(|e| e.to_string())?;
@@ -212,16 +232,23 @@ pub async fn meme_captions(
     meme_gen::captions(&state, &cfg, &idea, &refs, sketch.as_deref(), &avoid).await
 }
 
-/// 发起一个 AI 任务（排队，不跟窗口走），返回任务号。`title` 是列表里显示的那句话，`scene` 是发起时的做法 JSON，都原样带回。
+/// 领一个任务号。页面先领号、记成“这个窗口在等的”，再用它发起：任务列表比发起的返回先到也认得是不是自己的
+#[tauri::command(async)]
+pub fn meme_task_reserve() -> u64 {
+    crate::meme_tasks::reserve()
+}
+
+/// 用领来的号发起一个 AI 任务（排队，不跟窗口走）。`title` 是列表里显示的那句话，`scene` 是发起时的做法 JSON，都原样带回。
 /// `req.kind` 为 `set_parts` 时是“分 4 次重画”：一个任务里顺序画 4 部分，拼成 16 张。不认识的生成方式返回原因
 #[tauri::command(async)]
 pub fn meme_task_start(
     app: AppHandle,
+    id: u64,
     req: GenReq,
     scene: String,
     title: String,
-) -> Result<u64, String> {
-    crate::meme_tasks::start(&app, req, title, scene)
+) -> Result<(), String> {
+    crate::meme_tasks::start(&app, id, req, title, scene)
 }
 
 /// 取消任务：排队的直接拿掉；在画的请求不中止，结果回来照样进库，不再显示
@@ -232,8 +259,8 @@ pub fn meme_task_cancel(app: AppHandle, id: u64) {
 
 /// 没画出来的重试：回到队尾
 #[tauri::command(async)]
-pub fn meme_task_retry(app: AppHandle, id: u64) {
-    crate::meme_tasks::retry(&app, id);
+pub fn meme_task_retry(app: AppHandle, id: u64) -> Result<(), String> {
+    crate::meme_tasks::retry(&app, id)
 }
 
 /// 去掉画好的、没画出来的
@@ -252,6 +279,12 @@ pub fn meme_task_open(app: AppHandle, id: u64) -> Result<(), AppError> {
 #[tauri::command(async)]
 pub fn meme_target() -> Option<String> {
     meme::refresh_target()
+}
+
+/// 页面把事件都听上了：这之前来的打开事件现在补发（应用刚启动就按快捷键时）
+#[tauri::command(async)]
+pub fn meme_ready(app: AppHandle) {
+    crate::meme_window::ready(&app);
 }
 
 /// 整份任务列表，新的在前
@@ -301,7 +334,7 @@ pub async fn meme_cutout(request: Request<'_>) -> Result<tauri::ipc::Response, S
         started.elapsed().as_millis()
     );
     out.map(tauri::ipc::Response::new)
-        .ok_or_else(|| "没找到能抠出来的主体".into())
+        .ok_or_else(|| meme_gen::NO_SUBJECT.into())
 }
 
 /// 存草图：请求体是 PNG，存到 `memes/sketch/`，返回文件名
@@ -398,6 +431,10 @@ fn finish(
         &mut |f| xpaste_platform::write(f),
         &mut || meme::paste_back(app, id),
     )?;
+    // 复制、贴过去记了一次使用：面板里的次数和排序跟着变
+    if then != Then::Lib && out.clip_error.is_none() {
+        crate::events::emit_summary(app, crate::events::RECORD_UPDATED, id);
+    }
     match then {
         _ if out.clip_error.is_some() => {}
         Then::Lib => meme::reveal(app, id),

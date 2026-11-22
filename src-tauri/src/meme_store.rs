@@ -263,9 +263,15 @@ pub fn deliver(
     if then == Then::Lib {
         return Ok(out);
     }
-    if crate::commands::records::write_marked(state, || write(&flavors)).is_err() {
+    let Ok(seq) = crate::commands::records::write_marked(state, || write(&flavors)) else {
         out.clip_error = Some(CLIP_FAILED);
         return Ok(out);
+    };
+    // 同面板里粘贴（M01 规则 5）：剪切板里此刻是这一条，记一次使用；记不上不拦着贴
+    crate::clipboard::seen(seq, Some(id));
+    let top = state.settings().move_to_top;
+    if let Err(e) = state.store().bump_use(id, top, crate::clock::now_ms()) {
+        log::warn!("表情包 记使用次数失败 {id}：{e}");
     }
     out.pasted = then == Then::Paste && paste();
     Ok(out)
@@ -461,6 +467,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!((o.id, o.clip_error, o.pasted), (id, None, false));
+        // 从制作窗口复制出去也算用了一次（同面板粘贴）
+        let uses = |id| state.store().live_summary(id).unwrap().unwrap().uses;
+        assert_eq!(uses(id), 1);
         // 库里多一个做好的，剪切板写入带自身写入标记，历史不变
         assert_eq!(state.store().meme_bytes().unwrap().0, 1);
         let m = state
@@ -534,6 +543,8 @@ mod tests {
             (o.id, o.clip_error, o.pasted),
             (id, Some(CLIP_FAILED), false)
         );
+        // 没放进剪切板不算用过
+        assert_eq!(state.store().live_summary(id).unwrap().unwrap().uses, 0);
         assert!(
             state
                 .store()

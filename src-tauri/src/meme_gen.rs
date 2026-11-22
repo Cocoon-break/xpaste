@@ -25,8 +25,27 @@ use crate::translate::Fail;
 
 /// 晚到的结果（任务已取消）：不再显示、不提示
 pub const LATE: &str = "已取消";
-const GONE: &str = "原记录已删除，拿掉了一张";
-const CAPTION_UNCONFIGURED: &str = "AI 接口还没配好";
+/// 给页面的原因标记（页面据此走分支，文案由页面的 reasonText 给；这里的 `reason_text` 只用在系统通知里）。
+/// 参考图的原记录没了
+pub const GONE: &str = "gone";
+/// 出文案用的 AI 接口没配好
+pub const CAPTION_UNCONFIGURED: &str = "unconfigured";
+/// 抠图贴纸没抠出主体
+pub const NO_SUBJECT: &str = "no_subject";
+/// 重试的任务已经不在了
+pub const TASK_GONE: &str = "task_gone";
+
+/// 原因标记换成给用户看的话；不是标记的原样返回
+pub fn reason_text(e: &str) -> &str {
+    match e {
+        GONE => "原记录已删除，拿掉了一张",
+        CAPTION_UNCONFIGURED => "AI 接口还没配好",
+        NO_SUBJECT => "没找到能抠出来的主体",
+        TASK_GONE => "这个任务已经不在了",
+        _ if e.starts_with(UNREADABLE) => "这张参考图读不出来",
+        _ => e,
+    }
+}
 /// 交给系统抠主体的图，长边上限：平台层解码不设上限，超过的不抠
 const CUT_EDGE: u32 = 2048;
 /// 出文案、生图最多带几张参考图（草图算一张）：张数多了费用高，有的服务商也收不下

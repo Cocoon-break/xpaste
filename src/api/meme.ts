@@ -40,8 +40,10 @@ export const memeClose = () => invoke<void>('meme_close');
 export const memeBack = (draft: boolean) => invoke<void>('meme_back', { draft });
 /** 页面的参考图变了：后端据此判断再从面板带进来时还能加几张 */
 export const memeSetRefs = (refs: RefKey[]) => invoke<void>('meme_set_refs', { refs });
-/** 一张参考图的 PNG（动图取第一帧）；原记录没了时抛出 "gone" */
-export const memeRefImage = (k: RefKey) => invoke<ArrayBuffer>('meme_ref_image', { id: k.id, file: k.file });
+/** 一张参考图的 PNG（动图取第一帧）；`short` 是短边上限（缩略图、预览用，不给是原尺寸）。原记录没了时抛出 "gone" */
+export const memeRefImage = (k: RefKey, short: number | null = null) => invoke<ArrayBuffer>('meme_ref_image', { id: k.id, file: k.file, short });
+/** 这几张参考图的原记录还在不在（不读图） */
+export const memeRefsAlive = (refs: RefKey[]) => invoke<boolean[]>('meme_refs_alive', { refs });
 /** “从历史添加”：最近 8 张图片 */
 export const memeRecentImages = () => invoke<RefKey[]>('meme_recent_images');
 /** 窗口里按 ⌘V：只引用已经进了历史的那条，剪切板里是图片（或图片文件）时返回它的参考图（按文件拆开），用不上的为空数组。
@@ -87,9 +89,11 @@ export interface TaskView {
   title: string; style: string; startedMs: number | null; ahead: number;
   ids: number[]; irregular: number | null; error: string; scene: string;
 }
-/** 发起一个 AI 任务，返回任务号。`scene` 是做法 JSON，`title` 是列表里显示的那句话。
+/** 领一个任务号：先领号、记成这个窗口在等的，再发起，任务列表比发起的返回先到也认得是不是自己的 */
+export const memeTaskReserve = () => invoke<number>('meme_task_reserve');
+/** 用领来的任务号发起一个 AI 任务。`scene` 是做法 JSON，`title` 是列表里显示的那句话。
  *  “分 4 次重画”传 `kind: 'set_parts'`（`part` 为 null），一个任务里顺序画 4 部分拼成 16 张；不认识的 kind 抛出原因 */
-export const memeTaskStart = (req: GenReq, scene: string, title: string) => invoke<number>('meme_task_start', { req, scene, title });
+export const memeTaskStart = (id: number, req: GenReq, scene: string, title: string) => invoke<void>('meme_task_start', { id, req, scene, title });
 /** 取消：排队的直接拿掉；在画的结果回来照样进库，不再显示 */
 export const memeTaskCancel = (id: number) => invoke<void>('meme_task_cancel', { id });
 /** 没画出来的重试（回到队尾） */
@@ -100,6 +104,8 @@ export const memeTaskDrop = (id: number) => invoke<void>('meme_task_drop', { id 
 export const memeTaskOpen = (id: number) => invoke<void>('meme_task_open', { id });
 /** 制作窗口重新拿到焦点：粘贴目标的名字（macOS 换成此刻最前面的应用，Windows 是打开时记下的那个）；没有目标时为 null */
 export const memeTarget = () => invoke<string | null>('meme_target');
+/** 页面把事件都听上了：后端这才把（这之前留着的）打开事件发过来 */
+export const memeReady = () => invoke<void>('meme_ready');
 /** 整份任务列表，新的在前 */
 export const memeTasks = () => invoke<TaskView[]>('meme_tasks');
 /** 任务列表变了（发给制作窗口和面板），载荷是整份列表，新的在前 */

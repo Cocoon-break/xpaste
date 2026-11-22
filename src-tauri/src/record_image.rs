@@ -36,20 +36,44 @@ pub fn decode(
         .ok()
 }
 
+/// 文件记录里第 `n` 个文件的路径（要是图片文件）；`n` 为 None 是位图记录，没有路径。外层 None 是找不到
+fn file_of(state: &AppState, id: i64, n: Option<u32>) -> Option<Option<PathBuf>> {
+    let Some(n) = n else { return Some(None) };
+    let d = state.store().detail(id).ok()??;
+    let p = PathBuf::from(&d.files.get(n as usize)?.path);
+    xpaste_core::detect::is_image_file(&p).then_some(Some(p))
+}
+
+/// 这张参考图的记录和文件还在不在：只查记录和文件，不解码
+pub fn exists(state: &AppState, id: i64, file: Option<u32>) -> bool {
+    file_of(state, id, file)
+        .and_then(|f| path(state, id, f.as_deref()))
+        .is_some_and(|p| p.exists())
+}
+
 /// 一张参考图的 PNG：`file` 为 None 读位图记录，否则读文件记录里第 `file` 个文件（要是图片文件）。读不到为 None。
 pub fn read_record_image(state: &AppState, id: i64, file: Option<u32>) -> Option<Vec<u8>> {
-    let file = match file {
-        None => None,
-        Some(n) => {
-            let d = state.store().detail(id).ok()??;
-            let p = PathBuf::from(&d.files.get(n as usize)?.path);
-            if !xpaste_core::detect::is_image_file(&p) {
-                return None;
-            }
-            Some(p)
-        }
-    };
-    let img = decode(state, id, file.as_deref())?;
+    read_record_image_within(state, id, file, None)
+}
+
+/// 同 `read_record_image`；`short` 给了时把短边缩到不超过它（比例不变）
+pub fn read_record_image_within(
+    state: &AppState,
+    id: i64,
+    file: Option<u32>,
+    short: Option<u32>,
+) -> Option<Vec<u8>> {
+    let file = file_of(state, id, file)?;
+    let mut img = decode(state, id, file.as_deref())?;
+    if let Some(short) = short.filter(|&s| s > 0 && s < img.width().min(img.height())) {
+        let k = f64::from(short) / f64::from(img.width().min(img.height()));
+        let side = |v: u32| ((f64::from(v) * k).round() as u32).max(1);
+        img = img.resize_exact(
+            side(img.width()),
+            side(img.height()),
+            image::imageops::FilterType::Triangle,
+        );
+    }
     let mut out = Vec::new();
     img.write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png)
         .ok()?;

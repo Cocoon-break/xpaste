@@ -299,9 +299,9 @@ impl Settings {
         }
     }
 
-    /// 记住制作窗口的选择：风格不校验（自定义风格是任意文字），只截到 40 字；样式、位置不认识的按默认存
+    /// 记住制作窗口的选择：风格不校验（自定义风格是任意文字），只截到 44 字（“自定义：”4 字加最多 40 字的描述）；样式、位置不认识的按默认存
     pub fn set_meme_prefs(&mut self, style: &str, ts: &str, pos: &str, more: bool) {
-        let style: String = style.trim().chars().take(40).collect();
+        let style: String = style.trim().chars().take(44).collect();
         self.meme_last_style = if style.is_empty() { "q".into() } else { style };
         self.meme_last_text_style = match ts {
             "color" | "bubble" => ts,
@@ -1813,7 +1813,7 @@ mod tests {
             ("clay", "color", "top", true)
         );
         s.set_meme_prefs(&"字".repeat(60), "x", "y", false);
-        assert_eq!(s.meme_last_style.chars().count(), 40);
+        assert_eq!(s.meme_last_style.chars().count(), 44);
         assert_eq!(
             (
                 s.meme_last_text_style.as_str(),
