@@ -71,9 +71,9 @@ export const memeStylesTouch = (used: string[], custom: string[]) => invoke<void
 export const memeCaptions = (idea: string, refs: RefKey[], sketch: string | null, avoid: string[]) =>
   invoke<string[]>('meme_captions', { idea, refs, sketch, avoid });
 
-/** 生成请求：one 一张、set 一套 16 张、set_part 分 4 次里的第 part 次（0–3）、set_parts 分 4 次重画（只用于 AI 任务）、act 以库里 base 那张为底的 AI 动作 */
+/** 生成请求：one 一张、set 一套 16 张、set_parts 分 4 次重画（后端顺序画 4 部分）、act 以库里 base 那张为底的 AI 动作 */
 export interface GenReq {
-  kind: 'one' | 'set' | 'set_part' | 'set_parts' | 'act'; part: number | null; act: string | null;
+  kind: 'one' | 'set' | 'set_parts' | 'act'; part: number | null; act: string | null;
   /** 内置风格的键名，自定义时为空串 */
   style: string; custom: string | null;
   idea: string; caption: string;

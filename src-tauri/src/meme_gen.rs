@@ -14,7 +14,7 @@ use std::time::Instant;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
 use image::RgbaImage;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use xpaste_core::{MemeInfo, Settings};
 use xpaste_pro::{MemeAct, MemeGen, MemePrompt};
 
@@ -60,8 +60,7 @@ pub struct GenReq {
     pub set: Option<String>,
 }
 
-#[derive(Serialize, Debug, PartialEq)]
-#[serde(tag = "status", rename_all = "lowercase")]
+#[derive(Debug, PartialEq)]
 pub enum GenOut {
     Done {
         ids: Vec<i64>,

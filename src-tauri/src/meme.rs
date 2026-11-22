@@ -588,6 +588,8 @@ pub fn recent_images(state: &AppState) -> Result<Vec<RefKey>, AppError> {
 const PASTE_PAUSED: &str = "暂停记录时加不了剪切板里的图";
 const PASTE_MISSING: &str = "这张图没进历史（暂停记录、被忽略的应用或敏感内容时不收），加不了";
 const DROP_PAUSED: &str = "暂停记录时加不了拖进来的图";
+/// 拖进来的有图片文件，却一张也没加上（过大、空的被采集规则跳过）
+const DROP_NONE: &str = "这几张图加不进来";
 
 /// 这条记录能当参考图的部分（同从面板带进来时的拆法）；记录没了、不是图片时为空
 fn record_refs(state: &AppState, id: i64) -> Vec<RefKey> {
@@ -644,30 +646,35 @@ pub fn add_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<Vec<RefKey>, St
     let n = paths.len();
     let refs = files_refs(&state, paths, |s| {
         crate::clipboard::record(app, s).map(|(id, _)| id)
-    });
+    })?;
     log::info!("表情包 拖进来 {n} 个文件，加成参考图 {} 张", refs.len());
     Ok(refs)
 }
 
-/// 图片文件拼成一个快照交给 `record` 入库（返回记录 id），再按那条记录拆成参考图；没有图片文件、没入库时为空
+/// 图片文件拼成一个快照交给 `record` 入库（返回记录 id），再按那条记录拆成参考图；没有图片文件时为空，
+/// 有图片文件却一张也没加上（没入库）时返回提示
 fn files_refs(
     state: &AppState,
     paths: Vec<PathBuf>,
     record: impl FnOnce(xpaste_core::Snapshot) -> Option<i64>,
-) -> Vec<RefKey> {
+) -> Result<Vec<RefKey>, &'static str> {
     let files: Vec<PathBuf> = paths
         .into_iter()
         .filter(|p| p.is_file() && xpaste_core::detect::is_image_file(p))
         .collect();
     if files.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let snap = xpaste_core::Snapshot {
         flavors: file_flavors(&files),
         file_paths: files,
         ..Default::default()
     };
-    record(snap).map_or_else(Vec::new, |id| record_refs(state, id))
+    let refs = record(snap).map_or_else(Vec::new, |id| record_refs(state, id));
+    if refs.is_empty() {
+        return Err(DROP_NONE);
+    }
+    Ok(refs)
 }
 
 /// 几个文件的剪切板格式（同复制文件时系统给的），记录粘贴、复制时原样写回：Windows 一个 `CF_HDROP`
@@ -858,14 +865,20 @@ mod tests {
         };
         // PDF、不存在的、名字像图片的文件夹都不收
         let paths = ["a.png", "b.pdf", "没有.png", "夹子.png"].map(|f| dir.join(f));
-        let refs = files_refs(&state, paths.to_vec(), save);
+        let refs = files_refs(&state, paths.to_vec(), save).unwrap();
         assert_eq!(refs.len(), 1);
         // 和从面板带同一条记录进来时的键一样（同一张图不会有两个键）
         assert_eq!(refs, record_refs(&state, refs[0].id));
         assert_eq!(refs[0].file, Some(0));
-        // 一张图片都没有：不入库；采集规则跳过了：没有参考图
-        assert!(files_refs(&state, vec![dir.join("b.pdf")], |_| panic!("不该入库")).is_empty());
-        assert!(files_refs(&state, vec![dir.join("a.png")], |_| None).is_empty());
+        // 一张图片都没有：不入库、不提示；有图片却一张也没加上（采集规则跳过了过大、空的）：提示
+        assert_eq!(
+            files_refs(&state, vec![dir.join("b.pdf")], |_| panic!("不该入库")),
+            Ok(vec![])
+        );
+        assert_eq!(
+            files_refs(&state, vec![dir.join("a.png")], |_| None),
+            Err(DROP_NONE)
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
