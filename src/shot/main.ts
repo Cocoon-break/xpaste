@@ -1,6 +1,8 @@
 // 截图遮罩页面（shot.html），每块显示器一个窗口。结构对照原型 docs/specs/2026-10-28-截图与录屏-原型.html：
 // 状态 S、update / place、指针与键盘处理。坐标为本块屏的逻辑像素，冻结帧与标注 canvas 为物理像素。
 import './shot.css';
+// 拼音原样上屏去掉分隔空格（文字标注、卡片原文框，见 ime.ts）
+import '../ime';
 import {
   onShotBegin, onShotClaim, onShotEnd, onShotTranslateDelta, recStart, shotAlive, shotCancel, shotClaim, shotCopyText, shotEngines,
   shotFinish, shotFrame, shotLongStart, shotReady, shotTranslateAgain, shotTyping, type BeginPayload, type ShotAction, type ShotOutcome,
