@@ -25,7 +25,7 @@ import { lineDragDrop, lineDragHover, lineHangFromPanel, lineHide, lineSideHint,
 import { beltPut, onBeltPutSelected } from './api/belt';
 import { mixerDefaults, mixerPut, onMixerPutSelected } from './api/mixer';
 import { memeLibraryStats, memeOpen, memeOpenScene, memeTaskOpen, memeTasks, memeTestImage, onMemeBack, onMemeReveal, onMemeTasks, type TaskView } from './api/meme';
-import { cellClick, cellHTML, foldSets, gridMove, ofSource, previewHTML, taskCellHTML, taskTick, type Arrow, type MemeSource } from './meme-grid';
+import { cellClick, cellHTML, foldSets, gridMove, ofSource, previewHTML, restackOnRemove, taskCellHTML, taskTick, type Arrow, type MemeSource } from './meme-grid';
 import { mountRecipes } from './recipes';
 import { deviceLine, proCard, proControls, proLine } from './pro-status';
 import { popSelect } from './select-pop';
@@ -207,9 +207,10 @@ const favMin = () => S.settings.frequentMinUses;
 const memeShown = (r: RecordSummary) => !isMeme(r) || (memeOn() && (S.filter !== 'meme' || ofSource(r, S.memeSrc)));
 const listed = () => fromApp(visible(S.records, S.filter, S.matchIds, favMin()), S.app).filter(memeShown);
 /** 网格里看得见的格子：一套收成一格（搜索时不叠） */
-// 正在删的、属于一套的不画：删的是一叠显示的那一张时，这一叠立刻换成下一张
+// 正在删的一叠显示的那一张不画，这一叠立刻换成下一张；别的正在删的格子照常画（带 is-removing 淡出）
+const restack = new Set<number>();
 const memeCells = (v: RecordSummary[]) =>
-  foldSets(v.filter((r) => !(r.meme?.set && S.removing.has(r.id))).map((r) => ({ id: r.id, set: r.meme?.set ?? null, r })), S.openSet, S.matchIds !== null);
+  foldSets(v.filter((r) => !restack.has(r.id)).map((r) => ({ id: r.id, set: r.meme?.set ?? null, r })), S.openSet, S.matchIds !== null);
 /** 看得见的记录；网格里是看得见的格子（方向键、Mod+1–9、↩ 都按它算，选中一叠就是显示的那一张） */
 const vis = () => (memeGrid() ? memeCells(listed()).map((c) => c.item.r) : listed());
 /** 当前分类下、不看搜索词的记录：建议的条数与胶囊下的总数都按它算（M29 规则 1、3） */
@@ -1531,9 +1532,10 @@ function remove(ids: number[]) {
   const v = vis().filter((x) => !S.removing.has(x.id));
   const at = new Map(v.map((x, i) => [x.id, i]));
   const last = ids.reduce((a, id) => ((at.get(id) ?? -1) > (at.get(a) ?? -1) ? id : a));
-  // 删的是收着的一叠显示的那一张、这一套还剩不止一张：选中留在这一叠（换成排在它后面的那张）
-  const stack = memeGrid() && ids.length === 1 ? memeCells(listed()).find((c) => c.folded && c.item.id === ids[0]) : undefined;
-  const keep = stack && stack.count > 2 ? listed().find((x) => x.id !== ids[0] && x.meme?.set === stack.item.set && !S.removing.has(x.id))?.id : undefined;
+  // 删的是收着的一叠显示的那一张：这一叠换成排在它后面的那张，选中跟过去（只剩两张时剩下那张单独成一格）
+  const re = memeGrid() ? restackOnRemove(memeCells(listed()), listed().map((r) => ({ id: r.id, set: r.meme?.set ?? null })), ids, S.removing) : null;
+  const keep = re?.keep;
+  if (re) restack.add(re.restack);
   const next = keep ?? nextSelection(v.filter((x) => x.id === last || !ids.includes(x.id)), last);
   // 先退出多选再同步 p.h：之后的重绘与之相同，不会整行替换打断滑出
   S.multi.clear();
@@ -1564,6 +1566,7 @@ function remove(ids: number[]) {
   deleteRecords(ids).then(
     () => {
       setTimeout(() => {
+        ids.forEach((id) => restack.delete(id));
         const done = ids.filter((id) => S.removing.delete(id));
         if (!done.length) return;
         done.forEach((id) => S.records.delete(id));
@@ -1580,6 +1583,7 @@ function remove(ids: number[]) {
     (err: AppError) => {
       ids.forEach((id) => {
         S.removing.delete(id);
+        restack.delete(id);
         ownEcho.delete(id);
       });
       // 重绘把光柱补回来：没重建过时原地路径取消收起动画，删除途中重建过时按新布局补上
@@ -1734,6 +1738,7 @@ const handlers = {
   added: (s: RecordSummary) => {
     applyAdded(S.records, s);
     S.removing.delete(s.id);
+    restack.delete(s.id);
     const restored = restoring.delete(s.id) && !restoredSel;
     if (restored) restoredSel = true;
     const paint = () => {

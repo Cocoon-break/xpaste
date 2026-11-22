@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { RecordSummary } from './api/types.ts';
 import type { TaskView } from './api/meme.ts';
-import { cellClick, cellHTML, foldSets, gridMove, memeMeta, memeOrder, taskCellHTML, taskCellText } from './meme-grid.ts';
+import { cellClick, cellHTML, foldSets, gridMove, memeMeta, memeOrder, restackOnRemove, taskCellHTML, taskCellText } from './meme-grid.ts';
 
 const mk = (id: number, over: Partial<RecordSummary>): RecordSummary => ({
   id, kind: 'image', title: '', app: null, copiedAt: 0, uses: 0, pinned: false,
@@ -86,6 +86,21 @@ test('foldSets：一套收成一格、点开摊开、搜索时不叠、只剩一
   const one = foldSets([loose[0], set[5]], null, false);
   assert.equal(one.length, 2);
   assert.ok(one.every((c) => !c.folded && !c.inSet));
+});
+
+test('restackOnRemove：删收着的一叠显示的那张，换下一张并选中它；摊开的、散的照常淡出', () => {
+  const list = [{ id: 1, set: null as string | null }, { id: 10, set: 'a' }, { id: 11, set: 'a' }, { id: 12, set: 'a' }, { id: 2, set: null }];
+  // 收着：删代表 → 选中留在这一套的下一张
+  assert.deepEqual(restackOnRemove(foldSets(list, null, false), list, [10], new Set()), { restack: 10, keep: 11 });
+  // 下一张也在删：跳过它
+  assert.deepEqual(restackOnRemove(foldSets(list, null, false), list, [10], new Set([11])), { restack: 10, keep: 12 });
+  // 只剩两张：剩下那张单独成一格，选中落在它上面
+  const two = list.filter((x) => x.id !== 12);
+  assert.deepEqual(restackOnRemove(foldSets(two, null, false), two, [10], new Set()), { restack: 10, keep: 11 });
+  // 摊开着删成员、删散的、一次删几张：不换
+  assert.equal(restackOnRemove(foldSets(list, 'a', false), list, [10], new Set()), null);
+  assert.equal(restackOnRemove(foldSets(list, null, false), list, [1], new Set()), null);
+  assert.equal(restackOnRemove(foldSets(list, null, false), list, [10, 1], new Set()), null);
 });
 
 test('cellHTML：收着的一叠写“N 张”带叠起来的边；摊开的一套带浅色边', () => {

@@ -254,11 +254,13 @@ impl Queue {
         }
     }
 
-    /// 回到那次：做法、要摆进预览的结果（网格没画规整的是那一张）、是不是画好了
-    pub fn reopen(&self, id: u64) -> Option<(String, Vec<i64>, bool)> {
+    /// 回到那次：这个任务、要摆进预览的结果（网格没画规整的是那一张）、看过之后收不收下。
+    /// 画好又画规整的才收下；没画规整的要在三选一里选过才走，免得三选一再也拿不回来
+    pub fn reopen(&self, id: u64) -> Option<(TaskView, Vec<i64>, bool)> {
         let v = &self.tasks[self.at(id)?].view;
         let ids = v.irregular.map_or_else(|| v.ids.clone(), |x| vec![x]);
-        Some((v.scene.clone(), ids, v.state == TaskState::Done))
+        let take = v.state == TaskState::Done && v.irregular.is_none();
+        Some((v.clone(), ids, take))
     }
 
     /// 整份列表，新的在前；取消了还没回来的不在里面
@@ -379,12 +381,12 @@ pub fn views() -> Vec<TaskView> {
     q().views()
 }
 
-/// 按任务里的做法打开制作窗口，结果摆进预览；画好的随之拿掉（试用结束等没真打开时不拿）
+/// 按任务里的做法打开制作窗口，结果摆进预览；画好又画规整的随之拿掉（试用结束等没真打开时不拿）
 pub fn open(app: &AppHandle, id: u64) -> Result<(), AppError> {
-    let Some((scene, ids, done)) = q().reopen(id) else {
+    let Some((task, ids, take)) = q().reopen(id) else {
         return Err(AppError::Invalid("这个任务已经不在了".into()));
     };
-    if crate::meme::open_task(app, id, scene, ids)? && done {
+    if crate::meme::open_task(app, &task, ids)? && take {
         Queue::drop(&mut q(), id);
         changed(app);
     }
@@ -510,9 +512,25 @@ mod tests {
             (v.state, v.ids.len(), v.irregular),
             (TaskState::Done, 0, Some(5))
         );
-        assert_eq!(q.reopen(a), Some(("{}".into(), vec![5], true)));
+        // 没画规整的回去看过不收下：三选一里选过才走
+        let (t, ids, take) = q.reopen(a).unwrap();
+        assert_eq!((t.scene.as_str(), ids, take), ("{}", vec![5], false));
         q.drop(a);
         assert!(q.views().is_empty());
+    }
+
+    #[test]
+    fn reopen_takes_only_regular_done() {
+        let mut q = Queue::new();
+        let (a, b) = (push(&mut q), push(&mut q));
+        q.next();
+        q.next();
+        q.finish(a, Ok(GenOut::Done { ids: vec![3, 4] }));
+        q.finish(b, Err("超时".into()));
+        let (_, ids, take) = q.reopen(a).unwrap();
+        assert_eq!((ids, take), (vec![3, 4], true));
+        let (_, ids, take) = q.reopen(b).unwrap();
+        assert_eq!((ids, take), (vec![], false));
     }
 
     #[test]

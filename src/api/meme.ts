@@ -24,7 +24,9 @@ export type RefKey = { id: number; file: number | null };
 export interface MemeOpen {
   refs: RefKey[]; idea: string; scene: string | null; sceneId: number | null; sceneFinal: boolean; draft: string | null; cutout: boolean; expired: boolean;
   taskId: number | null; taskIds: number[];
-  /** 粘贴目标：打开窗口时前台应用的名字（主按钮“贴到<它>”）；从托盘打开、取不到时为 null */
+  /** 回到任务时那次的种类和是不是网格没画规整（`taskIds` 是整张那一个）；不是回到任务时为 null、false */
+  taskKind: TaskView['kind'] | null; taskIrregular: boolean;
+  /** 粘贴目标：打开窗口时前台应用的名字（主按钮“贴到<它>”）；从托盘打开、取不到时为 null。macOS 上窗口重新拿到焦点时用 memeTarget 更新 */
   target: string | null;
   /** 这次窗口是从面板里打开的：标题前有“‹ 返回面板”，Esc 回面板 */
   fromPanel: boolean;
@@ -94,8 +96,10 @@ export const memeTaskCancel = (id: number) => invoke<void>('meme_task_cancel', {
 export const memeTaskRetry = (id: number) => invoke<void>('meme_task_retry', { id });
 /** 去掉画好的、没画出来的 */
 export const memeTaskDrop = (id: number) => invoke<void>('meme_task_drop', { id });
-/** 回到那次：按任务里的做法打开制作窗口（发 meme-open，带 taskId、taskIds）；画好的随之拿掉 */
+/** 回到那次：按任务里的做法打开制作窗口（发 meme-open，带 taskId、taskIds）；画好又画规整的随之拿掉 */
 export const memeTaskOpen = (id: number) => invoke<void>('meme_task_open', { id });
+/** 制作窗口重新拿到焦点：粘贴目标的名字（macOS 换成此刻最前面的应用，Windows 是打开时记下的那个）；没有目标时为 null */
+export const memeTarget = () => invoke<string | null>('meme_target');
 /** 整份任务列表，新的在前 */
 export const memeTasks = () => invoke<TaskView[]>('meme_tasks');
 /** 任务列表变了（发给制作窗口和面板），载荷是整份列表，新的在前 */

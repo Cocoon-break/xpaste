@@ -573,6 +573,7 @@ pub fn run() {
             commands::meme::meme_task_drop,
             commands::meme::meme_task_open,
             commands::meme::meme_tasks,
+            commands::meme::meme_target,
             commands::meme::meme_gen_info,
             commands::meme::meme_cutout,
             commands::meme::meme_save_sketch,

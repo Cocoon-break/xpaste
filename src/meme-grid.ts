@@ -27,6 +27,15 @@ export function foldSets<T extends { id: number; set: string | null }>(list: T[]
   return out;
 }
 
+/** 网格里删一张时这一叠怎么换：删的是收着的一叠显示的那张（`restack`，重画时直接不画、不播淡出），这一叠换成这一套里
+ *  排在后面、没在删的下一张，选中跟过去（`keep`；只剩两张时剩下那张单独成一格）。摊开的套、散的格子、一次删几张都不换，照常淡出 */
+export function restackOnRemove<T extends { id: number; set: string | null }>(cells: { item: T; folded: boolean }[], list: T[], ids: number[], removing: Set<number>): { restack: number; keep: number } | null {
+  if (ids.length !== 1) return null;
+  const c = cells.find((c) => c.folded && c.item.id === ids[0]);
+  const k = c && list.find((x) => x.id !== ids[0] && x.set === c.item.set && !removing.has(x.id));
+  return k ? { restack: ids[0], keep: k.id } : null;
+}
+
 /** 用过的次数从多到少；次数相同按上次使用（copiedAt）从新到旧，从没用过的 copiedAt 就是创建时间 */
 export const memeOrder = (a: RecordSummary, b: RecordSummary): number => b.uses - a.uses || b.copiedAt - a.copiedAt || b.id - a.id;
 

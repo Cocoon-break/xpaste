@@ -71,6 +71,10 @@ pub struct OpenPayload {
     pub task_id: Option<u64>,
     /// 那次已经画好的结果 id（网格没画规整的是整张那一个）；在画、排队、没画出来的为空
     pub task_ids: Vec<i64>,
+    /// 那次的种类（one | set | act）；不是回到任务时为 None
+    pub task_kind: Option<&'static str>,
+    /// 那次网格没画规整（`task_ids` 是整张那一个）
+    pub task_irregular: bool,
     /// 粘贴目标：打开窗口时前台应用的名字（主按钮写“贴到<它>”）；从托盘打开、取不到名字时为 None
     pub target: Option<String>,
     /// 这次窗口是从面板里打开的：标题前有“返回面板”，Esc 回面板
@@ -96,12 +100,15 @@ pub struct Origin {
     /// 粘贴目标的应用名
     pub target: Option<String>,
     pub from_panel: bool,
+    /// 从托盘打开的：一直没有粘贴目标
+    pub tray: bool,
 }
 
 const NOWHERE: Origin = Origin {
     back: None,
     target: None,
     from_panel: false,
+    tray: false,
 };
 
 /// 这次打开之后的来处。新窗口按入口记下前台（`fg`：前台窗口和应用名；托盘打开不取，没有目标）；
@@ -117,16 +124,48 @@ pub fn arrive(
             from_panel: o.from_panel || panel,
             ..o
         },
-        None if entry == Entry::Tray => NOWHERE,
+        None if entry == Entry::Tray => Origin {
+            tray: true,
+            ..NOWHERE
+        },
         None => {
             let (back, target) = fg();
             Origin {
                 back,
                 target,
                 from_panel: panel,
+                tray: false,
             }
         }
     }
+}
+
+/// 窗口重新拿到焦点时的粘贴目标（`front`：此刻前台应用的名字，前台是 xPaste 自己时为 None）。
+/// `follow`（macOS）：贴的时候按给此刻最前面的应用，目标跟着换成它；从托盘打开的照旧没有目标。
+/// 不跟（Windows）：贴回打开时记下的那个窗口，不改
+pub fn retarget(
+    o: &mut Origin,
+    follow: bool,
+    front: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    if follow && !o.tray {
+        o.target = front();
+    }
+    o.target.clone()
+}
+
+/// 制作窗口重新拿到焦点：更新并返回粘贴目标的名字；窗口没开着时为 None
+pub fn refresh_target() -> Option<String> {
+    let mut rt = rt();
+    if !rt.open {
+        return None;
+    }
+    retarget(&mut rt.origin, cfg!(target_os = "macos"), || {
+        target_name(
+            xpaste_platform::frontmost_app(),
+            xpaste_platform::frontmost_is_self(),
+        )
+    })
 }
 
 /// 此刻的前台窗口和前台应用的名字（同采集时的来源应用名）
@@ -144,7 +183,6 @@ fn foreground() -> (Option<isize>, Option<String>) {
 }
 
 /// 粘贴目标的名字：前台是 xPaste 自己（比如设置窗口拿着键盘）时没有目标，贴不回自己
-#[cfg_attr(windows, allow(dead_code))]
 fn target_name(front: Option<xpaste_core::AppInfo>, is_self: bool) -> Option<String> {
     front.filter(|_| !is_self).map(|a| a.name)
 }
@@ -301,8 +339,7 @@ pub fn open_scene(app: &AppHandle, id: i64) -> Result<(), AppError> {
 /// 回到 AI 任务的那次：按任务里的做法打开，带上任务号和已画好的结果。返回是不是真恢复了（没关开关、试用没结束）
 pub fn open_task(
     app: &AppHandle,
-    task: u64,
-    scene: String,
+    task: &crate::meme_tasks::TaskView,
     ids: Vec<i64>,
 ) -> Result<bool, AppError> {
     // 面板里的任务格算从面板来；窗口自己的任务列表、系统通知不算
@@ -314,8 +351,8 @@ pub fn open_task(
     open_with(
         app,
         &[],
-        Some((Some(scene), None, false)),
-        Some((task, ids)),
+        Some((Some(task.scene.clone()), None, false)),
+        Some((task.id, ids, task.kind, task.irregular.is_some())),
         entry,
     )
 }
@@ -326,12 +363,12 @@ pub fn window_open() -> bool {
 }
 
 /// `again`：接着改的做法（可能没有）、库里的 id（回到任务时没有）、是不是做好的成品；
-/// `task`：回到 AI 任务时的任务号和结果。返回是不是按 `again` 恢复了（试用结束、开关关着时不是）
+/// `task`：回到 AI 任务时的任务号、结果、种类和是不是没画规整。返回是不是按 `again` 恢复了（试用结束、开关关着时不是）
 fn open_with(
     app: &AppHandle,
     ids: &[i64],
     again: Option<(Option<String>, Option<i64>, bool)>,
-    task: Option<(u64, Vec<i64>)>,
+    task: Option<(u64, Vec<i64>, &'static str, bool)>,
     entry: Entry,
 ) -> Result<bool, AppError> {
     if !on(app) {
@@ -369,9 +406,9 @@ fn open_with(
         Some((s, id, fin)) => (s, id, fin),
         None => (None, None, false),
     };
-    let (task_id, task_ids) = match task.filter(|_| !expired) {
-        Some((t, ids)) => (Some(t), ids),
-        None => (None, Vec::new()),
+    let (task_id, task_ids, task_kind, task_irregular) = match task.filter(|_| !expired) {
+        Some((t, ids, kind, irr)) => (Some(t), ids, Some(kind), irr),
+        None => (None, Vec::new(), None, false),
     };
     log::info!(
         "表情包 打开 {} 参考图 {} 张{}{}{}{}",
@@ -403,6 +440,8 @@ fn open_with(
         expired,
         task_id,
         task_ids,
+        task_kind,
+        task_irregular,
         target: origin.target,
         from_panel: origin.from_panel,
     };
@@ -726,9 +765,44 @@ mod tests {
         assert_eq!((o.back, o.target.as_deref()), (Some(7), Some("微信")));
         // 托盘打开没有粘贴目标，也不取前台
         let o = arrive(None, Entry::Tray, || panic!("托盘打开不取前台"));
-        assert_eq!(o, NOWHERE);
+        assert_eq!((o.back, o.target, o.tray), (None, None, true));
         // 取不到名字时没有目标（页面按没有目标处理）
         assert_eq!(arrive(None, Entry::Other, || (Some(7), None)).target, None);
+    }
+
+    #[test]
+    fn retarget_follows_front_on_mac_only() {
+        let wx = Origin {
+            back: None,
+            target: Some("微信".into()),
+            from_panel: false,
+            tray: false,
+        };
+        // macOS：换成此刻最前面的应用；前台是 xPaste 自己时没有目标，再切回别的应用又有
+        let mut o = wx.clone();
+        assert_eq!(
+            retarget(&mut o, true, || Some("备忘录".into())).as_deref(),
+            Some("备忘录")
+        );
+        assert_eq!(o.target.as_deref(), Some("备忘录"));
+        assert_eq!(retarget(&mut o, true, || None), None);
+        assert_eq!(
+            retarget(&mut o, true, || Some("微信".into())).as_deref(),
+            Some("微信")
+        );
+        // 从托盘打开的一直没有目标，也不取前台
+        let mut t = arrive(None, Entry::Tray, || panic!("托盘打开不取前台"));
+        assert_eq!(retarget(&mut t, true, || panic!("托盘打开不取前台")), None);
+        // Windows：贴回打开时记下的窗口，名字不改
+        let mut w = Origin {
+            back: Some(7),
+            ..wx
+        };
+        assert_eq!(
+            retarget(&mut w, false, || panic!("不取前台")).as_deref(),
+            Some("微信")
+        );
+        assert_eq!(w.back, Some(7));
     }
 
     #[test]
@@ -737,6 +811,7 @@ mod tests {
             back: Some(7),
             target: Some("微信".into()),
             from_panel: false,
+            tray: false,
         };
         let other = || (Some(9), Some("备忘录".to_string()));
         // 已开着再打开：目标不变；快捷键、托盘不改“从面板来”

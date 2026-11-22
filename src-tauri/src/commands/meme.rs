@@ -248,6 +248,12 @@ pub fn meme_task_open(app: AppHandle, id: u64) -> Result<(), AppError> {
     crate::meme_tasks::open(&app, id)
 }
 
+/// 制作窗口重新拿到焦点：粘贴目标的名字（macOS 换成此刻最前面的应用；Windows 是打开时记下的那个）
+#[tauri::command(async)]
+pub fn meme_target() -> Option<String> {
+    meme::refresh_target()
+}
+
 /// 整份任务列表，新的在前
 #[tauri::command(async)]
 pub fn meme_tasks() -> Vec<crate::meme_tasks::TaskView> {
