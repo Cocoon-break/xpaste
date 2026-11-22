@@ -143,6 +143,7 @@ pub fn arrive(
 /// 窗口重新拿到焦点时的粘贴目标（`front`：此刻前台应用的名字，前台是 xPaste 自己时为 None）。
 /// `follow`（macOS）：贴的时候按给此刻最前面的应用，目标跟着换成它；从托盘打开的照旧没有目标。
 /// 不跟（Windows）：贴回打开时记下的那个窗口，不改
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn retarget(
     o: &mut Origin,
     follow: bool,
@@ -154,18 +155,26 @@ pub fn retarget(
     o.target.clone()
 }
 
-/// 制作窗口重新拿到焦点：更新并返回粘贴目标的名字；窗口没开着时为 None
+/// 制作窗口重新拿到焦点：更新并返回粘贴目标的名字；窗口没开着时为 None。
+/// 先取前台应用名再拿锁写回，不拿着锁调 AppKit
+#[cfg(target_os = "macos")]
 pub fn refresh_target() -> Option<String> {
+    let front = target_name(
+        xpaste_platform::frontmost_app(),
+        xpaste_platform::frontmost_is_self(),
+    );
     let mut rt = rt();
     if !rt.open {
         return None;
     }
-    retarget(&mut rt.origin, cfg!(target_os = "macos"), || {
-        target_name(
-            xpaste_platform::frontmost_app(),
-            xpaste_platform::frontmost_is_self(),
-        )
-    })
+    retarget(&mut rt.origin, true, || front)
+}
+
+/// 制作窗口重新拿到焦点：Windows 贴回打开时记下的窗口，返回记着的名字、不改；窗口没开着时为 None
+#[cfg(not(target_os = "macos"))]
+pub fn refresh_target() -> Option<String> {
+    let rt = rt();
+    rt.open.then(|| rt.origin.target.clone()).flatten()
 }
 
 /// 此刻的前台窗口和前台应用的名字（同采集时的来源应用名）
@@ -183,6 +192,7 @@ fn foreground() -> (Option<isize>, Option<String>) {
 }
 
 /// 粘贴目标的名字：前台是 xPaste 自己（比如设置窗口拿着键盘）时没有目标，贴不回自己
+#[cfg_attr(windows, allow(dead_code))]
 fn target_name(front: Option<xpaste_core::AppInfo>, is_self: bool) -> Option<String> {
     front.filter(|_| !is_self).map(|a| a.name)
 }
