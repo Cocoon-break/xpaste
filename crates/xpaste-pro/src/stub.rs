@@ -8,6 +8,9 @@ use crate::types::*;
 
 pub const AVAILABLE: bool = false;
 
+/// 空实现没有改字
+pub const TE_SHIPS: bool = false;
+
 /// 空实现不含 Pro，签名是否官方无从谈起
 pub fn genuine() -> bool {
     false
@@ -467,6 +470,7 @@ mod tests {
         let mut l = Line::open(&dir, 0, 1, || None);
         // black_box：避免 clippy 对常量断言报错
         assert!(!std::hint::black_box(AVAILABLE));
+        assert!(!std::hint::black_box(TE_SHIPS));
         assert!(matches!(l.status(0), Pro::Unavailable));
         assert!(l.notes().is_empty());
         assert_eq!(

@@ -50,6 +50,8 @@ export type Pro =
 export interface LineView {
   /** 这个构建带不带晾衣绳 */
   available: boolean;
+  /** 这个构建有没有改字（Pro 在、而且这一端已经发布）；没有时设置页不出现改字一行 */
+  edit: boolean;
   pro: Pro;
   notes: NoteDto[];
   /** 已挂着的记录 id：面板据此画刻线 */

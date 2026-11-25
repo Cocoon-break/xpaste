@@ -52,6 +52,8 @@ pub struct NoteDto {
 pub struct LineView {
     /// 这个构建带不带晾衣绳
     pub available: bool,
+    /// 这个构建有没有改字（`hotkey::edit_enabled`：还要这一端已经发布）；没有时设置页不出现改字一行
+    pub edit: bool,
     pub pro: Pro,
     pub notes: Vec<NoteDto>,
     /// 已挂着的记录 id，面板据此画刻线
@@ -259,6 +261,7 @@ pub fn view(state: &AppState) -> LineView {
     let pro = line.status(now());
     LineView {
         available: crate::line::enabled(),
+        edit: crate::hotkey::edit_enabled(),
         style: effective_style(&pro, &chosen),
         pro,
         notes: line.notes().iter().map(|n| dto(&line, n.clone())).collect(),
@@ -1251,6 +1254,7 @@ mod tests {
         let state = AppState::for_test();
         let v = view(&state);
         assert_eq!(v.available, crate::line::enabled());
+        assert_eq!(v.edit, crate::hotkey::edit_enabled());
         if !crate::line::enabled() {
             assert!(matches!(v.pro, Pro::Unavailable));
             assert!(v.notes.is_empty() && v.hung.is_empty());

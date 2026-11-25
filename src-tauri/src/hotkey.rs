@@ -40,9 +40,19 @@ impl<'a> Keys<'a> {
     }
 }
 
-/// 改字（Pro）是否可用（与表情包同一个条件，含正版判断）；不可用时不注册快捷键。设置里的总开关由 `effective_edit_hotkey` 体现。
+/// 改字（Pro）是否可用（与表情包同一个条件，含正版判断），正式构建还要这一端已经发布（`TE_SHIPS`，没过发布门槛前是 false；
+/// 开发构建不看它）。不可用时不注册快捷键，托盘、面板、截图、贴图、打开方式和设置页都没有改字。
+/// 设置里的总开关由 `effective_edit_hotkey` 体现。改字的入口都经这里，不直接看 `line::enabled`。
 pub fn edit_enabled() -> bool {
-    crate::line::enabled()
+    ships(
+        crate::line::enabled(),
+        cfg!(debug_assertions),
+        xpaste_pro::TE_SHIPS,
+    )
+}
+
+fn ships(line: bool, debug: bool, shipped: bool) -> bool {
+    line && (debug || shipped)
 }
 
 /// 注销全部后注册唤起、截图、录屏、翻译、便签、传送带、搅拌机、表情包与改字快捷键（后八个为空串表示不启用，跳过；不含晾衣绳的版本不注册便签）；任何失败都视为被占用。
@@ -344,6 +354,18 @@ mod tests {
         REC_SUPPORTED, Role, ShotRoute, failure_notice, first_failure, label, role_of, shot_route,
     };
     use crate::error::AppError;
+
+    // 先不发：正式构建里没发的一端没有改字，开发构建照常；没有 Pro 的哪种构建都没有
+    #[test]
+    fn edit_needs_ship_flag_outside_debug() {
+        use super::ships;
+        assert!(!ships(true, false, false));
+        assert!(ships(true, false, true));
+        assert!(ships(true, true, false));
+        assert!(!ships(false, true, true));
+        // 测试是开发构建：只看 Pro 在不在
+        assert_eq!(super::edit_enabled(), crate::line::enabled());
+    }
 
     #[test]
     fn shot_goes_to_panel_only_while_dialog_open_and_panel_focused() {

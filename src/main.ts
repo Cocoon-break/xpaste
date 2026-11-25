@@ -189,7 +189,7 @@ const S = {
   /** 当前可见条数，供 aria-setsize */
   count: 0,
   /** 晾衣绳：不含晾衣绳的版本 available 为 false，挂钩按钮、已挂刻线与“Pro”标签都不出现 */
-  line: { available: false, pro: { state: 'unavailable' }, notes: [], hung: [], hotkey: '', style: { rope: 'jute', thick: 'mid', peg: 'plastic', paper: 'parch', edge: 'auto' }, on: true, side: 'top', pinned: false, leaveMs: 350, hookX: null, recovered: false, canBuy: false } as LineView,
+  line: { available: false, edit: false, pro: { state: 'unavailable' }, notes: [], hung: [], hotkey: '', style: { rope: 'jute', thick: 'mid', peg: 'plastic', paper: 'parch', edge: 'auto' }, on: true, side: 'top', pinned: false, leaveMs: 350, hookX: null, recovered: false, canBuy: false } as LineView,
 };
 const menuOpen = () => menu.dataset.open === 'true' || moreMenu.dataset.open === 'true';
 
@@ -2335,7 +2335,7 @@ function paintProHome() {
   for (const el of document.querySelectorAll<HTMLElement>('#proMixerPage > .line, #proMixerPage > .field, #proMixerPage > .recipes')) dimItem(el, !mixerOnIn.checked);
   // 生图接口和改字共用：表情包制作关着、改字开着时照常能填
   for (const el of document.querySelectorAll<HTMLElement>('#proMemePage > .line, #proMemePage > .field, #proMemePage > .help'))
-    dimItem(el, !memeOnIn.checked && !('iface' in el.dataset && editOnIn.checked));
+    dimItem(el, !memeOnIn.checked && !('iface' in el.dataset && S.line.edit && editOnIn.checked));
   // 改字关着时改过的图还在，照样能清空
   for (const el of document.querySelectorAll<HTMLElement>('#proEditPage > .field, #proEditPage > .line:not(#editRecentRow)')) dimItem(el, !editOnIn.checked);
 }
@@ -3006,7 +3006,7 @@ function openSettings() {
     if (h.belt && S.line.available) beltKey.setHelp(taken('传送带'), true);
     if (h.mixer && S.line.available) mixerKey.setHelp(taken('搅拌机'), true);
     if (h.meme && S.line.available) memeKey.setHelp(taken('表情包'), true);
-    if (h.edit && S.line.available) editKey.setHelp(taken('改字'), true);
+    if (h.edit && S.line.edit) editKey.setHelp(taken('改字'), true);
   }, (e: AppError) => void info(`读取快捷键状态失败 kind=${e.kind}`));
   shotDir.pending = st.shotDir;
   shotDir.paint();
@@ -3710,7 +3710,7 @@ await onOpenSettings((tab) => {
     return memeOnIn.checked ? proGo('proMemePage') : goImageApi();
   }
   // 托盘“改字设置…”、改字窗口里的“去设置”
-  if (tab === 'edit' && S.line.available) return goEditSettings();
+  if (tab === 'edit' && S.line.edit) return goEditSettings();
   if (tab !== 'pro' || !S.line.available) return openSettings();
   openSettingsAt('st-tab-pro');
   showStControl(proActField.hidden ? proOffBtn : proCodeIn);
@@ -3854,6 +3854,8 @@ S.paused = b.paused;
 // 订阅后到达的 line-changed 比快照新，快照不覆盖它
 if (!S.line.available) S.line = b.line;
 $('#st-tab-pro').hidden = $('#st-pro').hidden = !S.line.available;
+// 改字还没在这一端发布的正式构建：设置页没有改字一行
+$('#proFeatEdit').hidden = !S.line.edit;
 paintPause();
 // 订阅后到达的事件比快照新，快照不覆盖已有条目
 // ponytail: 快照之后、返回之前被删除的记录会被快照带回，下次 records-removed 或重启时消失
@@ -4045,9 +4047,9 @@ function makeMeme(id: number | null, multi = [...S.multi], blank = false) {
   const fail = (err: AppError) => toast(err.message);
   void memeOpen(putOrder(id, multi)).catch((err: AppError) => (blank ? memeOpen([]).catch(fail) : fail(err)));
 }
-// 改字在这个构建里、且用户开着：图片、图片文件记录上才有改字按钮。试用结束照常显示，点了由改字窗口提示
+// 改字在这个构建里（还要这一端已经发布）、且用户开着：图片、图片文件记录上才有改字按钮。试用结束照常显示，点了由改字窗口提示
 function editOn() {
-  return S.line.available && S.settings.editEnabled;
+  return S.line.edit && S.settings.editEnabled;
 }
 // 文件记录看有没有图片文件，同 memeable
 function textEditable(r: RecordSummary) {
