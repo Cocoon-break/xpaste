@@ -1069,7 +1069,7 @@ impl Live {
         let me = lines.len() - 1;
         let strip = xpaste_pro::te_strip(&self.img, s.line);
         let to = targets(&strip, o.len(), &lines[me].2, &at, s.range)?;
-        let from = xpaste_pro::te_find_sources(&self.img, &lines, me, &chars)?;
+        let from = xpaste_pro::te_find_sources(&self.img, &lines, me, &to, &chars)?;
         // 同一行里连着签名的
         let signed = |f: &TeSource| {
             let strip = xpaste_pro::te_strip(&self.img, lines[f.line].1);

@@ -435,6 +435,7 @@ pub fn te_find_sources(
     _img: &TeImg,
     _lines: &[(String, TeQuad, Vec<[f32; 2]>)],
     _target: usize,
+    _to: &[[f32; 2]],
     _chars: &[char],
 ) -> Option<Vec<TeSource>> {
     None
