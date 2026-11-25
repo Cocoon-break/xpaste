@@ -23,7 +23,7 @@ use crate::textedit_store as store;
 use crate::translate::Fail;
 
 /// 裁块两侧各带几个邻字
-const NEIGHBORS: usize = 4;
+pub const NEIGHBORS: usize = 4;
 const UNALIGNED: &str = "AI 出的图对不上";
 pub const TASK_GONE: &str = "这个任务已经不在了";
 

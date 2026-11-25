@@ -2430,3 +2430,7 @@ pub mod tests {
 
     // ---- 留存 ----
 }
+
+#[cfg(test)]
+#[path = "textedit_gates.rs"]
+mod gates;
