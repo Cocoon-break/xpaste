@@ -5,7 +5,6 @@
 
 use super::*;
 use std::io::BufRead;
-use std::sync::atomic::AtomicBool;
 
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -47,7 +46,7 @@ fn gates() {
 }
 
 /// 识别出错在应用里当作没读出字；这里量出来会像“没误拦”，所以多试两次，还不行就报错
-static OCR_FAILED: AtomicBool = AtomicBool::new(false);
+static OCR_FAILED: Mutex<Option<String>> = Mutex::new(None);
 fn ocr_or_flag(png: &[u8]) -> Result<Option<Vec<OcrLine>>, OcrError> {
     let mut r = ocr(png);
     for _ in 0..2 {
@@ -55,7 +54,8 @@ fn ocr_or_flag(png: &[u8]) -> Result<Option<Vec<OcrLine>>, OcrError> {
             r = ocr(png);
         }
     }
-    OCR_FAILED.store(r.is_err(), Ordering::SeqCst);
+    // 引擎的消息里没有路径和文字
+    *lock(&OCR_FAILED) = r.as_ref().err().map(|e| format!("{e:?}"));
     r
 }
 
@@ -93,8 +93,8 @@ fn answer(held: &mut Option<(String, Live)>, v: &Value) -> Result<Value, AppErro
         let (img, icc) = crate::textedit::decode(&bytes).map_err(|e| no(e.text()))?;
         let live = Live::fresh(img, icc);
         live.start(ocr_or_flag);
-        if OCR_FAILED.load(Ordering::SeqCst) {
-            return Err(no("系统识别出错，等电脑空一点再跑"));
+        if let Some(e) = lock(&OCR_FAILED).take() {
+            return Err(no(&format!("系统识别出错，等一会儿再跑：{e}")));
         }
         *held = Some((file, live));
     }
