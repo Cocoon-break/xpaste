@@ -23,6 +23,7 @@ const DIR: &str = "这个文件夹存不进去";
 const SAME: &str = "不能盖掉原文件，换个名字";
 const COPIED: &str = "已复制，已加入历史";
 const PIN_GONE: &str = "贴图已经关了，已复制，已加入历史";
+const PIN_FAIL: &str = "没贴上，请重试";
 const REPINNED: &str = "已钉回原处";
 
 /// 页面只说动作名：另存为的路径由后端问
@@ -79,6 +80,9 @@ pub enum Then {
 pub struct FinishOut {
     pub text: Option<String>,
     pub then: Then,
+    /// 要做的做成了；没贴过去、存一份写不进去的不算。只给日志用
+    #[serde(skip)]
+    done: bool,
 }
 
 impl FinishOut {
@@ -86,12 +90,21 @@ impl FinishOut {
     pub const NONE: FinishOut = FinishOut {
         text: None,
         then: Then::Stay,
+        done: true,
     };
 
     fn new(text: impl Into<String>, then: Then) -> Self {
         FinishOut {
             text: Some(text.into()),
             then,
+            ..Self::NONE
+        }
+    }
+
+    fn undone(self) -> Self {
+        FinishOut {
+            done: false,
+            ..self
         }
     }
 }
@@ -106,11 +119,21 @@ impl From<SaveFail> for AppError {
     }
 }
 
+/// 系统的错误换成给用户看的
+fn pin_fail(e: AppError) -> AppError {
+    match e {
+        AppError::Io(e) => log::warn!("改字 贴图写不进去：{:?}", e.kind()),
+        AppError::Tauri(_) => log::warn!("改字 贴图窗口没建成"),
+        e => return e,
+    }
+    no(PIN_FAIL)
+}
+
 /// 成品落到的地方
 trait Sink {
     fn write(&self, flavors: &[Flavor]) -> Result<u64, PlatformError>;
-    /// 关窗口、贴过去（没贴成的自己提示）。窗口里已经不是这张图时不贴，返回 false
-    fn paste(&self, target: &str) -> bool;
+    /// 关窗口、贴过去，返回贴成没有（没贴成的自己提示）。窗口里已经不是这张图时不关也不贴，返回 None
+    fn paste(&self) -> Option<bool>;
     fn pin_at(&self, rect: Rect, png: &[u8]) -> Result<(), AppError>;
     /// 贴图已经关了返回 false
     fn pin_replace(&self, n: u64, png: &[u8]) -> Result<bool, AppError>;
@@ -140,26 +163,26 @@ fn deliver(
         let name = p.file_name().unwrap_or_default().to_string_lossy();
         FinishOut::new(format!("已存成 {name}，原文件没动"), then)
     };
-    Ok(match (act, src) {
-        (Finish::Paste, _) if let Some(target) = target => {
+    Ok(match (act, src, target) {
+        (Finish::Paste, _, Some(_)) => {
             copy(png()?)?;
-            if sink.paste(target) {
-                FinishOut::NONE
-            } else {
-                FinishOut::new(COPIED, Then::Stay)
+            match sink.paste() {
+                Some(true) => FinishOut::NONE,
+                Some(false) => FinishOut::NONE.undone(),
+                None => FinishOut::new(COPIED, Then::Stay).undone(),
             }
         }
-        (Finish::SaveBeside, Source::File(p)) => {
+        (Finish::SaveBeside, Source::File(p), _) => {
             match store::write_beside(p, &out.img, icc, out.ai) {
                 Ok(p) => saved(&p, Then::Close),
-                Err(SaveFail::Dir) => FinishOut::new(DIR, Then::SaveAs),
+                Err(SaveFail::Dir) => FinishOut::new(DIR, Then::SaveAs).undone(),
                 Err(e) => return Err(e.into()),
             }
         }
-        (Finish::SaveAs(to), Source::File(p)) => {
+        (Finish::SaveAs(to), Source::File(p), _) => {
             saved(&store::write_as(to, p, &out.img, icc, out.ai)?, Then::Stay)
         }
-        (Finish::SaveShotDir, _) => {
+        (Finish::SaveShotDir, _, _) => {
             let (name, copied) = sink.save_shot(png()?).map_err(|e| match e {
                 AppError::Io(e) => SaveFail::from(e).into(),
                 e => e,
@@ -167,17 +190,17 @@ fn deliver(
             let copied = if copied { "并复制" } else { "" };
             FinishOut::new(format!("已保存{copied} · {name}"), Then::Stay)
         }
-        (Finish::Repin, Source::Shot { rect, .. }) => {
-            sink.pin_at(*rect, &png()?)?;
+        (Finish::Repin, Source::Shot { rect, .. }, _) => {
+            sink.pin_at(*rect, &png()?).map_err(pin_fail)?;
             FinishOut::new(REPINNED, Then::Close)
         }
-        (Finish::ReplacePin, Source::Pin { n }) => {
+        (Finish::ReplacePin, Source::Pin { n }, _) => {
             let png = png()?;
-            if sink.pin_replace(*n, &png)? {
+            if sink.pin_replace(*n, &png).map_err(pin_fail)? {
                 // 贴图自己提示
                 FinishOut {
-                    text: None,
                     then: Then::Close,
+                    ..FinishOut::NONE
                 }
             } else {
                 copy(png)?;
@@ -202,16 +225,10 @@ impl Sink for Real<'_> {
         xpaste_platform::write(flavors)
     }
 
-    fn paste(&self, target: &str) -> bool {
-        let Some(o) = textedit::shut_if(self.seq) else {
-            return false;
-        };
+    fn paste(&self) -> Option<bool> {
+        let o = textedit::shut_if(self.seq)?;
         textedit_window::hide(self.app, o.back);
-        // 窗口关了，用系统通知说
-        if crate::meme::paste_into(self.app, o.back, "改字") {
-            crate::notify(self.app, &format!("已贴到 {target}，已加入历史"));
-        }
-        true
+        Some(crate::meme::paste_into(self.app, o.back, "改字"))
     }
 
     fn pin_at(&self, rect: Rect, png: &[u8]) -> Result<(), AppError> {
@@ -255,18 +272,25 @@ pub fn finish(app: &AppHandle, job: &str, act: Finish) -> Result<FinishOut, AppE
         out.img.h,
         out.done,
         if out.ai { "（含 AI）" } else { "" },
-        if r.is_err() { " 没成" } else { "" },
+        if r.as_ref().is_ok_and(|o| o.done) {
+            ""
+        } else {
+            " 没成"
+        },
         t.elapsed().as_millis()
     );
     r
 }
 
-/// 另存为的对话框里先写好的路径
-pub fn suggest(job: &str) -> Result<PathBuf, AppError> {
-    match current(job)?.src {
-        Source::File(p) => Ok(store::out_path(&p)),
-        _ => Err(no(UNFIT)),
-    }
+/// 另存为的对话框里先写好的路径；做不了的不用开对话框
+pub fn suggest(app: &AppHandle, job: &str) -> Result<PathBuf, AppError> {
+    textedit::check_on(app)?;
+    let cur = current(job)?;
+    let Source::File(p) = cur.src else {
+        return Err(no(UNFIT));
+    };
+    cur.live.ready()?;
+    Ok(store::out_path(&p))
 }
 
 #[cfg(test)]
@@ -277,6 +301,7 @@ mod tests {
     use crate::textedit_job::{self as job, Live};
     use crate::textedit_tasks::tests::tasks as new_tasks;
     use std::cell::RefCell;
+    use std::io::ErrorKind;
     use std::sync::Arc;
     use std::sync::atomic::Ordering;
     use xpaste_platform::PlatformError;
@@ -287,18 +312,23 @@ mod tests {
         w: 300.0,
         h: 120.0,
     };
-    /// 记下落到哪儿了；`on` 是窗口还开着这张图，`pin` 是贴图还在
+    /// 记下落到哪儿了；`pasted` 同 `Sink::paste`，`pin` 是贴图还在，`also` 是存截图时同时复制，
+    /// `fail` 是写不进去的原因
     struct Fake {
-        on: bool,
+        pasted: Option<bool>,
         pin: bool,
+        also: bool,
+        fail: Option<ErrorKind>,
         clip: RefCell<Vec<Vec<u8>>>,
         did: RefCell<Vec<String>>,
     }
     impl Fake {
         fn new() -> Self {
             Fake {
-                on: true,
+                pasted: Some(true),
                 pin: true,
+                also: true,
+                fail: None,
                 clip: RefCell::default(),
                 did: RefCell::default(),
             }
@@ -309,28 +339,36 @@ mod tests {
         fn clip(&self) -> Vec<u8> {
             self.clip.borrow().last().unwrap().clone()
         }
+        fn io(&self) -> std::io::Result<()> {
+            self.fail.map_or(Ok(()), |k| Err(k.into()))
+        }
     }
     impl Sink for Fake {
         fn write(&self, f: &[Flavor]) -> Result<u64, PlatformError> {
+            self.io()
+                .map_err(|_| PlatformError::Clipboard("x".into()))?;
             self.clip.borrow_mut().push(f[0].data.clone());
             Ok(11)
         }
-        fn paste(&self, target: &str) -> bool {
-            self.note(format!("paste {target}"));
-            self.on
+        fn paste(&self) -> Option<bool> {
+            self.note("paste".into());
+            self.pasted
         }
         fn pin_at(&self, r: Rect, png: &[u8]) -> Result<(), AppError> {
+            self.io()?;
             self.clip.borrow_mut().push(png.to_vec());
             self.note(format!("pin {} {} {} {}", r.x, r.y, r.w, r.h));
             Ok(())
         }
         fn pin_replace(&self, n: u64, _: &[u8]) -> Result<bool, AppError> {
+            self.io()?;
             self.note(format!("replace {n}"));
             Ok(self.pin)
         }
         fn save_shot(&self, png: Vec<u8>) -> Result<(String, bool), AppError> {
+            self.io()?;
             self.clip.borrow_mut().push(png);
-            Ok(("截图 1.png".into(), true))
+            Ok(("截图 1.png".into(), self.also))
         }
     }
 
@@ -383,6 +421,8 @@ mod tests {
         let l = live();
         let none = || msg(l.output(&tmp.0));
         assert_eq!(none(), "还没有改好的");
+        // 另存为的对话框打开之前就查
+        assert_eq!(msg(l.ready()), "还没有改好的");
         // 在改
         let (task, ai) = t
             .submit(&tmp.0, &l, &draft("会政改到三点", range(1, 2)), true, true)
@@ -423,6 +463,15 @@ mod tests {
             ..read()
         });
         assert_eq!(msg(banned.output(&tmp.0)), "这张图不支持改字");
+        assert_eq!(msg(banned.ready()), "这张图不支持改字");
+        assert!(l.ready().is_ok());
+        // 文件夹没了的说没了，别的出错不说成删掉了
+        let file = &edit_of(&l, 2).cands[0].file;
+        let cand = tmp.0.join(&l.id).join(file);
+        std::fs::write(&cand, b"x").unwrap();
+        assert_eq!(msg(l.output(&tmp.0)), "没存成，请重试");
+        std::fs::remove_dir_all(tmp.0.join(&l.id)).unwrap();
+        assert_eq!(msg(l.output(&tmp.0)), job::GONE);
     }
 
     /// 复制按普通写入：不打自身写入标记，监听器照常收进历史
@@ -513,14 +562,59 @@ mod tests {
         // 有目标：写好剪切板再贴，窗口由后端关
         let r = go(&sink, &src, &Finish::Paste, Some("微信"), &o);
         assert_eq!(text(&r), (None, Then::Stay));
-        assert_eq!(*sink.did.borrow(), ["paste 微信"]);
+        assert!(r.unwrap().done);
+        assert_eq!(*sink.did.borrow(), ["paste"]);
+        // 没贴成：面板提示，日志记没成
+        let bad = Fake {
+            pasted: Some(false),
+            ..Fake::new()
+        };
+        let r = go(&bad, &src, &Finish::Paste, Some("微信"), &o);
+        assert_eq!(text(&r), (None, Then::Stay));
+        assert!(!r.unwrap().done);
         // 写的时候窗口关了、换了一张：只复制，不往别处贴
         let gone = Fake {
-            on: false,
+            pasted: None,
             ..Fake::new()
         };
         let r = go(&gone, &src, &Finish::Paste, Some("微信"), &o);
         assert_eq!(text(&r), (COPIED.0, Then::Stay));
+        assert!(!r.unwrap().done);
+    }
+
+    /// 写剪切板失败：不关窗口、不贴
+    #[test]
+    fn clipboard_fail_keeps_window() {
+        need_pro!();
+        let tmp = Tmp::new();
+        let o = edited(&tmp).output(&tmp.0).unwrap();
+        let src = Source::Clip { record: 1 };
+        for act in [Finish::Paste, Finish::Copy] {
+            let sink = Fake {
+                fail: Some(ErrorKind::Other),
+                ..Fake::new()
+            };
+            let r = go(&sink, &src, &act, Some("微信"), &o);
+            assert!(matches!(r, Err(AppError::ClipboardWrite)));
+            assert!(sink.did.borrow().is_empty());
+        }
+    }
+
+    /// 钉、换贴图写不了文件：说人话
+    #[test]
+    fn pin_io_fail_message() {
+        need_pro!();
+        let tmp = Tmp::new();
+        let o = edited(&tmp).output(&tmp.0).unwrap();
+        let sink = Fake {
+            fail: Some(ErrorKind::StorageFull),
+            ..Fake::new()
+        };
+        let pin = Source::Pin { n: 1 };
+        for (src, act) in [(&src_shot(), Finish::Repin), (&pin, Finish::ReplacePin)] {
+            assert_eq!(msg(go(&sink, src, &act, None, &o)), "没贴上，请重试");
+        }
+        assert!(sink.clip.borrow().is_empty());
     }
 
     /// 钉回截图时的位置
@@ -576,6 +670,7 @@ mod tests {
         let gone = Source::File(tmp.0.join("没有/a.png"));
         let r = go(&sink, &gone, &Finish::SaveBeside, None, &o);
         assert_eq!(text(&r), (Some("这个文件夹存不进去"), Then::SaveAs));
+        assert!(!r.unwrap().done);
         let to = Finish::SaveAs(tmp.0.join("b.png"));
         let r = go(&sink, &gone, &to, None, &o);
         assert_eq!(text(&r), (Some("已存成 b.png，原文件没动"), Then::Stay));
@@ -597,8 +692,24 @@ mod tests {
         need_pro!();
         let tmp = Tmp::new();
         let o = edited(&tmp).output(&tmp.0).unwrap();
-        let r = go(&Fake::new(), &Source::Blank, &Finish::SaveShotDir, None, &o);
+        let save = |sink: Fake| go(&sink, &Source::Blank, &Finish::SaveShotDir, None, &o);
+        let r = save(Fake::new());
         assert_eq!(text(&r), (Some("已保存并复制 · 截图 1.png"), Then::Stay));
+        let r = save(Fake {
+            also: false,
+            ..Fake::new()
+        });
+        assert_eq!(text(&r), (Some("已保存 · 截图 1.png"), Then::Stay));
+        for (kind, want) in [
+            (ErrorKind::PermissionDenied, "这个文件夹存不进去"),
+            (ErrorKind::StorageFull, "没存成，请重试"),
+        ] {
+            let r = save(Fake {
+                fail: Some(kind),
+                ..Fake::new()
+            });
+            assert_eq!(msg(r), want);
+        }
     }
 
     /// 来源和动作对不上的不做
@@ -661,6 +772,7 @@ mod tests {
         let v = serde_json::to_value(FinishOut {
             text: None,
             then: Then::SaveAs,
+            done: false,
         });
         assert_eq!(
             v.unwrap(),

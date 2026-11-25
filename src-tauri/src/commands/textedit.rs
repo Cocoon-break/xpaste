@@ -384,7 +384,7 @@ pub async fn te_finish(app: AppHandle, job: String, act: Finish) -> Result<Finis
 
 /// 系统的保存文件对话框；取消为 None。等用户选完
 fn ask_path(app: &AppHandle, job: &str) -> Result<Option<PathBuf>, AppError> {
-    let p = fin::suggest(job)?;
+    let p = fin::suggest(app, job)?;
     let text = |s: Option<&std::ffi::OsStr>| s.unwrap_or_default().to_string_lossy().into_owned();
     let mut d = app
         .dialog()

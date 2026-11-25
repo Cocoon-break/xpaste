@@ -194,7 +194,7 @@ impl Tasks {
         self.cancel_if(|v| v.status == Status::Waiting && !store::exists(dir, &v.job));
     }
 
-    /// 还没结束的一样的任务：同一张图、同四角、同范围、同文字
+    /// 还没结束的一样的任务：同一张图、同四角、同范围、同文字、同对齐（字数没变的用不着）
     fn twin(&self, job: &str, s: &Spot) -> Option<(u64, u64)> {
         let near = |a: [f32; 2]| (0..2).all(|k| (a[k] - s.range[k]).abs() < 0.5);
         let q = self.q();
@@ -205,6 +205,7 @@ impl Tasks {
                 let o = &t.spot;
                 t.view.job == job
                     && (o.line, &o.old, &o.new) == (s.line, &s.old, &s.new)
+                    && (o.align == s.align || s.same_count())
                     && near(o.range)
             })
             .map(|t| (t.view.id, t.view.edit))
@@ -559,7 +560,7 @@ pub mod tests {
     use crate::imagegen::tests::{Reply, Req, b64, fake, json_reply};
     use crate::textedit_job::tests::*;
     use crate::textedit_job::{Read, no};
-    use crate::textedit_store::{By, NO_PICK};
+    use crate::textedit_store::{Align, By, NO_PICK};
     use serde_json::json;
     use std::net::TcpListener;
     use xpaste_platform::{OcrError, OcrLine};
@@ -1451,6 +1452,20 @@ pub mod tests {
         assert_eq!((l.view().edits.len(), t.views().len()), (1, 1));
         t.finish(id, Ok(()));
         assert_ne!(t.submit(&tmp.0, &l, &d, true, true).unwrap().0, id);
+        // 字数变了的换了对齐是另一种排法；字数没变的用不着对齐
+        let (t, l) = (tasks(), live());
+        let d = draft("会议改到三点一刻", range(0, 6));
+        for (d, one) in [(d, false), (draft(NEW, range(4, 5)), true)] {
+            // 范围一样，只差对齐
+            let s = l.check(&d).unwrap();
+            let same = |a| job::Spot {
+                align: a,
+                ..s.clone()
+            };
+            let first = t.submit(&tmp.0, &l, &d, true, true).unwrap();
+            assert_eq!(t.twin(&l.id, &same(Align::Left)), Some(first));
+            assert_eq!(t.twin(&l.id, &same(Align::Right)).is_some(), one);
+        }
     }
 
     /// “再出一张”连点两次：发两次，都是那一处的

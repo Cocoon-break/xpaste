@@ -356,8 +356,9 @@ impl Runtime {
     }
 
     /// 同 `shut`，窗口里已经不是 `seq` 这一次打开的就不关
-    fn shut_if(&mut self, seq: u64, opens: u64) -> Option<(Origin, Option<Arc<Live>>)> {
-        self.shows(seq).then(|| self.shut(opens)).flatten()
+    /// 正在打开的不作废
+    fn shut_if(&mut self, seq: u64) -> Option<(Origin, Option<Arc<Live>>)> {
+        self.shows(seq).then(|| self.shut(seq)).flatten()
     }
 }
 
@@ -791,7 +792,7 @@ fn shut() -> Option<Origin> {
 
 /// 同 `shut`，窗口里已经不是 `seq` 这一次打开的就不关
 pub fn shut_if(seq: u64) -> Option<Origin> {
-    let (origin, _cur) = lock(&RT).shut_if(seq, OPENS.load(Ordering::SeqCst))?;
+    let (origin, _cur) = lock(&RT).shut_if(seq)?;
     tasks().sweep();
     Some(origin)
 }
@@ -1375,11 +1376,12 @@ mod tests {
         // 换了一张：上一张的不认，按那一次关的也不关
         entered(&mut rt, 2, Entry::Other, "微信", Source::Pin { n: 1 });
         assert!(rt.current(&id).is_none());
-        assert!(rt.shut_if(1, 2).is_none() && rt.open);
-        assert_eq!(rt.shut_if(2, 2).unwrap().0.target.as_deref(), Some("微信"));
+        assert!(rt.shut_if(1).is_none() && rt.open);
+        assert_eq!(rt.shut_if(2).unwrap().0.target.as_deref(), Some("微信"));
         assert!(matches!(rt.src, Source::Blank) && rt.cur.is_none());
-        // 试用结束、空白窗口没有图
-        rt.enter(3, Some(meme::NOWHERE), None, Source::Pin { n: 2 });
+        // 正在打开的下一张照样上屏。试用结束、空白窗口没有图
+        let t = rt.enter(3, Some(meme::NOWHERE), None, Source::Pin { n: 2 });
+        assert!(t.is_some() && rt.open);
         assert!(rt.current(&id).is_none());
     }
 

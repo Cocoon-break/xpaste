@@ -370,8 +370,8 @@ impl Live {
         crate::img_meta::encode_png(img.w, img.h, &img.px, self.icc.as_deref())
     }
 
-    /// 成品：只画选中的，在改的、没贴好的不算。等读字完：不给改的不出
-    pub fn output(&self, dir: &Path) -> Result<Output, AppError> {
+    /// 出不出得了成品：改好了几处。等读字完：不给改的不出
+    pub fn ready(&self) -> Result<(Job, usize), AppError> {
         if self.read().blocked.is_some() {
             return Err(no(BLOCKED));
         }
@@ -380,7 +380,13 @@ impl Live {
         if done == 0 {
             return Err(no(NOTHING));
         }
-        let img = store::render(dir, &job).map_err(|_| no(GONE))?;
+        Ok((job, done))
+    }
+
+    /// 成品：只画选中的，在改的、没贴好的不算
+    pub fn output(&self, dir: &Path) -> Result<Output, AppError> {
+        let (job, done) = self.ready()?;
+        let img = store::render(dir, &job).map_err(not_saved)?;
         let ai = job.ai();
         Ok(Output { img, ai, done })
     }
@@ -746,7 +752,7 @@ pub struct Spot {
 }
 
 impl Spot {
-    fn same_count(&self) -> bool {
+    pub fn same_count(&self) -> bool {
         graphemes(&self.old).len() == graphemes(&self.new).len()
     }
 

@@ -427,7 +427,9 @@ impl From<io::Error> for SaveFail {
     fn from(e: io::Error) -> Self {
         use ErrorKind::*;
         match e.kind() {
-            PermissionDenied | NotFound | NotADirectory | ReadOnlyFilesystem | InvalidFilename => {
+            k @ (PermissionDenied | NotFound | NotADirectory | ReadOnlyFilesystem
+            | InvalidFilename) => {
+                log::warn!("改字 文件夹存不进去：{k:?}");
                 SaveFail::Dir
             }
             _ => SaveFail::Io(e),
@@ -493,6 +495,20 @@ pub fn write_beside(
     Ok(shot::write_new(|| out_path(&src), |f| f.write_all(&bytes))?)
 }
 
+/// 写到 `to`，有的换掉。先写好 `tmp` 再换上：写到一半失败，原来那个还在。文件夹里建不了 `tmp`、
+/// `to` 也还没有的直接写
+fn put(to: &Path, tmp: &Path, bytes: &[u8]) -> io::Result<()> {
+    if let Err(e) = fs::File::create_new(tmp) {
+        if to.symlink_metadata().is_ok() {
+            return Err(e);
+        }
+        return shot::write_new(|| to.into(), |f| f.write_all(bytes)).map(drop);
+    }
+    write_sync(tmp, bytes)
+        .and_then(|()| fs::rename(tmp, to))
+        .inspect_err(|_| drop(fs::remove_file(tmp)))
+}
+
 /// 另存到用户选的 `to`，`src` 是原文件：不盖它。名字是 PNG、JPEG 的照名字存，同名的系统对话框里已经问过；
 /// 别的补上 `.png`，没问过，不盖别的文件
 pub fn write_as(
@@ -509,11 +525,8 @@ pub fn write_as(
         if same(to, src) {
             return Err(SaveFail::Same);
         }
-        // 先写好再换上：写到一半失败，原来那个还在
         let tmp = to.with_file_name(format!(".{}.tmp", crate::meme_gen::uuid()));
-        write_sync(&tmp, &bytes)
-            .and_then(|()| fs::rename(&tmp, to))
-            .inspect_err(|_| drop(fs::remove_file(&tmp)))?;
+        put(to, &tmp, &bytes)?;
         return Ok(to.into());
     }
     let name = to.file_name().unwrap_or_default().to_string_lossy();
@@ -1297,6 +1310,20 @@ mod tests {
         // 原文件没了：照存
         fs::remove_file(&src).unwrap();
         assert_eq!(name(save("a.png", &pic)), ("a.png".into(), true));
+    }
+
+    /// 文件夹里建不了临时文件：新文件直接写，已有的不动
+    #[test]
+    fn put_without_tmp() {
+        let t = Tmp::new();
+        let (to, bad) = (t.0.join("a.png"), t.0.join("没有/x.tmp"));
+        put(&to, &bad, b"new").unwrap();
+        assert_eq!(fs::read(&to).unwrap(), b"new");
+        assert!(put(&to, &bad, b"more").is_err());
+        assert_eq!(fs::read(&to).unwrap(), b"new");
+        put(&to, &t.0.join("x.tmp"), b"more").unwrap();
+        assert_eq!(fs::read(&to).unwrap(), b"more");
+        assert_eq!(fs::read_dir(&t.0).unwrap().count(), 1);
     }
 
     #[test]
