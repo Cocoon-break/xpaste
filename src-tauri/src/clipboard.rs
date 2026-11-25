@@ -226,7 +226,7 @@ pub fn write_own(state: &AppState, flavors: &[Flavor], what: &str) -> Result<u64
     write_own_via(state, flavors, what, xpaste_platform::write)
 }
 
-fn write_own_via(
+pub(crate) fn write_own_via(
     state: &AppState,
     flavors: &[Flavor],
     what: &str,

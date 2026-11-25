@@ -38,22 +38,12 @@ const UNUSABLE: &str = "这条改不了字";
 // ---- 打开 ----
 
 /// 从哪儿来。`Shot` 的图是刚截的，`rect` 是它在屏幕上的位置（原生单位，交给 `shot::pin_at`）
+#[derive(Clone)]
 pub enum Source {
-    Shot {
-        #[allow(dead_code)] // “钉回原处”接上后删
-        rect: Rect,
-        png: Vec<u8>,
-    },
-    Clip {
-        record: i64,
-    },
-    Panel {
-        record: i64,
-        file: Option<u32>,
-    },
-    Pin {
-        n: u64,
-    },
+    Shot { rect: Rect, png: Vec<u8> },
+    Clip { record: i64 },
+    Panel { record: i64, file: Option<u32> },
+    Pin { n: u64 },
     File(PathBuf),
     Blank,
     Recent(String),
@@ -233,12 +223,28 @@ struct Runtime {
     held: Option<Opening>,
     origin: Origin,
     cur: Option<Arc<Live>>,
+    /// `cur` 的来源，关了窗口就忘掉：原文件的路径、截图的位置、贴图只在开着时记
+    src: Source,
     /// 窗口关着时改好了几处
     unseen: u32,
     /// 上屏的（或作废的）最大的打开号
     shown: u64,
     /// 正在打开“打开方式”来的文件；同一批后到的让它打开后提示一句
     batch: Option<Option<&'static str>>,
+}
+
+/// 窗口里此刻的一张图
+pub struct Current {
+    pub live: Arc<Live>,
+    pub src: Source,
+    pub target: Option<String>,
+    /// 这一次打开的号
+    pub seq: u64,
+}
+
+/// 完成时按什么来源算：窗口里 `⌘V`、最近的图是空白窗口来的
+fn kept(src: Source, from: &str) -> Source {
+    if from == "blank" { Source::Blank } else { src }
 }
 
 /// 这个号还轮得到上屏：比上过屏的新
@@ -256,10 +262,44 @@ impl Runtime {
             held: None,
             origin: meme::NOWHERE,
             cur: None,
+            src: Source::Blank,
             unseen: 0,
             shown: 0,
             batch: None,
         }
+    }
+
+    /// 换上 `seq` 这一次打开的，返回粘贴目标。来处跟着换；窗口里换图的没有来处（不变）。
+    /// 又开了一张、窗口里换图时窗口已经关了的不换，返回 None
+    fn enter(
+        &mut self,
+        seq: u64,
+        origin: Option<Origin>,
+        live: Option<Arc<Live>>,
+        src: Source,
+    ) -> Option<Option<String>> {
+        if (origin.is_none() && !self.open) || !admit(&mut self.shown, seq) {
+            return None;
+        }
+        if let Some(o) = origin {
+            self.origin = o;
+        }
+        self.open = true;
+        self.unseen = 0;
+        self.src = live.as_ref().map_or(Source::Blank, |_| src);
+        self.cur = live;
+        Some(self.origin.target.clone())
+    }
+
+    /// 窗口里开着的那张；`id` 不是它的没有
+    fn current(&self, id: &str) -> Option<Current> {
+        let live = self.cur.as_ref().filter(|l| self.open && l.id == id)?;
+        Some(Current {
+            live: live.clone(),
+            src: self.src.clone(),
+            target: self.origin.target.clone(),
+            seq: self.shown,
+        })
     }
 
     /// 窗口里的还是不是这一次打开的（后面又开了一张、已经关了就不是）
@@ -310,8 +350,14 @@ impl Runtime {
         }
         self.open = false;
         self.held = None;
+        self.src = Source::Blank;
         let origin = std::mem::replace(&mut self.origin, meme::NOWHERE);
         Some((origin, self.cur.take()))
+    }
+
+    /// 同 `shut`，窗口里已经不是 `seq` 这一次打开的就不关
+    fn shut_if(&mut self, seq: u64, opens: u64) -> Option<(Origin, Option<Arc<Live>>)> {
+        self.shows(seq).then(|| self.shut(opens)).flatten()
     }
 }
 
@@ -663,19 +709,9 @@ fn open_as(
             Some(enlist(Live::fresh(img, icc), None))
         }
     };
-    let target = {
-        let mut rt = lock(&RT);
-        // 又开了一张，或者窗口里换图时窗口已经关了
-        if (origin.is_none() && !rt.open) || !admit(&mut rt.shown, seq) {
-            return Ok(());
-        }
-        if let Some(o) = origin {
-            rt.origin = o;
-        }
-        rt.open = true;
-        rt.unseen = 0;
-        rt.cur.clone_from(&live);
-        rt.origin.target.clone()
+    let entered = lock(&RT).enter(seq, origin, live.clone(), kept(src, from));
+    let Some(target) = entered else {
+        return Ok(());
     };
     tasks().sweep();
     log::info!(
@@ -751,6 +787,18 @@ fn shut() -> Option<Origin> {
     let (origin, _cur) = lock(&RT).shut(OPENS.load(Ordering::SeqCst))?;
     tasks().sweep();
     Some(origin)
+}
+
+/// 同 `shut`，窗口里已经不是 `seq` 这一次打开的就不关
+pub fn shut_if(seq: u64) -> Option<Origin> {
+    let (origin, _cur) = lock(&RT).shut_if(seq, OPENS.load(Ordering::SeqCst))?;
+    tasks().sweep();
+    Some(origin)
+}
+
+/// 窗口里开着的那张；`id` 不是它的没有
+pub fn current(id: &str) -> Option<Current> {
+    lock(&RT).current(id)
 }
 
 /// 关掉窗口，键盘回到原来的应用。没开着时不做事
@@ -1280,6 +1328,73 @@ mod tests {
         );
         assert!(origin_of(None, || panic!("窗口里换图不问")).is_none());
         assert_eq!(meme::foreground_of(Some(7)).0, Some(7));
+    }
+
+    fn entered(rt: &mut Runtime, seq: u64, entry: Entry, app: &str, src: Source) -> Option<String> {
+        let front = (Some(seq as isize), Some(app.to_string()));
+        let o = origin_of(Some((entry, None)), || front);
+        rt.enter(seq, o, Some(live()), src).expect("上屏了")
+    }
+
+    /// 每次从外面打开，粘贴目标按那一刻的前台重新记；窗口里换图不变
+    #[test]
+    fn target_refreshed_on_each_open() {
+        let mut rt = Runtime::new();
+        let clip = || Source::Clip { record: 1 };
+        // 托盘打开的没有目标；切到微信复制一张图再从快捷键打开
+        assert_eq!(
+            entered(&mut rt, 1, Entry::Tray, "访达", Source::Blank),
+            None
+        );
+        assert!(rt.origin.tray);
+        let t = entered(&mut rt, 2, Entry::Other, "微信", clip());
+        assert_eq!(t.as_deref(), Some("微信"));
+        assert!(!rt.origin.tray);
+        let t = entered(&mut rt, 3, Entry::Panel, "备忘录", clip());
+        assert_eq!(t.as_deref(), Some("备忘录"));
+        assert_eq!((rt.origin.back, rt.origin.from_panel), (Some(3), true));
+        // 窗口里换图
+        let t = rt.enter(4, None, Some(live()), Source::Blank).unwrap();
+        assert_eq!(t.as_deref(), Some("备忘录"));
+        // 晚到的不换
+        assert!(rt.enter(3, Some(meme::NOWHERE), None, clip()).is_none());
+        assert_eq!(rt.origin.target.as_deref(), Some("备忘录"));
+    }
+
+    /// 完成用窗口里此刻这张图的来源；关了就忘掉，只认关着之前的那一次
+    #[test]
+    fn source_kept_until_closed() {
+        let mut rt = Runtime::new();
+        let file = Source::File("/a/b.png".into());
+        entered(&mut rt, 1, Entry::Other, "访达", file);
+        let id = rt.cur.as_ref().unwrap().id.clone();
+        let c = rt.current(&id).unwrap();
+        assert!(matches!(&c.src, Source::File(p) if p == Path::new("/a/b.png")));
+        assert_eq!((c.seq, c.target.as_deref()), (1, Some("访达")));
+        assert!(rt.current("别的").is_none());
+        // 换了一张：上一张的不认，按那一次关的也不关
+        entered(&mut rt, 2, Entry::Other, "微信", Source::Pin { n: 1 });
+        assert!(rt.current(&id).is_none());
+        assert!(rt.shut_if(1, 2).is_none() && rt.open);
+        assert_eq!(rt.shut_if(2, 2).unwrap().0.target.as_deref(), Some("微信"));
+        assert!(matches!(rt.src, Source::Blank) && rt.cur.is_none());
+        // 试用结束、空白窗口没有图
+        rt.enter(3, Some(meme::NOWHERE), None, Source::Pin { n: 2 });
+        assert!(rt.current(&id).is_none());
+    }
+
+    /// 窗口里 `⌘V`、最近的图是空白窗口来的，不算面板
+    #[test]
+    fn source_by_where_it_came_from() {
+        let panel = || Source::Panel {
+            record: 1,
+            file: None,
+        };
+        assert!(matches!(kept(panel(), "blank"), Source::Blank));
+        assert!(matches!(
+            kept(panel(), "panel"),
+            Source::Panel { record: 1, .. }
+        ));
     }
 
     /// 撤遮罩之前先看：太大、读不出来的都报出来

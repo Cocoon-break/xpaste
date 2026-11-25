@@ -39,6 +39,7 @@ const NO_LOCAL: &str = "本机改不了这一处";
 pub const GONE: &str = "这张图已经从“最近改过”里删掉了";
 const NOT_SAVED: &str = "没存成，请重试";
 const NO_EDIT: &str = "这一处已经不在了";
+const NOTHING: &str = "还没有改好的";
 pub const MISREAD: &str = "字可能不对，看一下";
 
 pub fn no(msg: &str) -> AppError {
@@ -369,6 +370,21 @@ impl Live {
         crate::img_meta::encode_png(img.w, img.h, &img.px, self.icc.as_deref())
     }
 
+    /// 成品：只画选中的，在改的、没贴好的不算。等读字完：不给改的不出
+    pub fn output(&self, dir: &Path) -> Result<Output, AppError> {
+        if self.read().blocked.is_some() {
+            return Err(no(BLOCKED));
+        }
+        let job = lock(&self.st).job.clone();
+        let done = job.edits.iter().filter(|e| e.shown().is_some()).count();
+        if done == 0 {
+            return Err(no(NOTHING));
+        }
+        let img = store::render(dir, &job).map_err(|_| no(GONE))?;
+        let ai = job.ai();
+        Ok(Output { img, ai, done })
+    }
+
     /// 原图的 PNG
     pub fn orig(&self) -> std::io::Result<Vec<u8>> {
         crate::img_meta::encode_png(self.img.w, self.img.h, &self.img.px, self.icc.as_deref())
@@ -378,6 +394,15 @@ impl Live {
         let job = lock(&self.st).job.clone();
         store::cand_png(dir, &job, file)
     }
+}
+
+/// 一张成品
+pub struct Output {
+    pub img: TeImg,
+    /// 画上去的里面有没有 AI 出的
+    pub ai: bool,
+    /// 改好几处
+    pub done: usize,
 }
 
 /// 加进候选，按 `pick` 选中

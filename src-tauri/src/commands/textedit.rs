@@ -6,11 +6,13 @@ use std::path::PathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 use tauri::ipc::{InvokeBody, Request, Response};
-use tauri::{AppHandle, WebviewWindow};
+use tauri::{AppHandle, Manager, WebviewWindow};
+use tauri_plugin_dialog::DialogExt;
 use xpaste_pro::TeQuad;
 
 use crate::error::AppError;
 use crate::textedit::{self, Config, Recent, Source};
+use crate::textedit_finish::{self as fin, Finish, FinishOut};
 use crate::textedit_job::{self as te, Draft, Extend, JobView, LineRef, Plan, Ranges};
 use crate::textedit_store as store;
 use crate::textedit_tasks::{self as tasks, TaskView, tasks};
@@ -362,6 +364,40 @@ pub async fn te_retry(app: AppHandle, task: u64, mask: bool) -> Result<(), AppEr
 pub fn te_drop(app: AppHandle, task: u64) {
     tasks().drop(task);
     tasks::changed(&app);
+}
+
+/// 完成，只用已改好的
+#[tauri::command]
+pub async fn te_finish(app: AppHandle, job: String, act: Finish) -> Result<FinishOut, AppError> {
+    bg(move || {
+        let act = match act {
+            Finish::SaveAs(_) => match ask_path(&app, &job)? {
+                Some(to) => Finish::SaveAs(to),
+                None => return Ok(FinishOut::NONE),
+            },
+            act => act,
+        };
+        fin::finish(&app, &job, act)
+    })
+    .await
+}
+
+/// 系统的保存文件对话框；取消为 None。等用户选完
+fn ask_path(app: &AppHandle, job: &str) -> Result<Option<PathBuf>, AppError> {
+    let p = fin::suggest(job)?;
+    let text = |s: Option<&std::ffi::OsStr>| s.unwrap_or_default().to_string_lossy().into_owned();
+    let mut d = app
+        .dialog()
+        .file()
+        .set_file_name(text(p.file_name()))
+        .add_filter("图片", &[&text(p.extension())]);
+    if let Some(dir) = p.parent() {
+        d = d.set_directory(dir);
+    }
+    if let Some(w) = app.get_webview_window(textedit::LABEL) {
+        d = d.set_parent(&w);
+    }
+    Ok(d.blocking_save_file().and_then(|f| f.into_path().ok()))
 }
 
 /// “最近改过”，最近 12 张

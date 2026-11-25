@@ -107,6 +107,16 @@ export const tePick = (job: string, edit: number, i: number) => invoke<Job>('te_
 /** 改回去：候选留着 */
 export const teUndo = (job: string, edit: number) => invoke<Job>('te_undo', { job, edit });
 
+/* —— 完成 —— */
+/** 完成动作。每种来源做得了哪几个由后端查：截图 copy、repin、saveShotDir；刚复制的图、面板 paste、copy、saveShotDir；
+ *  文件 saveBeside、copy、saveAs；贴图 replacePin、copy、saveShotDir；空白窗口、最近改过 copy、saveShotDir */
+export type FinishAct = 'paste' | 'copy' | 'saveBeside' | 'saveAs' | 'saveShotDir' | 'repin' | 'replacePin';
+/** text 是要弹的提示。then：stay 不动，close 提示完关窗口，saveAs 接着走另存为（存一份的文件夹写不进去） */
+export interface FinishOut { text: string | null; then: 'stay' | 'close' | 'saveAs' }
+/** 完成，只用已改好的。贴过去的由后端关窗口、提示，返回 stay 且没有 text；saveAs 由后端开系统对话框，取消的也是。
+ *  没成的抛出 AppError，窗口不关，改好的还在 */
+export const teFinish = (job: string, act: FinishAct) => invoke<FinishOut>('te_finish', { job, act });
+
 /* —— 任务 —— */
 export const teTasks = () => invoke<Task[]>('te_tasks');
 /** 取消：在改的请求不中止，结果回来存成候选、不选中 */

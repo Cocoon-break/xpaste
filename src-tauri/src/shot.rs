@@ -1366,8 +1366,8 @@ pub(crate) fn copy_png(app: &AppHandle, png: Vec<u8>) -> Result<(), AppError> {
     crate::clipboard::write_own(&state, &xpaste_platform::png_flavors(png), "截图").map(drop)
 }
 
-/// 保存到截图文件夹；“保存截图时同时复制”开着时也写剪切板。截图与贴图共用。
-fn save(app: &AppHandle, png: Vec<u8>) -> Result<ShotOutcome, AppError> {
+/// 保存到截图文件夹；“保存截图时同时复制”开着时也写剪切板。截图、贴图、改字共用。
+pub(crate) fn save(app: &AppHandle, png: Vec<u8>) -> Result<ShotOutcome, AppError> {
     let state = app.state::<AppState>();
     let (dir, also_copy) = {
         let s = state.settings();
@@ -1615,7 +1615,6 @@ fn open_pin(
 }
 
 /// 在屏幕上的 `rect`（原生单位，同 `Source::Shot` 记下的）放一张贴图，返回它的号；那块屏不在了挪到还在的屏上。
-#[allow(dead_code)] // 改字的“钉回原处”接上后删
 pub fn pin_at(app: &AppHandle, rect: Rect, png: &[u8]) -> Result<u64, AppError> {
     let screens: Vec<_> = app
         .available_monitors()?
@@ -1698,7 +1697,6 @@ fn new_pin(app: &AppHandle, rect: Rect, k: f64, png: &[u8]) -> Result<u64, AppEr
 }
 
 /// 换掉贴图 `n` 的图片，窗口的位置和缩放不动；贴图已经关了返回 false。
-#[allow(dead_code)] // 改字的“换掉贴图”接上后删
 pub fn pin_replace(app: &AppHandle, n: u64, png: &[u8]) -> Result<bool, AppError> {
     let label = format!("{PIN_PREFIX}{n}");
     if app.get_webview_window(&label).is_none() || !replace_png(&pin_path(app, n), png)? {

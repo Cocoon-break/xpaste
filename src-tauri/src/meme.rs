@@ -511,15 +511,20 @@ pub fn back(app: &AppHandle, draft: bool) {
 /// 贴到原来的应用（剪切板已写好）：关掉窗口、把前台交还给打开前的窗口，替用户按一次粘贴。
 /// 做不了模拟粘贴、粘贴失败时退成只复制，唤起面板给出面板粘贴同样的降级提示。返回贴过去没有；窗口已经关了时不粘贴
 pub fn paste_back(app: &AppHandle, id: i64) -> bool {
-    use crate::commands::records::{CopyResult, paste_blocking, paste_or_degrade};
     let Some(o) = shut() else { return false };
     crate::meme_window::hide(app, o.back);
+    paste_into(app, o.back, &format!("表情包 id={id}"))
+}
+
+/// 替用户按一次粘贴（窗口已经关了、剪切板已经写好；改字也用）。没成的唤起面板给出降级提示，返回 false
+pub(crate) fn paste_into(app: &AppHandle, back: Option<isize>, label: &str) -> bool {
+    use crate::commands::records::{CopyResult, paste_blocking, paste_or_degrade};
     let r = paste_or_degrade(
-        xpaste_platform::can_paste(o.back),
-        o.back,
-        &format!("表情包 id={id}"),
+        xpaste_platform::can_paste(back),
+        back,
+        label,
         || {},
-        || paste_blocking(app, o.back),
+        || paste_blocking(app, back),
         || {},
     );
     let CopyResult::CopiedOnly { reason } = r else {
@@ -529,7 +534,7 @@ pub fn paste_back(app: &AppHandle, id: i64) -> bool {
         draft: false,
         reason: Some(reason),
     };
-    to_panel(app, o.back, crate::events::MEME_BACK, payload);
+    to_panel(app, back, crate::events::MEME_BACK, payload);
     false
 }
 

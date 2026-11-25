@@ -37,6 +37,7 @@ mod remind;
 mod shot;
 pub mod state;
 mod textedit;
+mod textedit_finish;
 mod textedit_job;
 mod textedit_store;
 mod textedit_tasks;
@@ -657,6 +658,7 @@ pub fn run() {
             commands::textedit::te_cancel,
             commands::textedit::te_retry,
             commands::textedit::te_drop,
+            commands::textedit::te_finish,
             commands::textedit::te_recent,
             commands::textedit::te_thumb,
             commands::textedit::te_recent_remove,

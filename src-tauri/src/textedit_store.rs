@@ -95,7 +95,6 @@ impl Job {
     }
 
     /// 画上去的里面有没有 AI 出的（决定元数据怎么写）
-    #[allow(dead_code)] // 完成动作接入后删
     pub fn ai(&self) -> bool {
         self.edits
             .iter()
@@ -416,11 +415,45 @@ pub fn clear(dir: &Path) -> io::Result<()> {
 }
 
 /// 存不成的原因
-#[allow(dead_code)] // 完成动作接入后删
 pub enum SaveFail {
     /// 文件夹写不进去（没有权限、只读、不在了、名字太长）：改走另存为
     Dir,
+    /// 另存为选的就是原文件
+    Same,
     Io(io::Error),
+}
+
+impl From<io::Error> for SaveFail {
+    fn from(e: io::Error) -> Self {
+        use ErrorKind::*;
+        match e.kind() {
+            PermissionDenied | NotFound | NotADirectory | ReadOnlyFilesystem | InvalidFilename => {
+                SaveFail::Dir
+            }
+            _ => SaveFail::Io(e),
+        }
+    }
+}
+
+/// 出不出 JPEG：名字是 JPEG、图里没有透明的（有透明的是改过扩展名）
+fn as_jpeg(path: &Path, img: &TeImg) -> bool {
+    ImageFormat::from_path(path).is_ok_and(|f| f == ImageFormat::Jpeg)
+        && img.px.as_chunks::<4>().0.iter().all(|p| p[3] == 255)
+}
+
+/// 成品的字节，带元数据；`icc` 是原图的（`load_icc`），`ai` 是图里有没有 AI 出的（`Job::ai`）
+fn encode(jpeg: bool, img: &TeImg, icc: Option<&[u8]>, ai: bool) -> io::Result<Vec<u8>> {
+    if jpeg {
+        let b = img_meta::encode_jpeg(img.w, img.h, &img.px, icc)?;
+        return Ok(img_meta::mark_jpeg(b, ai));
+    }
+    png(img, icc, ai)
+}
+
+/// 成品的 PNG，带元数据
+pub fn png(img: &TeImg, icc: Option<&[u8]>, ai: bool) -> io::Result<Vec<u8>> {
+    let b = img_meta::encode_png(img.w, img.h, &img.px, icc)?;
+    Ok(img_meta::mark_png(b, ai))
 }
 
 /// 存在原图旁边的名字：`〈原名〉 改字.〈扩展名〉`，PNG、JPEG 的扩展名照原样，其余 `.png`；重名加序号。
@@ -444,9 +477,7 @@ pub fn out_path(src: &Path) -> PathBuf {
     }))
 }
 
-/// 在原图旁边另存一份，绝不覆盖；`icc` 是原图的（`load_icc`），`ai` 是图里有没有 AI 出的（`Job::ai`）。
-/// 名字是 JPEG、图里却有透明的（改过扩展名）存成 PNG
-#[allow(dead_code)] // 完成动作接入后删
+/// 在原图旁边另存一份，绝不覆盖。名字是 JPEG、图里却有透明的存成 PNG
 pub fn write_beside(
     src: &Path,
     img: &TeImg,
@@ -454,24 +485,48 @@ pub fn write_beside(
     ai: bool,
 ) -> Result<PathBuf, SaveFail> {
     let mut src = src.to_path_buf();
-    let mut jpeg = ImageFormat::from_path(&src).is_ok_and(|f| f == ImageFormat::Jpeg);
-    if jpeg && img.px.as_chunks::<4>().0.iter().any(|p| p[3] < 255) {
-        jpeg = false;
+    let jpeg = as_jpeg(&src, img);
+    if !jpeg && ImageFormat::from_path(&src).is_ok_and(|f| f == ImageFormat::Jpeg) {
         src.set_extension("png");
     }
-    let bytes = if jpeg {
-        img_meta::encode_jpeg(img.w, img.h, &img.px, icc).map(|b| img_meta::mark_jpeg(b, ai))
-    } else {
-        img_meta::encode_png(img.w, img.h, &img.px, icc).map(|b| img_meta::mark_png(b, ai))
-    }
-    .map_err(SaveFail::Io)?;
-    use ErrorKind::*;
-    shot::write_new(|| out_path(&src), |f| f.write_all(&bytes)).map_err(|e| match e.kind() {
-        PermissionDenied | NotFound | NotADirectory | ReadOnlyFilesystem | InvalidFilename => {
-            SaveFail::Dir
+    let bytes = encode(jpeg, img, icc, ai).map_err(SaveFail::Io)?;
+    Ok(shot::write_new(|| out_path(&src), |f| f.write_all(&bytes))?)
+}
+
+/// 另存到用户选的 `to`，`src` 是原文件：不盖它。名字是 PNG、JPEG 的照名字存，同名的系统对话框里已经问过；
+/// 别的补上 `.png`，没问过，不盖别的文件
+pub fn write_as(
+    to: &Path,
+    src: &Path,
+    img: &TeImg,
+    icc: Option<&[u8]>,
+    ai: bool,
+) -> Result<PathBuf, SaveFail> {
+    let same = |a: &Path, b: &Path| matches!((a.canonicalize(), b.canonicalize()), (Ok(a), Ok(b)) if a == b);
+    let jpeg = as_jpeg(to, img);
+    let bytes = encode(jpeg, img, icc, ai).map_err(SaveFail::Io)?;
+    if jpeg || ImageFormat::from_path(to).is_ok_and(|f| f == ImageFormat::Png) {
+        if same(to, src) {
+            return Err(SaveFail::Same);
         }
-        _ => SaveFail::Io(e),
-    })
+        // 先写好再换上：写到一半失败，原来那个还在
+        let tmp = to.with_file_name(format!(".{}.tmp", crate::meme_gen::uuid()));
+        write_sync(&tmp, &bytes)
+            .and_then(|()| fs::rename(&tmp, to))
+            .inspect_err(|_| drop(fs::remove_file(&tmp)))?;
+        return Ok(to.into());
+    }
+    let name = to.file_name().unwrap_or_default().to_string_lossy();
+    let next = || {
+        (1..)
+            .map(|k| match k {
+                1 => to.with_file_name(format!("{name}.png")),
+                _ => to.with_file_name(format!("{name} {k}.png")),
+            })
+            .find(|p| p.symlink_metadata().is_err())
+            .expect("总有不重名的序号")
+    };
+    Ok(shot::write_new(next, |f| f.write_all(&bytes))?)
 }
 
 #[cfg(test)]
@@ -1198,6 +1253,50 @@ mod tests {
         ));
         let back = load(&d, &job.id).unwrap();
         check(&render(&d, &back).unwrap(), &base, &[((2, 2), RED)]);
+    }
+
+    /// 另存为：用户在对话框里答应替换的才替换；换了扩展名的没问过，不盖别的文件
+    #[test]
+    fn write_as_table() {
+        let t = Tmp::new();
+        let src = t.0.join("a.png");
+        fs::write(&src, b"src").unwrap();
+        let save = |name: &str, img: &TeImg| write_as(&t.0.join(name), &src, img, None, false);
+        let name = |r: Result<PathBuf, SaveFail>| {
+            let p = r.ok().unwrap();
+            let b = fs::read(&p).unwrap();
+            let png = b.starts_with(b"\x89PNG");
+            assert!(png || b.starts_with(b"\xFF\xD8"));
+            (p.file_name().unwrap().to_str().unwrap().to_owned(), png)
+        };
+        let (pic, clear) = (opaque(8, 8), img(8, 8));
+        fs::write(t.0.join("b.png"), b"old").unwrap();
+        for (want, got, png) in [
+            ("b.png", "b.png", true),
+            ("b.JPG", "b.JPG", false),
+            ("c", "c.png", true),
+            ("c", "c 2.png", true),
+            ("d.webp", "d.webp.png", true),
+            ("截图 10.30", "截图 10.30.png", true),
+        ] {
+            assert_eq!(name(save(want, &pic)), (got.to_owned(), png));
+        }
+        // 图里有透明的存不成 JPEG
+        assert_eq!(name(save("e.jpg", &clear)), ("e.jpg.png".into(), true));
+        // 原文件本身：不盖，大小写、绕一圈的写法也认得出
+        #[cfg(target_os = "macos")]
+        assert!(matches!(save("A.PNG", &pic), Err(SaveFail::Same)));
+        for n in ["a.png", "./a.png"] {
+            assert!(matches!(save(n, &pic), Err(SaveFail::Same)));
+        }
+        assert_eq!(fs::read(&src).unwrap(), b"src");
+        assert!(matches!(save("gone/x.png", &pic), Err(SaveFail::Dir)));
+        let left =
+            |e: io::Result<fs::DirEntry>| e.unwrap().path().extension() == Some("tmp".as_ref());
+        assert!(!fs::read_dir(&t.0).unwrap().any(left), "没有残留");
+        // 原文件没了：照存
+        fs::remove_file(&src).unwrap();
+        assert_eq!(name(save("a.png", &pic)), ("a.png".into(), true));
     }
 
     #[test]
