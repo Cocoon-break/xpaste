@@ -345,3 +345,42 @@ pub struct ExportStep {
     pub colors: u16,
     pub side: u32,
 }
+
+/// 一张解码好的图，RGBA8，行优先；`px.len() == w * h * 4`，宽高至少为 1。不派生 `Debug`：里面是用户的图。
+pub struct TeImg {
+    pub w: u32,
+    pub h: u32,
+    pub px: Vec<u8>,
+}
+
+/// 一行字的四角，原图的连续坐标（像素 (i, j) 占 [i, i+1) × [j, j+1)），
+/// 顺序是沿文字方向的左上、右上、右下、左下
+pub type TeQuad = [[f32; 2]; 4];
+
+/// 从图里裁出的 1024 × 1024 正方形和它的遮罩。不派生 `Debug`：里面是用户的图。
+pub struct TeCrop {
+    /// RGB PNG
+    pub png: Vec<u8>,
+    /// RGBA PNG，透明处为要改的
+    pub mask: Vec<u8>,
+    /// 原图 → 裁块的单应矩阵，行优先；两边都是连续坐标
+    pub m: [f64; 9],
+}
+
+/// 一行字拉正后的条带，正好是四角围住的那块
+pub struct TeStrip {
+    pub img: TeImg,
+    /// 原图 → 条带的单应矩阵，行优先；两边都是连续坐标
+    pub m: [f64; 9],
+}
+
+/// 要覆盖到原图 `(x, y)` 的矩形，含没变的像素
+pub struct TePaste {
+    pub patch: TeImg,
+    pub x: u32,
+    pub y: u32,
+    /// 改动范围外没动过，直接取的像素
+    pub exact: bool,
+    /// 可能有痕迹
+    pub soft: bool,
+}

@@ -348,6 +348,55 @@ pub fn meme_scene_ok(_json: &str) -> bool {
     false
 }
 
+fn te_empty_strip() -> TeStrip {
+    TeStrip {
+        img: TeImg {
+            w: 0,
+            h: 0,
+            px: Vec::new(),
+        },
+        m: [0.0; 9],
+    }
+}
+
+pub fn te_strip(_img: &TeImg, _line: TeQuad) -> TeStrip {
+    te_empty_strip()
+}
+
+pub fn te_strip_native(_img: &TeImg, _line: TeQuad) -> TeStrip {
+    te_empty_strip()
+}
+
+pub fn te_strip_paste(_img: &TeImg, _strip: &TeStrip, _now: &[u8]) -> Option<TePaste> {
+    None
+}
+
+pub fn te_ink(_strip: &TeStrip) -> Vec<u8> {
+    Vec::new()
+}
+
+pub fn te_range(
+    _strip: &TeStrip,
+    _n: usize,
+    _chars: &[[f32; 2]],
+    _from: usize,
+    _to: usize,
+) -> [f32; 2] {
+    [0.0; 2]
+}
+
+pub fn te_room(_strip: &TeStrip, right: f32) -> f32 {
+    right
+}
+
+pub fn te_crop(_img: &TeImg, _line: TeQuad, _range: [f32; 2], _neighbors: usize) -> TeCrop {
+    TeCrop {
+        png: Vec::new(),
+        mask: Vec::new(),
+        m: [0.0; 9],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

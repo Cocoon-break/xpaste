@@ -6151,6 +6151,7 @@ version = "0.8.0"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
+ "image",
  "log",
  "serde",
  "serde_json",
