@@ -131,13 +131,14 @@ pub struct LineView {
     chars: Vec<[f32; 2]>,
 }
 
-/// 读字的结果。不给改的图只有类别
+/// 读字的结果。不给改的图只有类别；`failed` 的图读不出来，不许改
 #[derive(Serialize)]
 pub struct LinesView {
     lines: Vec<LineView>,
     blocked: Option<&'static str>,
     locked: Vec<TeQuad>,
     engine: bool,
+    failed: bool,
 }
 
 /// 读字的结果，没读完就等
@@ -159,6 +160,7 @@ pub async fn te_lines(app: AppHandle, job: String) -> Result<LinesView, AppError
             blocked,
             locked: r.locked.clone(),
             engine: r.engine,
+            failed: r.failed,
         })
     })
     .await

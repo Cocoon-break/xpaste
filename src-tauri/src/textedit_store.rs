@@ -35,10 +35,22 @@ pub struct Edit {
     pub range: [f32; 2],
     pub old: String,
     pub new: String,
+    /// 字数变了时怎么排，再出一张照它
+    #[serde(default)]
+    pub align: Align,
     /// 选中第几个候选；没选中时为 `NO_PICK`。被后来的改动替换的也写成 `NO_PICK` 留着，不从列表里去掉：
     /// 候选都要留
     pub pick: usize,
     pub cands: Vec<Cand>,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Align {
+    #[default]
+    Left,
+    Center,
+    Right,
 }
 
 /// 一个候选
@@ -538,6 +550,7 @@ mod tests {
             range: [1.5, 3.0],
             old: "三".into(),
             new: "四".into(),
+            align: Align::Left,
             pick: NO_PICK,
             cands: vec![],
         }
@@ -589,6 +602,19 @@ mod tests {
         job.edits[0].range[1] = f32::INFINITY;
         assert!(save(&d, &job).is_err());
         assert_eq!(json(&load(&d, &job.id).unwrap()), json(&back));
+    }
+
+    /// 没记对齐的算靠左
+    #[test]
+    fn align_defaults_left() {
+        let t = Tmp::new();
+        let mut job = one(&t.te()).0;
+        job.edits[0].align = Align::Right;
+        let mut v = serde_json::to_value(&job).unwrap();
+        assert_eq!(v["edits"][0]["align"], "right");
+        v["edits"][0].as_object_mut().unwrap().remove("align");
+        let back: Job = serde_json::from_value(v).unwrap();
+        assert!(back.edits[0].align == Align::Left);
     }
 
     #[test]

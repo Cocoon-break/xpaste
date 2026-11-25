@@ -21,7 +21,7 @@ use xpaste_pro::{TeBlock, TeImg, TeLocal, TePaste, TeQuad, TeSource, TeStrip, Te
 
 use crate::error::AppError;
 use crate::housekeeping::{self, UNDO_WINDOW};
-use crate::textedit_store::{self as store, Edit, Job, NO_PICK};
+use crate::textedit_store::{self as store, Align, Edit, Job, NO_PICK};
 use crate::textedit_tasks::Tasks;
 
 /// 一行最多几个字；读出来就更长的行，以它的字数为限
@@ -77,14 +77,16 @@ pub struct Read {
     pub locked: Vec<TeQuad>,
     /// 有没有识别引擎（识别出错的算有）
     pub engine: bool,
-    /// 给不给改没判断成：不许改
+    /// 图解不开、读字的线程起不来，给不给改没判断成：不许改。识别引擎出错的不算
     pub failed: bool,
 }
 
 impl Read {
     fn new(img: &TeImg, ocr: Ocr) -> Read {
-        let png = crate::img_meta::encode_png(img.w, img.h, &img.px, None).unwrap_or_default();
-        let (lines, engine) = match ocr(&png) {
+        let png = crate::img_meta::encode_png(img.w, img.h, &img.px, None);
+        let got = png.map_or(Err(OcrError::Decode), |p| ocr(&p));
+        let failed = matches!(got, Err(OcrError::Decode));
+        let (lines, engine) = match got {
             Ok(Some(l)) => (l, true),
             Ok(None) => (Vec::new(), false),
             Err(_) => (Vec::new(), true),
@@ -97,7 +99,7 @@ impl Read {
             locked: locked.iter().map(|q| clip(q, img.w, img.h)).collect(),
             lines,
             engine,
-            failed: false,
+            failed,
         }
     }
 }
@@ -696,14 +698,6 @@ fn weight(s: &[&str]) -> f32 {
         .sum()
 }
 
-#[derive(Clone, Copy, PartialEq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Align {
-    Left,
-    Center,
-    Right,
-}
-
 /// 页面给的一处改动；`edit` 是从哪一处打开重改的。带用户文字，不派生 Debug
 #[derive(Clone, Deserialize)]
 pub struct Draft {
@@ -877,13 +871,16 @@ fn spot(d: &Draft, range: [f32; 2]) -> Spot {
 
 // ---- 改动之间谁替换谁 ----
 
-/// 字和范围都没变
+/// 字、范围和对齐都没变；字数没变的用不着对齐
 fn same(e: &Edit, s: &Spot) -> bool {
     let near = |k: usize| (e.range[k] - s.range[k]).abs() < 0.5;
-    (&e.old, &e.new, e.line) == (&s.old, &s.new, s.line) && near(0) && near(1)
+    (&e.old, &e.new, e.line) == (&s.old, &s.new, s.line)
+        && (e.align == s.align || s.same_count())
+        && near(0)
+        && near(1)
 }
 
-/// 找到这一处，没有就新开：从哪一处打开、字和范围都没变的，是给那一处再出一张。返回它的 id 和被它替换的那一处
+/// 找到这一处，没有就新开：从哪一处打开、字、范围和对齐都没变的，是给那一处再出一张。返回它的 id 和被它替换的那一处
 pub fn put(job: &mut Job, s: &Spot) -> Result<(u64, Option<u64>), AppError> {
     if let Some(id) = s.edit {
         let e = job.edits.iter().find(|e| e.id == id);
@@ -899,6 +896,7 @@ pub fn put(job: &mut Job, s: &Spot) -> Result<(u64, Option<u64>), AppError> {
         range: s.range,
         old: s.old.clone(),
         new: s.new.clone(),
+        align: s.align,
         pick: NO_PICK,
         cands: Vec::new(),
     });
@@ -1537,13 +1535,25 @@ pub mod tests {
         assert_eq!(N.load(Ordering::SeqCst), 1);
     }
 
-    /// 没有引擎、识别出错都不报错
+    /// 没有引擎、识别出错都不报错；系统解不开这张图的不许改
     #[test]
     fn read_without_engine() {
         let r = Read::new(&scene(), |_| Ok(None));
-        assert!(!r.engine && r.lines.is_empty() && r.blocked.is_none());
+        assert!(!r.engine && r.lines.is_empty() && r.blocked.is_none() && !r.failed);
+        let broken: [Ocr; 2] = [
+            |_| Err(OcrError::Timeout),
+            |_| Err(OcrError::Engine("x".into())),
+        ];
+        for ocr in broken {
+            let r = Read::new(&scene(), ocr);
+            assert!(r.engine && r.lines.is_empty() && !r.failed);
+        }
         let r = Read::new(&scene(), |_| Err(OcrError::Decode));
-        assert!(r.engine && r.lines.is_empty());
+        assert!(r.lines.is_empty() && r.failed);
+        // 像素对不上，编码不了
+        let mut bad = scene();
+        bad.px.pop();
+        assert!(Read::new(&bad, |_| Ok(None)).failed);
     }
 
     // ---- 几何 ----
@@ -2177,6 +2187,55 @@ pub mod tests {
             ..moved
         };
         assert_eq!(msg(put_local(t, &tmp.0, &l, &gone, 1, RED)), NO_EDIT);
+    }
+
+    /// 对齐跟着那一处存：读回来照它再出一张是同一处，换了对齐的是另一处
+    #[test]
+    fn align_kept() {
+        if !xpaste_pro::AVAILABLE {
+            return eprintln!("这个构建不含 Pro，跳过");
+        }
+        let (t, tmp) = (new_tasks(), Tmp::new());
+        let l = live();
+        let d = Draft {
+            align: Align::Center,
+            ..draft("会议改到三点一刻", range(0, 6))
+        };
+        let (task, id) = t.submit(&tmp.0, &l, &d, true, true).unwrap();
+        t.cancel(task);
+        let back = store::load(&tmp.0, &l.id).unwrap();
+        let e = back.edits.into_iter().find(|e| e.id == id).unwrap();
+        assert!(e.align == Align::Center);
+        let more = Draft {
+            edit: Some(id),
+            range: Some(e.range),
+            align: e.align,
+            ..d
+        };
+        let s = l.check(&more).unwrap();
+        assert_eq!((s.range, s.realign()), (e.range, Some("居中")));
+        let (task, same) = t.submit(&tmp.0, &l, &more, true, true).unwrap();
+        assert_eq!(same, id);
+        t.cancel(task);
+        let right = Draft {
+            align: Align::Right,
+            ..more
+        };
+        let (task, other) = t.submit(&tmp.0, &l, &right, true, true).unwrap();
+        assert_ne!(other, id);
+        assert!(edit_of(&l, other).align == Align::Right);
+        t.cancel(task);
+        // 字数没变的用不着对齐：还是那一处
+        let a = put_local(t, &tmp.0, &l, &draft(NEW, range(4, 5)), 4, RED).unwrap();
+        let e = edit_of(&l, a);
+        let again = Draft {
+            edit: Some(a),
+            range: Some(e.range),
+            align: Align::Right,
+            ..draft(NEW, range(4, 5))
+        };
+        let (_, same) = t.submit(&tmp.0, &l, &again, true, true).unwrap();
+        assert_eq!(same, a);
     }
 
     #[test]

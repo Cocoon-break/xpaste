@@ -13,8 +13,8 @@ export type Align = 'left' | 'center' | 'right';
 
 /** 一个候选，图用 teCand 取；没贴好的（placed 为 false）只留着看，不画 */
 export interface Cand { file: string; x: number; y: number; by: Way; soft: boolean; note: string; placed: boolean }
-/** 一处改动。pick 是选中第几个候选，没选中为 NO_PICK（0xffffffff） */
-export interface Edit { id: number; line: Quad; range: Range; old: string; new: string; pick: number; cands: Cand[] }
+/** 一处改动。align 是字数变了时怎么排，“再出一张”照它发；pick 是选中第几个候选，没选中为 NO_PICK（0xffffffff） */
+export interface Edit { id: number; line: Quad; range: Range; old: string; new: string; align: Align; pick: number; cands: Cand[] }
 /** 一张图；rev 整个进程只增，晚到的旧快照丢掉 */
 export interface Job { id: string; rev: number; w: number; h: number; edits: Edit[] }
 /** 一个 AI 任务；ahead 是前面还在排队的个数（表情包的也算）；startedAt 是开始的 Unix 毫秒。取消了的不在列表里 */
@@ -24,8 +24,9 @@ export interface Task {
 }
 /** 读出来的一行；chars 是每个字沿行方向的起止（0–1），取不到时为空 */
 export interface Line { quad: Quad; text: string; chars: Range[] }
-/** 读字的结果。blocked 是不给改的类别（这时 lines 为空）；locked 是签名的那几段；engine 为 false 是没有识别引擎 */
-export interface Lines { lines: Line[]; blocked: string | null; locked: Quad[]; engine: boolean }
+/** 读字的结果。blocked 是不给改的类别（这时 lines 为空）；locked 是签名的那几段；engine 为 false 是没有识别引擎；
+ *  failed 是这张图读不出来，不许改 */
+export interface Lines { lines: Line[]; blocked: string | null; locked: Quad[]; engine: boolean; failed: boolean }
 /** 走法怎么算的；soft 是本机做得了、但可能有痕迹；本机做不了时没有 soft */
 export interface Plan { way: 'local' | 'soft' | 'ai'; why: string; could: Way[]; soft?: boolean }
 export type Source = 'shot' | 'clip' | 'panel' | 'file' | 'pin' | 'blank' | 'recent';

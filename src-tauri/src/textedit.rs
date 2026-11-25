@@ -1095,6 +1095,7 @@ mod tests {
             range: [0.0, 1.0],
             old: "甲".into(),
             new: "乙".into(),
+            align: Default::default(),
             pick: store::NO_PICK,
             cands: vec![],
         });
