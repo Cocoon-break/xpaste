@@ -1,4 +1,4 @@
-//! 历史记录里的原图：位图记录在 `images/<id>.png`，图片文件记录就是那个文件。搅拌机和表情包制作共用。不要在持有别的锁时调用。
+//! 历史记录里的原图：位图记录在 `images/<id>.png`，图片文件记录就是那个文件。搅拌机、表情包制作、改字共用。不要在持有别的锁时调用。
 
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
@@ -49,6 +49,11 @@ pub fn exists(state: &AppState, id: i64, file: Option<u32>) -> bool {
     file_of(state, id, file)
         .and_then(|f| path(state, id, f.as_deref()))
         .is_some_and(|p| p.exists())
+}
+
+/// 原图的路径，`file` 同 `read_record_image`。记录、文件没了为 None
+pub fn path_of(state: &AppState, id: i64, file: Option<u32>) -> Option<PathBuf> {
+    path(state, id, file_of(state, id, file)?.as_deref())
 }
 
 /// 一张参考图的 PNG：`file` 为 None 读位图记录，否则读文件记录里第 `file` 个文件（要是图片文件）。读不到为 None。

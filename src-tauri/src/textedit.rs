@@ -1,0 +1,740 @@
+//! 改字：打开一张图，和改字窗口的运行时（只在带 Pro 的构建里启用）。一张图里的事见 `textedit_job`，AI 任务见 `textedit_tasks`。
+//!
+//! 窗口只拿着当前那张图，没结束的任务各自拿着自己那张：换图、关窗口都不影响它们。
+
+use std::io::Cursor;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, Weak};
+
+use image::{DynamicImage, ImageDecoder, ImageReader};
+use serde::Serialize;
+use tauri::{AppHandle, Manager};
+use xpaste_pro::TeImg;
+
+use crate::error::AppError;
+use crate::events::{self, emit_to};
+use crate::meme::{self, Entry, Origin};
+use crate::panel::{Rect, on_main};
+use crate::state::AppState;
+use crate::textedit_job::{self as job, GONE, JobView, Live, lock, no, not_saved};
+use crate::textedit_store as store;
+use crate::textedit_tasks::{Tasks, tasks};
+
+pub const LABEL: &str = "textedit";
+/// 图最多多少像素
+const MAX_PX: u64 = 100_000_000;
+/// 打开的文件最多多大：再大也是读不了的
+const MAX_BYTES: u64 = 1 << 30;
+
+const OFF: &str = "改字没有开启";
+const EXPIRED: &str = "试用期已结束，改字需要授权";
+const UNUSABLE: &str = "这条改不了字";
+
+// ---- 打开 ----
+
+/// 从哪儿来。`Shot` 的图是刚截的，`rect` 是它在屏幕上的位置
+#[allow(dead_code)] // 各入口、完成动作接上后删
+pub enum Source {
+    Shot { rect: Rect, png: Vec<u8> },
+    Clip { record: i64 },
+    Panel { record: i64, file: Option<u32> },
+    Pin { n: u64 },
+    File(PathBuf),
+    Blank,
+    Recent(String),
+}
+
+impl Source {
+    /// 给页面和日志的种类
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Source::Shot { .. } => "shot",
+            Source::Clip { .. } => "clip",
+            Source::Panel { .. } => "panel",
+            Source::Pin { .. } => "pin",
+            Source::File(_) => "file",
+            Source::Blank => "blank",
+            Source::Recent(_) => "recent",
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum OpenFail {
+    Unreadable,
+    TooBig,
+}
+
+impl OpenFail {
+    pub fn text(&self) -> &'static str {
+        match self {
+            OpenFail::Unreadable => "这张图读不出来",
+            OpenFail::TooBig => "图太大，改不了",
+        }
+    }
+}
+
+/// 解码：按 EXIF 摆正，动图取第一帧；先看头部的尺寸再解。第二项是 RGB 的 ICC，灰度、CMYK 的图解成 RGB 后不能再带原来的
+pub fn decode(bytes: &[u8]) -> Result<(TeImg, Option<Vec<u8>>), OpenFail> {
+    let bad = |_| OpenFail::Unreadable;
+    let mut r = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|_| OpenFail::Unreadable)?;
+    // 1 亿像素的 16 位图要 800 MB，默认的上限装不下
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(1 << 30);
+    r.limits(limits);
+    let mut d = r.into_decoder().map_err(bad)?;
+    let (w, h) = d.dimensions();
+    if u64::from(w) * u64::from(h) > MAX_PX {
+        return Err(OpenFail::TooBig);
+    }
+    let turn = d
+        .orientation()
+        .unwrap_or(image::metadata::Orientation::NoTransforms);
+    let icc = d.icc_profile().ok().flatten();
+    let icc = icc.filter(|p| p.get(16..20) == Some(b"RGB "));
+    let mut img = DynamicImage::from_decoder(d).map_err(bad)?;
+    img.apply_orientation(turn);
+    let img = img.into_rgba8();
+    let img = TeImg {
+        w: img.width(),
+        h: img.height(),
+        px: img.into_raw(),
+    };
+    Ok((img, icc))
+}
+
+/// 来源的图片文件字节
+fn bytes_of(state: &AppState, src: &mut Source) -> Result<Vec<u8>, AppError> {
+    let unreadable = || no(OpenFail::Unreadable.text());
+    let path = match src {
+        Source::Shot { png, .. } => return Ok(std::mem::take(png)),
+        Source::Clip { record } => record_path(state, *record, None)?,
+        Source::Panel { record, file } => record_path(state, *record, *file)?,
+        Source::Pin { n } => state.data_dir.join("pins").join(format!("{n}.png")),
+        Source::File(p) => p.clone(),
+        Source::Blank | Source::Recent(_) => return Err(unreadable()),
+    };
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > MAX_BYTES) {
+        return Err(no(OpenFail::TooBig.text()));
+    }
+    std::fs::read(&path).map_err(|_| unreadable())
+}
+
+/// 历史记录的图；没说第几个文件的，文件记录取第一个图片文件
+fn record_path(state: &AppState, id: i64, file: Option<u32>) -> Result<PathBuf, AppError> {
+    let file = match file {
+        Some(_) => file,
+        None => {
+            let first = meme::record_refs(state, id).into_iter().next();
+            first.ok_or_else(|| no(UNUSABLE))?.file
+        }
+    };
+    crate::record_image::path_of(state, id, file).ok_or_else(|| no(OpenFail::Unreadable.text()))
+}
+
+// ---- 窗口的运行时 ----
+
+/// 发给页面的 `TE_OPEN`。空白窗口、试用结束时没有图；里面有改过的字，不派生 Debug
+#[derive(Clone, Serialize)]
+pub struct OpenPayload {
+    pub job: Option<JobView>,
+    pub from: &'static str,
+    /// 粘贴目标的应用名
+    pub target: Option<String>,
+    pub expired: bool,
+    #[serde(flatten)]
+    pub config: Config,
+}
+
+/// 设置的“怎么改”，生图接口配好没有
+#[derive(Clone, Serialize)]
+pub struct Config {
+    pub mode: String,
+    pub api: bool,
+}
+
+struct Runtime {
+    open: bool,
+    /// 页面把事件都听上了
+    ready: bool,
+    /// 听上之前的最后一次打开
+    held: Option<OpenPayload>,
+    origin: Origin,
+    cur: Option<Arc<Live>>,
+    /// 窗口关着时改好了几处
+    unseen: u32,
+}
+
+static RT: Mutex<Runtime> = Mutex::new(Runtime {
+    open: false,
+    ready: false,
+    held: None,
+    origin: meme::NOWHERE,
+    cur: None,
+    unseen: 0,
+});
+
+/// 还有人拿着的图：窗口里的、有任务没结束的。同一张图只有一份
+static LIVE: Mutex<Vec<Weak<Live>>> = Mutex::new(Vec::new());
+
+/// 第几次打开：先开的图解得慢、后开的已经上屏了，就不换回去
+static OPENS: AtomicU64 = AtomicU64::new(0);
+
+pub fn dir(app: &AppHandle) -> PathBuf {
+    app.state::<AppState>().data_dir.join("textedit")
+}
+
+/// 编入了、并且设置里开着
+pub fn on(app: &AppHandle) -> bool {
+    crate::hotkey::edit_enabled() && app.state::<AppState>().settings().edit_enabled
+}
+
+fn expired(app: &AppHandle) -> bool {
+    !crate::mixer::accepts_new(&crate::mixer::pro(app))
+}
+
+/// 现在能不能改；会产出改动的命令都先问它
+pub fn editable(app: &AppHandle) -> Result<(), AppError> {
+    may_edit(on(app), || expired(app)).map_err(no)
+}
+
+fn may_edit(on: bool, expired: impl FnOnce() -> bool) -> Result<(), &'static str> {
+    match on {
+        false => Err(OFF),
+        true if expired() => Err(EXPIRED),
+        true => Ok(()),
+    }
+}
+
+pub fn config(app: &AppHandle) -> Config {
+    let s = app.state::<AppState>().settings().clone();
+    Config {
+        api: !crate::imagegen::unconfigured(&crate::meme_gen::image_cfg(&s)),
+        mode: s.edit_mode,
+    }
+}
+
+/// 登记，开始读字；同一张已经有了就用那一份
+fn enlist(live: Live) -> Arc<Live> {
+    let live = Arc::new(live);
+    {
+        let mut all = lock(&LIVE);
+        all.retain(|l| l.strong_count() > 0);
+        if let Some(l) = all
+            .iter()
+            .filter_map(Weak::upgrade)
+            .find(|l| l.id == live.id)
+        {
+            return l;
+        }
+        all.push(Arc::downgrade(&live));
+    }
+    let l = live.clone();
+    crate::housekeeping::spawn("xpaste-textedit-read", move || l.start(job::ocr));
+    live
+}
+
+/// 一张图：还有人拿着的用那一份，否则从“最近改过”读回来。耗时
+pub fn find(app: &AppHandle, id: &str) -> Result<Arc<Live>, AppError> {
+    if let Some(l) = lock(&LIVE)
+        .iter()
+        .filter_map(Weak::upgrade)
+        .find(|l| l.id == id)
+    {
+        return Ok(l);
+    }
+    Ok(enlist(Live::load(&dir(app), id).map_err(|_| no(GONE))?))
+}
+
+/// 打开一张图，换掉窗口里的。粘贴目标按这一刻的前台应用记。要读文件、解码，不在主线程调用
+pub fn open(app: &AppHandle, src: Source) -> Result<(), AppError> {
+    let from = src.kind();
+    let entry = match src {
+        Source::Panel { .. } => Entry::Panel,
+        Source::Blank => Entry::Tray,
+        _ => Entry::Other,
+    };
+    open_as(app, src, from, Some(entry))
+}
+
+/// 主线程上的入口用：到后台打开，打不开的提示
+#[allow(dead_code)] // 各入口接上后删
+pub fn open_bg(app: &AppHandle, src: Source) {
+    let app = app.clone();
+    crate::housekeeping::spawn("xpaste-textedit-open", move || {
+        if let Err(e) = open(&app, src) {
+            toast(&app, &e.to_string());
+        }
+    });
+}
+
+/// 窗口里换一张（拖进来的、`⌘V`、最近的图、最近改过）：来处和粘贴目标不变
+pub fn open_inside(app: &AppHandle, src: Source, from: &'static str) -> Result<(), AppError> {
+    open_as(app, src, from, None)
+}
+
+fn open_as(
+    app: &AppHandle,
+    mut src: Source,
+    from: &'static str,
+    entry: Option<Entry>,
+) -> Result<(), AppError> {
+    if !on(app) {
+        return Err(no(OFF));
+    }
+    let seq = OPENS.fetch_add(1, Ordering::SeqCst) + 1;
+    let origin = entry.map(|e| meme::arrive(None, e, meme::foreground));
+    let expired = expired(app);
+    let live = match &src {
+        Source::Blank => None,
+        Source::Recent(id) => Some(find(app, id)?),
+        // 试用结束只能看“最近改过”的
+        _ if expired => None,
+        _ => {
+            let bytes = bytes_of(&app.state::<AppState>(), &mut src)?;
+            let (img, icc) = decode(&bytes).map_err(|e| no(e.text()))?;
+            Some(enlist(Live::fresh(img, icc)))
+        }
+    };
+    let target = {
+        let mut rt = lock(&RT);
+        // 又开了一张，或者窗口里换图时窗口已经关了
+        if OPENS.load(Ordering::SeqCst) != seq || (origin.is_none() && !rt.open) {
+            return Ok(());
+        }
+        if let Some(o) = origin {
+            rt.origin = o;
+        }
+        rt.open = true;
+        rt.unseen = 0;
+        rt.cur.clone_from(&live);
+        rt.origin.target.clone()
+    };
+    tasks().sweep();
+    log::info!(
+        "改字 打开 {from}{}{}{}",
+        live.as_ref()
+            .map_or(String::new(), |l| format!(" {}×{}", l.img.w, l.img.h)),
+        if target.is_some() {
+            "（有粘贴目标）"
+        } else {
+            ""
+        },
+        if expired { "（试用已结束）" } else { "" },
+    );
+    if crate::panel::visible(app) {
+        crate::panel::hide(app);
+    }
+    let payload = OpenPayload {
+        job: live.map(|l| l.view()),
+        from,
+        target,
+        expired,
+        config: config(app),
+    };
+    show(app, payload);
+    Ok(())
+}
+
+/// 显示窗口，把载荷发给页面；页面还没把事件听上时先留着
+fn show(app: &AppHandle, payload: OpenPayload) {
+    on_main(app, move |app| {
+        if let Some(w) = app.get_webview_window(LABEL)
+            && let Err(e) = w.show().and_then(|()| w.set_focus())
+        {
+            log::warn!("显示改字窗口失败：{e}");
+        }
+        let mut rt = lock(&RT);
+        if rt.ready {
+            drop(rt);
+            emit_to(app, LABEL, events::TE_OPEN, payload);
+        } else {
+            rt.held = Some(payload);
+        }
+    });
+}
+
+/// 页面说事件都听上了：补发留着的那次打开
+pub fn ready(app: &AppHandle) {
+    on_main(app, |app| {
+        let held = {
+            let mut rt = lock(&RT);
+            rt.ready = true;
+            rt.held.take()
+        };
+        if let Some(p) = held {
+            emit_to(app, LABEL, events::TE_OPEN, p);
+        }
+    });
+}
+
+/// 提示：窗口开着在窗口里，否则发系统通知
+fn toast(app: &AppHandle, text: &str) {
+    if window_open() {
+        emit_to(app, LABEL, events::TE_TOAST, text);
+    } else {
+        crate::notify(app, text);
+    }
+}
+
+pub fn window_open() -> bool {
+    lock(&RT).open
+}
+
+/// 窗口记成关闭，放开那张图（有任务的由任务拿着），返回来处；没开着时返回 None
+fn shut() -> Option<Origin> {
+    // 还没解完的那次打开作废
+    OPENS.fetch_add(1, Ordering::SeqCst);
+    let (origin, _cur) = {
+        let mut rt = lock(&RT);
+        if !rt.open {
+            return None;
+        }
+        rt.open = false;
+        rt.held = None;
+        (
+            std::mem::replace(&mut rt.origin, meme::NOWHERE),
+            rt.cur.take(),
+        )
+    };
+    tasks().sweep();
+    Some(origin)
+}
+
+/// `back`：打开前的前台窗口（只有 Windows 有）
+fn hide(app: &AppHandle, back: Option<isize>) {
+    on_main(app, move |app| {
+        if let Some(h) = back {
+            xpaste_platform::activate_window(h);
+        }
+        if let Some(w) = app.get_webview_window(LABEL)
+            && let Err(e) = w.hide()
+        {
+            log::warn!("收起改字窗口失败：{e}");
+        }
+        emit_to(app, LABEL, events::TE_CLOSED, ());
+    });
+}
+
+/// 关掉窗口，键盘回到原来的应用。没开着时不做事
+pub fn close(app: &AppHandle) {
+    if let Some(o) = shut() {
+        log::info!("改字 关闭窗口");
+        hide(app, o.back);
+    }
+}
+
+/// 返回面板：粘贴目标还是打开改字前的那个
+pub fn back(app: &AppHandle) {
+    let Some(o) = shut() else { return };
+    log::info!("改字 返回面板");
+    hide(app, None);
+    app.state::<AppState>()
+        .previous_window
+        .store(o.back.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
+    crate::panel::reshow(app);
+}
+
+/// 窗口重新拿到焦点：更新并返回粘贴目标的名字（macOS 换成此刻最前面的应用，Windows 不变）
+pub fn refresh_target() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    let front = meme::front_name();
+    #[cfg(not(target_os = "macos"))]
+    let front = None;
+    let mut rt = lock(&RT);
+    if !rt.open {
+        return None;
+    }
+    meme::retarget(&mut rt.origin, cfg!(target_os = "macos"), || front)
+}
+
+/// 窗口关着时又改好一处：到现在共几处；窗口开着为 None
+pub fn missed() -> Option<u32> {
+    let mut rt = lock(&RT);
+    if rt.open {
+        return None;
+    }
+    rt.unseen += 1;
+    Some(rt.unseen)
+}
+
+// ---- 最近改过 ----
+
+/// “最近改过”的一张；`done` 是画上去的有几处
+#[derive(Serialize)]
+pub struct Recent {
+    id: String,
+    w: u32,
+    h: u32,
+    created: i64,
+    done: usize,
+}
+
+const RECENT_MAX: usize = 12;
+
+pub fn recent(dir: &Path) -> Vec<Recent> {
+    store::list(dir)
+        .into_iter()
+        .take(RECENT_MAX)
+        .map(|j| Recent {
+            done: j.edits.iter().filter(|e| e.shown().is_some()).count(),
+            id: j.id,
+            w: j.w,
+            h: j.h,
+            created: j.created,
+        })
+        .collect()
+}
+
+/// 缩略图的 PNG，长边不超过 320
+pub fn thumb(dir: &Path, id: &str) -> Result<Vec<u8>, AppError> {
+    let img = store::load(dir, id)
+        .and_then(|j| store::render(dir, &j))
+        .map_err(|_| no(GONE))?;
+    let img = image::RgbaImage::from_raw(img.w, img.h, img.px).ok_or_else(|| no(GONE))?;
+    let img = DynamicImage::ImageRgba8(img).thumbnail(320, 320);
+    let mut png = Vec::new();
+    img.write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+        .map_err(|_| no(GONE))?;
+    Ok(png)
+}
+
+/// 撤销删除，没存进去的结果再存一次
+pub fn restore(t: Tasks, dir: &Path, id: &str) -> Result<(), AppError> {
+    store::restore(dir, id).map_err(not_saved)?;
+    job::retry_late(t, dir, id);
+    Ok(())
+}
+
+/// 清空：正拿着的图下次再存时重新落盘
+pub fn clear(t: Tasks, dir: &Path) -> Result<(), AppError> {
+    let out = store::clear(dir);
+    let all: Vec<Arc<Live>> = lock(&LIVE).iter().filter_map(Weak::upgrade).collect();
+    for l in all {
+        l.wiped(t, dir);
+    }
+    Ok(out?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::textedit_job::tests::*;
+    use crate::textedit_tasks::tests::tasks as new_tasks;
+
+    const RED: [u8; 3] = [255, 0, 0];
+    const BLUE: [u8; 3] = [0, 0, 255];
+
+    /// 方向 6（拍的时候转了 90°）：摆正后宽高对调，左上角到右上角
+    #[test]
+    fn decode_exif_rotates() {
+        let img = image::RgbImage::from_fn(32, 16, |x, y| {
+            image::Rgb(if x < 8 && y < 8 { RED } else { [255; 3] })
+        });
+        let mut jpg = Vec::new();
+        img.write_to(&mut Cursor::new(&mut jpg), image::ImageFormat::Jpeg)
+            .unwrap();
+        let mut exif =
+            b"Exif\0\0MM\0\x2a\0\0\0\x08\0\x01\x01\x12\0\x03\0\0\0\x01\0\x06\0\0\0\0\0\0".to_vec();
+        let mut seg = vec![0xFF, 0xE1];
+        seg.extend((exif.len() as u16 + 2).to_be_bytes());
+        seg.append(&mut exif);
+        jpg.splice(2..2, seg);
+        let (img, icc) = decode(&jpg).unwrap();
+        assert_eq!((img.w, img.h), (16, 32));
+        assert!(icc.is_none());
+        let px = |x: u32, y: u32| &img.px[((y * img.w + x) * 4) as usize..][..3];
+        assert!(px(13, 2)[1] < 90 && px(2, 2)[1] > 200 && px(13, 28)[1] > 200);
+    }
+
+    fn chunk(kind: &[u8], body: &[u8]) -> Vec<u8> {
+        let mut c = (body.len() as u32).to_be_bytes().to_vec();
+        let data = [kind, body].concat();
+        let crc = !data.iter().fold(!0u32, |c, &b| {
+            (0..8).fold(c ^ u32::from(b), |c, _| {
+                (c >> 1) ^ (0xEDB8_8320 & (c & 1).wrapping_neg())
+            })
+        });
+        c.extend(data);
+        c.extend(crc.to_be_bytes());
+        c
+    }
+
+    /// 只有头的 PNG
+    fn png_head(w: u32, h: u32) -> Vec<u8> {
+        let ihdr = [&w.to_be_bytes()[..], &h.to_be_bytes(), &[8, 6, 0, 0, 0]].concat();
+        [
+            b"\x89PNG\r\n\x1a\n".to_vec(),
+            chunk(b"IHDR", &ihdr),
+            chunk(b"IDAT", &[0x78, 0x9c, 3, 0, 0, 0, 0, 1]),
+            chunk(b"IEND", &[]),
+        ]
+        .concat()
+    }
+
+    /// 先看头部的尺寸：没有像素数据也能判断，说明没有解
+    #[test]
+    fn decode_too_big() {
+        for (w, h) in [(20_000, 20_000), (10_001, 10_000)] {
+            assert_eq!(decode(&png_head(w, h)).err(), Some(OpenFail::TooBig));
+        }
+        // 正好 1 亿像素的不算大，只是这个文件没有数据
+        let r = decode(&png_head(10_000, 10_000));
+        assert_eq!(r.err(), Some(OpenFail::Unreadable));
+    }
+
+    #[test]
+    fn decode_gif_first() {
+        use image::codecs::gif::GifEncoder;
+        let mut gif = Vec::new();
+        let mut enc = GifEncoder::new(&mut gif);
+        for c in [[255, 0, 0, 255], [0, 0, 255, 255]] {
+            let f = image::RgbaImage::from_pixel(3, 2, image::Rgba(c));
+            enc.encode_frame(image::Frame::new(f)).unwrap();
+        }
+        drop(enc);
+        let (img, _) = decode(&gif).unwrap();
+        assert_eq!((img.w, img.h), (3, 2));
+        assert_eq!(img.px[..4], [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn decode_garbage() {
+        for b in [&b""[..], b"hello", b"\x89PNG\r\n\x1a\n", b"GIF89a"] {
+            assert_eq!(decode(b).err(), Some(OpenFail::Unreadable));
+        }
+    }
+
+    /// RGB 的 ICC 留着，别的不要
+    #[test]
+    fn decode_keeps_rgb_icc() {
+        for (space, kept) in [(b"RGB ", true), (b"GRAY", false), (b"CMYK", false)] {
+            let mut icc = vec![7u8; 200];
+            icc[16..20].copy_from_slice(space);
+            let png = crate::img_meta::encode_png(2, 1, &[9; 8], Some(&icc)).unwrap();
+            let (img, got) = decode(&png).unwrap();
+            assert_eq!(img.px, [9; 8]);
+            assert_eq!(got, kept.then_some(icc));
+        }
+    }
+
+    #[test]
+    fn source_kinds() {
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 1.0,
+            h: 1.0,
+        };
+        let all = [
+            Source::Shot { rect, png: vec![] },
+            Source::Clip { record: 1 },
+            Source::Panel {
+                record: 1,
+                file: None,
+            },
+            Source::Pin { n: 1 },
+            Source::File("a.png".into()),
+            Source::Blank,
+            Source::Recent("x".into()),
+        ];
+        assert_eq!(
+            all.map(|s| s.kind()),
+            ["shot", "clip", "panel", "pin", "file", "blank", "recent"]
+        );
+    }
+
+    /// 记录的图：文件记录取第一个图片文件，没有图的、没了的各有说法
+    #[test]
+    fn bytes_of_sources() {
+        use xpaste_core::{Snapshot, capture, detect, store::Upsert};
+        let tmp = Tmp::new();
+        let state = AppState::for_test();
+        for (f, b) in [("a.pdf", "x"), ("b.png", "png"), ("c.png", "c")] {
+            std::fs::write(tmp.0.join(f), b).unwrap();
+        }
+        let snap = Snapshot {
+            file_paths: ["a.pdf", "b.png", "c.png"].map(|f| tmp.0.join(f)).to_vec(),
+            ..Default::default()
+        };
+        let kind = detect::kind(&snap);
+        let rec = capture::build_record(snap, kind, 0);
+        let (Upsert::Added(record) | Upsert::Merged(record)) =
+            state.store().insert_or_merge(&rec, 0, 500).unwrap().0;
+        let get = |mut src| bytes_of(&state, &mut src);
+        let panel = |record, file| get(Source::Panel { record, file });
+        assert_eq!(panel(record, None).unwrap(), b"png");
+        assert_eq!(get(Source::Clip { record }).unwrap(), b"png");
+        assert_eq!(panel(record, Some(2)).unwrap(), b"c");
+        assert_eq!(get(Source::File(tmp.0.join("c.png"))).unwrap(), b"c");
+        assert_eq!(msg(panel(999, None)), UNUSABLE);
+        assert_eq!(msg(get(Source::Pin { n: 1 << 40 })), "这张图读不出来");
+        std::fs::remove_file(tmp.0.join("b.png")).unwrap();
+        assert_eq!(msg(get(Source::Clip { record })), "这张图读不出来");
+    }
+
+    #[test]
+    fn closed_or_expired_not_editable() {
+        assert_eq!(may_edit(false, || panic!("没开启不查试用期")), Err(OFF));
+        assert_eq!(may_edit(true, || true), Err(EXPIRED));
+        assert_eq!(may_edit(true, || false), Ok(()));
+    }
+
+    /// 没改过的不落盘；打开着的、从盘上读回来的是同一份
+    #[test]
+    fn stored_on_first_edit() {
+        if !xpaste_pro::AVAILABLE {
+            return eprintln!("这个构建不含 Pro，跳过");
+        }
+        let (t, tmp) = (new_tasks(), Tmp::new());
+        let l = live();
+        l.plan(&draft(NEW, range(4, 5)), false, true).unwrap();
+        assert_eq!(std::fs::read_dir(&tmp.0).unwrap().count(), 0);
+        assert!(l.render(&tmp.0).is_ok());
+        let id = put_local(t, &tmp.0, &l, &draft(NEW, range(4, 5)), 4, RED).unwrap();
+        let back = Live::load(&tmp.0, &l.id).unwrap();
+        assert!(back.img.px == l.img.px);
+        assert!(back.view().rev > l.view().rev, "重新打开不归零");
+        assert_eq!(edit_of(&back, id).pick, 0);
+        let r = recent(&tmp.0);
+        assert_eq!((r.len(), r[0].id == l.id, r[0].done), (1, true, 1));
+        let th = image::load_from_memory(&thumb(&tmp.0, &l.id).unwrap()).unwrap();
+        assert_eq!((th.width(), th.height()), (320, 100));
+        let file = &edit_of(&l, id).cands[0].file;
+        assert!(l.cand_png(&tmp.0, file).unwrap().starts_with(b"\x89PNG"));
+        assert!(l.cand_png(&tmp.0, "orig.png").is_err());
+        // 清空之后接着改：重新落盘
+        clear(t, &tmp.0).unwrap();
+        l.wiped(t, &tmp.0);
+        assert!(recent(&tmp.0).is_empty() && edit_of(&l, id).cands.is_empty());
+        put_local(t, &tmp.0, &l, &draft(NEW, range(4, 5)), 4, BLUE).unwrap();
+        assert_eq!(recent(&tmp.0).len(), 1);
+        assert_eq!(at(&l, &tmp.0, 76 + 260, 90), BLUE);
+    }
+
+    /// 有人拿着的图只有一份
+    #[test]
+    fn one_live_per_job() {
+        let l = enlist(Live::fresh(scene(), None));
+        let mut twin = Live::fresh(scene(), None);
+        twin.id.clone_from(&l.id);
+        assert!(Arc::ptr_eq(&l, &enlist(twin)));
+        let id = l.id.clone();
+        // 读字的线程放手之后
+        l.read();
+        drop(l);
+        for _ in 0..100 {
+            if !lock(&LIVE)
+                .iter()
+                .any(|w| w.upgrade().is_some_and(|l| l.id == id))
+            {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!("没有放开");
+    }
+}

@@ -42,6 +42,7 @@ tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
 window-vibrancy = "0.8"
 tauri-plugin-dialog = "2"
+unicode-segmentation = "1"
 reqwest = { version = "0.13", default-features = false, features = ["native-tls", "system-proxy", "json", "multipart"] }
 zip = { version = "9.2.2", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }

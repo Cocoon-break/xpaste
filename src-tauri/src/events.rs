@@ -88,6 +88,15 @@ pub const MEME_BACK: &str = "meme-back";
 /// AI 任务列表变了，载荷是整份 `Vec<meme_tasks::TaskView>`（新的在前）。发给 `meme` 和 `panel`。
 pub const MEME_TASKS: &str = "meme-tasks";
 
+/// 改字窗口打开或换了一张图，载荷 `textedit::OpenPayload`。只发给 `textedit`；读字的结果另由 `te_lines` 给。
+pub const TE_OPEN: &str = "te-open";
+/// 改字窗口关掉了，无载荷。只发给 `textedit`：页面清空。
+pub const TE_CLOSED: &str = "te-closed";
+/// 改字的 AI 任务或任务所在的图变了，载荷是整份 `Vec<textedit_tasks::TaskView>`。只发给 `textedit`：里面有原文和新文。
+pub const TE_TASKS: &str = "te-tasks";
+/// 改字窗口的提示条，载荷是文案。只发给 `textedit`。
+pub const TE_TOAST: &str = "te-toast";
+
 /// 冻结完成，发给每块屏的遮罩 `shot-<i>`（载荷见 `shot::BeginPayload`）。
 pub const SHOT_BEGIN: &str = "shot-begin";
 /// 截图已结束，发给每块屏的遮罩；载荷是结束的那一次的代数，遮罩据此放掉冻结帧（M23 规则 11）。

@@ -104,7 +104,7 @@ pub struct Origin {
     pub tray: bool,
 }
 
-const NOWHERE: Origin = Origin {
+pub(crate) const NOWHERE: Origin = Origin {
     back: None,
     target: None,
     from_panel: false,
@@ -159,10 +159,7 @@ pub fn retarget(
 /// 先取前台应用名再拿锁写回，不拿着锁调 AppKit
 #[cfg(target_os = "macos")]
 pub fn refresh_target() -> Option<String> {
-    let front = target_name(
-        xpaste_platform::frontmost_app(),
-        xpaste_platform::frontmost_is_self(),
-    );
+    let front = front_name();
     let mut rt = rt();
     if !rt.open {
         return None;
@@ -178,17 +175,23 @@ pub fn refresh_target() -> Option<String> {
 }
 
 /// 此刻的前台窗口和前台应用的名字（同采集时的来源应用名）
-fn foreground() -> (Option<isize>, Option<String>) {
+pub(crate) fn foreground() -> (Option<isize>, Option<String>) {
     let back = xpaste_platform::foreground_window();
     // Windows 的 frontmost_app 先看剪切板所有者，这里要的是前台窗口所属的应用（已排除本进程）
     #[cfg(windows)]
     let name = back.and_then(xpaste_platform::window_app_name);
     #[cfg(not(windows))]
-    let name = target_name(
+    let name = front_name();
+    (back, name)
+}
+
+/// 此刻最前面的应用的名字；是 xPaste 自己时没有
+#[cfg(not(windows))]
+pub(crate) fn front_name() -> Option<String> {
+    target_name(
         xpaste_platform::frontmost_app(),
         xpaste_platform::frontmost_is_self(),
-    );
-    (back, name)
+    )
 }
 
 /// 粘贴目标的名字：前台是 xPaste 自己（比如设置窗口拿着键盘）时没有目标，贴不回自己
@@ -602,7 +605,7 @@ const DROP_PAUSED: &str = "暂停记录时加不了拖进来的图";
 const DROP_NONE: &str = "这几张图加不进来";
 
 /// 这条记录能当参考图的部分（同从面板带进来时的拆法）；记录没了、不是图片时为空
-fn record_refs(state: &AppState, id: i64) -> Vec<RefKey> {
+pub(crate) fn record_refs(state: &AppState, id: i64) -> Vec<RefKey> {
     from_selection(gather(state, &[id])).map_or_else(|_| Vec::new(), |(refs, _)| refs)
 }
 

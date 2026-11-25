@@ -474,6 +474,9 @@ pub fn save_settings(
     if !state.settings().meme_enabled {
         crate::meme::close(&app);
     }
+    if !state.settings().edit_enabled {
+        crate::textedit::close(&app);
+    }
     // 开关、位置与一直显示先生效，再收起或唤醒；设置锁只在取值时短暂持有
     // 改位置、改一直显示后的放下或收起：等页面拿到新的位置和 pinned 之后再做
     let mut then: Option<fn(&AppHandle)> = None;

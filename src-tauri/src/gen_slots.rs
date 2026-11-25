@@ -15,7 +15,6 @@ const MAX_RUNNING: usize = 2;
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Who {
     Meme,
-    #[allow(dead_code)] // 改字的任务接入后删
     Edit,
 }
 
@@ -75,7 +74,8 @@ impl Slots {
     }
 }
 
-static SLOTS: Mutex<Slots> = Mutex::new(Slots::new());
+/// 两家共用的那一份，平时用 `slots` 取锁
+pub static SLOTS: Mutex<Slots> = Mutex::new(Slots::new());
 static ON_FREE: Mutex<Vec<fn(&AppHandle)>> = Mutex::new(Vec::new());
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {

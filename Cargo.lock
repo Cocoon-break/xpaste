@@ -6098,6 +6098,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
  "thiserror 2.0.21",
+ "unicode-segmentation",
  "window-vibrancy",
  "xpaste-core",
  "xpaste-platform",

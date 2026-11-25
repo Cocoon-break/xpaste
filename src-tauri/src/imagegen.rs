@@ -35,7 +35,6 @@ pub enum ImgFail {
     /// OpenAI 兼容格式带参考图时被 400 / 415 / 422 拒绝：模型多半不收参考图
     NoRefs,
     /// 改字：这次带了遮罩，被 400 / 415 / 422 拒绝（非审核）：接口多半不收遮罩
-    #[allow(dead_code)] // 改字后续任务接入
     MaskRejected,
 }
 
@@ -64,14 +63,12 @@ pub async fn generate(c: &ImageCfg, prompt: &str, refs: &[Vec<u8>]) -> Result<Ve
 
 /// 改字：裁块 + 可选遮罩（透明处为要改的）。只有 OpenAI 兼容格式带遮罩；
 /// 方舟、Gemini 把裁块当参考图走 `generate` 的做法。
-#[allow(dead_code)] // 改字后续任务接入
 pub struct EditReq<'a> {
     pub prompt: &'a str,
     pub crop: &'a [u8],
     pub mask: Option<&'a [u8]>,
 }
 
-#[allow(dead_code)] // 改字后续任务接入
 pub async fn edit(c: &ImageCfg, r: EditReq<'_>) -> Result<Vec<u8>, ImgFail> {
     send(c, EDIT_TIMEOUTS, r.prompt, &[r.crop.to_vec()], r.mask).await
 }
@@ -257,7 +254,6 @@ pub fn reason(f: &ImgFail) -> String {
 }
 
 /// 改字失败原因：`NoRefs` 在这里是“模型不能改图”，其余同 `reason`。
-#[allow(dead_code)] // 改字后续任务接入
 pub fn edit_reason(f: &ImgFail) -> String {
     match f {
         ImgFail::NoRefs => "这个模型不能改图，换一个模型再试".into(),

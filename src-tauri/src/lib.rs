@@ -36,7 +36,10 @@ mod record_image;
 mod remind;
 mod shot;
 pub mod state;
+mod textedit;
+mod textedit_job;
 mod textedit_store;
+mod textedit_tasks;
 mod translate;
 mod tray;
 mod trcard;
@@ -54,6 +57,7 @@ use xpaste_core::Store;
 pub fn run() {
     log_panics();
     gen_slots::on_free(meme_tasks::pump);
+    gen_slots::on_free(textedit_tasks::pump);
     let override_ = data_dir_override(std::env::var_os("XPASTE_DATA_DIR"));
     let timing = timing_enabled(std::env::var_os("XPASTE_TIMING"));
     let builder = tauri::Builder::default();
@@ -605,7 +609,38 @@ pub fn run() {
             commands::meme::meme_copy,
             commands::meme::meme_open_scene,
             commands::meme::meme_draft_set,
-            commands::meme::meme_sketch_image
+            commands::meme::meme_sketch_image,
+            commands::textedit::te_open,
+            commands::textedit::te_open_record,
+            commands::textedit::te_open_file,
+            commands::textedit::te_open_recent,
+            commands::textedit::te_ready,
+            commands::textedit::te_close,
+            commands::textedit::te_back,
+            commands::textedit::te_target,
+            commands::textedit::te_config,
+            commands::textedit::te_image,
+            commands::textedit::te_render,
+            commands::textedit::te_cand,
+            commands::textedit::te_job,
+            commands::textedit::te_lines,
+            commands::textedit::te_ranges,
+            commands::textedit::te_strip,
+            commands::textedit::te_plan,
+            commands::textedit::te_run,
+            commands::textedit::te_local_patch,
+            commands::textedit::te_pick,
+            commands::textedit::te_undo,
+            commands::textedit::te_tasks,
+            commands::textedit::te_cancel,
+            commands::textedit::te_retry,
+            commands::textedit::te_drop,
+            commands::textedit::te_recent,
+            commands::textedit::te_thumb,
+            commands::textedit::te_recent_remove,
+            commands::textedit::te_recent_restore,
+            commands::textedit::te_recent_stats,
+            commands::textedit::te_recent_clear
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

@@ -7,4 +7,5 @@ pub mod records;
 pub mod settings;
 pub mod shot;
 pub mod snippets;
+pub mod textedit;
 pub mod translate;

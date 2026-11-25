@@ -12,7 +12,6 @@ use xpaste_pro::{TeImg, TePaste, TeQuad};
 use crate::{housekeeping, img_meta, shot};
 
 /// 没有选中任何候选（改回去了，或结果到得太晚）。页面拿得到，所以不超过 JS 的安全整数
-#[allow(dead_code)] // 改字的任务接入后删
 pub const NO_PICK: usize = u32::MAX as usize;
 
 /// 一张改过字的图。带用户文字，`Job`、`Edit`、`Cand` 都不派生 Debug
@@ -66,14 +65,25 @@ pub enum By {
 
 impl Edit {
     /// 画上去的那个候选
-    fn shown(&self) -> Option<&Cand> {
+    pub fn shown(&self) -> Option<&Cand> {
         self.cands.get(self.pick).filter(|c| c.placed)
     }
 }
 
 impl Job {
+    /// 刚打开的一张图，还没有落盘
+    pub fn new(img: &TeImg) -> Job {
+        Job {
+            id: crate::meme_gen::uuid(),
+            w: img.w,
+            h: img.h,
+            created: crate::clock::now_ms(),
+            edits: vec![],
+        }
+    }
+
     /// 画上去的里面有没有 AI 出的（决定元数据怎么写）
-    #[allow(dead_code)] // 改字的任务接入后删
+    #[allow(dead_code)] // 完成动作接入后删
     pub fn ai(&self) -> bool {
         self.edits
             .iter()
@@ -130,20 +140,12 @@ fn read_png(path: &Path) -> io::Result<TeImg> {
     })
 }
 
-/// 存下原图和它的 ICC，起一个新的
-#[allow(dead_code)] // 改字的任务接入后删
-pub fn create(dir: &Path, img: &TeImg, icc: Option<&[u8]>) -> io::Result<Job> {
-    let job = Job {
-        id: crate::meme_gen::uuid(),
-        w: img.w,
-        h: img.h,
-        created: crate::clock::now_ms(),
-        edits: vec![],
-    };
+/// 第一次落盘：`job.json`、原图和它的 ICC
+pub fn create(dir: &Path, job: &Job, img: &TeImg, icc: Option<&[u8]>) -> io::Result<()> {
     let d = job_dir(dir, &job.id)?;
     fs::create_dir_all(&d)?;
     // 先写 job.json：中途退出的，启动时认得出是空的
-    save(dir, &job)
+    save(dir, job)
         .and_then(|()| match icc {
             Some(i) if !i.is_empty() => write_sync(&d.join(ICC), i),
             _ => Ok(()),
@@ -151,8 +153,7 @@ pub fn create(dir: &Path, img: &TeImg, icc: Option<&[u8]>) -> io::Result<Job> {
         .and_then(|()| write_png(&d.join(ORIG), img, icc))
         .inspect_err(|_| {
             let _ = fs::remove_dir_all(&d);
-        })?;
-    Ok(job)
+        })
 }
 
 /// 先写临时文件、落到盘上再改名。同一个 job 的几次保存由调用方排队；文件夹不在了（删了）就报错，不重新建
@@ -187,11 +188,33 @@ fn read(dir: &Path, id: &str) -> io::Result<Job> {
     Ok(job)
 }
 
-#[allow(dead_code)] // 改字的任务接入后删
 pub fn load(dir: &Path, id: &str) -> io::Result<Job> {
     let job = read(dir, id)?;
     fs::metadata(job_dir(dir, id)?.join(ORIG))?;
     Ok(job)
+}
+
+/// 原图
+pub fn load_orig(dir: &Path, job: &Job) -> io::Result<TeImg> {
+    let img = read_png(&job_dir(dir, &job.id)?.join(ORIG))?;
+    if (img.w, img.h) != (job.w, job.h) {
+        return Err(ErrorKind::InvalidData.into());
+    }
+    Ok(img)
+}
+
+/// 一张候选的文件（PNG）
+pub fn cand_png(dir: &Path, job: &Job, file: &str) -> io::Result<Vec<u8>> {
+    let mut all = job.edits.iter().flat_map(|e| &e.cands);
+    if !all.any(|c| c.file == file) {
+        return Err(ErrorKind::NotFound.into());
+    }
+    fs::read(job_dir(dir, &job.id)?.join(file))
+}
+
+/// 文件夹还在不在
+pub fn exists(dir: &Path, id: &str) -> bool {
+    job_dir(dir, id).is_ok_and(|d| d.is_dir())
 }
 
 /// 各张图的 id，坏了的也在内
@@ -217,14 +240,12 @@ pub fn list(dir: &Path) -> Vec<Job> {
 }
 
 /// 原图的 ICC，存出去的都要带上
-#[allow(dead_code)] // 改字的任务接入后删
 pub fn load_icc(dir: &Path, id: &str) -> Option<Vec<u8>> {
     fs::read(job_dir(dir, id).ok()?.join(ICC)).ok()
 }
 
 /// 给 id 为 `edit` 的那处加一个候选并存盘，返回它是第几个。不改选中的。`placed`：贴好了，没贴好的只留着。
 /// 没存成时不留下文件，`job` 也照旧
-#[allow(dead_code)] // 改字的任务接入后删
 pub fn add_cand(
     dir: &Path,
     job: &mut Job,
@@ -261,13 +282,9 @@ pub fn add_cand(
 
 /// 原图上依次画各处选中的候选。候选是按原图算的矩形，含没变的像素：只画和原图不同的，
 /// 两处的矩形叠在一起时，后画的不会把先画的盖回原样
-#[allow(dead_code)] // 改字的任务接入后删
 pub fn render(dir: &Path, job: &Job) -> io::Result<TeImg> {
     let d = job_dir(dir, &job.id)?;
-    let mut img = read_png(&d.join(ORIG))?;
-    if (img.w, img.h) != (job.w, job.h) {
-        return Err(ErrorKind::InvalidData.into());
-    }
+    let mut img = load_orig(dir, job)?;
     // 先都和原图比完再画，原图可能有 400 MB，不另存一份
     let mut diff = Vec::new();
     for c in job.edits.iter().filter_map(Edit::shown) {
@@ -292,7 +309,6 @@ fn diffs(img: &TeImg, patch: &TeImg, c: &Cand, out: &mut Vec<(usize, [u8; 4])>) 
 }
 
 /// 删一张：移进 `trash/`，撤销期过后彻底删
-#[allow(dead_code)] // 改字的任务接入后删
 pub fn remove(dir: &Path, id: &str) -> io::Result<()> {
     let path = trash(dir, id)?;
     housekeeping::spawn("xpaste-textedit-purge", move || {
@@ -324,7 +340,6 @@ fn purge(path: &Path) -> io::Result<()> {
 }
 
 /// 撤销删除
-#[allow(dead_code)] // 改字的任务接入后删
 pub fn restore(dir: &Path, id: &str) -> io::Result<()> {
     let to = job_dir(dir, id)?;
     let prefix = format!("{id}-");
@@ -365,7 +380,6 @@ fn clearable(dir: &Path) -> Vec<PathBuf> {
 }
 
 /// “最近改过”有几张、清空能腾出多少字节。坏了的不算张数、算字节：0 张但占地方时也要能清空
-#[allow(dead_code)] // 改字的任务接入后删
 pub fn stats(dir: &Path) -> (u64, u64) {
     let bytes = clearable(dir)
         .iter()
@@ -378,7 +392,6 @@ pub fn stats(dir: &Path) -> (u64, u64) {
 }
 
 /// 清空“最近改过”，坏了的和 `trash/` 一起删
-#[allow(dead_code)] // 改字的任务接入后删
 pub fn clear(dir: &Path) -> io::Result<()> {
     let mut gone = clearable(dir);
     gone.push(dir.join(TRASH));
@@ -391,7 +404,7 @@ pub fn clear(dir: &Path) -> io::Result<()> {
 }
 
 /// 存不成的原因
-#[allow(dead_code)] // 改字的任务接入后删
+#[allow(dead_code)] // 完成动作接入后删
 pub enum SaveFail {
     /// 文件夹写不进去（没有权限、只读、不在了、名字太长）：改走另存为
     Dir,
@@ -421,7 +434,7 @@ pub fn out_path(src: &Path) -> PathBuf {
 
 /// 在原图旁边另存一份，绝不覆盖；`icc` 是原图的（`load_icc`），`ai` 是图里有没有 AI 出的（`Job::ai`）。
 /// 名字是 JPEG、图里却有透明的（改过扩展名）存成 PNG
-#[allow(dead_code)] // 改字的任务接入后删
+#[allow(dead_code)] // 完成动作接入后删
 pub fn write_beside(
     src: &Path,
     img: &TeImg,
@@ -452,6 +465,11 @@ pub fn write_beside(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn create(dir: &Path, img: &TeImg, icc: Option<&[u8]>) -> io::Result<Job> {
+        let job = Job::new(img);
+        super::create(dir, &job, img, icc).map(|()| job)
+    }
 
     /// 测试用的文件夹，用完删掉
     struct Tmp(PathBuf);
