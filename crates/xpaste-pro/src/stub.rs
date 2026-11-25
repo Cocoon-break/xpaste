@@ -417,6 +417,29 @@ pub fn te_paste(
     Err(TePasteFail::Unaligned)
 }
 
+pub fn te_erase(_img: &TeImg, _line: TeQuad, _range: [f32; 2]) -> Option<TeLocal> {
+    None
+}
+
+pub fn te_move(
+    _img: &TeImg,
+    _line: TeQuad,
+    _range: [f32; 2],
+    _src_line: TeQuad,
+    _src_range: [f32; 2],
+) -> Option<TeLocal> {
+    None
+}
+
+pub fn te_find_sources(
+    _img: &TeImg,
+    _lines: &[(String, TeQuad, Vec<[f32; 2]>)],
+    _target: usize,
+    _chars: &[char],
+) -> Option<Vec<(usize, [f32; 2])>> {
+    None
+}
+
 pub fn te_block(_texts: &[&str], _img: &TeImg) -> Option<TeBlock> {
     None
 }

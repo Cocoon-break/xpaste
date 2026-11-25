@@ -385,6 +385,24 @@ pub struct TePaste {
     pub soft: bool,
 }
 
+/// 本机改完自检的结果，越往后越差
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TeVerdict {
+    Pass,
+    /// 可能有痕迹
+    Soft,
+    /// 不能用
+    Bad,
+}
+
+/// 本机改好的一处和自检结果
+pub struct TeLocal {
+    pub paste: TePaste,
+    pub verdict: TeVerdict,
+    /// 最差的那一项，通过时为空
+    pub why: &'static str,
+}
+
 /// AI 出的图为什么贴不上
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TePasteFail {
