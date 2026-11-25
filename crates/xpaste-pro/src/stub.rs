@@ -405,6 +405,18 @@ pub fn te_crop(_img: &TeImg, _line: TeQuad, _range: [f32; 2], _neighbors: usize)
     }
 }
 
+pub fn te_paste(
+    _img: &TeImg,
+    _line: TeQuad,
+    _range: [f32; 2],
+    _crop: &TeCrop,
+    _out_png: &[u8],
+    _old: &str,
+    _new: &str,
+) -> Result<TePaste, TePasteFail> {
+    Err(TePasteFail::Unaligned)
+}
+
 pub fn te_block(_texts: &[&str], _img: &TeImg) -> Option<TeBlock> {
     None
 }

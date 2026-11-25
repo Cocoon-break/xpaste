@@ -385,6 +385,17 @@ pub struct TePaste {
     pub soft: bool,
 }
 
+/// AI 出的图为什么贴不上
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TePasteFail {
+    /// 读不出来，或者和原图对不上
+    Unaligned,
+    /// 没找到新笔画
+    NoInk,
+    /// 旧字还在
+    OldStays,
+}
+
 /// 不给改的图的类别
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TeBlock {
