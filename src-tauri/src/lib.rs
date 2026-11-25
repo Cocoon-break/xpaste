@@ -250,6 +250,7 @@ pub fn run() {
                     tray::mark_hotkey_failed();
                 }
             }
+            textedit_tasks::remember(app.handle());
             clipboard::start(app.handle().clone());
             shot::prewarm(app.handle());
             trcard::prewarm(app.handle());

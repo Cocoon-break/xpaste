@@ -96,6 +96,8 @@ pub const TE_CLOSED: &str = "te-closed";
 pub const TE_TASKS: &str = "te-tasks";
 /// 改字窗口的提示条，载荷是文案。只发给 `textedit`。
 pub const TE_TOAST: &str = "te-toast";
+/// 打开时识别出错、没读成的图，要改之前再读时读成了，载荷是图的 id。只发给 `textedit`：页面重新取 `te_lines`。
+pub const TE_LINES: &str = "te-lines";
 /// 改字关着时从系统的“打开方式”进来，后端已唤起面板。无载荷，只发给 `panel`：提示“改字没有开启”，带“去设置”。
 pub const TE_OFF: &str = "te-off";
 

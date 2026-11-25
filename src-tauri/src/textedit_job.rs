@@ -80,13 +80,50 @@ pub struct Read {
     pub engine: bool,
     /// 图解不开、读字的线程起不来，给不给改没判断成：不许改。识别引擎出错的不算
     pub failed: bool,
+    /// 引擎一直出错，没读成：能自己框，头一次要改时再读一次（`Live::sure`）
+    pub unread: bool,
+}
+
+/// 引擎出错时再读几次、每次缩到多少，隔多久
+const RESCALE: [f64; 3] = [0.97, 0.94, 0.91];
+const RETRY_WAIT: Duration = if cfg!(test) {
+    Duration::from_millis(5)
+} else {
+    Duration::from_millis(300)
+};
+
+/// 读字。引擎偶尔对着同一张图一直出错：缩小一点再读，坐标换回来。超时、没有引擎、解不开的不再读
+fn recognize(img: &TeImg, ocr: Ocr) -> Result<Option<Vec<OcrLine>>, OcrError> {
+    let png =
+        |w, h, px: &[u8]| crate::img_meta::encode_png(w, h, px, None).map_err(|_| OcrError::Decode);
+    let mut got = ocr(&png(img.w, img.h, &img.px)?);
+    for k in RESCALE {
+        if !matches!(got, Err(OcrError::Engine(_))) {
+            break;
+        }
+        std::thread::sleep(RETRY_WAIT);
+        let view = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(img.w, img.h, &img.px[..])
+            .ok_or(OcrError::Decode)?;
+        let size = |n: u32| ((f64::from(n) * k).round() as u32).max(1);
+        let (w, h) = (size(img.w), size(img.h));
+        // 不用 resize：一亿像素的图，它中间要 1.6 GB
+        let small = image::imageops::thumbnail(&view, w, h);
+        let back = [img.w as f32 / w as f32, img.h as f32 / h as f32];
+        got = ocr(&png(w, h, &small)?);
+        if let Ok(Some(lines)) = &mut got {
+            for l in lines {
+                l.quad = l.quad.map(|p| [p[0] * back[0], p[1] * back[1]]);
+            }
+        }
+    }
+    got
 }
 
 impl Read {
     fn new(img: &TeImg, ocr: Ocr) -> Read {
-        let png = crate::img_meta::encode_png(img.w, img.h, &img.px, None);
-        let got = png.map_or(Err(OcrError::Decode), |p| ocr(&p));
+        let got = recognize(img, ocr);
         let failed = matches!(got, Err(OcrError::Decode));
+        let unread = matches!(got, Err(OcrError::Engine(_) | OcrError::Timeout));
         let (lines, engine) = match got {
             Ok(Some(l)) => (l, true),
             Ok(None) => (Vec::new(), false),
@@ -101,7 +138,29 @@ impl Read {
             lines,
             engine,
             failed,
+            unread,
         }
+    }
+
+    fn log(&self, what: &str, t: Instant) {
+        log::info!(
+            "改字 {what} {} 行 锁住 {} 段{}{}{} 耗时 {} ms",
+            self.lines.len(),
+            self.locked.len(),
+            if self.engine {
+                ""
+            } else {
+                "（没有识别引擎）"
+            },
+            if self.unread {
+                "（识别出错，没读成）"
+            } else {
+                ""
+            },
+            self.blocked
+                .map_or(String::new(), |b| format!(" 不给改：{}", b.label())),
+            t.elapsed().as_millis()
+        );
     }
 }
 
@@ -129,6 +188,9 @@ pub struct Live {
     pub img: TeImg,
     pub icc: Option<Vec<u8>>,
     read: OnceLock<Read>,
+    /// 没读成的，要改之前再读的那次
+    again: OnceLock<Read>,
+    ocr: OnceLock<Ocr>,
     st: Mutex<St>,
     /// 最近一次算的本机做法
     local: Mutex<Option<(Spot, Option<Arc<TeLocal>>)>>,
@@ -156,6 +218,8 @@ impl Live {
             img,
             icc,
             read: OnceLock::new(),
+            again: OnceLock::new(),
+            ocr: OnceLock::new(),
             st: Mutex::new(St {
                 job,
                 stored,
@@ -182,20 +246,30 @@ impl Live {
     /// 读字、判断给不给改，耗时
     pub fn start(&self, ocr: Ocr) {
         let t = Instant::now();
+        let _ = self.ocr.set(ocr);
         let r = self.read.get_or_init(|| Read::new(&self.img, ocr));
-        log::info!(
-            "改字 读字 {} 行 锁住 {} 段{}{} 耗时 {} ms",
-            r.lines.len(),
-            r.locked.len(),
-            if r.engine {
-                ""
-            } else {
-                "（没有识别引擎）"
-            },
-            r.blocked
-                .map_or(String::new(), |b| format!(" 不给改：{}", b.label())),
-            t.elapsed().as_millis()
-        );
+        r.log("读字", t);
+    }
+
+    /// 要改之前：识别出错、没读成的再读一次，给不给改才有的判断。只再读这一次，几处同时要改的等同一次；
+    /// 读成了告诉页面，又没读成就和没有引擎一样
+    fn sure(&self) -> &Read {
+        if self.read.wait().unread
+            && let Some(&ocr) = self.ocr.get()
+        {
+            let mut mine = false;
+            let r = self.again.get_or_init(|| {
+                mine = true;
+                let t = Instant::now();
+                let r = Read::new(&self.img, ocr);
+                r.log("再读一次", t);
+                r
+            });
+            if mine && !r.unread {
+                crate::textedit_tasks::reread(&self.id);
+            }
+        }
+        self.read()
     }
 
     /// 读字的线程起不来
@@ -206,12 +280,13 @@ impl Live {
             locked: Vec::new(),
             engine: false,
             failed: true,
+            unread: false,
         });
     }
 
-    /// 读字的结果，没读完就等
+    /// 读字的结果，没读完就等；再读过的用后一次
     pub fn read(&self) -> &Read {
-        self.read.wait()
+        self.again.get().unwrap_or_else(|| self.read.wait())
     }
 
     pub fn view(&self) -> JobView {
@@ -803,7 +878,7 @@ fn grow(img: &TeImg, d: &Draft, s: &TeStrip, range: [f32; 2]) -> [f32; 2] {
 impl Live {
     /// 这张图、这几个字给不给改
     fn allow(&self, d: &Draft) -> Result<(), AppError> {
-        let r = self.read();
+        let r = self.sure();
         if r.failed {
             return Err(no(UNREADABLE));
         }
@@ -1458,6 +1533,7 @@ pub mod tests {
             locked: Vec::new(),
             engine: true,
             failed: false,
+            unread: false,
         }
     }
 
@@ -1570,21 +1646,126 @@ pub mod tests {
     #[test]
     fn read_without_engine() {
         let r = Read::new(&scene(), |_| Ok(None));
-        assert!(!r.engine && r.lines.is_empty() && r.blocked.is_none() && !r.failed);
+        assert!(!r.engine && r.lines.is_empty() && r.blocked.is_none() && !r.failed && !r.unread);
         let broken: [Ocr; 2] = [
             |_| Err(OcrError::Timeout),
             |_| Err(OcrError::Engine("x".into())),
         ];
         for ocr in broken {
             let r = Read::new(&scene(), ocr);
-            assert!(r.engine && r.lines.is_empty() && !r.failed);
+            assert!(r.engine && r.lines.is_empty() && !r.failed && r.unread);
         }
         let r = Read::new(&scene(), |_| Err(OcrError::Decode));
-        assert!(r.lines.is_empty() && r.failed);
+        assert!(r.lines.is_empty() && r.failed && !r.unread);
         // 像素对不上，编码不了
         let mut bad = scene();
         bad.px.pop();
         assert!(Read::new(&bad, |_| Ok(None)).failed);
+    }
+
+    /// 引擎出错的再读，每次的图都不一样大，坐标换回原图；超时、没有引擎、解不开的只读一次
+    #[test]
+    fn engine_errors_read_again() {
+        static SEEN: Mutex<Vec<(u32, u32)>> = Mutex::new(Vec::new());
+        fn flaky(png: &[u8]) -> Result<Option<Vec<OcrLine>>, OcrError> {
+            let img = image::load_from_memory(png).unwrap();
+            let (w, h) = (img.width(), img.height());
+            let mut seen = lock(&SEEN);
+            seen.push((w, h));
+            if seen.len() < 4 {
+                return Err(OcrError::Engine("x".into()));
+            }
+            let (w, h) = (w as f32, h as f32);
+            let all = [[0.0, 0.0], [w, 0.0], [w, h], [w / 2.0, h / 2.0]];
+            Ok(Some(vec![row("甲", all, vec![[0.0, 1.0]])]))
+        }
+        let r = Read::new(&scene(), flaky);
+        let mut seen = lock(&SEEN).clone();
+        assert_eq!((seen.len(), seen[0]), (4, (640, 200)));
+        seen.sort();
+        seen.dedup();
+        assert_eq!(seen.len(), 4);
+        assert!(!r.unread && r.lines[0].chars == [[0.0, 1.0]]);
+        let want = [[0.0, 0.0], [640.0, 0.0], [640.0, 200.0], [320.0, 100.0]];
+        for (p, q) in r.lines[0].quad.iter().zip(want) {
+            assert!((p[0] - q[0]).abs() < 0.01 && (p[1] - q[1]).abs() < 0.01);
+        }
+
+        static N: AtomicU64 = AtomicU64::new(0);
+        let once: [Ocr; 4] = [
+            |_| {
+                N.fetch_add(1, Ordering::SeqCst);
+                Err(OcrError::Timeout)
+            },
+            |_| {
+                N.fetch_add(1, Ordering::SeqCst);
+                Ok(None)
+            },
+            |_| {
+                N.fetch_add(1, Ordering::SeqCst);
+                Err(OcrError::Decode)
+            },
+            |_| {
+                N.fetch_add(1, Ordering::SeqCst);
+                Ok(Some(vec![]))
+            },
+        ];
+        for (i, ocr) in once.into_iter().enumerate() {
+            Read::new(&scene(), ocr);
+            assert_eq!(N.load(Ordering::SeqCst), i as u64 + 1);
+        }
+    }
+
+    /// 打开时没读成的：头一次要改再读，又没读成就放行，之后不再读；同时几处只读一次
+    #[test]
+    fn unread_is_read_once_more() {
+        static N: AtomicU64 = AtomicU64::new(0);
+        fn broken(_: &[u8]) -> Result<Option<Vec<OcrLine>>, OcrError> {
+            N.fetch_add(1, Ordering::SeqCst);
+            Err(OcrError::Engine("x".into()))
+        }
+        if !xpaste_pro::AVAILABLE {
+            return eprintln!("这个构建不含 Pro，跳过");
+        }
+        let l = unread();
+        l.start(broken);
+        assert_eq!(N.load(Ordering::SeqCst), 4);
+        let d = draft(NEW, range(4, 5));
+        std::thread::scope(|s| {
+            for _ in 0..4 {
+                s.spawn(|| assert!(l.check(&d).is_ok()));
+            }
+        });
+        assert_eq!(N.load(Ordering::SeqCst), 8);
+        assert!(l.plan(&d, false, true).is_ok());
+        assert_eq!(N.load(Ordering::SeqCst), 8);
+        // 打开时读成了的不再读
+        let l = live();
+        assert!(l.check(&d).is_ok() && l.again.get().is_none());
+    }
+
+    /// 再读时读成了：签名那一段照锁，读出来的行给得到页面
+    #[test]
+    fn second_reading_locks_signature() {
+        static N: AtomicU64 = AtomicU64::new(0);
+        fn late(_: &[u8]) -> Result<Option<Vec<OcrLine>>, OcrError> {
+            if N.fetch_add(1, Ordering::SeqCst) < 4 {
+                return Err(OcrError::Engine("x".into()));
+            }
+            Ok(Some(vec![row("签名：张三丰", LINE, chars())]))
+        }
+        if !xpaste_pro::AVAILABLE {
+            return eprintln!("这个构建不含 Pro，跳过");
+        }
+        let (t, tmp) = (new_tasks(), Tmp::new());
+        let l = unread();
+        l.start(late);
+        assert!(l.read().lines.is_empty() && l.read().locked.is_empty());
+        let d = draft(NEW, range(4, 5));
+        assert_eq!(msg(put_local(t, &tmp.0, &l, &d, 4, RED)), LOCKED);
+        assert_eq!((l.read().lines.len(), l.read().locked.len()), (1, 1));
+        assert_eq!(msg(run_local(t, &tmp.0, &l, &d)), LOCKED);
+        assert_eq!(N.load(Ordering::SeqCst), 5);
     }
 
     // ---- 几何 ----

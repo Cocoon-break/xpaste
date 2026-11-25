@@ -510,8 +510,20 @@ pub fn tasks() -> Tasks {
     }
 }
 
-/// 记下来给后台补存的用
+/// 给后台补存、再读字的用
 static APP: OnceLock<AppHandle> = OnceLock::new();
+
+/// 启动时记下
+pub fn remember(app: &AppHandle) {
+    let _ = APP.set(app.clone());
+}
+
+/// 没读成的图再读时读成了：告诉页面重新取
+pub fn reread(job: &str) {
+    if let Some(app) = APP.get() {
+        crate::events::emit_to(app, textedit::LABEL, crate::events::TE_LINES, job);
+    }
+}
 
 /// 后台补存了结果：告诉页面
 pub fn saved_later() {
@@ -527,7 +539,6 @@ pub fn changed(app: &AppHandle) {
 
 /// 空出来的名额接上排队的，再把整份列表发给改字窗口。启动时登记给 `gen_slots::on_free`
 pub fn pump(app: &AppHandle) {
-    APP.get_or_init(|| app.clone());
     let t = tasks();
     loop {
         let next = t.next();
@@ -739,6 +750,47 @@ pub mod tests {
         }
         assert!(t.next().is_none());
         assert_eq!(std::fs::read_dir(&tmp.0).unwrap().count(), 0);
+    }
+
+    /// 打开时没读成：提交时再读，命中就拦，不入队、不落盘，一个请求也没有；又没读成才放行
+    #[test]
+    fn unread_image_checked_at_submit() {
+        use std::sync::atomic::{AtomicU64, Ordering::SeqCst};
+        static N: AtomicU64 = AtomicU64::new(0);
+        fn late(_: &[u8]) -> Got {
+            if N.fetch_add(1, SeqCst) < 4 {
+                return Err(OcrError::Engine("x".into()));
+            }
+            let texts = ["姓名 张三", "公民身份号码 11010519491231002X"];
+            Ok(Some(
+                texts
+                    .map(|s| row(s, moved(0.0), vec![]))
+                    .into_iter()
+                    .collect(),
+            ))
+        }
+        fn never(_: &[u8]) -> Got {
+            Err(OcrError::Engine("x".into()))
+        }
+        if !xpaste_pro::AVAILABLE {
+            return eprintln!("这个构建不含 Pro，跳过");
+        }
+        let (t, tmp) = (tasks(), Tmp::new());
+        let d = draft(NEW, range(4, 5));
+        let srv = refused();
+        let l = crate::textedit_job::tests::unread();
+        crate::textedit_job::tests::start(&l, late);
+        assert!(l.read().blocked.is_none());
+        assert!(t.submit(&tmp.0, &l, &d, true, true).is_err());
+        assert!(l.read().blocked.is_some() && l.plan(&d, false, true).is_err());
+        assert_eq!(N.load(SeqCst), 5);
+        assert!(t.next().is_none() && srv.accept().is_err(), "{}", url(&srv));
+        assert_eq!(std::fs::read_dir(&tmp.0).unwrap().count(), 0);
+
+        let l = crate::textedit_job::tests::unread();
+        crate::textedit_job::tests::start(&l, never);
+        assert!(t.submit(&tmp.0, &l, &d, true, true).is_ok());
+        assert!(t.next().is_some());
     }
 
     /// 读字没读完就点了“改”：等它判断完

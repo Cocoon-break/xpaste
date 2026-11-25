@@ -143,6 +143,8 @@ export const onTeOpen = (cb: (p: TeOpen) => void): Promise<UnlistenFn> => listen
 export const onTeClosed = (cb: () => void): Promise<UnlistenFn> => listen('te-closed', () => cb());
 /** 任务或图变了，载荷是整份任务列表；先取 teJob 再派发 */
 export const onTeTasks = (cb: (tasks: Task[]) => void): Promise<UnlistenFn> => listen<Task[]>('te-tasks', (e) => cb(e.payload));
+/** 打开时识别出错、没读成的图，要改之前再读时读成了，载荷是图的 id：重新取 teLines，像刚读完一样 */
+export const onTeLines = (cb: (job: string) => void): Promise<UnlistenFn> => listen<string>('te-lines', (e) => cb(e.payload));
 export const onTeToast = (cb: (text: string) => void): Promise<UnlistenFn> => listen<string>('te-toast', (e) => cb(e.payload));
 /** 改字关着时从系统的“打开方式”进来（后端已唤起面板），只发给面板 */
 export const onTeOff = (cb: () => void): Promise<UnlistenFn> => listen('te-off', () => cb());
