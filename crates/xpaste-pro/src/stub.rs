@@ -389,6 +389,14 @@ pub fn te_room(_strip: &TeStrip, right: f32) -> f32 {
     right
 }
 
+pub fn te_extend(_img: &TeImg, line: TeQuad, _k: f32) -> TeQuad {
+    line
+}
+
+pub fn te_remap(_old: &TeStrip, _new: &TeStrip, range: [f32; 2]) -> [f32; 2] {
+    range
+}
+
 pub fn te_crop(_img: &TeImg, _line: TeQuad, _range: [f32; 2], _neighbors: usize) -> TeCrop {
     TeCrop {
         png: Vec::new(),
