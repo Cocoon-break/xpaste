@@ -34,12 +34,21 @@ pub enum ImgFail {
     Moderation,
     /// OpenAI 兼容格式带参考图时被 400 / 415 / 422 拒绝：模型多半不收参考图
     NoRefs,
+    /// 改字：这次带了遮罩，被 400 / 415 / 422 拒绝（非审核）：接口多半不收遮罩
+    #[allow(dead_code)] // 改字后续任务接入
+    MaskRejected,
 }
 
 /// 连接 10 秒；读空闲 180 秒（生图慢，首段与段间都算）。
 const TIMEOUTS: Timeouts = Timeouts {
     connect: Duration::from_secs(10),
     read: Duration::from_secs(180),
+};
+
+/// 改字单次更慢：读空闲 400 秒。
+const EDIT_TIMEOUTS: Timeouts = Timeouts {
+    connect: Duration::from_secs(10),
+    read: Duration::from_secs(400),
 };
 
 const REF_EDGE: u32 = 1024;
@@ -50,10 +59,36 @@ pub fn unconfigured(c: &ImageCfg) -> bool {
 }
 
 pub async fn generate(c: &ImageCfg, prompt: &str, refs: &[Vec<u8>]) -> Result<Vec<u8>, ImgFail> {
+    send(c, TIMEOUTS, prompt, refs, None).await
+}
+
+/// 改字：裁块 + 可选遮罩（透明处为要改的）。只有 OpenAI 兼容格式带遮罩；
+/// 方舟、Gemini 把裁块当参考图走 `generate` 的做法。
+#[allow(dead_code)] // 改字后续任务接入
+pub struct EditReq<'a> {
+    pub prompt: &'a str,
+    pub crop: &'a [u8],
+    pub mask: Option<&'a [u8]>,
+}
+
+#[allow(dead_code)] // 改字后续任务接入
+pub async fn edit(c: &ImageCfg, r: EditReq<'_>) -> Result<Vec<u8>, ImgFail> {
+    send(c, EDIT_TIMEOUTS, r.prompt, &[r.crop.to_vec()], r.mask).await
+}
+
+async fn send(
+    c: &ImageCfg,
+    timeouts: Timeouts,
+    prompt: &str,
+    refs: &[Vec<u8>],
+    mask: Option<&[u8]>,
+) -> Result<Vec<u8>, ImgFail> {
     if unconfigured(c) {
         return Err(ImgFail::Base(Fail::Config));
     }
-    let client = build_client(is_loopback(&c.base_url), TIMEOUTS).map_err(ImgFail::Base)?;
+    // 只有 OpenAI 兼容格式真的发出遮罩
+    let mask = mask.filter(|_| c.format == Format::Openai);
+    let client = build_client(is_loopback(&c.base_url), timeouts).map_err(ImgFail::Base)?;
     let base = c.base_url.trim().trim_end_matches('/');
     let model = c.model.trim();
     let key = c.api_key.trim();
@@ -75,6 +110,13 @@ pub async fn generate(c: &ImageCfg, prompt: &str, refs: &[Vec<u8>]) -> Result<Ve
                     .mime_str(mime(r))
                     .map_err(|_| ImgFail::Base(Fail::Bad))?;
                 form = form.part("image[]", part);
+            }
+            if let Some(m) = mask {
+                let part = reqwest::multipart::Part::bytes(m.to_vec())
+                    .file_name("mask.png")
+                    .mime_str("image/png")
+                    .map_err(|_| ImgFail::Base(Fail::Bad))?;
+                form = form.part("mask", part);
             }
             client.post(format!("{base}/images/edits")).multipart(form)
         }
@@ -127,6 +169,8 @@ pub async fn generate(c: &ImageCfg, prompt: &str, refs: &[Vec<u8>]) -> Result<Ve
                 .any(|m| lower.contains(m));
         return Err(if moderated {
             ImgFail::Moderation
+        } else if mask.is_some() && matches!(s, 400 | 415 | 422) {
+            ImgFail::MaskRejected
         } else if !refs.is_empty() && c.format == Format::Openai && matches!(s, 400 | 415 | 422) {
             ImgFail::NoRefs
         } else {
@@ -198,6 +242,7 @@ pub fn reason(f: &ImgFail) -> String {
     match f {
         ImgFail::Moderation => "生图接口拒绝了这次请求（可能是内容审核），换个说法再试".into(),
         ImgFail::NoRefs => "这个模型不支持参考图，换一个模型，或拿掉参考图再试".into(),
+        ImgFail::MaskRejected => "这个接口不接受遮罩".into(),
         ImgFail::Base(f) => match f {
             Fail::Http(s @ (401 | 403 | 404 | 429)) => http_error(*s),
             Fail::Http(s) => format!("生图接口出错（HTTP {s}）"),
@@ -208,6 +253,15 @@ pub fn reason(f: &ImgFail) -> String {
             Fail::Internal(e) => e.to_string(),
             _ => "生图接口返回的内容无法识别".into(),
         },
+    }
+}
+
+/// 改字失败原因：`NoRefs` 在这里是“模型不能改图”，其余同 `reason`。
+#[allow(dead_code)] // 改字后续任务接入
+pub fn edit_reason(f: &ImgFail) -> String {
+    match f {
+        ImgFail::NoRefs => "这个模型不能改图，换一个模型再试".into(),
+        _ => reason(f),
     }
 }
 
@@ -612,5 +666,135 @@ pub(crate) mod tests {
             .get_pixel(10, 10)
             .0;
         assert!(px.iter().all(|&c| c >= 250), "{px:?}");
+    }
+
+    fn edit_ok(png: &[u8]) -> Reply {
+        json_reply(json!({"data":[{"b64_json": b64(png)}]}))
+    }
+
+    fn has(r: &Req, needle: &str) -> bool {
+        String::from_utf8_lossy(&r.body).contains(needle)
+    }
+
+    #[test]
+    fn edit_openai_sends_mask() {
+        let png = png_1x1();
+        let p2 = png.clone();
+        let (url, h) = fake(1, move |_| edit_ok(&p2));
+        let r = run(edit(
+            &cfg(Format::Openai, &url),
+            EditReq {
+                prompt: "p",
+                crop: &png,
+                mask: Some(&png),
+            },
+        ));
+        assert!(r.is_ok());
+        let seen = h.join().unwrap();
+        assert_eq!(seen[0].path, "/images/edits");
+        assert!(has(&seen[0], "name=\"image[]\""));
+        assert!(has(&seen[0], "name=\"mask\""));
+    }
+
+    #[test]
+    fn edit_mask_400_is_mask_rejected() {
+        let png = png_1x1();
+        for s in [400u16, 415, 422] {
+            for (mask, want_mask) in [(Some(&png[..]), true), (None, false)] {
+                let (url, _h) = fake(1, move |_| (s, "text/plain", b"nope".to_vec()));
+                let e = run(edit(
+                    &cfg(Format::Openai, &url),
+                    EditReq {
+                        prompt: "p",
+                        crop: &png,
+                        mask,
+                    },
+                ))
+                .err()
+                .unwrap();
+                if want_mask {
+                    assert!(matches!(e, ImgFail::MaskRejected), "{s}");
+                } else {
+                    assert!(matches!(e, ImgFail::NoRefs), "{s}");
+                    assert_eq!(edit_reason(&e), "这个模型不能改图，换一个模型再试");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn edit_moderation_beats_mask_rejected() {
+        let png = png_1x1();
+        let (url, _h) = fake(1, |_| {
+            (
+                400,
+                "application/json",
+                br#"{"error":{"code":"content_policy_violation"}}"#.to_vec(),
+            )
+        });
+        let e = run(edit(
+            &cfg(Format::Openai, &url),
+            EditReq {
+                prompt: "p",
+                crop: &png,
+                mask: Some(&png),
+            },
+        ))
+        .err()
+        .unwrap();
+        assert!(matches!(e, ImgFail::Moderation));
+    }
+
+    #[test]
+    fn edit_429_is_not_mask_rejected() {
+        let png = png_1x1();
+        let (url, _h) = fake(1, |_| (429, "text/plain", b"slow".to_vec()));
+        let e = run(edit(
+            &cfg(Format::Openai, &url),
+            EditReq {
+                prompt: "p",
+                crop: &png,
+                mask: Some(&png),
+            },
+        ))
+        .err()
+        .unwrap();
+        assert!(matches!(e, ImgFail::Base(Fail::Http(429))));
+    }
+
+    #[test]
+    fn edit_ark_gemini_ignore_mask() {
+        let png = png_1x1();
+        for f in [Format::Ark, Format::Gemini] {
+            let p2 = png.clone();
+            let (url, h) = fake(1, move |_| {
+                if f == Format::Gemini {
+                    json_reply(json!({"candidates":[{"content":{"parts":[
+                        {"inline_data":{"data": b64(&p2)}}]}}]}))
+                } else {
+                    edit_ok(&p2)
+                }
+            });
+            let r = run(edit(
+                &cfg(f, &url),
+                EditReq {
+                    prompt: "p",
+                    crop: &png,
+                    mask: Some(&png),
+                },
+            ));
+            assert!(r.is_ok());
+            let seen = h.join().unwrap();
+            assert!(!has(&seen[0], "mask"));
+            // 裁块当参考图带上
+            let b = seen[0].json();
+            assert!(b.to_string().contains(&b64(&png)));
+        }
+    }
+
+    #[test]
+    fn edit_reads_400s() {
+        assert_eq!(EDIT_TIMEOUTS.read, Duration::from_secs(400));
+        assert_eq!(TIMEOUTS.read, Duration::from_secs(180));
     }
 }
