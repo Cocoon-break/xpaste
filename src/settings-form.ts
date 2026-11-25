@@ -1,5 +1,6 @@
 // 设置表单 ⇄ Settings：校验与解析。纯函数。
 import type { PanelStyle, Recipe, RecQuality, Settings } from './api/types';
+import { fmtBytes } from './format.ts';
 
 /** 原型 submit 的校验：非空、50–5000、50 的整数倍。 */
 export function parseLimit(s: string): number | null {
@@ -140,3 +141,21 @@ export const memeStatsText = (count: number, bytes: number): string =>
 /** “文案”一组的状态：翻译的接口地址和模型 ID 都填了才算配好（取表单里未保存的值）。 */
 export const memeCaptionState = (baseUrl: string, model: string): string =>
   baseUrl.trim() && model.trim() ? `已配置：${model.trim()}` : '还没配好';
+
+/** 改字的“生图接口”一行：和表情包制作共用（取表单里未保存的值，口径同后端：地址和模型 ID 都填了）；没配好时按“怎么改”写后果。 */
+export function editApiState(mode: Settings['editMode'], baseUrl: string, model: string): { text: string; go: string } {
+  if (baseUrl.trim() && model.trim()) return { text: '已配好 · 和“表情包制作”共用', go: '去设置' };
+  return { text: mode === 'ai' ? '还没配好，“直接用 AI”改不了字' : '还没配好，只能改本机做得了的', go: '现在配' };
+}
+
+/** 改字的“最近改过”一行。坏了的不算张数、算字节：可能 0 张但占地方，也能清空。 */
+export const editRecentText = (count: number, bytes: number): string =>
+  bytes > 0 ? `${count} 张，占 ${fmtBytes(bytes)}` : '还没有改过的图';
+
+/** 清空“最近改过”的确认框 */
+export const editClearAsk = (count: number) => ({
+  title: '清空“最近改过”',
+  body: `将删除${count ? ` ${count} 张改过的图，连同每处改动和 AI 出的候选` : '里面剩下的文件'}，不能撤销；还在排队的不再改。原来的图片文件和历史记录不受影响`,
+  ok: count ? `删除 ${count} 张` : '删除',
+  danger: true,
+});

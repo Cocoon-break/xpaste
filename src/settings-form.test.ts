@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Settings } from './api/types';
 import {
-  memeCaptionState, memeStatsText, MEME_PRESETS, memePreset, providerAfterEdit, addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFrequent, parseIgnored, parseLimit, pickerOptions, removeIgnored, retentionFromOption,
+  editApiState, editClearAsk, editRecentText, memeCaptionState, memeStatsText, MEME_PRESETS, memePreset, providerAfterEdit, addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFrequent, parseIgnored, parseLimit, pickerOptions, removeIgnored, retentionFromOption,
 } from './settings-form.ts';
 
 test('parseLimit 只接受 50–5000 的 50 倍数', () => {
@@ -123,4 +123,26 @@ test('memeCaptionState 看翻译的地址和模型是否都填了', () => {
   assert.equal(memeCaptionState(' https://a/v1 ', ' gpt-4o-mini '), '已配置：gpt-4o-mini');
   assert.equal(memeCaptionState('', 'm'), '还没配好');
   assert.equal(memeCaptionState('https://a', '  '), '还没配好');
+});
+
+test('editApiState：没配时按“怎么改”写清后果', () => {
+  assert.deepEqual(editApiState('local', ' https://a/v1 ', ' m '), { text: '已配好 · 和“表情包制作”共用', go: '去设置' });
+  assert.deepEqual(editApiState('ai', 'https://a/v1', 'm'), { text: '已配好 · 和“表情包制作”共用', go: '去设置' });
+  assert.deepEqual(editApiState('local', '', 'm'), { text: '还没配好，只能改本机做得了的', go: '现在配' });
+  assert.deepEqual(editApiState('ai', 'https://a/v1', ' '), { text: '还没配好，“直接用 AI”改不了字', go: '现在配' });
+});
+
+test('editRecentText：张数和占用；0 张也可能占地方', () => {
+  assert.equal(editRecentText(0, 0), '还没有改过的图');
+  assert.equal(editRecentText(3, 5 * 1048576 + 52429), '3 张，占 5.1 MB');
+  assert.equal(editRecentText(0, 2 * 1048576), '0 张，占 2 MB');
+});
+
+test('editClearAsk：写明删几张、不能撤销', () => {
+  const a = editClearAsk(3);
+  assert.match(a.body, /3 张/);
+  assert.match(a.body, /不能撤销/);
+  assert.equal(a.ok, '删除 3 张');
+  assert.equal(a.danger, true);
+  assert.equal(editClearAsk(0).ok, '删除');
 });

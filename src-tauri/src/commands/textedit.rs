@@ -453,3 +453,44 @@ pub async fn te_recent_clear(app: AppHandle) -> Result<(), AppError> {
     })
     .await
 }
+
+#[cfg(test)]
+mod tests {
+    /// 某个函数的源码，到它的右花括号
+    fn body<'a>(src: &'a str, name: &str) -> &'a str {
+        let at = src
+            .find(&format!("pub async fn {name}("))
+            .or(src.find(&format!("pub fn {name}(")));
+        let s = &src[at.expect(name)..];
+        &s[..s.find("\n}").expect(name)]
+    }
+
+    /// 试用结束：会产出改动的命令都过 `editable`（它怎么判断见 textedit.rs 的测试）；
+    /// 看图和完成不看试用期，“最近改过”的照样能复制、存成文件
+    #[test]
+    fn expired_can_export_not_edit() {
+        const GATE: &str = "textedit::editable(&app)?;";
+        let src = include_str!("textedit.rs");
+        for name in [
+            "te_plan",
+            "te_run",
+            "te_local_patch",
+            "te_pick",
+            "te_undo",
+            "te_retry",
+        ] {
+            assert!(body(src, name).contains(GATE), "{name}");
+        }
+        for name in [
+            "te_finish",
+            "te_render",
+            "te_cand",
+            "te_recent",
+            "te_open_recent",
+        ] {
+            assert!(!body(src, name).contains("editable"), "{name}");
+        }
+        let finish = body(include_str!("../textedit_finish.rs"), "finish");
+        assert!(finish.contains("check_on(app)?;") && !finish.contains("editable"));
+    }
+}

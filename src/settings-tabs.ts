@@ -26,7 +26,7 @@ export const revealsFocus = (e: { key: string } & Mods): boolean =>
   !['Meta', 'Control', 'Alt', 'Shift'].includes(e.key) && !e.meta && !e.ctrl;
 
 /** 保存失败的错误该写在哪个快捷键录制框下（按控件所在标签显示红点、切换）；其余错误 null，走提示条。 */
-export function errorControl(kind: string, message: string): 'hotkey' | 'shotHotkey' | 'recHotkey' | 'trHotkey' | 'lineHotkey' | 'beltHotkey' | 'beltBackHotkey' | 'mixerHotkey' | 'memeHotkey' | null {
+export function errorControl(kind: string, message: string): 'hotkey' | 'shotHotkey' | 'recHotkey' | 'trHotkey' | 'lineHotkey' | 'beltHotkey' | 'beltBackHotkey' | 'mixerHotkey' | 'memeHotkey' | 'editHotkey' | null {
   const invalid = kind === 'invalidSettings';
   if (kind === 'hotkeyTaken') return 'hotkey';
   if (kind === 'shotHotkeyTaken' || (invalid && message.startsWith('截图快捷键'))) return 'shotHotkey';
@@ -37,5 +37,6 @@ export function errorControl(kind: string, message: string): 'hotkey' | 'shotHot
   if (invalid && message.startsWith('退回快捷键')) return 'beltBackHotkey';
   if (kind === 'mixerHotkeyTaken' || (invalid && message.startsWith('搅拌机快捷键'))) return 'mixerHotkey';
   if (kind === 'memeHotkeyTaken' || (invalid && message.startsWith('表情包快捷键'))) return 'memeHotkey';
+  if (kind === 'editHotkeyTaken' || (invalid && message.startsWith('改字快捷键'))) return 'editHotkey';
   return null;
 }

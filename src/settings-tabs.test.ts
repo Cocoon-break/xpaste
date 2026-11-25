@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { errorControl, revealsFocus, shownTabTarget, tabKeyTarget } from './settings-tabs.ts';
 
 test('←/→ 切到相邻标签，首尾循环', () => {
@@ -70,4 +71,38 @@ test('errorControl：传送带快捷键冲突', () => {
   assert.equal(errorControl('beltHotkeyTaken', '传送带快捷键已被其他应用占用，请换一个'), 'beltHotkey');
   assert.equal(errorControl('invalidSettings', '退回快捷键至少需要包含 Mod 或 Alt'), 'beltBackHotkey');
   assert.equal(errorControl('invalidSettings', '退回快捷键不能与传送带快捷键相同'), 'beltBackHotkey');
+});
+
+test('errorControl：改字快捷键冲突', () => {
+  assert.equal(errorControl('editHotkeyTaken', '改字快捷键已被其他应用占用，请换一个'), 'editHotkey');
+  assert.equal(errorControl('invalidSettings', '改字快捷键不能与表情包快捷键相同'), 'editHotkey');
+  assert.equal(errorControl('invalidSettings', '改字快捷键至少需要包含 Mod 或 Alt'), 'editHotkey');
+  assert.equal(errorControl('invalidSettings', '改字方式只能是只在本机改或交给生图接口'), null);
+});
+
+// —— 设置 → Pro → 改字 ——（只读 index.html、main.ts 的文本，同 a11y.test.ts）
+const read = (f: string) => readFileSync(new URL(f, import.meta.url), 'utf8');
+const html = read('../index.html'), main = read('./main.ts');
+const proPanel = /<section[^>]*id="st-pro"[\s\S]*?<\/section>/.exec(html)![0];
+
+test('改字只在“Pro”标签里：概览一行加一个子页，没有 Pro 时整个标签不出现', () => {
+  for (const id of ['proFeatEdit', 'proEditPage', 'editOn', 'editHotkey', 'editMode', 'editApi', 'editRecent']) {
+    assert.ok(proPanel.includes(`id="${id}"`), `“Pro”标签里缺少 #${id}`);
+    assert.equal(html.split(`id="${id}"`).length, 2, `#${id} 不止一个`);
+  }
+  assert.match(proPanel, /data-pro-go="proEditPage"[^>]*>[\s\S]*?<b>改字<\/b>/);
+  assert.match(html, /id="st-tab-pro"[^>]* hidden>/);
+  assert.match(proPanel, /^<section[^>]* hidden>/);
+  assert.ok(main.includes("$('#st-tab-pro').hidden = $('#st-pro').hidden = !S.line.available;"));
+});
+
+test('“怎么改”是同一组单选：方向键由浏览器切换', () => {
+  const group = /<div class="tr-pick" id="editMode" role="radiogroup" aria-labelledby="editModeLabel">[\s\S]*?<\/div>/.exec(proPanel)![0];
+  assert.deepEqual([...group.matchAll(/<input type="radio" name="editMode" value="(\w+)">/g)].map((m) => m[1]), ['local', 'ai']);
+  assert.ok(!/tabindex|preventDefault/.test(group));
+});
+
+test('清空“最近改过”之前先确认', () => {
+  assert.equal(main.split('teRecentClear()').length, 2, '只有一处会清空');
+  assert.match(main, /if \(!\(await confirm\(editClearAsk\(n\)\)\)\) return;[\s\S]{0,200}teRecentClear\(\)/);
 });

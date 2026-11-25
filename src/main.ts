@@ -25,7 +25,7 @@ import { lineDragDrop, lineDragHover, lineHangFromPanel, lineHide, lineSideHint,
 import { beltPut, onBeltPutSelected } from './api/belt';
 import { mixerDefaults, mixerPut, onMixerPutSelected } from './api/mixer';
 import { memeLibraryStats, memeOpen, memeOpenScene, memeTaskOpen, memeTasks, memeTestImage, onMemeBack, onMemeReveal, onMemeTasks, type TaskView } from './api/meme';
-import { onTeOff, teOpen } from './api/textedit';
+import { onTeOff, teOpen, teRecentClear, teRecentStats } from './api/textedit';
 import { cellClick, cellHTML, foldSets, gridMove, ofSource, previewHTML, restackOnRemove, taskCellHTML, taskTick, type Arrow, type MemeSource } from './meme-grid';
 import { mountRecipes } from './recipes';
 import { deviceLine, proCard, proControls, proLine } from './pro-status';
@@ -51,7 +51,7 @@ import {
   centerWin, clampWin, DAY, followNow, HOUR, layoutBars, minorDayTicks, miniWin, panWin, sameColumns, spanOf, spectrumStat, staggerIndex,
   ticks as winTicks, winLabel, xOf, zoomWin, type Layout, type Win,
 } from './spectrum';
-import { MEME_PRESETS, memeCaptionState, type MemeField, type MemeFormat, memePreset, memeStatsText, providerAfterEdit, addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFrequent, parseLimit, pickerOptions, removeIgnored } from './settings-form';
+import { editApiState, editClearAsk, editRecentText, MEME_PRESETS, memeCaptionState, type MemeField, type MemeFormat, memePreset, memeStatsText, providerAfterEdit, addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFrequent, parseLimit, pickerOptions, removeIgnored } from './settings-form';
 import { composing, justComposed } from './ime';
 import { errorControl, revealsFocus, shownTabTarget } from './settings-tabs';
 import {
@@ -2016,6 +2016,7 @@ const lineKey = optHotkey('lineHotkey', '把最近复制的一条挂到晾衣绳
 const beltKey = optHotkey('beltHotkey', '打开或关闭传送带；面板开着时，把选中的记录放上去（多选则按选中的先后）');
 const beltBackKey = optHotkey('beltBackHotkey', '退回上一件：带子往回走一格');
 const memeKey = optHotkey('memeHotkey', '打开空白的表情包制作窗口；面板里选中记录时按 ⌘E 带着它打开');
+const editKey = optHotkey('editHotkey', '框屏幕上的图，或用刚复制的图');
 const mixerKey = optHotkey('mixerHotkey', '打开或关闭搅拌机；面板开着时，把选中的记录放进去');
 
 // “Pro”标签（只在含晾衣绳的版本里显示）：状态行、联网激活、设备满员时解绑、购买入口、在本机停用。
@@ -2284,6 +2285,7 @@ function proGo(id: string, focus?: HTMLElement | null, animate = true) {
     }
     $('#st-pro').scrollTop = 0;
     if (id === 'proHome') paintProHome();
+    else if (id === 'proEditPage') paintEditApi();
   }
   if (focus === undefined) focus = id === 'proHome' ? $(`[data-pro-go="${from}"]`) : $(`#${id} .pro-back`);
   focus?.focus({ preventScroll: true });
@@ -2313,6 +2315,9 @@ function paintProHome() {
   paintMemeSum();
   paintMemeCaption();
   $('#proFeatMeme').classList.toggle('off', !memeOnIn.checked);
+  editOnQuick.checked = editOnIn.checked;
+  featSummary($('#proSumEdit'), editOnIn.checked, editKey.pending, draftEditMode === 'ai' ? '直接用 AI' : '先在本机改');
+  $('#proFeatEdit').classList.toggle('off', !editOnIn.checked);
   $('#proFeatLine').classList.toggle('off', !draftLineEnabled);
   $('#proFeatBelt').classList.toggle('off', !beltOnIn.checked);
   $('#proFeatMixer').classList.toggle('off', !mixerOnIn.checked);
@@ -2323,9 +2328,16 @@ function paintProHome() {
     el.classList.toggle('line-off', !mixerOnIn.checked);
     el.inert = !mixerOnIn.checked;
   }
+  // 生图接口和改字共用：表情包制作关着、改字开着时照常能填
   for (const el of document.querySelectorAll<HTMLElement>('#proMemePage > .line, #proMemePage > .field, #proMemePage > .help')) {
-    el.classList.toggle('line-off', !memeOnIn.checked);
-    el.inert = !memeOnIn.checked;
+    const off = !memeOnIn.checked && !('iface' in el.dataset && editOnIn.checked);
+    el.classList.toggle('line-off', off);
+    el.inert = off;
+  }
+  // 改字关着时下面几项变淡、不可操作；改过的图还在，照样能清空
+  for (const el of document.querySelectorAll<HTMLElement>('#proEditPage > .field, #proEditPage > .line:not(#editRecentRow)')) {
+    el.classList.toggle('line-off', !editOnIn.checked);
+    el.inert = !editOnIn.checked;
   }
 }
 $('#st-pro').addEventListener('click', (e) => {
@@ -2450,6 +2462,50 @@ memeOnQuick.addEventListener('change', () => {
 memeOnIn.addEventListener('change', paintProHome);
 const paintMemeCaption = () => ($('#memeCaption').textContent = memeCaptionState(trBaseIn.value, trModelIn.value));
 $('#memeTrGo').addEventListener('click', () => showStControl(trBaseIn));
+// 改字：开关、快捷键、怎么改都是草稿，保存时写回；清空“最近改过”当场生效
+const editOnIn = $<HTMLInputElement>('#editOn'), editOnQuick = $<HTMLInputElement>('#editOnQuick'), editModeEl = $('#editMode');
+const editClearBtn = $<HTMLButtonElement>('#editClear'), editRecentEl = $('#editRecent');
+let draftEditMode: Settings['editMode'] = 'local';
+function paintEditApi() {
+  const s = editApiState(draftEditMode, memeUrlIn.value, memeModelIn.value);
+  $('#editApi').textContent = s.text;
+  $('#editApiGo').textContent = s.go;
+}
+const paintEditRecent = (): Promise<number> => teRecentStats().then(([n, b]) => {
+  editRecentEl.textContent = editRecentText(n, b);
+  editClearBtn.disabled = !b;
+  return n;
+});
+editOnQuick.addEventListener('change', () => {
+  editOnIn.checked = editOnQuick.checked;
+  paintProHome();
+});
+editOnIn.addEventListener('change', paintProHome);
+// 原生单选：点击与方向键切换都由浏览器处理
+editModeEl.addEventListener('change', (e) => {
+  draftEditMode = (e.target as HTMLInputElement).value as Settings['editMode'];
+  paintEditApi();
+});
+// 生图接口在“表情包制作”的子页里，从服务商那一项开始
+function goImageApi() {
+  showStControl(memeProvEl.querySelector<HTMLElement>('[aria-checked="true"]')!);
+  memeProvEl.closest('.field')!.scrollIntoView({ block: 'start' });
+}
+$('#editApiGo').addEventListener('click', goImageApi);
+editClearBtn.addEventListener('click', () => void (async () => {
+  try {
+    // 张数以点的这一刻为准：设置开着时可能又改好了一张
+    const n = await paintEditRecent();
+    if (editClearBtn.disabled) return;
+    if (!(await confirm(editClearAsk(n)))) return;
+    // 清空后按钮不可点，接不住焦点：确认框关了回到“‹ Pro”
+    cfReturn = $('#proEditPage .pro-back');
+    await teRecentClear();
+    await paintEditRecent();
+  } catch (e) {
+    editRecentEl.textContent = (e as AppError).message;
+  }
+})());
 proLicCode.addEventListener('click', () => proGo('proLicPage', proCodeIn));
 proLicManage.addEventListener('click', () => proGo('proLicPage'));
 proLicBuy.addEventListener('click', () => void proBuy().catch((err: AppError) => {
@@ -2885,6 +2941,13 @@ function openSettings() {
   paintMemeIface();
   $('#memeStats').textContent = '';
   void memeLibraryStats().then(([n, b]) => ($('#memeStats').textContent = memeStatsText(n, b)), (e: AppError) => void info(`读取表情包库统计失败 kind=${e.kind}`));
+  editKey.reset(st.editHotkey);
+  editOnIn.checked = st.editEnabled;
+  draftEditMode = st.editMode;
+  for (const i of editModeEl.querySelectorAll('input')) i.checked = i.value === draftEditMode;
+  editRecentEl.textContent = '';
+  editClearBtn.disabled = true;
+  if (S.line.available) paintEditRecent().catch((e: AppError) => void info(`读取“最近改过”统计失败 kind=${e.kind}`));
   mixerKey.reset(st.mixerHotkey);
   mixerOnIn.checked = st.mixerEnabled;
   draftRecipes = st.mixerRecipes;
@@ -2931,6 +2994,7 @@ function openSettings() {
     if (h.belt && S.line.available) beltKey.setHelp(taken('传送带'), true);
     if (h.mixer && S.line.available) mixerKey.setHelp(taken('搅拌机'), true);
     if (h.meme && S.line.available) memeKey.setHelp(taken('表情包'), true);
+    if (h.edit && S.line.available) editKey.setHelp(taken('改字'), true);
   }, (e: AppError) => void info(`读取快捷键状态失败 kind=${e.kind}`));
   shotDir.pending = st.shotDir;
   shotDir.paint();
@@ -3075,6 +3139,7 @@ async function submitSettings() {
     lineAppear: draftPace.lineAppear, lineLeave: draftPace.lineLeave,
     memeEnabled: memeOnIn.checked, memeHotkey: memeKey.pending, memeImageProvider: memeProvider, memeImageFormat: memeFormat,
     memeImageBaseUrl: memeUrlIn.value.trim(), memeImageApiKey: memeKeyIn.value, memeImageModel: memeModelIn.value.trim(),
+    editEnabled: editOnIn.checked, editHotkey: editKey.pending, editMode: draftEditMode,
   });
   saving = true;
   try {
@@ -3119,7 +3184,7 @@ async function submitSettings() {
       showStControl(hotkeyIn);
       setHotkeyHelp(err.message, true);
     } else if (at) {
-      const f = { shotHotkey: shotKey, recHotkey: recKey, trHotkey: trKey, lineHotkey: lineKey, beltHotkey: beltKey, beltBackHotkey: beltBackKey, mixerHotkey: mixerKey, memeHotkey: memeKey }[at];
+      const f = { shotHotkey: shotKey, recHotkey: recKey, trHotkey: trKey, lineHotkey: lineKey, beltHotkey: beltKey, beltBackHotkey: beltBackKey, mixerHotkey: mixerKey, memeHotkey: memeKey, editHotkey: editKey }[at];
       showStControl(f.input);
       f.setHelp(err.message, true);
     } else toast(err.message);
@@ -3625,12 +3690,12 @@ await onOpenSettings((tab) => {
     if (tab !== 'mixer') recipes.edit(tab.slice('mixer:'.length));
     return;
   }
-  // 表情包制作窗口里的“生图接口还没配好［去设置］”：打开 Pro → 表情包制作
+  // 表情包制作、改字窗口里的“生图接口还没配好［去设置］”：打开 Pro → 表情包制作；它关着时直接到生图接口
   if (tab === 'meme' && S.line.available) {
     openSettingsAt('st-tab-pro');
     if (!dlg.open) return;
     selectStTab(stTabs.findIndex((t) => t.id === 'st-tab-pro'), false);
-    return proGo('proMemePage');
+    return memeOnIn.checked ? proGo('proMemePage') : goImageApi();
   }
   // 托盘“改字设置…”、改字窗口里的“去设置”
   if (tab === 'edit' && S.line.available) return goEditSettings();
@@ -3702,15 +3767,15 @@ await onShotNeedPermission(({ pane, mode }) =>
 // 只认面板有焦点时的按键：失焦时后端不发到这里，这里再防一道
 const hkOn = (el: Element) => document.activeElement === el && document.hasFocus();
 const hkOpts = [[shotKey, '截图', 'shot'], [recKey, '录屏', 'rec'], [trKey, '翻译', 'translate'], [lineKey, '便签', 'line'], [beltKey, '传送带', 'belt'],
-  [beltBackKey, '退回', 'beltBack'], [mixerKey, '搅拌机', 'mixer'], [memeKey, '表情包', 'meme']] as const;
+  [beltBackKey, '退回', 'beltBack'], [mixerKey, '搅拌机', 'mixer'], [memeKey, '表情包', 'meme'], [editKey, '改字', 'edit']] as const;
 await onHotkeyPressed((role) => {
   // 被自己的全局快捷键拦下的组合也算收到了主键，松开修饰键时不报“没收到组合键”
   hotkeyGot = true;
   if (role !== 'panel') {
-    const hit = hkOpts.find((o) => o[2] === role), self = hit?.[0], name = hit?.[1] ?? '改字';
+    const [self, name] = hkOpts.find((o) => o[2] === role)!;
     const other = hkOpts.find(([f]) => f !== self && hkOn(f.input));
     const pressed = { shot: S.settings.shotHotkey, rec: S.settings.recHotkey, translate: S.settings.translateHotkey, meme: S.settings.memeHotkey, edit: S.settings.editHotkey }[role];
-    if (self && hkOn(self.input)) self.record(pressed);
+    if (hkOn(self.input)) self.record(pressed);
     else if (hkOn(hotkeyIn)) setHotkeyHelp(`不能与${name}快捷键相同`, true);
     else if (other) other[0].setHelp(`${other[1]}快捷键不能与${name}快捷键相同`, true);
     // 表情包：焦点不在任何录制框里时带着选中的（多选按先后）打开制作窗口，同 Mod+E；没有选中、选中的都做不了就空白打开
@@ -3982,7 +4047,9 @@ function editText(id: number) {
 }
 function goEditSettings() {
   openSettingsAt('st-tab-pro');
-  if (dlg.open) selectStTab(stTabs.findIndex((t) => t.id === 'st-tab-pro'), false);
+  if (!dlg.open) return;
+  selectStTab(stTabs.findIndex((t) => t.id === 'st-tab-pro'), false);
+  proGo('proEditPage');
 }
 // 接着改：按库里的做法打开制作窗口；试用过期时由制作窗口提示
 function editMeme(id: number) {

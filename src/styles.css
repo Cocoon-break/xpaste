@@ -717,6 +717,8 @@ dialog > form { display: contents; }
 /* 设置“Pro”：概览（授权卡片 + 功能清单）和各功能的子页；进子页从右边滑进，返回从左边滑进，减少动态效果时只淡入 */
 .pro-page { display: grid; gap: 16px; align-content: start; min-width: 0; }
 .pro-page[hidden] { display: none; }
+/* 从“改字”跳来看生图接口时，服务商上面留一点：标题不贴着标签栏 */
+.pro-page > [data-iface] { scroll-margin-top: 24px; }
 .pro-page.in-r { animation: proInR 260ms var(--ease-enter) both; }
 .pro-page.in-l { animation: proInL 260ms var(--ease-enter) both; }
 @keyframes proInR { from { opacity: 0; transform: translateX(16px); } }

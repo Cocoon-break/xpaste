@@ -82,7 +82,7 @@ export interface GenReq {
   /** 草图（负数 id）由页面滤掉，另经 `sketch` 带文件名 */
   refs: RefKey[]; sketch: string | null; base: number | null;
 }
-/** 一个 AI 任务（后端排队，不跟窗口走）。`startedMs` 是开始画的 Unix 毫秒，秒数页面自己走；`ahead` 是前面还在排队的个数；
+/** 一个 AI 任务（后端排队，不跟窗口走）。`startedMs` 是开始画的 Unix 毫秒，秒数页面自己走；`ahead` 是前面还在排队的个数（改字的也算）；
  *  画好的结果在 `ids`，网格没画规整时 `ids` 为空、整张图是 `irregular`；`title`、`scene` 是发起时传的，原样带回 */
 export interface TaskView {
   id: number; kind: 'one' | 'set' | 'act'; state: 'queue' | 'run' | 'done' | 'fail';

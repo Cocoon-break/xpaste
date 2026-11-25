@@ -88,7 +88,7 @@ export interface Settings {
   editEnabled: boolean;
   /** 打开改字窗口的全局快捷键；'' 表示不启用 */
   editHotkey: string;
-  /** 怎么改：只在本机改 | 交给生图接口 */
+  /** 怎么改：先在本机改 | 直接用 AI */
   editMode: 'local' | 'ai';
   /** 生图服务商预设键名，或 custom */
   memeImageProvider: string;
