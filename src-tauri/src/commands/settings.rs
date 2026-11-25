@@ -296,7 +296,7 @@ pub fn commit_settings(
         settings.yield_meme_hotkey();
     }
     crate::meme::normalize_settings(&mut settings);
-    // 不含 Pro 的版本里设置页没有改字快捷键：同样让出
+    // 不含晾衣绳的版本里设置页没有改字快捷键：同样让出
     if !crate::hotkey::edit_enabled() {
         settings.yield_edit_hotkey();
     }

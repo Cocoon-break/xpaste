@@ -40,9 +40,9 @@ impl<'a> Keys<'a> {
     }
 }
 
-/// 改字（Pro）是否编入此构建；没有 Pro 时不注册快捷键。设置里的总开关由 `effective_edit_hotkey` 体现。
+/// 改字（Pro）是否可用（与表情包同一个条件，含正版判断）；不可用时不注册快捷键。设置里的总开关由 `effective_edit_hotkey` 体现。
 pub fn edit_enabled() -> bool {
-    xpaste_pro::AVAILABLE
+    crate::line::enabled()
 }
 
 /// 注销全部后注册唤起、截图、录屏、翻译、便签、传送带、搅拌机、表情包与改字快捷键（后八个为空串表示不启用，跳过；不含晾衣绳的版本不注册便签）；任何失败都视为被占用。
@@ -104,8 +104,8 @@ fn first_failure(
     }
 }
 
-/// 截图、录屏、翻译、便签、传送带、搅拌机快捷键各自是否该注册却没注册上（空串不启用；Windows 上录屏从不注册，
-/// 不含晾衣绳的版本不注册便签、传送带和搅拌机，不算）。
+/// 截图、录屏、翻译、便签、传送带、搅拌机、表情包、改字快捷键各自是否该注册却没注册上（空串不启用；Windows 上录屏从不注册，
+/// 不含晾衣绳的版本不注册便签、传送带、搅拌机、表情包和改字，不算）。
 #[allow(clippy::too_many_arguments)]
 pub fn unregistered(
     app: &AppHandle,
@@ -396,6 +396,10 @@ mod tests {
         assert_eq!(
             failure_notice(false, false, false, false, false, true, true, false, false),
             Some(format!("传送带与搅拌机{tail}"))
+        );
+        assert_eq!(
+            failure_notice(false, false, false, false, false, false, false, false, true),
+            Some(format!("改字{tail}"))
         );
     }
 
