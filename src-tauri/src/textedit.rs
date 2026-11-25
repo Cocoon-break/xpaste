@@ -20,6 +20,7 @@ use crate::state::AppState;
 use crate::textedit_job::{self as job, GONE, JobView, Live, lock, no, not_saved};
 use crate::textedit_store as store;
 use crate::textedit_tasks::{Tasks, tasks};
+use crate::textedit_window;
 
 pub const LABEL: &str = "textedit";
 /// 图最多多少像素
@@ -28,18 +29,30 @@ const MAX_PX: u64 = 100_000_000;
 const MAX_BYTES: u64 = 1 << 30;
 
 const OFF: &str = "改字没有开启";
+/// 一次给了多个文件，只用一个
+const ONE: &str = "一次改一张";
 const EXPIRED: &str = "试用期已结束，改字需要授权";
 const UNUSABLE: &str = "这条改不了字";
 
 // ---- 打开 ----
 
-/// 从哪儿来。`Shot` 的图是刚截的，`rect` 是它在屏幕上的位置
-#[allow(dead_code)] // 各入口、完成动作接上后删
+/// 从哪儿来。`Shot` 的图是刚截的，`rect` 是它在屏幕上的位置（原生单位，交给 `shot::pin_at`）
 pub enum Source {
-    Shot { rect: Rect, png: Vec<u8> },
-    Clip { record: i64 },
-    Panel { record: i64, file: Option<u32> },
-    Pin { n: u64 },
+    Shot {
+        #[allow(dead_code)] // “钉回原处”接上后删
+        rect: Rect,
+        png: Vec<u8>,
+    },
+    Clip {
+        record: i64,
+    },
+    Panel {
+        record: i64,
+        file: Option<u32>,
+    },
+    Pin {
+        n: u64,
+    },
     File(PathBuf),
     Blank,
     Recent(String),
@@ -106,6 +119,18 @@ pub fn decode(bytes: &[u8]) -> Result<(TeImg, Option<Vec<u8>>), OpenFail> {
     Ok((img, icc))
 }
 
+/// 图片文件摆正后的宽高，只读文件头
+pub fn dims(path: &Path) -> Option<(u32, u32)> {
+    let r = ImageReader::open(path).ok()?.with_guessed_format().ok()?;
+    let mut d = r.into_decoder().ok()?;
+    let (w, h) = d.dimensions();
+    use image::metadata::Orientation::*;
+    Some(match d.orientation().unwrap_or(NoTransforms) {
+        Rotate90 | Rotate270 | Rotate90FlipH | Rotate270FlipH => (h, w),
+        _ => (w, h),
+    })
+}
+
 /// 来源的图片文件字节
 fn bytes_of(state: &AppState, src: &mut Source) -> Result<Vec<u8>, AppError> {
     let unreadable = || no(OpenFail::Unreadable.text());
@@ -161,12 +186,15 @@ pub struct Config {
     pub api: bool,
 }
 
+/// 一次打开：载荷，和打开后的提示
+type Opening = (OpenPayload, Option<&'static str>);
+
 struct Runtime {
     open: bool,
     /// 页面把事件都听上了
     ready: bool,
     /// 听上之前的最后一次打开
-    held: Option<OpenPayload>,
+    held: Option<Opening>,
     origin: Origin,
     cur: Option<Arc<Live>>,
     /// 窗口关着时改好了几处
@@ -182,15 +210,36 @@ fn admit(shown: &mut u64, seq: u64) -> bool {
     ok
 }
 
-static RT: Mutex<Runtime> = Mutex::new(Runtime {
-    open: false,
-    ready: false,
-    held: None,
-    origin: meme::NOWHERE,
-    cur: None,
-    unseen: 0,
-    shown: 0,
-});
+impl Runtime {
+    const fn new() -> Self {
+        Runtime {
+            open: false,
+            ready: false,
+            held: None,
+            origin: meme::NOWHERE,
+            cur: None,
+            unseen: 0,
+            shown: 0,
+        }
+    }
+
+    /// 页面就绪了就交回去发，没有就先留着
+    fn deliver(&mut self, o: Opening) -> Option<Opening> {
+        if self.ready {
+            return Some(o);
+        }
+        self.held = Some(o);
+        None
+    }
+
+    /// 页面就绪：要补发的那次打开
+    fn page_ready(&mut self) -> Option<Opening> {
+        self.ready = true;
+        self.held.take()
+    }
+}
+
+static RT: Mutex<Runtime> = Mutex::new(Runtime::new());
 
 /// 还有人拿着的图：窗口里的、有任务没结束的。同一张图只有一份
 static LIVE: Mutex<Vec<Weak<Live>>> = Mutex::new(Vec::new());
@@ -214,6 +263,11 @@ fn expired(app: &AppHandle) -> bool {
 /// 现在能不能改；会产出改动的命令都先问它
 pub fn editable(app: &AppHandle) -> Result<(), AppError> {
     may_edit(on(app), || expired(app)).map_err(no)
+}
+
+/// 没开启时返回原因
+pub fn check_on(app: &AppHandle) -> Result<(), AppError> {
+    on(app).then_some(()).ok_or_else(|| no(OFF))
 }
 
 fn may_edit(on: bool, expired: impl FnOnce() -> bool) -> Result<(), &'static str> {
@@ -274,29 +328,119 @@ pub fn find(app: &AppHandle, id: &str) -> Result<Arc<Live>, AppError> {
 
 /// 打开一张图，换掉窗口里的。粘贴目标按这一刻的前台应用记。要读文件、解码，不在主线程调用
 pub fn open(app: &AppHandle, src: Source) -> Result<(), AppError> {
+    open_noted(app, src, None)
+}
+
+/// 同 `open`，窗口里另给一句提示
+fn open_noted(app: &AppHandle, src: Source, note: Option<&'static str>) -> Result<(), AppError> {
     let from = src.kind();
     let entry = match src {
         Source::Panel { .. } => Entry::Panel,
         Source::Blank => Entry::Tray,
         _ => Entry::Other,
     };
-    open_as(app, src, from, Some(entry))
+    open_as(app, src, from, Some(entry), note)
 }
 
 /// 主线程上的入口用：到后台打开，打不开的提示
-#[allow(dead_code)] // 各入口接上后删
 pub fn open_bg(app: &AppHandle, src: Source) {
+    open_noted_bg(app, src, None);
+}
+
+fn open_noted_bg(app: &AppHandle, src: Source, note: Option<&'static str>) {
     let app = app.clone();
     crate::housekeeping::spawn("xpaste-textedit-open", move || {
-        if let Err(e) = open(&app, src) {
+        if let Err(e) = open_noted(&app, src, note) {
             toast(&app, &e.to_string());
         }
     });
 }
 
-/// 窗口里换一张（拖进来的、`⌘V`、最近的图、最近改过）：来处和粘贴目标不变
+/// 窗口里换一张（`⌘V`、最近的图、最近改过）：来处和粘贴目标不变
 pub fn open_inside(app: &AppHandle, src: Source, from: &'static str) -> Result<(), AppError> {
-    open_as(app, src, from, None)
+    open_as(app, src, from, None, None)
+}
+
+/// 拖进窗口的文件：同 `open_inside`，多个的只用一个
+pub fn open_dropped(app: &AppHandle, paths: &[PathBuf]) -> Result<(), AppError> {
+    let Some((p, note)) = pick_file(paths) else {
+        return Ok(());
+    };
+    open_as(app, Source::File(p.into()), "file", None, note)
+}
+
+// ---- 系统的“打开方式” ----
+
+/// 改得了的图片文件的扩展名
+const EXTS: [&str; 8] = ["png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "gif"];
+
+fn is_image(p: &Path) -> bool {
+    p.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| EXTS.iter().any(|x| e.eq_ignore_ascii_case(x)))
+}
+
+/// 命令行参数里的图片文件；第一项是程序自己
+pub fn argv_files(argv: &[String]) -> Vec<PathBuf> {
+    argv.iter()
+        .skip(1)
+        .filter(|a| !a.starts_with('-') && !a.starts_with("xpaste://"))
+        .map(PathBuf::from)
+        .filter(|p| is_image(p))
+        .collect()
+}
+
+/// 用哪个文件：第一个图片，一个图片都没有就第一个；给了多个的带一句提示
+fn pick_file(files: &[PathBuf]) -> Option<(&Path, Option<&'static str>)> {
+    let p = files.iter().find(|p| is_image(p)).or(files.first())?;
+    Some((p, (files.len() > 1).then_some(ONE)))
+}
+
+type Picked<'a> = (&'a Path, Option<&'static str>);
+
+/// 打开哪个文件；没开启时是给用户看的原因；没有文件为 None
+fn route_files(on: bool, files: &[PathBuf]) -> Option<Result<Picked<'_>, &'static str>> {
+    pick_file(files).map(|p| on.then_some(p).ok_or(OFF))
+}
+
+/// 应用还没启动完就来的文件（macOS 上被文件拉起时系统在启动完成之前就发来）
+static EARLY: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+/// 系统“打开方式”带来的文件。没有文件、这个构建没有改字时返回 false，调用方照常
+pub fn opened(app: &AppHandle, files: Vec<PathBuf>) -> bool {
+    if files.is_empty() || !crate::hotkey::edit_enabled() {
+        return false;
+    }
+    if app.try_state::<AppState>().is_none() {
+        *lock(&EARLY) = files;
+        return true;
+    }
+    match route_files(on(app), &files) {
+        None => return false,
+        Some(Ok((p, note))) => open_noted_bg(app, Source::File(p.into()), note),
+        Some(Err(why)) => {
+            log::info!("改字 没有开启，不打开文件");
+            // 面板页面还没就绪（刚启动）时它收不到，改发系统通知
+            if crate::panel::page_ready() {
+                crate::panel::show(app, None, crate::panel::Trigger::Tray);
+                // 排在面板显示之后发：panel-shown 会重画列表
+                on_main(app, |app| emit_to(app, "panel", events::TE_OFF, ()));
+            } else {
+                crate::notify(app, why);
+            }
+        }
+    }
+    true
+}
+
+/// 启动完成：打开启动参数和启动完成之前来的文件
+pub fn start(app: &AppHandle) {
+    let argv: Vec<String> = std::env::args_os()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    let mut files = std::mem::take(&mut *lock(&EARLY));
+    files.extend(argv_files(&argv));
+    opened(app, files);
 }
 
 fn open_as(
@@ -304,10 +448,9 @@ fn open_as(
     mut src: Source,
     from: &'static str,
     entry: Option<Entry>,
+    note: Option<&'static str>,
 ) -> Result<(), AppError> {
-    if !on(app) {
-        return Err(no(OFF));
-    }
+    check_on(app)?;
     let seq = OPENS.fetch_add(1, Ordering::SeqCst) + 1;
     let origin = entry.map(|e| meme::arrive(None, e, meme::foreground));
     let expired = expired(app);
@@ -322,7 +465,7 @@ fn open_as(
             Some(enlist(Live::fresh(img, icc), None))
         }
     };
-    let target = {
+    let (target, fresh) = {
         let mut rt = lock(&RT);
         // 又开了一张，或者窗口里换图时窗口已经关了
         if (origin.is_none() && !rt.open) || !admit(&mut rt.shown, seq) {
@@ -331,10 +474,10 @@ fn open_as(
         if let Some(o) = origin {
             rt.origin = o;
         }
-        rt.open = true;
+        let fresh = !std::mem::replace(&mut rt.open, true);
         rt.unseen = 0;
         rt.cur.clone_from(&live);
-        rt.origin.target.clone()
+        (rt.origin.target.clone(), fresh)
     };
     tasks().sweep();
     log::info!(
@@ -358,40 +501,35 @@ fn open_as(
         expired,
         config: config(app),
     };
-    show(app, payload);
+    show(app, (payload, note), fresh);
     Ok(())
 }
 
-/// 显示窗口，把载荷发给页面；页面还没把事件听上时先留着
-fn show(app: &AppHandle, payload: OpenPayload) {
+/// 显示窗口，把载荷发给页面；页面还没把事件听上时先留着。`fresh` 时先摆好位置
+fn show(app: &AppHandle, opening: Opening, fresh: bool) {
     on_main(app, move |app| {
-        if let Some(w) = app.get_webview_window(LABEL)
-            && let Err(e) = w.show().and_then(|()| w.set_focus())
-        {
-            log::warn!("显示改字窗口失败：{e}");
-        }
-        let mut rt = lock(&RT);
-        if rt.ready {
-            drop(rt);
-            emit_to(app, LABEL, events::TE_OPEN, payload);
-        } else {
-            rt.held = Some(payload);
-        }
+        textedit_window::show(app, fresh);
+        let now = lock(&RT).deliver(opening);
+        send(app, now);
     });
 }
 
 /// 页面说事件都听上了：补发留着的那次打开
 pub fn ready(app: &AppHandle) {
     on_main(app, |app| {
-        let held = {
-            let mut rt = lock(&RT);
-            rt.ready = true;
-            rt.held.take()
-        };
-        if let Some(p) = held {
-            emit_to(app, LABEL, events::TE_OPEN, p);
-        }
+        let held = lock(&RT).page_ready();
+        send(app, held);
     });
+}
+
+fn send(app: &AppHandle, opening: Option<Opening>) {
+    let Some((payload, note)) = opening else {
+        return;
+    };
+    emit_to(app, LABEL, events::TE_OPEN, payload);
+    if let Some(note) = note {
+        emit_to(app, LABEL, events::TE_TOAST, note);
+    }
 }
 
 /// 提示：窗口开着在窗口里，否则发系统通知
@@ -427,26 +565,11 @@ fn shut() -> Option<Origin> {
     Some(origin)
 }
 
-/// `back`：打开前的前台窗口（只有 Windows 有）
-fn hide(app: &AppHandle, back: Option<isize>) {
-    on_main(app, move |app| {
-        if let Some(h) = back {
-            xpaste_platform::activate_window(h);
-        }
-        if let Some(w) = app.get_webview_window(LABEL)
-            && let Err(e) = w.hide()
-        {
-            log::warn!("收起改字窗口失败：{e}");
-        }
-        emit_to(app, LABEL, events::TE_CLOSED, ());
-    });
-}
-
 /// 关掉窗口，键盘回到原来的应用。没开着时不做事
 pub fn close(app: &AppHandle) {
     if let Some(o) = shut() {
         log::info!("改字 关闭窗口");
-        hide(app, o.back);
+        textedit_window::hide(app, o.back);
     }
 }
 
@@ -454,7 +577,7 @@ pub fn close(app: &AppHandle) {
 pub fn back(app: &AppHandle) {
     let Some(o) = shut() else { return };
     log::info!("改字 返回面板");
-    hide(app, None);
+    textedit_window::hide(app, None);
     app.state::<AppState>()
         .previous_window
         .store(o.back.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
@@ -791,6 +914,99 @@ mod tests {
         let got = enlist(stale, Some(&tmp.0));
         assert_eq!(got.view().edits.len(), 1);
         assert_eq!(got.view().edits[0].id, 7);
+    }
+
+    #[test]
+    fn argv_files_picks_images_only() {
+        let argv = [
+            r"C:\app\图.png",
+            "--flag.png",
+            "-x.jpg",
+            "xpaste://activate?code=a.png",
+            "a.txt",
+            "b.PNG",
+            "/tmp/c d.jpeg",
+            "e.heic",
+            "f.webp",
+            "g.bmp",
+            "h.tif",
+            "i.tiff",
+            "j.gif",
+            "k.jpg",
+            "png",
+            "",
+        ]
+        .map(String::from);
+        let want = [
+            "b.PNG",
+            "/tmp/c d.jpeg",
+            "f.webp",
+            "g.bmp",
+            "h.tif",
+            "i.tiff",
+            "j.gif",
+            "k.jpg",
+        ];
+        assert_eq!(argv_files(&argv), want.map(PathBuf::from));
+        assert!(argv_files(&[]).is_empty());
+    }
+
+    #[test]
+    fn argv_two_files_takes_first() {
+        let argv = ["xpaste", "a.png", "b.png"].map(String::from);
+        let files = argv_files(&argv);
+        assert_eq!(
+            pick_file(&files),
+            Some((Path::new("a.png"), Some("一次改一张")))
+        );
+        assert_eq!(pick_file(&files[..1]), Some((Path::new("a.png"), None)));
+        assert_eq!(pick_file(&[]), None);
+        // 拖进来的夹着别的：取第一个图片；一个都不是就给第一个，照常说读不出来
+        let mixed = ["a.txt", "b.png"].map(PathBuf::from);
+        assert_eq!(
+            pick_file(&mixed),
+            Some((Path::new("b.png"), Some("一次改一张")))
+        );
+        assert_eq!(pick_file(&mixed[..1]), Some((Path::new("a.txt"), None)));
+    }
+
+    #[test]
+    fn files_while_disabled_toasts() {
+        let files = ["a.png", "b.png"].map(PathBuf::from);
+        assert_eq!(route_files(false, &files), Some(Err("改字没有开启")));
+        assert_eq!(
+            route_files(true, &files),
+            Some(Ok((Path::new("a.png"), Some("一次改一张"))))
+        );
+        assert_eq!(route_files(true, &[]), None);
+        assert_eq!(route_files(false, &[]), None);
+    }
+
+    /// 页面没就绪：先留着最后一次打开（连同提示），就绪后补发一次；就绪以后直接发
+    #[test]
+    fn open_before_window_ready_is_held() {
+        let p = |from| OpenPayload {
+            job: None,
+            from,
+            target: None,
+            expired: false,
+            config: Config {
+                mode: "local".into(),
+                api: false,
+            },
+        };
+        let mut rt = Runtime::new();
+        assert!(rt.deliver((p("blank"), None)).is_none());
+        assert!(rt.deliver((p("file"), Some(ONE))).is_none());
+        let (held, note) = rt.page_ready().unwrap();
+        assert_eq!((held.from, note), ("file", Some("一次改一张")));
+        assert!(rt.page_ready().is_none());
+        assert_eq!(rt.deliver((p("shot"), None)).unwrap().0.from, "shot");
+        // 页面重新加载，没就绪之前关掉的不补发
+        let mut rt = Runtime::new();
+        assert!(rt.deliver((p("blank"), None)).is_none());
+        rt.held = None;
+        assert!(rt.page_ready().is_none());
     }
 
     fn job_on_disk(l: &Live, dir: &Path) -> store::Job {

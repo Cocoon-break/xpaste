@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import type {
+  BeginPayload,
   Bootstrap,
   CopyResult,
   OcrProgress,
@@ -32,7 +33,7 @@ export const accessibilityGranted = () => invoke<boolean>('accessibility_granted
 export const requestScreenCapture = () => invoke<void>('request_screen_capture');
 export const screenCaptureGranted = () => invoke<boolean>('screen_capture_granted');
 /** 设置开着时按截图或录屏快捷键、焦点不在录制框里：开始截图或录屏（面板与对话框保留）。 */
-export const overlayBegin = (rec: boolean) => invoke<void>('overlay_begin', { rec });
+export const overlayBegin = (mode: BeginPayload['mode']) => invoke<void>('overlay_begin', { mode });
 /** 设置开着时按翻译快捷键、焦点不在录制框里：照常弹划词翻译卡片（M15 交互规则 4、M26 规则 18）。 */
 export const trcardPress = () => invoke<void>('trcard_press');
 /** 系统的选择文件夹对话框；取消返回 null。 */

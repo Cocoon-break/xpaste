@@ -358,6 +358,11 @@ pub fn frontend_ready(app: &AppHandle) {
     }
 }
 
+/// 面板页面把事件都听上、列表画好了没有
+pub fn page_ready() -> bool {
+    READY.load(Ordering::SeqCst)
+}
+
 /// `trigger` 随 `panel-shown` 发给前端，决定进入动效的时长（托盘单击用鼠标时长）。
 /// 网页未就绪时只记下来源，`frontend_ready` 时再显示（见 `READY`）。
 pub fn show(app: &AppHandle, t0: Option<u64>, trigger: Trigger) {

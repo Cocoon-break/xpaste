@@ -25,6 +25,7 @@ import { lineDragDrop, lineDragHover, lineHangFromPanel, lineHide, lineSideHint,
 import { beltPut, onBeltPutSelected } from './api/belt';
 import { mixerDefaults, mixerPut, onMixerPutSelected } from './api/mixer';
 import { memeLibraryStats, memeOpen, memeOpenScene, memeTaskOpen, memeTasks, memeTestImage, onMemeBack, onMemeReveal, onMemeTasks, type TaskView } from './api/meme';
+import { onTeOff, teOpen } from './api/textedit';
 import { cellClick, cellHTML, foldSets, gridMove, ofSource, previewHTML, restackOnRemove, taskCellHTML, taskTick, type Arrow, type MemeSource } from './meme-grid';
 import { mountRecipes } from './recipes';
 import { deviceLine, proCard, proControls, proLine } from './pro-status';
@@ -99,6 +100,8 @@ const I = {
   belt: '<rect x="2.5" y="12.5" width="15" height="4" rx="2"/><rect x="4.5" y="6" width="4.5" height="4" rx="1"/><rect x="11" y="6" width="4.5" height="4" rx="1"/>',
   // 放进搅拌机：量杯
   cup: '<path d="M5.5 4h9l-1.2 8.5H6.7z"/><path d="M6.7 12.5h6.6l.7 3.5H6z"/><path d="M8 8.5h4"/>',
+  // 改字：T 和一支笔
+  editText: '<path d="M4 5.5V4h9v1.5M8.5 4v9M6.5 13h4"/><path d="m12.2 15.9 4.6-4.6 1.5 1.5-4.6 4.6-2 .5z"/>',
   // 做表情包：笑脸
   smile: '<circle cx="10" cy="10" r="7"/><path d="M7 11.8c.8 1 1.8 1.5 3 1.5s2.2-.5 3-1.5"/><path d="M7.6 8h.01M12.4 8h.01" stroke-width="2.2"/>',
 };
@@ -277,6 +280,7 @@ const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id ===
               ${beltOn() && !isMeme(r) ? `<button type="button" tabindex="-1" data-qa="belt" title="放上传送带">${svg('belt')}</button>` : ''}
               ${mixerOn() && r.kind !== 'video' && !isMeme(r) ? `<button type="button" tabindex="-1" data-qa="mixer" data-tip="放进搅拌机">${svg('cup')}</button>` : ''}
               ${memeOn() && memeable(r) ? `<button type="button" tabindex="-1" data-qa="meme" data-tip="做表情包">${svg('smile')}</button>` : ''}
+              ${editOn() && textEditable(r) ? `<button type="button" tabindex="-1" data-qa="editText" data-tip="改字 ${modKey()} G">${svg('editText')}</button>` : ''}
               <button type="button" tabindex="-1" data-qa="copy" title="${copyVerb(S.canPaste)}">${svg('copy')}</button>
             </span>
           </div>
@@ -1645,6 +1649,7 @@ function openMenu(id: number, x: number, y: number, viaKb: boolean, detail = det
   $('[data-m="pin"]').hidden = $('[data-m="saveSnippet"]').hidden = bulk || isLib(r);
   $('[data-m="editSnippet"]').hidden = bulk || !snip;
   $('[data-m="translate"]').hidden = bulk || !translatable(r);
+  $('[data-m="editText"]').hidden = bulk || !editOn() || !textEditable(r);
   $('#menu .sep').hidden = bulk;
   $('#mDel').textContent = bulk ? `删除 ${S.multi.size} ${multiUnit(multiRecords())}` : '删除';
   // stagger 序号按可见项重排，隐藏的项不留空拍
@@ -3091,8 +3096,8 @@ async function submitSettings() {
       if (n > 0 && !(await confirm({ title: '保存设置', body: `将删除 ${n} 条记录`, ok: '删除并保存' }))) return;
     }
     await saveSettings(s);
-    // 表情包制作的开关也改分类栏：关掉时“表情包”分类和搜索里的表情包都不出现
-    const favChanged = s.frequentMinUses !== S.settings.frequentMinUses || s.memeEnabled !== S.settings.memeEnabled;
+    // 表情包制作的开关也改分类栏：关掉时“表情包”分类和搜索里的表情包都不出现；改字的开关改行上的按钮
+    const favChanged = s.frequentMinUses !== S.settings.frequentMinUses || s.memeEnabled !== S.settings.memeEnabled || s.editEnabled !== S.settings.editEnabled;
     const styleChanged = s.panelStyle !== S.settings.panelStyle;
     S.settings = s;
     refreshEngines();
@@ -3502,6 +3507,8 @@ document.addEventListener('keydown', (e) => {
       meme: memeOn(),
       inMeme: memeGrid(),
       selIsMeme: !!selR && isMeme(selR),
+      edit: editOn(),
+      selEditable: !!selR && !isLib(selR) && (selR.kind === 'image' || selR.kind === 'file'),
     },
   );
   if (!a) return;
@@ -3540,6 +3547,8 @@ document.addEventListener('keydown', (e) => {
     case 'editSnippet': return void (sel !== null && openSnippet('edit', sel));
     case 'makeMeme': return makeMeme(sel);
     case 'editMeme': return void (sel !== null && editMeme(sel));
+    case 'editText': return void (sel !== null && editText(sel));
+    case 'editNone': return toast('这条改不了字');
     case 'cell': return memeStep(a.d > 0 ? 'ArrowRight' : 'ArrowLeft');
     case 'newSnippet': return void openSnippet('new');
     case 'translate': return void (sel !== null && doTranslate(sel));
@@ -3623,6 +3632,8 @@ await onOpenSettings((tab) => {
     selectStTab(stTabs.findIndex((t) => t.id === 'st-tab-pro'), false);
     return proGo('proMemePage');
   }
+  // 托盘“改字设置…”、改字窗口里的“去设置”
+  if (tab === 'edit' && S.line.available) return goEditSettings();
   if (tab !== 'pro' || !S.line.available) return openSettings();
   openSettingsAt('st-tab-pro');
   showStControl(proActField.hidden ? proOffBtn : proCodeIn);
@@ -3669,6 +3680,8 @@ await onMemeBack(({ draft, reason }) => {
     });
   } else if (draft) toast('刚才的改动留成了草稿，下次空白打开能接着做');
 });
+// 改字关着时从系统的“打开方式”进来：后端已唤起面板
+await onTeOff(() => toast('改字没有开启', { icon: 'editText', action: { label: '去设置', run: goEditSettings } }));
 await onConfirmClear(() => {
   if (dlg.open) showStControl($('#clearBtn'));
   void confirmClear().then((m) => m && dlg.open && (clearNote.textContent = m));
@@ -3694,15 +3707,15 @@ await onHotkeyPressed((role) => {
   // 被自己的全局快捷键拦下的组合也算收到了主键，松开修饰键时不报“没收到组合键”
   hotkeyGot = true;
   if (role !== 'panel') {
-    const [self, name] = hkOpts.find((o) => o[2] === role)!;
+    const hit = hkOpts.find((o) => o[2] === role), self = hit?.[0], name = hit?.[1] ?? '改字';
     const other = hkOpts.find(([f]) => f !== self && hkOn(f.input));
-    const pressed = { shot: S.settings.shotHotkey, rec: S.settings.recHotkey, translate: S.settings.translateHotkey, meme: S.settings.memeHotkey }[role];
-    if (hkOn(self.input)) self.record(pressed);
+    const pressed = { shot: S.settings.shotHotkey, rec: S.settings.recHotkey, translate: S.settings.translateHotkey, meme: S.settings.memeHotkey, edit: S.settings.editHotkey }[role];
+    if (self && hkOn(self.input)) self.record(pressed);
     else if (hkOn(hotkeyIn)) setHotkeyHelp(`不能与${name}快捷键相同`, true);
     else if (other) other[0].setHelp(`${other[1]}快捷键不能与${name}快捷键相同`, true);
     // 表情包：焦点不在任何录制框里时带着选中的（多选按先后）打开制作窗口，同 Mod+E；没有选中、选中的都做不了就空白打开
     else if (role === 'meme') makeMeme(S.sel, [...S.multi], true);
-    else void (role === 'translate' ? trcardPress() : overlayBegin(role === 'rec')).catch((err: AppError) => toast(err.message));
+    else void (role === 'translate' ? trcardPress() : overlayBegin(role)).catch((err: AppError) => toast(err.message));
     return;
   }
   if (hkOn(hotkeyIn)) return recordHotkey(S.settings.hotkey);
@@ -3898,6 +3911,7 @@ list.addEventListener('click', (e) => {
   if (qa === 'belt') putOnBelt(id, group);
   if (qa === 'mixer') putInMixer(id, group);
   if (qa === 'meme') makeMeme(id, group);
+  if (qa === 'editText') editText(id);
 });
 // 吸顶栏在列表外，上面的列表委托收不到它的点击（空列表里的同名按钮仍走上面）
 $('#newSnipBtn').addEventListener('click', () => openSnippet('new'));
@@ -3953,6 +3967,22 @@ const memeable = (r: RecordSummary) =>
 function makeMeme(id: number | null, multi = [...S.multi], blank = false) {
   const fail = (err: AppError) => toast(err.message);
   void memeOpen(putOrder(id, multi)).catch((err: AppError) => (blank ? memeOpen([]).catch(fail) : fail(err)));
+}
+// 改字在这个构建里、且用户开着：图片、图片文件记录上才有改字按钮。试用结束照常显示，点了由改字窗口提示
+function editOn() {
+  return S.line.available && S.settings.editEnabled;
+}
+// 文件记录看有没有图片文件，同 memeable
+function textEditable(r: RecordSummary) {
+  return !isLib(r) && (r.kind === 'image' || (r.kind === 'file' && r.ocrState !== 0));
+}
+// 打开改字窗口，面板由后端收起；改不了的提示原因
+function editText(id: number) {
+  void teOpen(id).catch((err: AppError) => toast(err.message));
+}
+function goEditSettings() {
+  openSettingsAt('st-tab-pro');
+  if (dlg.open) selectStTab(stTabs.findIndex((t) => t.id === 'st-tab-pro'), false);
 }
 // 接着改：按库里的做法打开制作窗口；试用过期时由制作窗口提示
 function editMeme(id: number) {
@@ -4183,6 +4213,7 @@ menu.addEventListener('click', (e) => {
   if (m === 'saveSnippet') void openSnippet('save', id);
   if (m === 'editSnippet') void openSnippet('edit', id);
   if (m === 'translate') doTranslate(id);
+  if (m === 'editText') editText(id);
   if (m === 'del') remove(S.multi.size >= 2 && S.multi.has(id) ? [...S.multi] : [id]);
 });
 document.addEventListener('pointerdown', (e) => {

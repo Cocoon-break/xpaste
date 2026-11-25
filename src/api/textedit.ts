@@ -1,6 +1,7 @@
 // 改字，对接 src-tauri/src/commands/textedit.rs。类型的形状同 pro/web/textedit/state.ts。
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
 
 export type Pt = [number, number];
 /** 左上、右上、右下、左下，原图像素 */
@@ -52,11 +53,13 @@ export type LineRef = number | Quad;
 export const teOpen = (record: number) => invoke<void>('te_open', { record });
 /** 窗口里 ⌘V、最近的图：先用 memePasteImage、memeRecentImages 拿到是哪张 */
 export const teOpenRecord = (record: number, file: number | null) => invoke<void>('te_open_record', { record, file });
-/** 拖进窗口的文件 */
-export const teOpenFile = (path: string) => invoke<void>('te_open_file', { path });
+/** 拖进窗口的文件；多个的只用第一个图片，后端另发 te-toast “一次改一张” */
+export const teOpenFiles = (paths: string[]) => invoke<void>('te_open_files', { paths });
 export const teOpenRecent = (id: string) => invoke<void>('te_open_recent', { id });
 /** 页面把事件都听上了：后端这才把（这之前留着的）打开事件发过来 */
 export const teReady = () => invoke<void>('te_ready');
+/** 打开设置的“改字” */
+export const openEditSettings = () => invoke<void>('open_panel_settings', { tab: 'edit' });
 export const teClose = () => invoke<void>('te_close');
 export const teBack = () => invoke<void>('te_back');
 /** 窗口重新拿到焦点：粘贴目标的名字 */
@@ -130,3 +133,8 @@ export const onTeClosed = (cb: () => void): Promise<UnlistenFn> => listen('te-cl
 /** 任务或图变了，载荷是整份任务列表；先取 teJob 再派发 */
 export const onTeTasks = (cb: (tasks: Task[]) => void): Promise<UnlistenFn> => listen<Task[]>('te-tasks', (e) => cb(e.payload));
 export const onTeToast = (cb: (text: string) => void): Promise<UnlistenFn> => listen<string>('te-toast', (e) => cb(e.payload));
+/** 改字关着时从系统的“打开方式”进来（后端已唤起面板），只发给面板 */
+export const onTeOff = (cb: () => void): Promise<UnlistenFn> => listen('te-off', () => cb());
+/** 有文件拖进窗口 */
+export const onTeDrop = (cb: (d: { type: 'over' } | { type: 'leave' } | { type: 'drop'; paths: string[] }) => void): Promise<UnlistenFn> =>
+  getCurrentWebview().onDragDropEvent(({ payload: p }) => cb(p.type === 'drop' ? { type: 'drop', paths: p.paths } : p.type === 'leave' ? { type: 'leave' } : { type: 'over' }));

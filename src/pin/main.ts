@@ -2,9 +2,10 @@
 // 的 makePin：拖动移动、滚轮以光标为锚缩放、右上角关闭按钮、双击或 Esc 关闭、右键菜单。坐标为屏幕逻辑坐标。
 import './pin.css';
 import {
-  onPinMoved, pinButtonDown, pinClose, pinCopy, pinImageSrc, pinMenu, pinPosition, pinSave, pinSetBounds, pinStartDrag, pinWorkArea,
+  onPinMoved, onPinReplaced, pinButtonDown, pinCanEdit, pinClose, pinCopy, pinEdit, pinImageSrc, pinMenu, pinPosition, pinSave, pinSetBounds, pinStartDrag, pinWorkArea,
   type MenuEntry,
 } from '../api/shot';
+import type { AppError } from '../api/types';
 import { clampPos, maxZoom, wheelSteps, zoomAt, type Wheel } from './zoom';
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -21,6 +22,11 @@ img.addEventListener('load', () => {
   pin.addEventListener('animationend', () => pin.classList.remove('lift'), { once: true });
 }, { once: true });
 img.src = pinImageSrc(q);
+// 改字换掉了这张图：同一个地址重新取，位置和缩放不动
+onPinReplaced(() => {
+  img.src = `${pinImageSrc(q)}?v=${Date.now()}`;
+  flash('贴图换好了');
+}).catch(() => {});
 
 let chipT = 0;
 function flash(text: string) {
@@ -114,6 +120,11 @@ async function save() {
   try { flash((await pinSave()).copied ? '已保存并复制' : '已保存'); } catch { flash('保存失败'); }
 }
 
+/** 改字：带着原图打开改字窗口；关着、打不开时在标签里说一声 */
+async function edit() {
+  try { await pinEdit(); } catch (e) { flash((e as AppError)?.message || '改字没有打开'); }
+}
+
 /** 关闭按钮、双击、菜单关闭淡出 120 ms；Esc 等键盘触发不加动画（M20）。 */
 let closing = false;
 function close(animate: boolean) {
@@ -133,11 +144,13 @@ closeBtn.addEventListener('click', () => close(true));
 const fit = () => pin.classList.toggle('tiny', innerWidth < 48 || innerHeight < 32);
 addEventListener('resize', fit);
 fit();
-addEventListener('contextmenu', (e) => {
+addEventListener('contextmenu', async (e) => {
   e.preventDefault();
+  const canEdit = await pinCanEdit().catch(() => false);
   const items: MenuEntry[] = [
     { text: '复制', accel: 'CmdOrCtrl+C', run: () => void copy() },
     { text: '保存', accel: 'CmdOrCtrl+S', run: () => void save() },
+    ...(canEdit ? [{ text: '改字…', accel: 'CmdOrCtrl+G', run: () => void edit() }] : []),
     ...(k !== 1 ? [{ text: '恢复原始大小', accel: 'CmdOrCtrl+0', run: reset }] : []),
     'sep',
     { text: '关闭', accel: 'Escape', run: () => close(true) },
@@ -150,6 +163,7 @@ addEventListener('keydown', (e) => {
   else if (mod && e.code === 'KeyC') void copy();
   else if (mod && e.code === 'KeyS') void save();
   else if (mod && e.code === 'Digit0') reset();
+  else if (mod && e.code === 'KeyG') void pinCanEdit().then((on) => { if (on) void edit(); }, () => {});
   else return;
   e.preventDefault();
 });

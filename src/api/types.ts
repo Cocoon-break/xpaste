@@ -306,8 +306,8 @@ export type BeginPayload = {
   scale: number;
   /** 设置“保存截图时同时复制” */
   saveCopy: boolean;
-  /** 截图（M23）或选录屏区域（M24） */
-  mode: 'shot' | 'rec';
+  /** 截图（M23）、选录屏区域（M24）或框选改字 */
+  mode: 'shot' | 'rec' | 'edit';
   /** 设置“录制系统声音”，录屏开关的初值 */
   systemAudio: boolean;
   /** 设置“录制麦克风”；本机不支持（macOS 15 以下）为 null */
@@ -316,8 +316,14 @@ export type BeginPayload = {
   recScale: number;
   /** 设置“录屏帧率” */
   recFps: number;
+  /** 改字可用 */
+  edit: boolean;
+  /** 改字快捷键的显示（框选改字的提示用，没设为空） */
+  editKey: string;
+  /** 框选改字时的“用刚复制的图”：缩略图和原图尺寸 */
+  clip: { thumb: string | null; w: number; h: number } | null;
 };
-export type ShotAction = 'copy' | 'save' | 'ocr' | 'pin' | 'translate';
+export type ShotAction = 'copy' | 'save' | 'ocr' | 'pin' | 'translate' | 'edit';
 /** 对应 `shot::ShotOutcome`；`text` 为完整译文、`engine` 为翻译方式标签，只有翻译动作有值。 */
 export type ShotOutcome = { action: ShotAction; chars: number | null; file: string | null; copied: boolean; text: string | null; engine: string | null };
 

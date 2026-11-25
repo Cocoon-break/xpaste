@@ -20,8 +20,10 @@ struct Handles {
     rec_stop: MenuItem<Wry>,
     version: MenuItem<Wry>,
     translate: MenuItem<Wry>,
-    /// “表情包制作…”：表情包开着时插在“翻译…”后面
+    /// “改字…”“表情包制作…”“改字设置…”：各自开着时依次插在“翻译…”后面
+    edit: MenuItem<Wry>,
     meme: MenuItem<Wry>,
+    edit_settings: MenuItem<Wry>,
     /// “下载新版本…”：发现新版本后插在版本号上面（M28 规则 4）
     update: MenuItem<Wry>,
 }
@@ -155,39 +157,38 @@ pub fn show_update(v: &str) {
     }
 }
 
-/// 表情包开着（含此构建带 Pro）时显示“表情包制作…”并带上快捷键，关着时移除。启动和保存设置后调用。
+/// 改字、表情包开着（含此构建带 Pro）时显示它们的菜单项，关着时移除；表情包的带上快捷键。启动和保存设置后调用。
 pub fn refresh_menu(app: &AppHandle) {
     let Some(h) = TRAY.get() else {
         return;
     };
-    let (on, key) = {
+    let (edit, meme, key) = {
         let state = app.state::<AppState>();
         let s = state.settings();
         (
+            hotkey::edit_enabled() && s.edit_enabled,
             crate::meme::enabled() && s.meme_enabled,
             hotkey::label(s.effective_meme_hotkey()),
         )
     };
-    let shown = h.menu.get(h.meme.id()).is_some();
-    let r = if on {
-        h.meme.set_text(meme_label(&key)).and_then(|()| {
-            if shown {
-                return Ok(());
+    let update = || -> tauri::Result<()> {
+        h.meme.set_text(meme_label(&key))?;
+        let items = h.menu.items()?;
+        let after = items.iter().position(|i| i.id() == h.translate.id());
+        let mut at = after.map_or(0, |i| i + 1);
+        for (item, on) in [(&h.edit, edit), (&h.meme, meme), (&h.edit_settings, edit)] {
+            let shown = h.menu.get(item.id()).is_some();
+            if on && !shown {
+                h.menu.insert(item, at)?;
+            } else if !on && shown {
+                h.menu.remove(item)?;
             }
-            let at = h
-                .menu
-                .items()?
-                .iter()
-                .position(|i| i.id() == h.translate.id());
-            h.menu.insert(&h.meme, at.map_or(0, |i| i + 1))
-        })
-    } else if shown {
-        h.menu.remove(&h.meme)
-    } else {
+            at += usize::from(on);
+        }
         Ok(())
     };
-    if let Err(e) = r {
-        log::warn!("更新托盘“表情包制作”失败：{e}");
+    if let Err(e) = update() {
+        log::warn!("更新托盘“改字”“表情包制作”失败：{e}");
     }
 }
 
@@ -232,7 +233,9 @@ pub fn setup(app: &App) -> tauri::Result<()> {
         false,
         None::<&str>,
     )?;
+    let edit = MenuItem::with_id(app, "edit", "改字…", true, None::<&str>)?;
     let meme = MenuItem::with_id(app, "meme", meme_label(""), true, None::<&str>)?;
+    let edit_settings = MenuItem::with_id(app, "edit-settings", "改字设置…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出 xPaste", true, None::<&str>)?;
     let rec_stop = MenuItem::with_id(app, "rec-stop", rec_stop_label(""), true, None::<&str>)?;
     let update = MenuItem::with_id(app, "update", update_label(""), true, None::<&str>)?;
@@ -287,6 +290,10 @@ pub fn setup(app: &App) -> tauri::Result<()> {
                 // 空白打开不读库，也不会失败
                 let _ = crate::meme::open(app, &[], crate::meme::Entry::Tray);
             }
+            "edit" => crate::textedit::open_bg(app, crate::textedit::Source::Blank),
+            "edit-settings" => {
+                crate::commands::panel::open_panel_settings(app.clone(), Some("edit".into()))
+            }
             "update" => crate::update::open(app),
             // 录制中退出由 ExitRequested 里的 rec::hold_exit 先停止、写完文件再退出（M24 规则 8）
             "quit" => app.exit(0),
@@ -311,7 +318,9 @@ pub fn setup(app: &App) -> tauri::Result<()> {
         rec_stop,
         version,
         translate,
+        edit,
         meme,
+        edit_settings,
         update,
     });
     refresh_menu(app.handle());

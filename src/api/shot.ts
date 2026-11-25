@@ -1,7 +1,7 @@
 // 截图遮罩（shot.html）、贴图（pin.html）与 Rust 侧 src-tauri/src/shot.rs、commands/shot.rs 的对接。
 // 不在 Tauri 里（浏览器打开 `pnpm dev` 的 /shot.html、/pin.html）时换成开发替身：遮罩生成一张测试帧并立即开始一次截图，
 // 供对照原型调界面；动作返回模拟结果，退出后 0.8 秒再开始一次。贴图见文末 devPin。
-// 替身的查询参数：`?rec` 录屏模式，`&mic=none` 本机不支持麦克风，`&recfail` 开始录屏失败。
+// 替身的查询参数：`?rec` 录屏模式，`?edit` 框选改字（`?edit=clip` 带“用刚复制的图”），`&mic=none` 本机不支持麦克风，`&recfail` 开始录屏失败。
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
 import { Menu } from '@tauri-apps/api/menu';
@@ -88,6 +88,9 @@ export const recStart = (a: { generation: number; index: number; rect: LRect; sy
 export const shotLongStart = (a: { generation: number; index: number; rect: LRect }) =>
   stub ? dev.recStart() : invoke<void>('shot_long_start', a);
 
+/** 框选改字时的“用刚复制的图”。成功时后端已结束这次截图、去开改字窗口。 */
+export const shotEditClip = (generation: number) => (stub ? dev.recStart() : invoke<void>('shot_edit_clip', { generation }));
+
 /** 后端结束了这次截图（载荷为代数）：再按快捷键、看门狗、Alt+F4 等，页面自己不知道。 */
 export const onShotEnd = async (cb: (generation: number) => void) => {
   if (!stub) await listen<number>(SHOT_END, (e) => cb(e.payload));
@@ -169,6 +172,13 @@ export const pinCopy = () => (stub ? devPin.outcome('copy') : invoke<ShotOutcome
 export const pinSave = () => (stub ? devPin.outcome('save') : invoke<ShotOutcome>('pin_save'));
 /** 一次改位置和尺寸（后端在主线程里连着改，缩放时锚点不跳）。返回尺寸实际乘上的系数（超过窗口尺寸上限时小于 1）。 */
 export const pinSetBounds = (b: Box) => (stub ? devPin.setBounds(b) : invoke<number>('pin_set_bounds', b));
+/** 贴图的“改字…”：改字开着才有；打不开时抛出原因 */
+export const pinCanEdit = () => (stub ? Promise.resolve(true) : invoke<boolean>('te_on'));
+export const pinEdit = () => (stub ? Promise.resolve() : invoke<void>('te_open_pin'));
+/** 图片换了（改字的“换掉贴图”） */
+export const onPinReplaced = async (cb: () => void) => {
+  if (!stub) await listen('pin-replaced', cb, { target: getCurrentWindow().label });
+};
 export const pinStartDrag = () => (stub ? Promise.resolve() : getCurrentWindow().startDragging());
 
 /** 窗口当前左上角：原生拖动会移动它，每次现取。 */
@@ -221,8 +231,10 @@ const dev = {
   payload(): BeginPayload {
     return {
       index: 0, generation: ++this.gen, rects: this.wins(), cursor: [innerWidth / 2, innerHeight / 2], scale: devicePixelRatio || 1, saveCopy: true,
-      mode: this.q.has('rec') ? 'rec' : 'shot', systemAudio: false, microphone: this.q.get('mic') === 'none' ? null : false,
+      mode: this.q.has('rec') ? 'rec' : this.q.has('edit') ? 'edit' : 'shot', systemAudio: false, microphone: this.q.get('mic') === 'none' ? null : false,
       recScale: 1, recFps: 30,
+      edit: this.q.has('edit'), editKey: '⌥ + Shift + G',
+      clip: this.q.get('edit') === 'clip' ? { thumb: `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="124" height="92"><rect width="124" height="92" fill="#E8C07A"/></svg>')}`, w: 1400, h: 1016 } : null,
     };
   },
   frame(): Frame {
@@ -258,6 +270,8 @@ const dev = {
       const text = parts.join('');
       return { action, chars: text.length, file: null, copied: false, text, engine: 'system' };
     }
+    // 改字：后端结束这次截图、去开改字窗口
+    if (action === 'edit') void this.cancel();
     const p = (n: number) => String(n).padStart(2, '0'), d = new Date();
     const file = `截图 ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}.${p(d.getMinutes())}.png`;
     return { action, chars: action === 'ocr' ? 42 : null, file: action === 'save' ? file : null, copied: action !== 'pin', text: null, engine: null };

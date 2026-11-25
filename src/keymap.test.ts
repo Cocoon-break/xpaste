@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { keyAction, type KeyCtx, type KeyEv } from './keymap.ts';
 
 const ctx = (o: Partial<KeyCtx> = {}): KeyCtx => ({
-  inSearch: true, onControl: false, searchHasText: false, menuOpen: false, hasSel: true, canUndo: false, dialogOpen: false, selIsSnip: false, inSnip: false, multi: 0, selTranslatable: false, selPlain: false, app: false, sug: false, compact: false, peek: false, filtered: false, meme: false, inMeme: false, selIsMeme: false, ...o,
+  inSearch: true, onControl: false, searchHasText: false, menuOpen: false, hasSel: true, canUndo: false, dialogOpen: false, selIsSnip: false, inSnip: false, multi: 0, selTranslatable: false, selPlain: false, app: false, sug: false, compact: false, peek: false, filtered: false, meme: false, inMeme: false, selIsMeme: false, edit: false, selEditable: false, ...o,
 });
 const ev = (o: Partial<KeyEv>): KeyEv => ({ key: '', code: '', mod: false, alt: false, shift: false, repeat: false, ...o });
 
@@ -79,7 +79,7 @@ test('Mod+, 打开设置', () => assert.deepEqual(keyAction(ev({ key: ',', mod: 
 
 test('⌃ + 字母不进搜索框，⌃ + Enter 不复制（macOS 上 ⌃ 不是 Mod）', () => {
   const base = { key: '', code: '', mod: false, alt: false, shift: false, repeat: false };
-  const ctx = { inSearch: false, onControl: false, searchHasText: false, menuOpen: false, hasSel: true, canUndo: false, dialogOpen: false, selIsSnip: false, inSnip: false, multi: 0, selTranslatable: false, selPlain: false, app: false, sug: false, compact: false, peek: false, filtered: false, meme: false, inMeme: false, selIsMeme: false };
+  const ctx = { inSearch: false, onControl: false, searchHasText: false, menuOpen: false, hasSel: true, canUndo: false, dialogOpen: false, selIsSnip: false, inSnip: false, multi: 0, selTranslatable: false, selPlain: false, app: false, sug: false, compact: false, peek: false, filtered: false, meme: false, inMeme: false, selIsMeme: false, edit: false, selEditable: false };
   assert.equal(keyAction({ ...base, key: 'a', code: 'KeyA', ctrl: true }, ctx), null);
   assert.deepEqual(keyAction({ ...base, key: 'a', code: 'KeyA' }, ctx), { t: 'focusSearch' });
   assert.equal(keyAction({ ...base, key: 'Enter', code: 'Enter', ctrl: true }, ctx), null);
@@ -238,4 +238,21 @@ test('“全部”搜索结果里选中表情包：Mod+E 也是接着改，不�
   assert.equal(k({ key: 'ArrowLeft' }), null);
   // 多选里当前选中的是表情包：接着改它，不去“做表情包”（不会提示做不了）
   assert.deepEqual(keyAction(ev({ key: 'e', mod: true }), ctx({ meme: true, selIsMeme: true, multi: 3 })), { t: 'editMeme' });
+});
+
+test('Mod+G 只对单条图片改字，其余提示', () => {
+  const g = ev({ key: 'g', code: 'KeyG', mod: true });
+  assert.deepEqual(keyAction(g, ctx({ edit: true, selEditable: true })), { t: 'editText' });
+  // 文本、片段、表情包，多选：提示“这条改不了字”
+  assert.deepEqual(keyAction(g, ctx({ edit: true })), { t: 'editNone' });
+  assert.deepEqual(keyAction(g, ctx({ edit: true, selIsSnip: true })), { t: 'editNone' });
+  assert.deepEqual(keyAction(g, ctx({ edit: true, selIsMeme: true, inMeme: true })), { t: 'editNone' });
+  assert.deepEqual(keyAction(g, ctx({ edit: true, selEditable: true, multi: 2 })), { t: 'editNone' });
+  // 没开、没有选中、连发、带别的修饰键、不带 Mod：不管
+  assert.equal(keyAction(g, ctx({ selEditable: true })), null);
+  assert.equal(keyAction(g, ctx({ edit: true, hasSel: false })), null);
+  assert.equal(keyAction({ ...g, repeat: true }, ctx({ edit: true, selEditable: true })), null);
+  assert.equal(keyAction({ ...g, shift: true }, ctx({ edit: true, selEditable: true })), null);
+  assert.equal(keyAction({ ...g, mod: false }, ctx({ edit: true, selEditable: true })), null);
+  assert.equal(keyAction(g, ctx({ edit: true, selEditable: true, dialogOpen: true })), null);
 });

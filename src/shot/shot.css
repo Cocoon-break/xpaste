@@ -107,6 +107,12 @@ kbd {
 #ov[data-mode="rec"] .bar .go { background: var(--c-video); color: var(--on-rec); }
 #ov[data-mode="rec"] .bar .go kbd { color: var(--on-rec); background: color-mix(in srgb, var(--on-rec) 12%, transparent); border-color: color-mix(in srgb, var(--on-rec) 28%, transparent); }
 @media (hover: hover) and (pointer: fine) { #ov[data-mode="rec"] .bar .go:hover { background: color-mix(in srgb, var(--c-video) 85%, #fff) !important; color: var(--on-rec) !important; } }
+/* 改字：图标加文字 */
+.bar .lab {
+  display: inline-flex; align-items: center; gap: 5px; width: auto; padding: 0 9px; font-size: 12.5px; white-space: nowrap;
+  color: var(--cursor); background: color-mix(in srgb, var(--beam) 16%, transparent);
+}
+@media (hover: hover) and (pointer: fine) { .bar .lab:hover { background: color-mix(in srgb, var(--beam) 24%, transparent) !important; color: var(--cursor) !important; } }
 .go .rd { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
 
 /* 悬停提示：名称 + 按键，380 ms 后出现 */
@@ -181,6 +187,20 @@ kbd {
 }
 .hintbar b { font-weight: 500; color: var(--fg); }
 .hintbar span { display: inline-flex; align-items: center; gap: 6px; }
+
+/* 框选改字：“用刚复制的图”，在操作提示上面 */
+.just {
+  position: absolute; left: 16px; bottom: 60px; display: flex; gap: 12px; align-items: center; padding: 8px 12px 8px 8px; text-align: left;
+  border-radius: 10px; background: var(--pop); border: 1px solid var(--line-2); box-shadow: var(--shadow-pop); cursor: pointer;
+  -webkit-backdrop-filter: blur(20px) saturate(150%); backdrop-filter: blur(20px) saturate(150%);
+  transition: border-color 130ms ease; animation: fadeIn 200ms ease-out 120ms both;
+}
+@media (hover: hover) and (pointer: fine) { .just:hover { border-color: var(--beam); } }
+.just .j-th { width: 62px; height: 46px; flex: none; display: grid; place-items: center; overflow: hidden; border-radius: 5px; color: var(--c-image); background: var(--hover); }
+.just .j-th img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.just .j-tx { display: grid; gap: 4px; }
+.just b { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; color: var(--fg); }
+.just small { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
 
 /* 文字标注输入框 */
 .txt {

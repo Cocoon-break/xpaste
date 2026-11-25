@@ -186,8 +186,8 @@ pub fn role_of(
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ShotRoute {
-    /// 交给面板（`hotkey-pressed`，载荷 `"shot"` / `"rec"` / `"translate"`）：录制框聚焦时写入录制框，
-    /// 否则由面板调 `overlay_begin`（截图、录屏）或 `trcard_press`（翻译）开始
+    /// 交给面板（`hotkey-pressed`，载荷 `"shot"` / `"rec"` / `"edit"` / `"translate"`）：录制框聚焦时写入录制框，
+    /// 否则由面板调 `overlay_begin`（截图、录屏、改字）或 `trcard_press`（翻译）开始
     Recorder,
     Begin,
 }
@@ -205,6 +205,11 @@ pub fn shot_route(dialog_open: bool, panel_visible: bool, panel_focused: bool) -
 /// 截图快捷键按下：按 `shot_route` 通知面板或开始截图。主线程调用。
 pub fn shot_pressed(app: &AppHandle) {
     overlay_pressed(app, crate::shot::Mode::Shot);
+}
+
+/// 改字快捷键按下：按 `shot_route` 通知面板或框选要改的图。主线程调用。
+pub fn edit_pressed(app: &AppHandle) {
+    overlay_pressed(app, crate::shot::Mode::Edit);
 }
 
 /// 翻译快捷键按下（M26 规则 18）：设置或确认框开着且面板有焦点时同截图交给面板（M15 规则 3：在录制框里就写入、不翻译，

@@ -40,6 +40,7 @@ mod textedit;
 mod textedit_job;
 mod textedit_store;
 mod textedit_tasks;
+mod textedit_window;
 mod translate;
 mod tray;
 mod trcard;
@@ -66,9 +67,15 @@ pub fn run() {
     let builder = if override_.is_some() {
         builder
     } else {
-        builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+        builder.plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
             // 第二个进程是被 xpaste:// 链接拉起的（Windows）：链接已转给 deep-link 插件处理，这里不再切换面板
             if argv.iter().any(|a| a.starts_with("xpaste://")) {
+                return;
+            }
+            // 第二个进程是用“打开方式”打开图片拉起的（Windows）
+            let files = textedit::argv_files(&argv);
+            let files = files.iter().map(|p| std::path::Path::new(&cwd).join(p));
+            if textedit::opened(app, files.collect()) {
                 return;
             }
             panel::toggle(app, None, panel::Trigger::Relaunch)
@@ -256,6 +263,9 @@ pub fn run() {
             if meme::enabled() {
                 meme_window::prewarm(app.handle());
             }
+            if hotkey::edit_enabled() {
+                textedit_window::prewarm(app.handle());
+            }
             // 表情包：删掉没有记录、也没有草稿指向的文件（不占启动时间）
             {
                 let h = app.handle().clone();
@@ -278,6 +288,8 @@ pub fn run() {
                     license::opened(app.handle(), &urls);
                 }
             }
+            // 被图片文件拉起的（“打开方式”）
+            textedit::start(app.handle());
             // 首次启动直接显示面板与引导（AC-M18-01）
             if first_run {
                 app.state::<AppState>()
@@ -336,8 +348,7 @@ pub fn run() {
                         Some(hotkey::Role::Belt) => belt::hotkey_pressed(app),
                         Some(hotkey::Role::Mixer) => mixer::hotkey_pressed(app),
                         Some(hotkey::Role::Meme) => meme::hotkey_pressed(app),
-                        // 打开改字窗口由后面的任务接上
-                        Some(hotkey::Role::Edit) => log::info!("edit 快捷键按下"),
+                        Some(hotkey::Role::Edit) => hotkey::edit_pressed(app),
                         None => {}
                     }
                 })
@@ -365,6 +376,13 @@ pub fn run() {
             {
                 api.prevent_close();
                 meme::close(window.app_handle());
+            }
+            // 改字窗口同理
+            if window.label() == textedit::LABEL
+                && let WindowEvent::CloseRequested { api, .. } = event
+            {
+                api.prevent_close();
+                textedit::close(window.app_handle());
             }
             // 晾衣绳同理，Alt+F4 当作 Esc：收起；一直显示时不收，只交还键盘
             if window.label() == line::LABEL
@@ -475,6 +493,7 @@ pub fn run() {
             commands::shot::shot_typing,
             commands::shot::shot_cancel,
             commands::shot::overlay_begin,
+            commands::shot::shot_edit_clip,
             commands::shot::shot_finish,
             commands::shot::shot_copy_text,
             commands::shot::shot_translate_again,
@@ -612,7 +631,9 @@ pub fn run() {
             commands::meme::meme_sketch_image,
             commands::textedit::te_open,
             commands::textedit::te_open_record,
-            commands::textedit::te_open_file,
+            commands::textedit::te_open_pin,
+            commands::textedit::te_open_files,
+            commands::textedit::te_on,
             commands::textedit::te_open_recent,
             commands::textedit::te_ready,
             commands::textedit::te_close,
@@ -648,6 +669,13 @@ pub fn run() {
             // macOS 重开已运行的 .app（Finder / Spotlight）不起第二个进程，而是发 Reopen
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => panel::toggle(app, None, panel::Trigger::Relaunch),
+            // 访达的“打开方式”；xpaste:// 链接也从这里来，由 deep-link 插件处理
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Opened { urls } => {
+                let files = urls.iter().filter(|u| u.scheme() == "file");
+                let files = files.filter_map(|u| u.to_file_path().ok());
+                textedit::opened(app, files.collect());
+            }
             // 录制、开始或停止进行中时拦下这次退出（托盘“退出”也走这里）：rec 先停止、把文件写完再退出，
             // 不然 mp4 打不开（M24 规则 8）。守卫里的 hold_exit 每次都会执行
             tauri::RunEvent::ExitRequested { api, .. } if rec::hold_exit(app) => api.prevent_exit(),

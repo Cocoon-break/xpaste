@@ -1,10 +1,12 @@
 //! 改字的命令：打开、关闭窗口，图和读出来的字，范围、条带、走法，改一处，任务，最近改过。
 //! 解码、识别、裁剪、贴回、存盘都在阻塞线程上；会产出改动的先过 `editable`（开关、试用期）。
 
+use std::path::PathBuf;
+
 use serde::Deserialize;
 use serde::Serialize;
-use tauri::AppHandle;
 use tauri::ipc::{InvokeBody, Request, Response};
+use tauri::{AppHandle, WebviewWindow};
 use xpaste_pro::TeQuad;
 
 use crate::error::AppError;
@@ -38,11 +40,23 @@ pub async fn te_open_record(
     bg(move || textedit::open_inside(&app, src, "blank")).await
 }
 
-/// 拖进改字窗口的文件
+/// 贴图的“改字…”：调用方贴图的原图
 #[tauri::command]
-pub async fn te_open_file(app: AppHandle, path: String) -> Result<(), AppError> {
-    let src = Source::File(path.into());
-    bg(move || textedit::open_inside(&app, src, "file")).await
+pub async fn te_open_pin(app: AppHandle, window: WebviewWindow) -> Result<(), AppError> {
+    let n = crate::shot::pin_n(&window)?;
+    bg(move || textedit::open(&app, Source::Pin { n })).await
+}
+
+/// 改字编在这个构建里、设置里也开着
+#[tauri::command(async)]
+pub fn te_on(app: AppHandle) -> bool {
+    textedit::on(&app)
+}
+
+/// 拖进改字窗口的文件；多个的只用第一个图片，打开后提示“一次改一张”
+#[tauri::command]
+pub async fn te_open_files(app: AppHandle, paths: Vec<PathBuf>) -> Result<(), AppError> {
+    bg(move || textedit::open_dropped(&app, &paths)).await
 }
 
 /// 改字窗口里点一张“最近改过”

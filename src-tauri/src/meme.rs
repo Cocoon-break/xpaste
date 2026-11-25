@@ -613,20 +613,29 @@ pub(crate) fn record_refs(state: &AppState, id: i64) -> Vec<RefKey> {
 /// 文件记录按文件拆开；是文字等用不上的、是 xPaste 自己写进去又对应不到记录的，为空。
 /// 暂停记录时、这次没进历史（没收、监听还没处理到、启动前复制的）时返回给用户看的原因
 pub fn paste_image(app: &AppHandle) -> Result<Vec<RefKey>, String> {
-    use std::sync::atomic::Ordering::SeqCst;
-    let state = app.state::<AppState>();
-    let r = paste_refs(
-        xpaste_platform::change_count(),
-        crate::clipboard::last_seen(),
-        state.last_write_seq.load(SeqCst),
-        state.paused.load(SeqCst),
-        |id| record_refs(&state, id),
-    );
+    let r = clip_refs(app);
     match &r {
         Ok(refs) => log::info!("表情包 剪切板里的图加成参考图 {} 张", refs.len()),
         Err(_) => log::info!("表情包 剪切板里的这次没进历史，不加"),
     }
     r.map_err(Into::into)
+}
+
+/// 剪切板里刚复制的图：采集管道已经收下的那条记录的第一张（改字的“用刚复制的图”，判断同 ⌘V）
+pub(crate) fn clip_image(app: &AppHandle) -> Option<RefKey> {
+    clip_refs(app).ok()?.into_iter().next()
+}
+
+fn clip_refs(app: &AppHandle) -> Result<Vec<RefKey>, &'static str> {
+    use std::sync::atomic::Ordering::SeqCst;
+    let state = app.state::<AppState>();
+    paste_refs(
+        xpaste_platform::change_count(),
+        crate::clipboard::last_seen(),
+        state.last_write_seq.load(SeqCst),
+        state.paused.load(SeqCst),
+        |id| record_refs(&state, id),
+    )
 }
 
 /// ⌘V 的判断：`now` 是剪切板此刻的序号，`last` 是采集管道最后处理的那次（序号、收下的记录 id），

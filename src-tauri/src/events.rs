@@ -10,7 +10,7 @@ pub const PANEL_HIDDEN: &str = "panel-hidden";
 /// 快捷键 / 托盘要隐藏面板：前端播完淡出后调 `hide_panel`，400 ms 内没隐藏则后端兜底。
 pub const PANEL_HIDE_REQUESTED: &str = "panel-hide-requested";
 /// 引导或对话框打开时按下快捷键，面板保持显示：载荷 `"panel"`（唤起，前端据此推进引导、写入录制框）
-/// 或 `"shot"` / `"rec"`（截图、录屏，见 `hotkey::overlay_pressed`）、`"translate"`（翻译，见 `hotkey::translate_pressed`）。
+/// 或 `"shot"` / `"rec"` / `"edit"`（截图、录屏、改字，见 `hotkey::overlay_pressed`）、`"translate"`（翻译，见 `hotkey::translate_pressed`）。
 pub const HOTKEY_PRESSED: &str = "hotkey-pressed";
 pub const RECORD_ADDED: &str = "record-added";
 pub const RECORD_UPDATED: &str = "record-updated";
@@ -96,6 +96,11 @@ pub const TE_CLOSED: &str = "te-closed";
 pub const TE_TASKS: &str = "te-tasks";
 /// 改字窗口的提示条，载荷是文案。只发给 `textedit`。
 pub const TE_TOAST: &str = "te-toast";
+/// 改字关着时从系统的“打开方式”进来，后端已唤起面板。无载荷，只发给 `panel`：提示“改字没有开启”，带“去设置”。
+pub const TE_OFF: &str = "te-off";
+
+/// 贴图的图片换了（改字的“换掉贴图”），无载荷，只发给那张 `pin-<n>`：重新取图。
+pub const PIN_REPLACED: &str = "pin-replaced";
 
 /// 冻结完成，发给每块屏的遮罩 `shot-<i>`（载荷见 `shot::BeginPayload`）。
 pub const SHOT_BEGIN: &str = "shot-begin";

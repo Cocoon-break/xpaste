@@ -32,6 +32,9 @@ export type KeyCtx = {
   /** 当前在“表情包”分类（网格）；选中的是表情包 */
   inMeme: boolean;
   selIsMeme: boolean;
+  /** 改字在这个构建里、且用户开着；选中的是图片、文件记录 */
+  edit: boolean;
+  selEditable: boolean;
 };
 
 /** `mod` 是平台的 Mod 键：macOS 只认 ⌘（metaKey），Windows 只认 Ctrl；`ctrl` 是字面的 Control 键（macOS 的 ⌃），
@@ -58,6 +61,8 @@ export type Action =
   | { t: 'editSnippet' }
   | { t: 'makeMeme' }
   | { t: 'editMeme' }
+  | { t: 'editText' }
+  | { t: 'editNone' }
   | { t: 'cell'; d: 1 | -1 }
   | { t: 'newSnippet' }
   | { t: 'selectAll' }
@@ -104,6 +109,8 @@ export const keyAction = (e: KeyEv, c: KeyCtx): Action => {
     if (lk === 'e' && c.selIsSnip && c.multi < 2) return { t: 'editSnippet' };
     // 历史记录上 Mod+E 带着选中的（多选按先后）打开表情包制作；片段上仍是编辑片段
     if (lk === 'e' && c.meme && c.hasSel && !c.selIsSnip) return { t: 'makeMeme' };
+    // 改字：只对单条图片，别的提示改不了
+    if (lk === 'g' && c.edit && c.hasSel) return { t: c.selEditable && c.multi < 2 ? 'editText' : 'editNone' };
     if (lk === 'n') return { t: 'newSnippet' };
     if (lk === 'a' && c.inSnip && !c.searchHasText) return { t: 'selectAll' };
   }
