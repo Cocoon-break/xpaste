@@ -47,11 +47,11 @@ fn gates() {
 
 /// 识别出错在应用里当作没读出字；这里量出来会像“没误拦”，所以多试两次，还不行就报错
 static OCR_FAILED: Mutex<Option<String>> = Mutex::new(None);
-fn ocr_or_flag(png: &[u8]) -> Result<Option<Vec<OcrLine>>, OcrError> {
-    let mut r = ocr(png);
+fn ocr_or_flag(png: &[u8], max_side: u32) -> Result<Option<Vec<OcrLine>>, OcrError> {
+    let mut r = ocr(png, max_side);
     for _ in 0..2 {
         if r.is_err() {
-            r = ocr(png);
+            r = ocr(png, max_side);
         }
     }
     // 引擎的消息里没有路径和文字

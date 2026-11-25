@@ -594,20 +594,20 @@ pub mod tests {
     }
 
     type Got = Result<Option<Vec<OcrLine>>, OcrError>;
-    fn no_engine(_: &[u8]) -> Got {
+    fn no_engine(_: &[u8], _: u32) -> Got {
         Ok(None)
     }
-    fn reads_new(_: &[u8]) -> Got {
+    fn reads_new(_: &[u8], _: u32) -> Got {
         // 分成两段、带空格也是一样的字
         Ok(Some(vec![
             row("到 四点", moved(200.0), vec![]),
             row("会议改", moved(0.0), vec![]),
         ]))
     }
-    fn reads_wrong(_: &[u8]) -> Got {
+    fn reads_wrong(_: &[u8], _: u32) -> Got {
         Ok(Some(vec![row("会议改到西点", moved(0.0), vec![])]))
     }
-    fn reads_nothing(_: &[u8]) -> Got {
+    fn reads_nothing(_: &[u8], _: u32) -> Got {
         Ok(Some(vec![]))
     }
     fn moved(dx: f32) -> xpaste_pro::TeQuad {
@@ -757,7 +757,7 @@ pub mod tests {
     fn unread_image_checked_at_submit() {
         use std::sync::atomic::{AtomicU64, Ordering::SeqCst};
         static N: AtomicU64 = AtomicU64::new(0);
-        fn late(_: &[u8]) -> Got {
+        fn late(_: &[u8], _: u32) -> Got {
             if N.fetch_add(1, SeqCst) < 4 {
                 return Err(OcrError::Engine("x".into()));
             }
@@ -769,7 +769,7 @@ pub mod tests {
                     .collect(),
             ))
         }
-        fn never(_: &[u8]) -> Got {
+        fn never(_: &[u8], _: u32) -> Got {
             Err(OcrError::Engine("x".into()))
         }
         if !xpaste_pro::AVAILABLE {
@@ -1742,7 +1742,7 @@ pub mod tests {
 
         let (t, tmp) = (tasks(), Tmp::new());
         let (old, new) = ("鑫淼焱垚犇骉", "鑫淼焱垚羴骉");
-        fn reads(_: &[u8]) -> Got {
+        fn reads(_: &[u8], _: u32) -> Got {
             Ok(Some(vec![row("鑫淼焱垚麤骉", LINE, vec![])]))
         }
         let l = crate::textedit_job::tests::unread();

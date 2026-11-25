@@ -63,11 +63,11 @@ pub fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// 带位置的识别；`Ok(None)` 是没有能用的引擎
-pub type Ocr = fn(&[u8]) -> Result<Option<Vec<OcrLine>>, OcrError>;
+/// 带位置的识别，第二项是识别时长边最多多少像素；`Ok(None)` 是没有能用的引擎
+pub type Ocr = fn(&[u8], u32) -> Result<Option<Vec<OcrLine>>, OcrError>;
 
-pub fn ocr(png: &[u8]) -> Result<Option<Vec<OcrLine>>, OcrError> {
-    xpaste_platform::ocr_lines(png, OCR_SIDE)
+pub fn ocr(png: &[u8], max_side: u32) -> Result<Option<Vec<OcrLine>>, OcrError> {
+    xpaste_platform::ocr_lines(png, max_side)
 }
 
 /// 读出来的字和给不给改。带用户文字，不派生 Debug
@@ -82,6 +82,8 @@ pub struct Read {
     pub failed: bool,
     /// 引擎一直出错，没读成：能自己框，头一次要改时再读一次（`Live::sure`）
     pub unread: bool,
+    /// 引擎出错，又读了几次
+    pub again: u32,
 }
 
 /// 引擎出错时再读几次、每次缩到多少，隔多久
@@ -92,36 +94,31 @@ const RETRY_WAIT: Duration = if cfg!(test) {
     Duration::from_millis(300)
 };
 
-/// 读字。引擎偶尔对着同一张图一直出错：缩小一点再读，坐标换回来。超时、没有引擎、解不开的不再读
-fn recognize(img: &TeImg, ocr: Ocr) -> Result<Option<Vec<OcrLine>>, OcrError> {
-    let png =
-        |w, h, px: &[u8]| crate::img_meta::encode_png(w, h, px, None).map_err(|_| OcrError::Decode);
-    let mut got = ocr(&png(img.w, img.h, &img.px)?);
+/// 读字，返回再读了几次。引擎偶尔对着同一张图一直出错：让平台层缩小一点再读（坐标由它换回来）。自己缩图没有用，
+/// 小图会被它放回同样大小。超时、没有引擎、解不开的不再读
+fn recognize(img: &TeImg, ocr: Ocr) -> (Result<Option<Vec<OcrLine>>, OcrError>, u32) {
+    let Ok(png) = crate::img_meta::encode_png(img.w, img.h, &img.px, None) else {
+        return (Err(OcrError::Decode), 0);
+    };
+    let mut got = ocr(&png, OCR_SIDE);
+    // 头一次识别时的长边
+    let long = f64::from(img.w.max(img.h)) * f64::from(xpaste_platform::ocr_scale(img.w, img.h));
+    let long = long.min(f64::from(OCR_SIDE));
+    let mut again = 0;
     for k in RESCALE {
         if !matches!(got, Err(OcrError::Engine(_))) {
             break;
         }
         std::thread::sleep(RETRY_WAIT);
-        let view = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(img.w, img.h, &img.px[..])
-            .ok_or(OcrError::Decode)?;
-        let size = |n: u32| ((f64::from(n) * k).round() as u32).max(1);
-        let (w, h) = (size(img.w), size(img.h));
-        // 不用 resize：一亿像素的图，它中间要 1.6 GB
-        let small = image::imageops::thumbnail(&view, w, h);
-        let back = [img.w as f32 / w as f32, img.h as f32 / h as f32];
-        got = ocr(&png(w, h, &small)?);
-        if let Ok(Some(lines)) = &mut got {
-            for l in lines {
-                l.quad = l.quad.map(|p| [p[0] * back[0], p[1] * back[1]]);
-            }
-        }
+        again += 1;
+        got = ocr(&png, (long * k) as u32);
     }
-    got
+    (got, again)
 }
 
 impl Read {
     fn new(img: &TeImg, ocr: Ocr) -> Read {
-        let got = recognize(img, ocr);
+        let (got, again) = recognize(img, ocr);
         let failed = matches!(got, Err(OcrError::Decode));
         let unread = matches!(got, Err(OcrError::Engine(_) | OcrError::Timeout));
         let (lines, engine) = match got {
@@ -139,12 +136,13 @@ impl Read {
             engine,
             failed,
             unread,
+            again,
         }
     }
 
     fn log(&self, what: &str, t: Instant) {
         log::info!(
-            "改字 {what} {} 行 锁住 {} 段{}{}{} 耗时 {} ms",
+            "改字 {what} {} 行 锁住 {} 段{}{} 又读 {} 次{} 耗时 {} ms",
             self.lines.len(),
             self.locked.len(),
             if self.engine {
@@ -157,6 +155,7 @@ impl Read {
             } else {
                 ""
             },
+            self.again,
             self.blocked
                 .map_or(String::new(), |b| format!(" 不给改：{}", b.label())),
             t.elapsed().as_millis()
@@ -281,6 +280,7 @@ impl Live {
             engine: false,
             failed: true,
             unread: false,
+            again: 0,
         });
     }
 
@@ -447,7 +447,7 @@ impl Live {
 
     /// 出不出得了成品：改好了几处。等读字完：不给改的不出
     pub fn ready(&self) -> Result<(Job, usize), AppError> {
-        if self.read().blocked.is_some() {
+        if self.sure().blocked.is_some() {
             return Err(no(BLOCKED));
         }
         let job = lock(&self.st).job.clone();
@@ -1027,7 +1027,7 @@ pub fn replace(img: &TeImg, job: &mut Job, keep: u64, also: Option<u64>) -> Vec<
 
 /// 选中第 `i` 个候选
 pub fn pick(t: Tasks, dir: &Path, live: &Live, edit: u64, i: usize) -> Result<(), AppError> {
-    let r = live.read();
+    let r = live.sure();
     if r.failed || r.blocked.is_some() {
         return Err(no(if r.failed { UNREADABLE } else { BLOCKED }));
     }
@@ -1036,6 +1036,11 @@ pub fn pick(t: Tasks, dir: &Path, live: &Live, edit: u64, i: usize) -> Result<()
         let e = e.ok_or_else(|| no(NO_EDIT))?;
         if !e.cands.get(i).is_some_and(|c| c.placed) {
             return Err(no(NO_EDIT));
+        }
+        // 后来才认出来的签名段
+        let at = || span(&xpaste_pro::te_strip(&live.img, e.line), e.range);
+        if e.pick != i && live.touches_locked(&at()) {
+            return Err(no(LOCKED));
         }
         e.pick = i;
         let gone = replace(&live.img, job, edit, None);
@@ -1341,7 +1346,7 @@ pub fn misread(img: &TeImg, line: &TeQuad, paste: &TePaste, new: &str, ocr: Ocr)
     let Ok(png) = crate::img_meta::encode_png(pw, ph, &px, None) else {
         return false;
     };
-    let Ok(Some(mut lines)) = ocr(&png) else {
+    let Ok(Some(mut lines)) = ocr(&png, OCR_SIDE) else {
         return false;
     };
     lines.sort_by(|a, b| a.quad[0][0].total_cmp(&b.quad[0][0]));
@@ -1534,6 +1539,7 @@ pub mod tests {
             engine: true,
             failed: false,
             unread: false,
+            again: 0,
         }
     }
 
@@ -1625,7 +1631,7 @@ pub mod tests {
     #[test]
     fn read_is_awaited_once() {
         static N: AtomicU64 = AtomicU64::new(0);
-        fn slow(_: &[u8]) -> Result<Option<Vec<OcrLine>>, OcrError> {
+        fn slow(_: &[u8], _: u32) -> Result<Option<Vec<OcrLine>>, OcrError> {
             N.fetch_add(1, Ordering::SeqCst);
             std::thread::sleep(std::time::Duration::from_millis(80));
             Ok(Some(vec![row("甲", LINE, vec![])]))
@@ -1645,67 +1651,76 @@ pub mod tests {
     /// 没有引擎、识别出错都不报错；系统解不开这张图的不许改
     #[test]
     fn read_without_engine() {
-        let r = Read::new(&scene(), |_| Ok(None));
+        let r = Read::new(&scene(), |_, _| Ok(None));
         assert!(!r.engine && r.lines.is_empty() && r.blocked.is_none() && !r.failed && !r.unread);
         let broken: [Ocr; 2] = [
-            |_| Err(OcrError::Timeout),
-            |_| Err(OcrError::Engine("x".into())),
+            |_, _| Err(OcrError::Timeout),
+            |_, _| Err(OcrError::Engine("x".into())),
         ];
         for ocr in broken {
             let r = Read::new(&scene(), ocr);
             assert!(r.engine && r.lines.is_empty() && !r.failed && r.unread);
         }
-        let r = Read::new(&scene(), |_| Err(OcrError::Decode));
+        let r = Read::new(&scene(), |_, _| Err(OcrError::Decode));
         assert!(r.lines.is_empty() && r.failed && !r.unread);
         // 像素对不上，编码不了
         let mut bad = scene();
         bad.px.pop();
-        assert!(Read::new(&bad, |_| Ok(None)).failed);
+        assert!(Read::new(&bad, |_, _| Ok(None)).failed);
     }
 
     /// 引擎出错的再读，每次的图都不一样大，坐标换回原图；超时、没有引擎、解不开的只读一次
     #[test]
     fn engine_errors_read_again() {
-        static SEEN: Mutex<Vec<(u32, u32)>> = Mutex::new(Vec::new());
-        fn flaky(png: &[u8]) -> Result<Option<Vec<OcrLine>>, OcrError> {
+        static SEEN: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+        fn flaky(png: &[u8], max_side: u32) -> Result<Option<Vec<OcrLine>>, OcrError> {
             let img = image::load_from_memory(png).unwrap();
-            let (w, h) = (img.width(), img.height());
             let mut seen = lock(&SEEN);
-            seen.push((w, h));
+            seen.push(max_side);
             if seen.len() < 4 {
                 return Err(OcrError::Engine("x".into()));
             }
-            let (w, h) = (w as f32, h as f32);
-            let all = [[0.0, 0.0], [w, 0.0], [w, h], [w / 2.0, h / 2.0]];
-            Ok(Some(vec![row("甲", all, vec![[0.0, 1.0]])]))
+            // 给的一直是原图，坐标由平台层换
+            let q = [
+                [0.0, 0.0],
+                [img.width() as f32, 0.0],
+                [9.0, 9.0],
+                [0.0, 9.0],
+            ];
+            Ok(Some(vec![row("甲", q, vec![[0.0, 1.0]])]))
         }
-        let r = Read::new(&scene(), flaky);
-        let mut seen = lock(&SEEN).clone();
-        assert_eq!((seen.len(), seen[0]), (4, (640, 200)));
-        seen.sort();
-        seen.dedup();
-        assert_eq!(seen.len(), 4);
-        assert!(!r.unread && r.lines[0].chars == [[0.0, 1.0]]);
-        let want = [[0.0, 0.0], [640.0, 0.0], [640.0, 200.0], [320.0, 100.0]];
-        for (p, q) in r.lines[0].quad.iter().zip(want) {
-            assert!((p[0] - q[0]).abs() < 0.01 && (p[1] - q[1]).abs() < 0.01);
+        // 短边 200：平台层放大到 3 倍，长边 1920；短边 1000 以上的不放大；长边超过上限的按上限
+        let cases = [
+            ((640, 200), [8000, 1862, 1804, 1747]),
+            ((1200, 1000), [8000, 1164, 1128, 1092]),
+            ((9000, 1), [8000, 7760, 7520, 7280]),
+        ];
+        for ((w, h), want) in cases {
+            let img = TeImg {
+                w,
+                h,
+                px: vec![255; (w * h * 4) as usize],
+            };
+            let r = Read::new(&img, flaky);
+            assert_eq!(std::mem::take(&mut *lock(&SEEN)), want);
+            assert!(!r.unread && r.again == 3 && r.lines[0].quad[1][0] == w as f32);
         }
 
         static N: AtomicU64 = AtomicU64::new(0);
         let once: [Ocr; 4] = [
-            |_| {
+            |_, _| {
                 N.fetch_add(1, Ordering::SeqCst);
                 Err(OcrError::Timeout)
             },
-            |_| {
+            |_, _| {
                 N.fetch_add(1, Ordering::SeqCst);
                 Ok(None)
             },
-            |_| {
+            |_, _| {
                 N.fetch_add(1, Ordering::SeqCst);
                 Err(OcrError::Decode)
             },
-            |_| {
+            |_, _| {
                 N.fetch_add(1, Ordering::SeqCst);
                 Ok(Some(vec![]))
             },
@@ -1720,7 +1735,7 @@ pub mod tests {
     #[test]
     fn unread_is_read_once_more() {
         static N: AtomicU64 = AtomicU64::new(0);
-        fn broken(_: &[u8]) -> Result<Option<Vec<OcrLine>>, OcrError> {
+        fn broken(_: &[u8], _: u32) -> Result<Option<Vec<OcrLine>>, OcrError> {
             N.fetch_add(1, Ordering::SeqCst);
             Err(OcrError::Engine("x".into()))
         }
@@ -1748,7 +1763,7 @@ pub mod tests {
     #[test]
     fn second_reading_locks_signature() {
         static N: AtomicU64 = AtomicU64::new(0);
-        fn late(_: &[u8]) -> Result<Option<Vec<OcrLine>>, OcrError> {
+        fn late(_: &[u8], _: u32) -> Result<Option<Vec<OcrLine>>, OcrError> {
             if N.fetch_add(1, Ordering::SeqCst) < 4 {
                 return Err(OcrError::Engine("x".into()));
             }
@@ -1766,6 +1781,41 @@ pub mod tests {
         assert_eq!((l.read().lines.len(), l.read().locked.len()), (1, 1));
         assert_eq!(msg(run_local(t, &tmp.0, &l, &d)), LOCKED);
         assert_eq!(N.load(Ordering::SeqCst), 5);
+    }
+
+    /// 从“最近改过”打开、没读成的：选候选、完成之前也再读；命中就拦，签名段上的不能再选上，已选中的不动
+    #[test]
+    fn reopened_unread_checked_before_pick_and_finish() {
+        static N: AtomicU64 = AtomicU64::new(0);
+        fn fails_then(text: &str) -> Result<Option<Vec<OcrLine>>, OcrError> {
+            if N.fetch_add(1, Ordering::SeqCst) < 4 {
+                return Err(OcrError::Engine("x".into()));
+            }
+            Ok(Some(vec![row(text, LINE, chars())]))
+        }
+        if !xpaste_pro::AVAILABLE {
+            return eprintln!("这个构建不含 Pro，跳过");
+        }
+        let (t, tmp) = (new_tasks(), Tmp::new());
+        let l = live();
+        let id = put_local(t, &tmp.0, &l, &draft(NEW, range(4, 5)), 4, RED).unwrap();
+        let open = |ocr: Ocr| {
+            let l = Live::load(&tmp.0, &l.id).unwrap();
+            N.store(0, Ordering::SeqCst);
+            l.start(ocr);
+            assert!(l.read().unread);
+            l
+        };
+        let id_card: Ocr = |_, _| fails_then("姓名张三公民身份号码11010519491231002X");
+        assert_eq!(msg(pick(t, &tmp.0, &open(id_card), id, 0)), BLOCKED);
+        assert_eq!(msg(open(id_card).ready().map(|_| ())), BLOCKED);
+        let l = open(|_, _| fails_then("签名：张三丰"));
+        pick(t, &tmp.0, &l, id, 0).unwrap();
+        assert_eq!(l.read().locked.len(), 1);
+        assert_eq!(l.ready().unwrap().1, 1);
+        undo(t, &tmp.0, &l, id).unwrap();
+        assert_eq!(msg(pick(t, &tmp.0, &l, id, 0)), LOCKED);
+        assert_eq!(edit_of(&l, id).pick, NO_PICK);
     }
 
     // ---- 几何 ----
@@ -2143,7 +2193,7 @@ pub mod tests {
         assert_eq!(msg(pick(t, &tmp.0, &l, 1, 0)), UNREADABLE);
         assert!(!l.read().engine);
         // 晚到的读字结果不改主意
-        l.start(|_| Ok(Some(vec![])));
+        l.start(|_, _| Ok(Some(vec![])));
         assert_eq!(msg(l.check(&d)), UNREADABLE);
     }
 
