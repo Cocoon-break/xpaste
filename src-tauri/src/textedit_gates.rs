@@ -5,6 +5,7 @@
 
 use super::*;
 use std::io::BufRead;
+use std::sync::atomic::AtomicBool;
 
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -45,6 +46,19 @@ fn gates() {
     }
 }
 
+/// 识别出错在应用里当作没读出字；这里量出来会像“没误拦”，所以多试两次，还不行就报错
+static OCR_FAILED: AtomicBool = AtomicBool::new(false);
+fn ocr_or_flag(png: &[u8]) -> Result<Option<Vec<OcrLine>>, OcrError> {
+    let mut r = ocr(png);
+    for _ in 0..2 {
+        if r.is_err() {
+            r = ocr(png);
+        }
+    }
+    OCR_FAILED.store(r.is_err(), Ordering::SeqCst);
+    r
+}
+
 fn bad(e: impl std::fmt::Display) -> AppError {
     no(&e.to_string())
 }
@@ -69,12 +83,19 @@ fn laid(live: &Live, p: &TePaste) -> TeImg {
 }
 
 fn answer(held: &mut Option<(String, Live)>, v: &Value) -> Result<Value, AppError> {
+    // 没有 Pro 的构建什么都量不出来，脚本先问这个
+    if v["do"] == "pro" {
+        return Ok(json!({ "pro": xpaste_pro::AVAILABLE }));
+    }
     let file: String = get(v, "file")?;
     if held.as_ref().is_none_or(|h| h.0 != file) {
         let bytes = std::fs::read(&file).map_err(bad)?;
         let (img, icc) = crate::textedit::decode(&bytes).map_err(|e| no(e.text()))?;
         let live = Live::fresh(img, icc);
-        live.start(ocr);
+        live.start(ocr_or_flag);
+        if OCR_FAILED.load(Ordering::SeqCst) {
+            return Err(no("系统识别出错，等电脑空一点再跑"));
+        }
         *held = Some((file, live));
     }
     let live = &held.as_ref().unwrap().1;
