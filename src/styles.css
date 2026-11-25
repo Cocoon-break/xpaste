@@ -710,6 +710,8 @@ dialog > form { display: contents; }
 .side-pick svg rect:not(.scr) { fill: currentColor; stroke: none; opacity: .55; }
 .side-pick label:has(:checked) svg path { stroke: var(--beam); }
 .line-off { opacity: .4; }
+/* 关着时快捷键冲突也写在这一项下面：要看得清 */
+.line-off:has([aria-invalid="true"]) { opacity: 1; }
 @media (prefers-reduced-motion: reduce) { .side-pick label { transition: none; } }
 /* 设置里带小标题的一组（“截图”标签的截图 / 长截图，“翻译”标签的两种方式）：上面一道分隔线；标签内第一组不画，免得和标签栏的分隔线叠成两道 */
 .st-group { display: grid; gap: 12px; padding-top: 16px; border-top: 1px solid var(--line); }

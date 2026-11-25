@@ -2287,6 +2287,10 @@ function proGo(id: string, focus?: HTMLElement | null, animate = true) {
     if (id === 'proHome') paintProHome();
     else if (id === 'proEditPage') paintEditApi();
   }
+  if (id === 'proEditPage') {
+    paintEditClearErr();
+    void paintEditRecent();
+  }
   if (focus === undefined) focus = id === 'proHome' ? $(`[data-pro-go="${from}"]`) : $(`#${id} .pro-back`);
   focus?.focus({ preventScroll: true });
 }
@@ -2296,6 +2300,11 @@ function featSummary(el: HTMLElement, on: boolean, hotkey: string, rest: string)
   const k = document.createElement(hotkey ? 'kbd' : 'span');
   k.textContent = hotkey ? hotkeyLabel(hotkey, S.platform.os) : '没有快捷键';
   el.replaceChildren(k, '·', rest);
+}
+/** 子页里关着时的一项：变淡、不可操作。录制框那一项只变淡：关着时快捷键冲突也写在它下面，要能改 */
+function dimItem(el: HTMLElement, off: boolean) {
+  el.classList.toggle('line-off', off);
+  el.inert = off && !el.querySelector('[id$="Hotkey"]');
 }
 function paintProHome() {
   const c = proCard(S.line.pro, S.line.canBuy);
@@ -2323,22 +2332,12 @@ function paintProHome() {
   $('#proFeatMixer').classList.toggle('off', !mixerOnIn.checked);
   // 传送带关着时下面几项变淡，仍可改（同晾衣绳）
   for (const el of document.querySelectorAll('#proBeltPage > .line, #proBeltPage > .field')) el.classList.toggle('line-off', !beltOnIn.checked);
-  // 搅拌机关着时下面几项变淡、不可操作
-  for (const el of document.querySelectorAll<HTMLElement>('#proMixerPage > .line, #proMixerPage > .field, #proMixerPage > .recipes')) {
-    el.classList.toggle('line-off', !mixerOnIn.checked);
-    el.inert = !mixerOnIn.checked;
-  }
+  for (const el of document.querySelectorAll<HTMLElement>('#proMixerPage > .line, #proMixerPage > .field, #proMixerPage > .recipes')) dimItem(el, !mixerOnIn.checked);
   // 生图接口和改字共用：表情包制作关着、改字开着时照常能填
-  for (const el of document.querySelectorAll<HTMLElement>('#proMemePage > .line, #proMemePage > .field, #proMemePage > .help')) {
-    const off = !memeOnIn.checked && !('iface' in el.dataset && editOnIn.checked);
-    el.classList.toggle('line-off', off);
-    el.inert = off;
-  }
-  // 改字关着时下面几项变淡、不可操作；改过的图还在，照样能清空
-  for (const el of document.querySelectorAll<HTMLElement>('#proEditPage > .field, #proEditPage > .line:not(#editRecentRow)')) {
-    el.classList.toggle('line-off', !editOnIn.checked);
-    el.inert = !editOnIn.checked;
-  }
+  for (const el of document.querySelectorAll<HTMLElement>('#proMemePage > .line, #proMemePage > .field, #proMemePage > .help'))
+    dimItem(el, !memeOnIn.checked && !('iface' in el.dataset && editOnIn.checked));
+  // 改字关着时改过的图还在，照样能清空
+  for (const el of document.querySelectorAll<HTMLElement>('#proEditPage > .field, #proEditPage > .line:not(#editRecentRow)')) dimItem(el, !editOnIn.checked);
 }
 $('#st-pro').addEventListener('click', (e) => {
   const t = e.target as Element, go = t.closest<HTMLElement>('[data-pro-go]');
@@ -2464,18 +2463,34 @@ const paintMemeCaption = () => ($('#memeCaption').textContent = memeCaptionState
 $('#memeTrGo').addEventListener('click', () => showStControl(trBaseIn));
 // 改字：开关、快捷键、怎么改都是草稿，保存时写回；清空“最近改过”当场生效
 const editOnIn = $<HTMLInputElement>('#editOn'), editOnQuick = $<HTMLInputElement>('#editOnQuick'), editModeEl = $('#editMode');
-const editClearBtn = $<HTMLButtonElement>('#editClear'), editRecentEl = $('#editRecent');
+const editClearBtn = $<HTMLButtonElement>('#editClear'), editRecentEl = $('#editRecent'), editClearErr = $('#editClearErr');
 let draftEditMode: Settings['editMode'] = 'local';
 function paintEditApi() {
   const s = editApiState(draftEditMode, memeUrlIn.value, memeModelIn.value);
   $('#editApi').textContent = s.text;
   $('#editApiGo').textContent = s.go;
 }
-const paintEditRecent = (): Promise<number> => teRecentStats().then(([n, b]) => {
-  editRecentEl.textContent = editRecentText(n, b);
-  editClearBtn.disabled = !b;
-  return n;
-});
+function paintEditClearErr(msg = '') {
+  editClearErr.textContent = msg;
+  editClearErr.hidden = !msg;
+  // 在最底下，写出来时滚到看得见
+  if (msg) editClearErr.scrollIntoView({ block: 'nearest' });
+  paintStErr();
+}
+/** 取一次“最近改过”的张数和占用，返回张数；读不到返回 null。连着取几次只画最后一次的 */
+let editRecentSeq = 0;
+async function paintEditRecent(): Promise<number | null> {
+  const seq = ++editRecentSeq;
+  const got = await teRecentStats().catch((e: AppError) => {
+    void info(`读取“最近改过”统计失败 kind=${e.kind}`);
+    return null;
+  });
+  if (seq === editRecentSeq) {
+    editRecentEl.textContent = got ? editRecentText(...got) : '读不到有几张，现在不能清空';
+    editClearBtn.disabled = !got?.[1];
+  }
+  return got && got[0];
+}
 editOnQuick.addEventListener('change', () => {
   editOnIn.checked = editOnQuick.checked;
   paintProHome();
@@ -2493,18 +2508,17 @@ function goImageApi() {
 }
 $('#editApiGo').addEventListener('click', goImageApi);
 editClearBtn.addEventListener('click', () => void (async () => {
-  try {
-    // 张数以点的这一刻为准：设置开着时可能又改好了一张
-    const n = await paintEditRecent();
-    if (editClearBtn.disabled) return;
-    if (!(await confirm(editClearAsk(n)))) return;
-    // 清空后按钮不可点，接不住焦点：确认框关了回到“‹ Pro”
-    cfReturn = $('#proEditPage .pro-back');
-    await teRecentClear();
-    await paintEditRecent();
-  } catch (e) {
-    editRecentEl.textContent = (e as AppError).message;
-  }
+  paintEditClearErr();
+  // 张数以点的这一刻为准：设置开着时可能又改好了一张
+  const n = await paintEditRecent();
+  if (n === null || editClearBtn.disabled || !(await confirm(editClearAsk(n)))) return;
+  // 清空后按钮不可点，接不住焦点：确认框关了回到“‹ Pro”
+  cfReturn = $('#proEditPage .pro-back');
+  const err = await teRecentClear().then(() => null, (e: AppError) => e);
+  // 没清成的可能已经删了几张：重新取。清成了、取不到时照样说清空了
+  const left = await paintEditRecent();
+  if (err) paintEditClearErr(`没清成：${err.message}`);
+  else if (left === null) editRecentEl.textContent = '已清空';
 })());
 proLicCode.addEventListener('click', () => proGo('proLicPage', proCodeIn));
 proLicManage.addEventListener('click', () => proGo('proLicPage'));
@@ -2945,9 +2959,7 @@ function openSettings() {
   editOnIn.checked = st.editEnabled;
   draftEditMode = st.editMode;
   for (const i of editModeEl.querySelectorAll('input')) i.checked = i.value === draftEditMode;
-  editRecentEl.textContent = '';
-  editClearBtn.disabled = true;
-  if (S.line.available) paintEditRecent().catch((e: AppError) => void info(`读取“最近改过”统计失败 kind=${e.kind}`));
+  paintEditClearErr();
   mixerKey.reset(st.mixerHotkey);
   mixerOnIn.checked = st.mixerEnabled;
   draftRecipes = st.mixerRecipes;

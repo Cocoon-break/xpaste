@@ -204,7 +204,7 @@ pub struct Settings {
     pub edit_enabled: bool,
     /// 打开改字窗口的全局快捷键；空字符串表示不启用
     pub edit_hotkey: String,
-    /// 怎么改：local（只在本机改）| ai（交给生图接口）
+    /// 怎么改：local（先在本机改）| ai（直接用 AI）
     pub edit_mode: String,
     /// 生图服务商：预设键名（openai | gemini | ark | qwen）或 custom；只影响设置页的显示，请求只看格式、地址和模型 ID
     pub meme_image_provider: String,
@@ -856,7 +856,7 @@ impl Settings {
             return fail(&format!("改字快捷键不能与{name}快捷键相同"));
         }
         if !matches!(self.edit_mode.as_str(), "local" | "ai") {
-            return fail("改字方式只能是只在本机改或交给生图接口");
+            return fail("改字方式只能是先在本机改或直接用 AI");
         }
         let url = self.meme_image_base_url.to_ascii_lowercase();
         if !url.is_empty() && !url.starts_with("http://") && !url.starts_with("https://") {
@@ -1873,7 +1873,7 @@ mod tests {
             edit_mode: "x".into(),
             ..Default::default()
         };
-        assert_eq!(invalid(&s), "改字方式只能是只在本机改或交给生图接口");
+        assert_eq!(invalid(&s), "改字方式只能是先在本机改或直接用 AI");
         let (s, dropped) = Settings::from_json_lenient(r#"{"editMode":"x"}"#).unwrap();
         assert_eq!(s.edit_mode, "local");
         assert_eq!(dropped, ["editMode"]);

@@ -456,41 +456,83 @@ pub async fn te_recent_clear(app: AppHandle) -> Result<(), AppError> {
 
 #[cfg(test)]
 mod tests {
-    /// 某个函数的源码，到它的右花括号
-    fn body<'a>(src: &'a str, name: &str) -> &'a str {
-        let at = src
-            .find(&format!("pub async fn {name}("))
-            .or(src.find(&format!("pub fn {name}(")));
-        let s = &src[at.expect(name)..];
-        &s[..s.find("\n}").expect(name)]
+    /// 要过门的：会产出改动
+    const GATED: [&str; 6] = [
+        "te_plan",
+        "te_run",
+        "te_local_patch",
+        "te_pick",
+        "te_undo",
+        "te_retry",
+    ];
+    /// 放行的：打开窗口、看图、完成、任务列表、最近改过
+    const FREE: [&str; 28] = [
+        "te_open",
+        "te_open_record",
+        "te_open_pin",
+        "te_on",
+        "te_open_files",
+        "te_open_recent",
+        "te_ready",
+        "te_close",
+        "te_back",
+        "te_target",
+        "te_config",
+        "te_image",
+        "te_render",
+        "te_cand",
+        "te_job",
+        "te_lines",
+        "te_ranges",
+        "te_strip",
+        "te_tasks",
+        "te_cancel",
+        "te_drop",
+        "te_finish",
+        "te_recent",
+        "te_thumb",
+        "te_recent_remove",
+        "te_recent_restore",
+        "te_recent_stats",
+        "te_recent_clear",
+    ];
+
+    /// 顶格定义的函数的源码，一行一行，去掉缩进，到它的右花括号
+    fn body<'a>(src: &'a str, name: &str) -> Vec<&'a str> {
+        let at = format!("fn {name}(");
+        src.lines()
+            .skip_while(|l| l.starts_with(' ') || !l.contains(&at))
+            .take_while(|l| !l.starts_with('}'))
+            .map(str::trim)
+            .collect()
     }
 
-    /// 试用结束：会产出改动的命令都过 `editable`（它怎么判断见 textedit.rs 的测试）；
-    /// 看图和完成不看试用期，“最近改过”的照样能复制、存成文件
+    /// 试用结束：会产出改动的命令都过 `editable`（它怎么判断见 textedit.rs 的测试），
+    /// 其余的一律不过，“最近改过”的照样能看、复制、存成文件。新加的命令要归到一张表里
     #[test]
     fn expired_can_export_not_edit() {
         const GATE: &str = "textedit::editable(&app)?;";
         let src = include_str!("textedit.rs");
-        for name in [
-            "te_plan",
-            "te_run",
-            "te_local_patch",
-            "te_pick",
-            "te_undo",
-            "te_retry",
-        ] {
-            assert!(body(src, name).contains(GATE), "{name}");
-        }
-        for name in [
-            "te_finish",
-            "te_render",
-            "te_cand",
-            "te_recent",
-            "te_open_recent",
-        ] {
-            assert!(!body(src, name).contains("editable"), "{name}");
+        let all: Vec<&str> = src
+            .lines()
+            .filter(|l| l.starts_with("pub "))
+            .filter_map(|l| l.split_once("fn te_")?.1.split_once('('))
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(all.len(), GATED.len() + FREE.len());
+        for name in all {
+            let name = &*format!("te_{name}");
+            let gated = body(src, name).contains(&GATE);
+            assert_eq!(gated, GATED.contains(&name), "{name}");
+            assert_ne!(gated, FREE.contains(&name), "{name}");
         }
         let finish = body(include_str!("../textedit_finish.rs"), "finish");
-        assert!(finish.contains("check_on(app)?;") && !finish.contains("editable"));
+        assert!(finish.contains(&"textedit::check_on(app)?;"));
+        assert!(!finish.iter().any(|l| l.contains("editable")));
+        // 打开：只有“最近改过”的给图，别的来源不读图
+        let open = body(include_str!("../textedit.rs"), "open_as");
+        let at = |s: &str| open.iter().position(|l| l.starts_with(s)).expect(s);
+        assert!(at("Source::Recent(id) => Some(find(app, id)?),") < at("_ if expired => None,"));
+        assert!(at("_ if expired => None,") < at("let bytes = bytes_of("));
     }
 }

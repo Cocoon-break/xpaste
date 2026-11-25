@@ -562,8 +562,9 @@
             </div>
             <div class="line" id="editRecentRow">
               <span><b>最近改过</b><small id="editRecent" role="status"></small></span>
-              <button class="btn sm" type="button" id="editClear">清空…</button>
+              <button class="btn sm" type="button" id="editClear" aria-describedby="editRecent editClearErr">清空…</button>
             </div>
+            <p class="err" id="editClearErr" role="alert" hidden></p>
             </div>
           </section>
         </div>

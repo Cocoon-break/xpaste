@@ -77,7 +77,7 @@ test('errorControl：改字快捷键冲突', () => {
   assert.equal(errorControl('editHotkeyTaken', '改字快捷键已被其他应用占用，请换一个'), 'editHotkey');
   assert.equal(errorControl('invalidSettings', '改字快捷键不能与表情包快捷键相同'), 'editHotkey');
   assert.equal(errorControl('invalidSettings', '改字快捷键至少需要包含 Mod 或 Alt'), 'editHotkey');
-  assert.equal(errorControl('invalidSettings', '改字方式只能是只在本机改或交给生图接口'), null);
+  assert.equal(errorControl('invalidSettings', '改字方式只能是先在本机改或直接用 AI'), null);
 });
 
 // —— 设置 → Pro → 改字 ——（只读 index.html、main.ts 的文本，同 a11y.test.ts）
@@ -102,7 +102,17 @@ test('“怎么改”是同一组单选：方向键由浏览器切换', () => {
   assert.ok(!/tabindex|preventDefault/.test(group));
 });
 
+test('功能关着时录制框那一项只变淡、还能操作：快捷键冲突照样写在它下面', () => {
+  assert.ok(main.includes(`el.inert = off && !el.querySelector('[id$="Hotkey"]');`));
+  assert.equal(main.match(/\bel\.inert = /g)!.length, 1, '三个子页都走同一处');
+});
+
+test('“清空…”读得到占用和没清成的原因', () => {
+  assert.match(proPanel, /id="editClear" aria-describedby="editRecent editClearErr"/);
+  assert.match(proPanel, /<p class="err" id="editClearErr" role="alert" hidden><\/p>/);
+});
+
 test('清空“最近改过”之前先确认', () => {
   assert.equal(main.split('teRecentClear()').length, 2, '只有一处会清空');
-  assert.match(main, /if \(!\(await confirm\(editClearAsk\(n\)\)\)\) return;[\s\S]{0,200}teRecentClear\(\)/);
+  assert.match(main, /!\(await confirm\(editClearAsk\(n\)\)\)\) return;[\s\S]{0,200}teRecentClear\(\)/);
 });
