@@ -274,8 +274,10 @@ impl Tasks {
         }
         let s = live.check(d)?;
         live.commit(self, dir, |job| {
-            // 连着提交两次一样的：只发一次
-            if let Some(same) = self.twin(&live.id, &s) {
+            // 连着提交两次一样的：只发一次。从哪一处打开的是明说再来一张
+            if s.edit.is_none()
+                && let Some(same) = self.twin(&live.id, &s)
+            {
                 return Ok(same);
             }
             let (edit, also) = job::put(job, &s)?;
@@ -1258,8 +1260,9 @@ pub mod tests {
         assert_eq!(msg(t.retry(&tmp.0, id, true, true, |_| Ok(l.clone()))), why);
         assert!(t.next().is_none() && one(t, id).status == Status::Failed);
         mode(0o755);
-        // 接口没配也能补存
-        t.retry(&tmp.0, id, true, false, |_| Ok(l.clone())).unwrap();
+        // 接口没配也能补存。后台正好先补上了的，任务已经改好
+        let r = t.retry(&tmp.0, id, true, false, |_| Ok(l.clone()));
+        assert!(r.is_ok() || msg(r) == TASK_GONE);
         assert!(t.next().is_none());
         assert_eq!(
             (one(t, id).status, edit_of(&l, edit).pick),
@@ -1299,6 +1302,44 @@ pub mod tests {
         job::retry_late(t, &tmp.0, &l.id);
         let e = edit_of(&l, edit);
         assert_eq!((e.pick, e.cands.len()), (NO_PICK, 1));
+    }
+
+    /// 先补存了上一张（选中），这一张取消了：选中的是补存的那张
+    #[cfg(unix)]
+    #[test]
+    fn cancel_keeps_the_one_saved_just_before() {
+        use std::os::unix::fs::PermissionsExt;
+        if !xpaste_pro::AVAILABLE {
+            return eprintln!("这个构建不含 Pro，跳过");
+        }
+        let (t, tmp) = (tasks(), Tmp::new());
+        let l = live();
+        let d = draft(NEW, range(4, 5));
+        let (_, edit) = t.submit(&tmp.0, &l, &d, true, true).unwrap();
+        let more = Draft {
+            edit: Some(edit),
+            ..d
+        };
+        let (second, same) = t.submit(&tmp.0, &l, &more, true, true).unwrap();
+        assert_eq!(same, edit);
+        let dir = tmp.0.join(&l.id);
+        let (url, _h) = fake(2, {
+            let n = std::sync::atomic::AtomicU32::new(0);
+            move |r| {
+                let first = n.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
+                let m = if first { 0o555 } else { 0o755 };
+                std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(m)).unwrap();
+                if !first {
+                    t.cancel(second);
+                }
+                model(r)
+            }
+        });
+        let env = env(&tmp.0, no_engine);
+        assert!(!go(t, &env, &cfg(&url)));
+        assert!(!go(t, &env, &cfg(&url)));
+        let e = edit_of(&l, edit);
+        assert_eq!((e.pick, e.cands.len()), (0, 2));
     }
 
     /// 没存进去的过一会儿自己补存
@@ -1410,6 +1451,31 @@ pub mod tests {
         assert_eq!((l.view().edits.len(), t.views().len()), (1, 1));
         t.finish(id, Ok(()));
         assert_ne!(t.submit(&tmp.0, &l, &d, true, true).unwrap().0, id);
+    }
+
+    /// “再出一张”连点两次：发两次，都是那一处的
+    #[test]
+    fn another_one_twice_sends_twice() {
+        if !xpaste_pro::AVAILABLE {
+            return eprintln!("这个构建不含 Pro，跳过");
+        }
+        let (t, tmp) = (tasks(), Tmp::new());
+        let l = live();
+        let d = draft(NEW, range(4, 5));
+        let edit = put_local(t, &tmp.0, &l, &d, 4, [255, 0, 0]).unwrap();
+        let more = Draft {
+            edit: Some(edit),
+            range: Some(edit_of(&l, edit).range),
+            ..d
+        };
+        let (url, h) = fake(2, model);
+        let ids = [(); 2].map(|()| t.submit(&tmp.0, &l, &more, true, true).unwrap());
+        assert!(ids[0].0 != ids[1].0 && ids.iter().all(|i| i.1 == edit));
+        let env = env(&tmp.0, no_engine);
+        assert!(go(t, &env, &cfg(&url)) && go(t, &env, &cfg(&url)));
+        assert_eq!(h.join().unwrap().len(), 2);
+        let e = edit_of(&l, edit);
+        assert_eq!((e.pick, e.cands.len()), (2, 3));
     }
 
     /// 重写到一半取消：结果留着，选中的还是原来那张

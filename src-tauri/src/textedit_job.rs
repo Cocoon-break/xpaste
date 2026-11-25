@@ -267,10 +267,12 @@ impl Live {
         why: Option<String>,
     ) -> bool {
         let mut st = lock(&self.st);
-        let pick = |job: &Job, id: u64| job.edits.iter().find(|e| e.id == id).map(|e| e.pick);
-        let before = late.as_ref().and_then(|l| pick(&st.job, l.edit));
+        let mut before = NO_PICK;
         let saved = late.as_ref().map_or(Ok(()), |l| {
+            // 先补存的可能改了选中的
             self.settle(t, dir, &mut st)?;
+            let e = st.job.edits.iter().find(|e| e.id == l.edit);
+            before = e.map_or(NO_PICK, |e| e.pick);
             add(dir, &mut st, l)
         });
         let r = match (&saved, why) {
@@ -292,7 +294,7 @@ impl Live {
             Ok(()) if canceled && l.pick => {
                 let mut job = st.job.clone();
                 if let Some(e) = job.edits.iter_mut().find(|e| e.id == l.edit) {
-                    e.pick = before.unwrap_or(NO_PICK);
+                    e.pick = before;
                 }
                 if let Err(e) = store::save(dir, &job) {
                     log::warn!("改字 存盘失败：{:?}", e.kind());
@@ -407,7 +409,7 @@ struct Kept {
 
 static KEPT: Mutex<Vec<Kept>> = Mutex::new(Vec::new());
 
-/// 隔多久补存一次；文件夹没了的过这么久（撤销期之后）就放开
+/// 隔多久补存一次，比撤销期长
 const KEEP_FOR: Duration = if cfg!(test) {
     Duration::from_secs(1)
 } else {
@@ -440,25 +442,37 @@ fn keep(live: &Arc<Live>, t: Tasks, dir: &Path) {
     }
     let (id, dir) = (live.id.clone(), dir.to_path_buf());
     housekeeping::spawn("xpaste-textedit-kept", move || {
-        for _ in 0..KEEP_TRIES {
+        let (mut tries, mut missing) = (0, false);
+        while tries < KEEP_TRIES || missing {
+            tries += 1;
             std::thread::sleep(KEEP_FOR);
-            let live = {
-                let mut kept = lock(&KEPT);
-                // 存进去了，或者又没存进去一次（有新的线程管）
-                let Some(i) = kept.iter().position(|k| k.live.id == id && k.at == at) else {
-                    return;
-                };
-                if !store::exists(&dir, &id) {
-                    // 撤销期过了：是真删了
-                    kept.remove(i);
-                    return;
-                }
-                kept[i].live.clone()
-            };
-            live.retry_late(t, &dir);
-            crate::textedit_tasks::saved_later();
+            if !tend(t, &dir, &id, at, &mut missing) {
+                return;
+            }
         }
     });
+}
+
+/// 补存一次，返回还要不要接着管。文件夹没了的再等一回：可能刚删，还能撤销
+fn tend(t: Tasks, dir: &Path, id: &str, at: Instant, missing: &mut bool) -> bool {
+    let live = {
+        let mut kept = lock(&KEPT);
+        // 存进去了，或者又没存进去一次（有新的线程管）
+        let Some(i) = kept.iter().position(|k| k.live.id == id && k.at == at) else {
+            return false;
+        };
+        if !store::exists(dir, id) {
+            if *missing {
+                kept.remove(i);
+            }
+            return !std::mem::replace(missing, true);
+        }
+        *missing = false;
+        kept[i].live.clone()
+    };
+    live.retry_late(t, dir);
+    crate::textedit_tasks::saved_later();
+    true
 }
 
 // ---- 几何 ----
@@ -2246,6 +2260,50 @@ pub mod tests {
         assert_eq!(edit_of(&l, a).cands.len(), 1);
         assert_ne!(at(&l, &tmp.0, 76 + 260, 90), RED);
         assert!(undo(t, &tmp.0, &l, 9).is_err());
+    }
+
+    /// 没存进去的：文件夹刚没的再等一回，撤销回来就补存；还没有就放开
+    #[test]
+    fn kept_until_undo_is_over() {
+        let (t, tmp) = (new_tasks(), Tmp::new());
+        for back in [true, false] {
+            let l = unread();
+            l.commit(t, &tmp.0, |job| {
+                put(job, &spot(&draft(NEW, [0.0, 1.0]), [0.0, 1.0]))?;
+                store::save(&tmp.0, job).map_err(not_saved)
+            })
+            .unwrap();
+            lock(&l.st).late.push(Late {
+                task: 1,
+                edit: 1,
+                paste: TePaste {
+                    patch: cut(&l.img, [0, 0, 2, 2]),
+                    x: 0,
+                    y: 0,
+                    exact: true,
+                    soft: false,
+                },
+                note: "",
+                placed: true,
+                pick: true,
+            });
+            let at = Instant::now();
+            lock(&KEPT).push(Kept {
+                live: l.clone(),
+                at,
+            });
+            let kept = || lock(&KEPT).iter().any(|k| k.live.id == l.id);
+            let (dir, aside) = (tmp.0.join(&l.id), tmp.0.join("aside"));
+            std::fs::rename(&dir, &aside).unwrap();
+            let mut missing = false;
+            assert!(tend(t, &tmp.0, &l.id, at, &mut missing) && kept());
+            if back {
+                std::fs::rename(&aside, &dir).unwrap();
+                assert!(tend(t, &tmp.0, &l.id, at, &mut missing) && !kept());
+                assert_eq!((edit_of(&l, 1).pick, edit_of(&l, 1).cands.len()), (0, 1));
+            }
+            assert!(!tend(t, &tmp.0, &l.id, at, &mut missing) && !kept());
+        }
     }
 
     // ---- 本机重排交回的 ----
