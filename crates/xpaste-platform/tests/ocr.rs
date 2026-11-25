@@ -59,3 +59,74 @@ fn ocr_reads_png_bytes() {
     let r = ocr_png_bytes(&png, 8000).unwrap().unwrap();
     assert!(r.text.contains("2026"), "{}", r.text);
 }
+
+#[test]
+fn ocr_scale_table() {
+    assert_eq!(xpaste_platform::ocr_scale(274, 363), 3.0);
+    assert_eq!(xpaste_platform::ocr_scale(500, 900), 2.0);
+    assert_eq!(xpaste_platform::ocr_scale(1200, 1600), 1.0);
+}
+
+/// 黑字的墨迹外框（像素），当作“画字的矩形”。
+#[cfg(target_os = "macos")]
+fn ink_bbox(png: &[u8]) -> [f32; 4] {
+    let img = image::load_from_memory(png).unwrap().to_luma8();
+    let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
+    for (x, y, p) in img.enumerate_pixels() {
+        if p.0[0] < 128 {
+            (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+        }
+    }
+    [x0 as f32, y0 as f32, x1 as f32, y1 as f32]
+}
+
+#[cfg(target_os = "macos")]
+fn fixture(name: &str) -> Vec<u8> {
+    std::fs::read(format!(
+        "{}/tests/fixtures/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap()
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn lines_have_quads() {
+    let png = fixture("ocr-line.png");
+    let lines = xpaste_platform::ocr_lines(&png, 8000).unwrap().unwrap();
+    assert_eq!(lines.len(), 1);
+    let l = &lines[0];
+    assert_eq!(l.text, "会议改到三点");
+    let [x0, y0, x1, y1] = ink_bbox(&png);
+    // 行框取在字体行高上，比墨迹略高；水平方向与上下沿各给 6 px，竖直方向只要求包住墨迹
+    assert!((l.quad[0][0] - x0).abs() <= 6.0, "{:?}", l.quad);
+    assert!((l.quad[1][0] - x1).abs() <= 6.0, "{:?}", l.quad);
+    assert!(
+        l.quad[0][1] <= y0 + 6.0 && l.quad[3][1] >= y1 - 6.0,
+        "{:?}",
+        l.quad
+    );
+    assert_eq!(l.chars.len(), 6);
+    assert!(
+        l.chars
+            .windows(2)
+            .all(|w| w[0][0] < w[1][0] && w[0][1] <= w[1][1])
+    );
+    assert!(
+        l.chars
+            .iter()
+            .all(|c| c[0] >= 0.0 && c[1] <= 1.0 && c[0] < c[1])
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn tilted_line_quad() {
+    let lines = xpaste_platform::ocr_lines(&fixture("ocr-line-tilt.png"), 8000)
+        .unwrap()
+        .unwrap();
+    assert_eq!(lines.len(), 1);
+    let q = lines[0].quad;
+    let width = (q[1][0] - q[0][0]).hypot(q[1][1] - q[0][1]);
+    assert!(q[1][1] - q[0][1] >= 0.15 * width, "{q:?}");
+}

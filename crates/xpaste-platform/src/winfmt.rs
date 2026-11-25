@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use image::codecs::bmp::BmpDecoder;
 use image::imageops::FilterType;
 use image::{DynamicImage, ImageDecoder, ImageFormat, RgbaImage};
+use unicode_segmentation::UnicodeSegmentation;
 use xpaste_core::capture::MAX_FLAVOR_BYTES;
 use xpaste_core::{Flavor, VideoMeta};
 
@@ -400,6 +401,57 @@ pub fn join_ocr_words(words: &[String]) -> String {
         out.push_str(w);
     }
     out
+}
+
+/// 矩形 `(x, y, w, h)` 绕图中心顺时针（屏幕 y 向下）转 `angle_deg` 度，返回左上、右上、右下、左下四角。
+/// Windows 识别给的词框在“摆正后”的坐标里，`TextAngle` 把它们转回图上。
+pub fn rotate_rect(
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    angle_deg: f32,
+    img: (f32, f32),
+) -> [[f32; 2]; 4] {
+    let (cx, cy) = (img.0 / 2.0, img.1 / 2.0);
+    let (s, c) = angle_deg.to_radians().sin_cos();
+    [[x, y], [x + w, y], [x + w, y + h], [x, y + h]].map(|[px, py]| {
+        let (dx, dy) = (px - cx, py - cy);
+        [cx + dx * c - dy * s, cy + dx * s + dy * c]
+    })
+}
+
+/// 一行的词（文字、摆正坐标里的 x 与宽）→ 整行文字，以及每个字位簇沿行方向的起止（0–1）。
+/// 词框内字位簇均分；`join_ocr_words` 补的空格宽度为 0，贴在前一个字的末端。
+/// 返回 `(文字, chars, 行起点 x, 行宽)`；行起点与行宽是各词框之并。
+pub fn words_to_line(words: &[(String, f32, f32)]) -> (String, Vec<[f32; 2]>, f32, f32) {
+    let words: Vec<_> = words.iter().filter(|w| !w.0.is_empty()).collect();
+    let x0 = words.iter().map(|w| w.1).fold(f32::MAX, f32::min);
+    let x1 = words.iter().map(|w| w.1 + w.2).fold(f32::MIN, f32::max);
+    let width = (x1 - x0).max(f32::EPSILON);
+    let text = join_ocr_words(&words.iter().map(|w| w.0.clone()).collect::<Vec<_>>());
+    let mut cells = words.iter().flat_map(|(t, x, w)| {
+        let g: Vec<&str> = t.graphemes(true).collect();
+        let n = g.len() as f32;
+        g.into_iter().enumerate().map(move |(i, g)| {
+            let at = |k: f32| (x - x0 + w * k / n) / width;
+            (g, [at(i as f32), at(i as f32 + 1.0)])
+        })
+    });
+    let mut chars = Vec::new();
+    let mut end = 0.0;
+    let mut pending = cells.next();
+    for g in text.graphemes(true) {
+        match pending {
+            Some((pg, span)) if pg == g => {
+                chars.push(span);
+                end = span[1];
+                pending = cells.next();
+            }
+            _ => chars.push([end, end]), // 拼接时插入的空格
+        }
+    }
+    (text, chars, x0, width)
 }
 
 /// 本进程发的滚动事件带的 `dwExtraInfo` 标记（"xpas"），低层钩子据此认出不是用户滚的（M23 规则 13）
@@ -796,6 +848,37 @@ mod tests {
             video_meta_from_props(&VideoProps { h: Some(0), ..base }),
             None
         );
+    }
+
+    #[test]
+    fn rotate_rect_identity() {
+        let q = rotate_rect(10.0, 40.0, 20.0, 10.0, 0.0, (100.0, 100.0));
+        assert_eq!(q, [[10.0, 40.0], [30.0, 40.0], [30.0, 50.0], [10.0, 50.0]]);
+        let q = rotate_rect(10.0, 40.0, 20.0, 10.0, 90.0, (100.0, 100.0));
+        let want = [[60.0, 10.0], [60.0, 30.0], [50.0, 30.0], [50.0, 10.0]];
+        for (a, b) in q.iter().zip(want) {
+            assert!(
+                (a[0] - b[0]).abs() < 0.01 && (a[1] - b[1]).abs() < 0.01,
+                "{q:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn words_to_line_spans() {
+        // 两个中文词紧贴；后接英文词，中间补空格
+        let w = |t: &str, x, w| (t.to_string(), x, w);
+        let (text, chars, x0, width) = words_to_line(&[
+            w("会议", 10.0, 40.0),
+            w("改", 50.0, 20.0),
+            w("ab", 80.0, 20.0),
+        ]);
+        assert_eq!(text, "会议改 ab");
+        assert_eq!((x0, width), (10.0, 90.0));
+        assert_eq!(chars.len(), 6);
+        assert_eq!(chars[0], [0.0, 20.0 / 90.0]);
+        assert_eq!(chars[3], [60.0 / 90.0; 2]); // 空格：零宽，贴在“改”末端
+        assert_eq!(chars[5][1], 1.0);
     }
 
     #[test]

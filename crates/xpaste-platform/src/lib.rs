@@ -116,6 +116,45 @@ fn load_rgba(bytes: &[u8], max_side: u32) -> Result<image::RgbaImage, OcrError> 
     Ok(img.to_rgba8())
 }
 
+/// 带位置的一行识别结果。含用户文字，所以不派生 `Debug`。
+#[derive(Clone, PartialEq)]
+pub struct OcrLine {
+    pub text: String,
+    /// 左上、右上、右下、左下（沿文字方向），单位是原图像素
+    pub quad: [[f32; 2]; 4],
+    pub confidence: f32,
+    /// 每个字位簇沿行方向的起止（0–1）；取不到时为空
+    pub chars: Vec<[f32; 2]>,
+}
+
+/// `ocr_lines` 识别前的放大倍数：短边不到 1000 时为 `min(3, 1000/短边)`，否则 1。
+pub fn ocr_scale(w: u32, h: u32) -> f32 {
+    let short = w.min(h).max(1) as f32;
+    if short < 1000.0 {
+        (1000.0 / short).min(3.0)
+    } else {
+        1.0
+    }
+}
+
+/// 解码并按 `ocr_scale` 放大（长边仍不超过 `max_side`），连同原图尺寸一起返回。
+fn load_scaled(bytes: &[u8], max_side: u32) -> Result<(image::RgbaImage, (u32, u32)), OcrError> {
+    let img = image::load_from_memory(bytes).map_err(|_| OcrError::Decode)?;
+    let orig = (img.width(), img.height());
+    let k = ocr_scale(orig.0, orig.1).min(max_side as f32 / orig.0.max(orig.1) as f32);
+    let size = |v: u32| ((v as f32 * k).round() as u32).max(1);
+    let img = if k == 1.0 {
+        img
+    } else {
+        img.resize_exact(
+            size(orig.0),
+            size(orig.1),
+            image::imageops::FilterType::CatmullRom,
+        )
+    };
+    Ok((img.to_rgba8(), orig))
+}
+
 /// 行文本与置信度拼成结果；没有行时置信度为 0。
 fn ocr_text(lines: Vec<(String, f32)>) -> OcrText {
     let confidence = if lines.is_empty() {

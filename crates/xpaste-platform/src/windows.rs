@@ -105,11 +105,11 @@ use crate::winfmt::{
     Foreground, SCROLL_MARK, VideoProps, bgra_to_opaque_rgba, bgra_to_png, bgra_to_png_within,
     bitmap_from_flavors, cf_html_fragment, file_description_query, foreground_target,
     formats_to_read, is_desktop_class, is_shell_tray_class, is_user_input, join_ocr_words,
-    parse_hdrop, png_to_dib, standard_format_id, standard_format_name, video_meta_from_props,
-    write_bytes,
+    parse_hdrop, png_to_dib, rotate_rect, standard_format_id, standard_format_name,
+    video_meta_from_props, words_to_line, write_bytes,
 };
 use crate::{
-    Frame, OcrError, OcrText, PIN_TITLE_PREFIX, PackStatus, PasteBlock, PlatformError,
+    Frame, OcrError, OcrLine, OcrText, PIN_TITLE_PREFIX, PackStatus, PasteBlock, PlatformError,
     SysTranslateError, WinRect,
 };
 
@@ -1089,6 +1089,77 @@ pub fn ocr_png_bytes(png: &[u8], max_side_px: u32) -> Result<Option<OcrText>, Oc
         .collect::<Result<Vec<_>, Error>>()
         .map_err(err)?;
     Ok(Some(crate::ocr_text(lines)))
+}
+
+/// 带四角与逐字位置的识别。只用中文引擎（简体、繁体台湾、繁体香港），都没有时 `Ok(None)`。
+/// 行框取各词框之并，再按 `TextAngle` 转回图上；识别用的放大图只影响精度，坐标除回原图像素。
+/// 阻塞，只在工作线程调用。
+pub fn ocr_lines(png: &[u8], max_side_px: u32) -> Result<Option<Vec<OcrLine>>, OcrError> {
+    let _com = ComGuard::init();
+    let max = OcrEngine::MaxImageDimension().map_or(max_side_px, |m| m.min(max_side_px));
+    let (mut img, (ow, oh)) = crate::load_scaled(png, max)?;
+    let Some(engine) = ["zh-Hans-CN", "zh-Hant-TW", "zh-Hant-HK"]
+        .into_iter()
+        .find_map(|tag| {
+            let lang = Language::CreateLanguage(&HSTRING::from(tag)).ok()?;
+            OcrEngine::TryCreateFromLanguage(&lang).ok()
+        })
+    else {
+        return Ok(None);
+    };
+    let err = |e: Error| OcrError::Engine(e.message());
+    let (w, h) = img.dimensions();
+    for px in img.pixels_mut() {
+        px.0.swap(0, 2); // RGBA → BGRA
+    }
+    let writer = DataWriter::new().map_err(err)?;
+    writer.WriteBytes(img.as_raw()).map_err(err)?;
+    let bitmap = SoftwareBitmap::CreateCopyFromBuffer(
+        &writer.DetachBuffer().map_err(err)?,
+        BitmapPixelFormat::Bgra8,
+        w as i32,
+        h as i32,
+    )
+    .map_err(err)?;
+    let result = engine
+        .RecognizeAsync(&bitmap)
+        .map_err(err)?
+        .join()
+        .map_err(err)?;
+    let angle = result
+        .TextAngle()
+        .and_then(|a| a.Value())
+        .map_or(0.0, |a| a as f32);
+    let (kx, ky) = (ow as f32 / w as f32, oh as f32 / h as f32);
+    let lines = result
+        .Lines()
+        .map_err(err)?
+        .into_iter()
+        .map(|l| {
+            let mut y = (f32::MAX, f32::MIN);
+            let words = l
+                .Words()?
+                .into_iter()
+                .map(|w| {
+                    let r = w.BoundingRect()?;
+                    y = (y.0.min(r.Y), y.1.max(r.Y + r.Height));
+                    Ok((w.Text()?.to_string(), r.X, r.Width))
+                })
+                .collect::<Result<Vec<_>, Error>>()?;
+            let (text, chars, x0, width) = words_to_line(&words);
+            let quad = rotate_rect(x0, y.0, width, y.1 - y.0, angle, (w as f32, h as f32))
+                .map(|[x, y]| [x * kx, y * ky]);
+            // WinRT 不给行置信度，固定 1.0
+            Ok(OcrLine {
+                text,
+                quad,
+                confidence: 1.0,
+                chars,
+            })
+        })
+        .collect::<Result<Vec<_>, Error>>()
+        .map_err(err)?;
+    Ok(Some(lines))
 }
 
 /// 系统翻译只在 macOS 26 及以上提供（M26 规则 7）。

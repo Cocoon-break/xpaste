@@ -36,12 +36,14 @@ use objc2_core_video::{
 };
 use objc2_foundation::{
     NSArray, NSData, NSDictionary, NSFileManager, NSIndexSet, NSLocale, NSNumber,
-    NSOperatingSystemVersion, NSPoint, NSProcessInfo, NSRect, NSSize, NSString, NSURL, ns_string,
+    NSOperatingSystemVersion, NSPoint, NSProcessInfo, NSRange, NSRect, NSSize, NSString, NSURL,
+    ns_string,
 };
 use objc2_vision::{
     VNGenerateForegroundInstanceMaskRequest, VNImageRequestHandler, VNRecognizeTextRequest,
     VNRequest, VNRequestTextRecognitionLevel,
 };
+use unicode_segmentation::UnicodeSegmentation;
 use xpaste_core::{AppInfo, Flavor, Snapshot, VideoMeta};
 
 #[path = "macos_record.rs"]
@@ -54,7 +56,7 @@ pub use macos_record::{
 pub(crate) use macos_stream::start_native_stream;
 
 use crate::{
-    Frame, OcrError, OcrText, PIN_TITLE_PREFIX, PackStatus, PasteBlock, PlatformError,
+    Frame, OcrError, OcrLine, OcrText, PIN_TITLE_PREFIX, PackStatus, PasteBlock, PlatformError,
     SysTranslateError, WinRect,
 };
 
@@ -731,10 +733,12 @@ pub fn ocr_available() -> bool {
     true
 }
 
-/// Vision `VNRecognizeTextRequest`（accurate、语言校正、简繁中英）。`png` 为图片文件字节（按内容识别格式）。
-/// 阻塞，只在工作线程调用。
-pub fn ocr_png_bytes(png: &[u8], max_side_px: u32) -> Result<Option<OcrText>, OcrError> {
-    let img = crate::load_rgba(png, max_side_px)?;
+/// 建好 Vision 文字识别请求并执行，识别完把请求交给 `read` 取结果。
+/// accurate、语言校正、简繁中英；固定第 2 版模型。阻塞，只在工作线程调用。
+fn run_text_request<T>(
+    img: &image::RgbaImage,
+    read: impl FnOnce(&VNRecognizeTextRequest) -> T,
+) -> Result<T, OcrError> {
     let engine = |what: &str| OcrError::Engine(what.into());
     autoreleasepool(|_| {
         let (w, h) = (img.width() as usize, img.height() as usize);
@@ -794,7 +798,15 @@ pub fn ocr_png_bytes(png: &[u8], max_side_px: u32) -> Result<Option<OcrText>, Oc
         handler
             .performRequests_error(&NSArray::from_slice(&[base]))
             .map_err(|e| OcrError::Engine(e.localizedDescription().to_string()))?;
-        let lines = request
+        Ok(read(&request))
+    })
+}
+
+/// Vision 文字识别。`png` 为图片文件字节（按内容识别格式）。阻塞，只在工作线程调用。
+pub fn ocr_png_bytes(png: &[u8], max_side_px: u32) -> Result<Option<OcrText>, OcrError> {
+    let img = crate::load_rgba(png, max_side_px)?;
+    let lines = run_text_request(&img, |request| {
+        request
             .results()
             .map(|obs| {
                 obs.iter()
@@ -802,9 +814,64 @@ pub fn ocr_png_bytes(png: &[u8], max_side_px: u32) -> Result<Option<OcrText>, Oc
                     .map(|t| (t.string().to_string(), t.confidence()))
                     .collect()
             })
-            .unwrap_or_default();
-        Ok(Some(crate::ocr_text(lines)))
-    })
+            .unwrap_or_default()
+    })?;
+    Ok(Some(crate::ocr_text(lines)))
+}
+
+/// 带四角与逐字位置的识别。Vision 坐标是 0–1、y 朝上：翻转后乘原图尺寸（识别用的放大图只影响精度）。
+/// 阻塞，只在工作线程调用。
+pub fn ocr_lines(png: &[u8], max_side_px: u32) -> Result<Option<Vec<OcrLine>>, OcrError> {
+    let (img, (ow, oh)) = crate::load_scaled(png, max_side_px)?;
+    let px = |p: NSPoint| [p.x as f32 * ow as f32, (1.0 - p.y as f32) * oh as f32];
+    let lines = run_text_request(&img, |request| {
+        let Some(obs) = request.results() else {
+            return Vec::new();
+        };
+        obs.iter()
+            .filter_map(|o| {
+                let cand = o.topCandidates(1).firstObject()?;
+                // SAFETY: 只读属性
+                let quad =
+                    unsafe { [o.topLeft(), o.topRight(), o.bottomRight(), o.bottomLeft()] }.map(px);
+                let text = cand.string().to_string();
+                let (a, d) = (quad[0], [quad[1][0] - quad[0][0], quad[1][1] - quad[0][1]]);
+                let len2 = (d[0] * d[0] + d[1] * d[1]).max(f32::EPSILON);
+                let t = |p: [f32; 2]| {
+                    (((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / len2).clamp(0.0, 1.0)
+                };
+                // 每个字位簇取 boundingBoxForRange（UTF-16 范围）四角在行方向上的投影
+                let mut at = 0;
+                // 任何一个字取不到框就整行不给 chars（空）
+                let chars = text
+                    .graphemes(true)
+                    .map(|g| {
+                        let n = g.encode_utf16().count();
+                        // SAFETY: 范围在候选字符串内
+                        let b =
+                            unsafe { cand.boundingBoxForRange_error(NSRange::new(at, n)) }.ok()?;
+                        at += n;
+                        // SAFETY: 只读属性
+                        let ts =
+                            unsafe { [b.topLeft(), b.topRight(), b.bottomRight(), b.bottomLeft()] }
+                                .map(|p| t(px(p)));
+                        Some([
+                            ts.iter().copied().fold(1.0, f32::min),
+                            ts.iter().copied().fold(0.0, f32::max),
+                        ])
+                    })
+                    .collect::<Option<Vec<_>>>()
+                    .unwrap_or_default();
+                Some(OcrLine {
+                    text,
+                    quad,
+                    confidence: cand.confidence(),
+                    chars,
+                })
+            })
+            .collect()
+    })?;
+    Ok(Some(lines))
 }
 
 /// 前景分割（`VNGenerateForegroundInstanceMaskRequest`）要 macOS 14。
