@@ -759,18 +759,12 @@ fn settled<E>(grab: impl Fn() -> Result<(u32, u32, Vec<u8>), E>) -> Result<(u32,
     Ok(f)
 }
 
-/// 快速压缩档：长图很大，默认档在 release 下也要近 2 秒（2818 × 3872），快速档不到 0.1 秒，文件大 2%–55%
 fn encode(w: usize, h: usize, rgba: Vec<u8>) -> Result<Vec<u8>, AppError> {
-    use image::ImageEncoder;
-    use image::codecs::png::{CompressionType, FilterType, PngEncoder};
     if rgba.len() != w * h * 4 {
         return Err(AppError::Invalid("长截图尺寸无效".into()));
     }
-    let mut png = Vec::new();
-    PngEncoder::new_with_quality(&mut png, CompressionType::Fast, FilterType::Adaptive)
-        .write_image(&rgba, w as u32, h as u32, image::ExtendedColorType::Rgba8)
-        .map_err(|e| AppError::Invalid(format!("长截图编码失败：{e}")))?;
-    Ok(png)
+    crate::img_meta::encode_png(w as u32, h as u32, &rgba)
+        .map_err(|e| AppError::Invalid(format!("长截图编码失败：{e}")))
 }
 
 /// 不再自动滚动（转手动、到上限）：空格还给应用（可能用它翻页）

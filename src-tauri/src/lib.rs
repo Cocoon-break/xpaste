@@ -17,6 +17,7 @@ mod gen_slots;
 mod hotkey;
 mod housekeeping;
 mod imagegen;
+mod img_meta;
 mod license;
 mod line;
 mod longshot;
@@ -35,6 +36,7 @@ mod record_image;
 mod remind;
 mod shot;
 pub mod state;
+mod textedit_store;
 mod translate;
 mod tray;
 mod trcard;
@@ -107,10 +109,13 @@ pub fn run() {
             if let Err(e) = shot::clear_pins(&data_dir.join("pins")) {
                 log::warn!("清空贴图目录失败：{e}");
             }
+            textedit_store::clean(&data_dir.join("textedit"));
             if isolated {
                 log::info!("数据目录已由 XPASTE_DATA_DIR 覆盖，不启用单实例");
                 // tauri.conf.json 的 assetProtocol.scope 只覆盖默认数据目录
-                for sub in ["images", "thumbs", "icons", "pins", "line", "memes"] {
+                for sub in [
+                    "images", "thumbs", "icons", "pins", "line", "memes", "textedit",
+                ] {
                     if let Err(e) = app
                         .asset_protocol_scope()
                         .allow_directory(data_dir.join(sub), true)

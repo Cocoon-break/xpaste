@@ -1081,28 +1081,43 @@ pub fn resolve_dir(
     base.map_or_else(|| data_dir.join(fallback), |b| b.join("xPaste"))
 }
 
-/// 在 `dir` 里新建不重名的截图文件并写入，返回文件名。用 `create_new`，
-/// 检查与写入之间有别人建了同名文件时换下一个序号，不会覆盖。
+/// 在 `dir` 里新建不重名的截图文件并写入，返回文件名。
 pub fn write_unique(dir: &Path, stamp: &str, png: &[u8]) -> std::io::Result<String> {
     use std::io::Write;
+    let path = write_new(
+        || {
+            // symlink_metadata：失效的符号链接也算占用，否则 create_new 会一直撞上它
+            dir.join(unique_file_name("截图", stamp, "png", |n| {
+                dir.join(n).symlink_metadata().is_ok()
+            }))
+        },
+        |f| f.write_all(png),
+    )?;
+    Ok(path
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned()))
+}
+
+/// 新建 `next` 给的文件并写入，返回路径。用 `create_new`，挑名字与写入之间有别人建了同名文件时再要一个，
+/// 不会覆盖；写失败时不留下写了一半的文件。
+pub fn write_new(
+    next: impl Fn() -> PathBuf,
+    write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+) -> std::io::Result<PathBuf> {
     let mut tries = 0;
     loop {
-        // symlink_metadata：失效的符号链接也算占用，否则 create_new 会一直撞上它
-        let name = unique_file_name("截图", stamp, "png", |n| {
-            dir.join(n).symlink_metadata().is_ok()
-        });
+        let path = next();
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(dir.join(&name))
+            .open(&path)
         {
             Ok(mut f) => {
-                return match f.write_all(png) {
-                    Ok(()) => Ok(name),
+                return match write(&mut f) {
+                    Ok(()) => Ok(path),
                     Err(e) => {
-                        // 不留下写了一半的文件
                         drop(f);
-                        let _ = std::fs::remove_file(dir.join(&name));
+                        let _ = std::fs::remove_file(&path);
                         Err(e)
                     }
                 };
@@ -2229,6 +2244,30 @@ mod tests {
         assert_eq!(write_unique(&dir, "s", b"new").unwrap(), "截图 s 2.png");
         assert_eq!(std::fs::read(dir.join("截图 s.png")).unwrap(), b"old");
         assert_eq!(std::fs::read(dir.join("截图 s 2.png")).unwrap(), b"new");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// 写到一半失败（磁盘满）：不留半截文件，别的文件不动
+    #[test]
+    fn write_new_removes_half_file() {
+        use std::io::{Error, ErrorKind, Write};
+        let dir = std::env::temp_dir().join(format!("xpaste-shot-half-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let r = write_new(
+            || dir.join("a.png"),
+            |f| {
+                f.write_all(b"half")?;
+                Err(Error::from(ErrorKind::StorageFull))
+            },
+        );
+        assert_eq!(r.unwrap_err().kind(), ErrorKind::StorageFull);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        // 一直撞名：报错，不动占着名字的那个
+        std::fs::write(dir.join("a.png"), b"mine").unwrap();
+        let r = write_new(|| dir.join("a.png"), |f| f.write_all(b"x"));
+        assert_eq!(r.unwrap_err().kind(), ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(dir.join("a.png")).unwrap(), b"mine");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

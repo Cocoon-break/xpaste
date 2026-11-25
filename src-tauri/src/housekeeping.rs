@@ -9,7 +9,7 @@ use crate::events::emit_removed;
 use crate::state::AppState;
 
 const PRUNE_EVERY: Duration = Duration::from_secs(3600);
-const UNDO_WINDOW: Duration = Duration::from_secs(5);
+pub(crate) const UNDO_WINDOW: Duration = Duration::from_secs(5);
 
 pub fn start(app: AppHandle) {
     let purged = app.state::<AppState>().store().purge_all_soft_deleted();
