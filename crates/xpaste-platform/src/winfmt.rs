@@ -423,9 +423,12 @@ pub fn rotate_rect(
 
 /// 一行的词（文字、摆正坐标里的 x 与宽）→ 整行文字，以及每个字位簇沿行方向的起止（0–1）。
 /// 词框内字位簇均分；`join_ocr_words` 补的空格宽度为 0，贴在前一个字的末端。
-/// 返回 `(文字, chars, 行起点 x, 行宽)`；行起点与行宽是各词框之并。
-pub fn words_to_line(words: &[(String, f32, f32)]) -> (String, Vec<[f32; 2]>, f32, f32) {
+/// 返回 `(文字, chars, 行起点 x, 行宽)`；行起点与行宽是各词框之并。没有词或词都是空文字时返回 `None`。
+pub fn words_to_line(words: &[(String, f32, f32)]) -> Option<(String, Vec<[f32; 2]>, f32, f32)> {
     let words: Vec<_> = words.iter().filter(|w| !w.0.is_empty()).collect();
+    if words.is_empty() {
+        return None;
+    }
     let x0 = words.iter().map(|w| w.1).fold(f32::MAX, f32::min);
     let x1 = words.iter().map(|w| w.1 + w.2).fold(f32::MIN, f32::max);
     let width = (x1 - x0).max(f32::EPSILON);
@@ -451,7 +454,7 @@ pub fn words_to_line(words: &[(String, f32, f32)]) -> (String, Vec<[f32; 2]>, f3
             _ => chars.push([end, end]), // 拼接时插入的空格
         }
     }
-    (text, chars, x0, width)
+    Some((text, chars, x0, width))
 }
 
 /// 本进程发的滚动事件带的 `dwExtraInfo` 标记（"xpas"），低层钩子据此认出不是用户滚的（M23 规则 13）
@@ -872,13 +875,20 @@ mod tests {
             w("会议", 10.0, 40.0),
             w("改", 50.0, 20.0),
             w("ab", 80.0, 20.0),
-        ]);
+        ])
+        .unwrap();
         assert_eq!(text, "会议改 ab");
         assert_eq!((x0, width), (10.0, 90.0));
         assert_eq!(chars.len(), 6);
         assert_eq!(chars[0], [0.0, 20.0 / 90.0]);
         assert_eq!(chars[3], [60.0 / 90.0; 2]); // 空格：零宽，贴在“改”末端
         assert_eq!(chars[5][1], 1.0);
+    }
+
+    #[test]
+    fn words_to_line_skips_empty_lines() {
+        assert_eq!(words_to_line(&[]), None);
+        assert_eq!(words_to_line(&[(String::new(), 1.0, 2.0)]), None);
     }
 
     #[test]

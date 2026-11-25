@@ -98,11 +98,16 @@ fn lines_have_quads() {
     let l = &lines[0];
     assert_eq!(l.text, "会议改到三点");
     let [x0, y0, x1, y1] = ink_bbox(&png);
-    // 行框取在字体行高上，比墨迹略高；水平方向与上下沿各给 6 px，竖直方向只要求包住墨迹
+    // 水平 ±6 px；竖直要求包住墨迹（容差 6 px：Vision 的框贴着墨迹且略带倾斜，实测上沿比墨迹低 1–4 px），且行框高不超过墨迹高的 2 倍（Vision 行框取字体行高，比墨迹高）
     assert!((l.quad[0][0] - x0).abs() <= 6.0, "{:?}", l.quad);
     assert!((l.quad[1][0] - x1).abs() <= 6.0, "{:?}", l.quad);
     assert!(
         l.quad[0][1] <= y0 + 6.0 && l.quad[3][1] >= y1 - 6.0,
+        "{:?}",
+        l.quad
+    );
+    assert!(
+        l.quad[3][1] - l.quad[0][1] <= 2.0 * (y1 - y0),
         "{:?}",
         l.quad
     );
@@ -117,6 +122,21 @@ fn lines_have_quads() {
             .iter()
             .all(|c| c[0] >= 0.0 && c[1] <= 1.0 && c[0] < c[1])
     );
+    assert!(
+        l.chars[0][0] <= 0.1 && l.chars[5][1] >= 0.9,
+        "{:?}",
+        l.chars
+    );
+    // 相邻两字中心间距彼此相差不超过 35%
+    let gaps: Vec<f32> = l
+        .chars
+        .windows(2)
+        .map(|w| (w[1][0] + w[1][1] - w[0][0] - w[0][1]) / 2.0)
+        .collect();
+    let (lo, hi) = gaps
+        .iter()
+        .fold((f32::MAX, f32::MIN), |(a, b), &g| (a.min(g), b.max(g)));
+    assert!(hi <= lo * 1.35, "{gaps:?}");
 }
 
 #[cfg(target_os = "macos")]
@@ -129,4 +149,9 @@ fn tilted_line_quad() {
     let q = lines[0].quad;
     let width = (q[1][0] - q[0][0]).hypot(q[1][1] - q[0][1]);
     assert!(q[1][1] - q[0][1] >= 0.15 * width, "{q:?}");
+    // 上边长约等于画字宽度（原图水平字宽 / cos12°，±10%）
+    let [x0, _, x1, _] = ink_bbox(&fixture("ocr-line.png"));
+    let drawn = x1 - x0;
+    assert!((width - drawn).abs() <= 0.1 * drawn, "{width} vs {drawn}");
+    assert_eq!(lines[0].chars.len(), 6);
 }

@@ -1146,18 +1146,21 @@ pub fn ocr_lines(png: &[u8], max_side_px: u32) -> Result<Option<Vec<OcrLine>>, O
                     Ok((w.Text()?.to_string(), r.X, r.Width))
                 })
                 .collect::<Result<Vec<_>, Error>>()?;
-            let (text, chars, x0, width) = words_to_line(&words);
+            let Some((text, chars, x0, width)) = words_to_line(&words) else {
+                return Ok(None); // 空行不产出
+            };
             let quad = rotate_rect(x0, y.0, width, y.1 - y.0, angle, (w as f32, h as f32))
                 .map(|[x, y]| [x * kx, y * ky]);
             // WinRT 不给行置信度，固定 1.0
-            Ok(OcrLine {
+            Ok(Some(OcrLine {
                 text,
                 quad,
                 confidence: 1.0,
                 chars,
-            })
+            }))
         })
         .collect::<Result<Vec<_>, Error>>()
+        .map(|v| v.into_iter().flatten().collect::<Vec<_>>())
         .map_err(err)?;
     Ok(Some(lines))
 }
