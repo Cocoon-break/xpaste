@@ -1,4 +1,5 @@
-//! 表情包制作的 AI 任务队列：每次生成是一个任务，不跟窗口走；同时最多 2 个在画，其余排队。
+//! 表情包制作的 AI 任务队列：每次生成是一个任务，不跟窗口走；同时最多 2 个在画，其余排队
+//! （名额和排队的先后与改字共用，见 `gen_slots`）。
 //! 状态一变就把整份任务列表发给制作窗口和面板。只在内存里，不存盘。
 //!
 //! `Queue` 是纯数据结构（不联网、不碰窗口），运行时是下面薄薄一层：全局锁、`pump`、异步任务。
@@ -9,11 +10,9 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
 use crate::error::AppError;
+use crate::gen_slots::{self, Slots, Who};
 use crate::meme_gen::{self, GenOut, GenReq};
 use crate::state::AppState;
-
-/// 同时在画的最多几个
-pub const MAX_RUNNING: usize = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -38,7 +37,7 @@ pub struct TaskView {
     pub style: String,
     /// 开始画的 Unix 毫秒，秒数由前端自己走；还没开始为 None
     pub started_ms: Option<u64>,
-    /// 排在它前面、还在排队的个数；不在排队的为 0
+    /// 排在它前面、还在排队的个数（改字的也算）；不在排队的为 0
     pub ahead: usize,
     /// 画好的结果在表情包库里的 id
     pub ids: Vec<i64>,
@@ -66,7 +65,7 @@ impl std::fmt::Debug for TaskView {
 struct Task {
     view: TaskView,
     req: GenReq,
-    /// 在画时被取消：不再显示，等结果回来（照样进库）再拿掉；仍占一个在画的名额
+    /// 在画时被取消：不再显示，等结果回来（照样进库）再拿掉、让出名额
     cancelled: bool,
 }
 
@@ -79,7 +78,9 @@ pub struct Queue {
 
 impl std::fmt::Debug for Queue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_list().entries(self.views()).finish()
+        f.debug_list()
+            .entries(self.tasks.iter().map(|t| &t.view))
+            .finish()
     }
 }
 
@@ -141,6 +142,7 @@ impl Queue {
     /// 拿领来的号入队；不认识的生成方式、不是领来的号、这个号已经在队里都不入队
     pub fn push(
         &mut self,
+        slots: &mut Slots,
         id: u64,
         req: GenReq,
         title: String,
@@ -172,27 +174,18 @@ impl Queue {
             req,
             cancelled: false,
         });
+        slots.enqueue(Who::Meme, id);
         Ok(())
     }
 
-    /// 在画的不到 `MAX_RUNNING` 个时，把最早排队的标成在画并返回它（取消了还没回来的也占名额）
-    #[allow(clippy::should_implement_trait)] // 不是迭代器：取出的任务留在队列里
-    pub fn next(&mut self) -> Option<u64> {
-        let running = self
-            .tasks
-            .iter()
-            .filter(|t| t.view.state == TaskState::Run)
-            .count();
-        if running >= MAX_RUNNING {
-            return None;
-        }
-        let t = self
-            .tasks
-            .iter_mut()
-            .find(|t| t.view.state == TaskState::Queue)?;
-        t.view.state = TaskState::Run;
-        t.view.started_ms = Some(u64::try_from(crate::clock::now_ms()).unwrap_or(0));
-        Some(t.view.id)
+    /// 轮到自己且有名额时，把排头标成在画并返回它（取消了还没回来的也占名额）
+    pub fn next(&mut self, slots: &mut Slots) -> Option<u64> {
+        let id = slots.take(Who::Meme)?;
+        let i = self.at(id)?;
+        let v = &mut self.tasks[i].view;
+        v.state = TaskState::Run;
+        v.started_ms = Some(u64::try_from(crate::clock::now_ms()).unwrap_or(0));
+        Some(id)
     }
 
     /// 在画时被取消了（或已经不在了）：分 4 次重画据此不再发后面的部分
@@ -205,9 +198,15 @@ impl Queue {
         self.at(id).map(|i| self.tasks[i].req.clone())
     }
 
-    /// 在画的结束了（结果已由 `generate` 存进库）。返回该发的通知正文；已取消、不在了的返回 None
-    pub fn finish(&mut self, id: u64, r: Result<GenOut, String>) -> Option<String> {
+    /// 在画的结束了（结果已由 `generate` 存进库），让出名额。返回该发的通知正文；已取消、不在了的返回 None
+    pub fn finish(
+        &mut self,
+        slots: &mut Slots,
+        id: u64,
+        r: Result<GenOut, String>,
+    ) -> Option<String> {
         let i = self.at(id)?;
+        slots.release();
         if self.tasks[i].cancelled {
             self.tasks.remove(i);
             return None;
@@ -232,21 +231,22 @@ impl Queue {
         })
     }
 
-    /// 取消：排队的直接拿掉；在画的不再显示，请求不中止，结果回来照样进库
-    pub fn cancel(&mut self, id: u64) {
+    /// 取消：排队的直接拿掉；在画的不再显示，请求不中止（名额等它回来才让），结果回来照样进库
+    pub fn cancel(&mut self, slots: &mut Slots, id: u64) {
         let Some(i) = self.at(id) else { return };
         match self.tasks[i].view.state {
             TaskState::Queue => {
                 self.tasks.remove(i);
+                slots.remove(Who::Meme, id);
             }
             TaskState::Run => self.tasks[i].cancelled = true,
             TaskState::Done | TaskState::Fail => {}
         }
     }
 
-    /// 没画出来的重试：回到队尾排队
+    /// 没画出来的重试：重新入队，回到队尾
     /// 返回重试上了没有：任务已经不在、不是没画出来的都不动
-    pub fn retry(&mut self, id: u64) -> bool {
+    pub fn retry(&mut self, slots: &mut Slots, id: u64) -> bool {
         let Some(i) = self.at(id) else { return false };
         if self.tasks[i].view.state != TaskState::Fail {
             return false;
@@ -256,6 +256,7 @@ impl Queue {
         t.view.error.clear();
         t.view.started_ms = None;
         self.tasks.push(t);
+        slots.enqueue(Who::Meme, id);
         true
     }
 
@@ -278,19 +279,16 @@ impl Queue {
     }
 
     /// 整份列表，新的在前；取消了还没回来的不在里面
-    pub fn views(&self) -> Vec<TaskView> {
-        let mut ahead = 0;
-        let mut out: Vec<TaskView> = Vec::new();
-        for t in self.tasks.iter().filter(|t| !t.cancelled) {
-            let mut v = t.view.clone();
-            if v.state == TaskState::Queue {
-                v.ahead = ahead;
-                ahead += 1;
-            }
-            out.push(v);
-        }
-        out.reverse();
-        out
+    pub fn views(&self, slots: &Slots) -> Vec<TaskView> {
+        self.tasks
+            .iter()
+            .rev()
+            .filter(|t| !t.cancelled)
+            .map(|t| TaskView {
+                ahead: slots.ahead(Who::Meme, t.view.id),
+                ..t.view.clone()
+            })
+            .collect()
     }
 }
 
@@ -305,20 +303,26 @@ fn q() -> MutexGuard<'static, Queue> {
     Q.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// 空出来的名额接上排队的，再把整份列表发给制作窗口和面板
+/// 任务列表变了：叫醒共用名额的每一家（自己在 `pump` 里接上排队的、发列表）
 fn changed(app: &AppHandle) {
+    gen_slots::freed(app);
+}
+
+/// 空出来的名额接上排队的，再把整份列表发给制作窗口和面板。启动时登记给 `gen_slots::on_free`
+pub fn pump(app: &AppHandle) {
     loop {
         // 取出要跑的就放锁，再起异步任务
         let next = {
             let mut q = q();
-            q.next().and_then(|id| q.req(id).map(|r| (id, r)))
+            let id = q.next(&mut gen_slots::slots());
+            id.and_then(|id| q.req(id).map(|r| (id, r)))
         };
         let Some((id, req)) = next else { break };
         log::info!("表情包 任务 {id} 开始画");
         tauri::async_runtime::spawn(run(app.clone(), id, req));
     }
     let _emit = EMIT.lock().unwrap_or_else(PoisonError::into_inner);
-    let views = q().views();
+    let views = views();
     for label in [crate::meme::LABEL, "panel"] {
         crate::events::emit_to(app, label, crate::events::MEME_TASKS, views.clone());
     }
@@ -359,7 +363,7 @@ async fn run(app: AppHandle, id: u64, req: GenReq) {
             "没画出来"
         }
     );
-    let note = q().finish(id, r);
+    let note = q().finish(&mut gen_slots::slots(), id, r);
     if let Some(body) = note
         && !crate::meme::window_open()
     {
@@ -379,21 +383,21 @@ pub fn start(
     title: String,
     scene: String,
 ) -> Result<(), String> {
-    q().push(id, req, title, scene)?;
+    q().push(&mut gen_slots::slots(), id, req, title, scene)?;
     log::info!("表情包 任务 {id} 入队");
     changed(app);
     Ok(())
 }
 
 pub fn cancel(app: &AppHandle, id: u64) {
-    q().cancel(id);
+    q().cancel(&mut gen_slots::slots(), id);
     log::info!("表情包 任务 {id} 取消");
     changed(app);
 }
 
 /// 重试；任务已经不在（去掉了）或不是没画出来的时返回 `TASK_GONE`，页面据此不再等它
 pub fn retry(app: &AppHandle, id: u64) -> Result<(), String> {
-    if !q().retry(id) {
+    if !q().retry(&mut gen_slots::slots(), id) {
         return Err(meme_gen::TASK_GONE.into());
     }
     log::info!("表情包 任务 {id} 重试");
@@ -407,7 +411,7 @@ pub fn dismiss(app: &AppHandle, id: u64) {
 }
 
 pub fn views() -> Vec<TaskView> {
-    q().views()
+    q().views(&gen_slots::slots())
 }
 
 /// 按任务里的做法打开制作窗口，结果摆进预览；画好又画规整的随之拿掉（试用结束等没真打开时不拿）
@@ -435,40 +439,50 @@ mod tests {
         .unwrap()
     }
 
-    fn push(q: &mut Queue) -> u64 {
+    fn push(q: &mut Queue, s: &mut Slots) -> u64 {
         let id = q.reserve();
-        q.push(id, req("one"), "标题".into(), "{}".into()).unwrap();
+        q.push(s, id, req("one"), "标题".into(), "{}".into())
+            .unwrap();
         id
     }
 
     /// 入队只认领来的号，一个号只能用一次
     #[test]
     fn push_needs_a_reserved_id() {
-        let mut q = Queue::new();
-        let push = |q: &mut Queue, id| q.push(id, req("one"), "标题".into(), "{}".into());
-        assert!(push(&mut q, 1).is_err());
+        let (mut q, mut s) = (Queue::new(), Slots::new());
+        let push = |q: &mut Queue, s: &mut Slots, id| {
+            q.push(s, id, req("one"), "标题".into(), "{}".into())
+        };
+        assert!(push(&mut q, &mut s, 1).is_err());
         let id = q.reserve();
-        assert!(push(&mut q, id).is_ok());
-        assert!(push(&mut q, id).is_err());
-        assert!(!q.retry(99));
+        assert!(push(&mut q, &mut s, id).is_ok());
+        assert!(push(&mut q, &mut s, id).is_err());
+        assert!(!q.retry(&mut s, 99));
     }
 
-    fn state(q: &Queue, id: u64) -> Option<TaskState> {
-        q.views().into_iter().find(|v| v.id == id).map(|v| v.state)
+    fn state(q: &Queue, s: &Slots, id: u64) -> Option<TaskState> {
+        q.views(s).into_iter().find(|v| v.id == id).map(|v| v.state)
     }
 
     #[test]
     fn two_run_rest_wait() {
-        let mut q = Queue::new();
-        let (a, b, c) = (push(&mut q), push(&mut q), push(&mut q));
-        assert_eq!(q.next(), Some(a));
-        assert_eq!(q.next(), Some(b));
-        assert_eq!(q.next(), None);
-        assert!(q.finish(a, Ok(GenOut::Done { ids: vec![7] })).is_some());
-        assert_eq!(q.next(), Some(c));
-        assert_eq!(state(&q, c), Some(TaskState::Run));
+        let (mut q, mut s) = (Queue::new(), Slots::new());
+        let (a, b, c) = (
+            push(&mut q, &mut s),
+            push(&mut q, &mut s),
+            push(&mut q, &mut s),
+        );
+        assert_eq!(q.next(&mut s), Some(a));
+        assert_eq!(q.next(&mut s), Some(b));
+        assert_eq!(q.next(&mut s), None);
         assert!(
-            q.views()
+            q.finish(&mut s, a, Ok(GenOut::Done { ids: vec![7] }))
+                .is_some()
+        );
+        assert_eq!(q.next(&mut s), Some(c));
+        assert_eq!(state(&q, &s, c), Some(TaskState::Run));
+        assert!(
+            q.views(&s)
                 .iter()
                 .find(|v| v.id == c)
                 .unwrap()
@@ -479,78 +493,111 @@ mod tests {
 
     #[test]
     fn ahead_counts_waiting_before() {
-        let mut q = Queue::new();
-        push(&mut q);
-        push(&mut q);
-        let c = push(&mut q);
-        q.next();
-        q.next();
-        let ahead = |q: &Queue, id| q.views().into_iter().find(|v| v.id == id).unwrap().ahead;
-        assert_eq!(ahead(&q, c), 0);
-        let d = push(&mut q);
-        assert_eq!(ahead(&q, d), 1);
-        assert_eq!(ahead(&q, c), 0);
+        let (mut q, mut s) = (Queue::new(), Slots::new());
+        push(&mut q, &mut s);
+        push(&mut q, &mut s);
+        let c = push(&mut q, &mut s);
+        q.next(&mut s);
+        q.next(&mut s);
+        let ahead =
+            |q: &Queue, s: &Slots, id| q.views(s).into_iter().find(|v| v.id == id).unwrap().ahead;
+        assert_eq!(ahead(&q, &s, c), 0);
+        let d = push(&mut q, &mut s);
+        assert_eq!(ahead(&q, &s, d), 1);
+        assert_eq!(ahead(&q, &s, c), 0);
         // 新的在前
-        assert_eq!(q.views()[0].id, d);
+        assert_eq!(q.views(&s)[0].id, d);
     }
 
     #[test]
     fn cancel_waiting_and_running() {
-        let mut q = Queue::new();
-        let (a, b, c) = (push(&mut q), push(&mut q), push(&mut q));
-        q.next();
-        q.next();
-        q.cancel(c);
-        assert_eq!(state(&q, c), None);
-        q.cancel(a);
-        assert_eq!(state(&q, a), None);
+        let (mut q, mut s) = (Queue::new(), Slots::new());
+        let (a, b, c) = (
+            push(&mut q, &mut s),
+            push(&mut q, &mut s),
+            push(&mut q, &mut s),
+        );
+        q.next(&mut s);
+        q.next(&mut s);
+        q.cancel(&mut s, c);
+        assert_eq!(state(&q, &s, c), None);
+        q.cancel(&mut s, a);
+        assert_eq!(state(&q, &s, a), None);
         // 在画的取消了还占名额，回来之前不接新的
-        let d = push(&mut q);
-        assert_eq!(q.next(), None);
+        let d = push(&mut q, &mut s);
+        assert_eq!(q.next(&mut s), None);
         // 结果回来：不 panic，不发通知（结果已由 generate 进库）
-        assert_eq!(q.finish(a, Ok(GenOut::Done { ids: vec![9] })), None);
-        assert_eq!(state(&q, a), None);
-        assert_eq!(q.next(), Some(d));
-        assert_eq!(state(&q, b), Some(TaskState::Run));
+        assert_eq!(q.finish(&mut s, a, Ok(GenOut::Done { ids: vec![9] })), None);
+        assert_eq!(state(&q, &s, a), None);
+        assert_eq!(q.next(&mut s), Some(d));
+        assert_eq!(state(&q, &s, b), Some(TaskState::Run));
+    }
+
+    /// 和改字共用名额和队列：别家在跑、在排的都算，取消排队的也从共用队列里去掉
+    #[test]
+    fn slots_shared_with_other() {
+        let (mut q, mut s) = (Queue::new(), Slots::new());
+        s.enqueue(Who::Edit, 1);
+        let a = push(&mut q, &mut s);
+        s.enqueue(Who::Edit, 2);
+        let b = push(&mut q, &mut s);
+        let ahead =
+            |q: &Queue, s: &Slots, id| q.views(s).into_iter().find(|v| v.id == id).unwrap().ahead;
+        assert_eq!((ahead(&q, &s, a), ahead(&q, &s, b)), (1, 3));
+        assert_eq!(q.next(&mut s), None);
+        assert_eq!(s.take(Who::Edit), Some(1));
+        assert_eq!(q.next(&mut s), Some(a));
+        assert_eq!((ahead(&q, &s, a), ahead(&q, &s, b)), (0, 1));
+        assert!(q.finish(&mut s, a, Err("超时".into())).is_some());
+        // 排头是改字的
+        assert_eq!(q.next(&mut s), None);
+        q.retry(&mut s, a);
+        assert_eq!(ahead(&q, &s, a), 2);
+        q.cancel(&mut s, b);
+        assert_eq!(ahead(&q, &s, a), 1);
+        assert_eq!(s.take(Who::Edit), Some(2));
+        assert_eq!(q.next(&mut s), None);
+        s.release();
+        assert_eq!(q.next(&mut s), Some(a));
     }
 
     #[test]
     fn unreadable_ref_note_hides_internal_reason() {
-        let mut q = Queue::new();
-        let a = push(&mut q);
-        q.next();
-        let note = q.finish(a, Err("unreadable:5:0".into())).unwrap();
+        let (mut q, mut s) = (Queue::new(), Slots::new());
+        let a = push(&mut q, &mut s);
+        q.next(&mut s);
+        let note = q.finish(&mut s, a, Err("unreadable:5:0".into())).unwrap();
         assert!(note.ends_with("没画出来：这张参考图读不出来"));
         assert!(!note.contains("unreadable"));
     }
 
     #[test]
     fn fail_then_retry_goes_to_back() {
-        let mut q = Queue::new();
-        let (a, b) = (push(&mut q), push(&mut q));
-        q.next();
-        let note = q.finish(a, Err("服务商限流".into())).unwrap();
+        let (mut q, mut s) = (Queue::new(), Slots::new());
+        let (a, b) = (push(&mut q, &mut s), push(&mut q, &mut s));
+        q.next(&mut s);
+        let note = q.finish(&mut s, a, Err("服务商限流".into())).unwrap();
         assert!(note.contains("没画出来：服务商限流"));
-        let v = q.views().into_iter().find(|v| v.id == a).unwrap();
+        let v = q.views(&s).into_iter().find(|v| v.id == a).unwrap();
         assert_eq!((v.state, v.error.as_str()), (TaskState::Fail, "服务商限流"));
-        q.retry(a);
-        let v = q.views().into_iter().find(|v| v.id == a).unwrap();
+        q.retry(&mut s, a);
+        let v = q.views(&s).into_iter().find(|v| v.id == a).unwrap();
         assert_eq!(
             (v.state, v.error.as_str(), v.ahead),
             (TaskState::Queue, "", 1)
         );
-        assert_eq!(q.views()[0].id, a);
-        assert_eq!(q.next(), Some(b));
-        assert_eq!(q.next(), Some(a));
+        assert_eq!(q.views(&s)[0].id, a);
+        assert_eq!(q.next(&mut s), Some(b));
+        assert_eq!(q.next(&mut s), Some(a));
     }
 
     #[test]
     fn drop_done() {
-        let mut q = Queue::new();
-        let a = push(&mut q);
-        q.next();
-        q.finish(a, Ok(GenOut::Irregular { id: 5 }));
-        let v = q.views().into_iter().find(|v| v.id == a).unwrap();
+        let (mut q, mut s) = (Queue::new(), Slots::new());
+        let a = push(&mut q, &mut s);
+        q.next(&mut s);
+        q.finish(&mut s, a, Ok(GenOut::Irregular { id: 5 }));
+        let v = q.views(&s).into_iter().find(|v| v.id == a).unwrap();
         assert_eq!(
             (v.state, v.ids.len(), v.irregular),
             (TaskState::Done, 0, Some(5))
@@ -559,17 +606,17 @@ mod tests {
         let (t, ids, take) = q.reopen(a).unwrap();
         assert_eq!((t.scene.as_str(), ids, take), ("{}", vec![5], false));
         q.drop(a);
-        assert!(q.views().is_empty());
+        assert!(q.views(&s).is_empty());
     }
 
     #[test]
     fn reopen_takes_only_regular_done() {
-        let mut q = Queue::new();
-        let (a, b) = (push(&mut q), push(&mut q));
-        q.next();
-        q.next();
-        q.finish(a, Ok(GenOut::Done { ids: vec![3, 4] }));
-        q.finish(b, Err("超时".into()));
+        let (mut q, mut s) = (Queue::new(), Slots::new());
+        let (a, b) = (push(&mut q, &mut s), push(&mut q, &mut s));
+        q.next(&mut s);
+        q.next(&mut s);
+        q.finish(&mut s, a, Ok(GenOut::Done { ids: vec![3, 4] }));
+        q.finish(&mut s, b, Err("超时".into()));
         let (_, ids, take) = q.reopen(a).unwrap();
         assert_eq!((ids, take), (vec![3, 4], true));
         let (_, ids, take) = q.reopen(b).unwrap();
@@ -578,9 +625,10 @@ mod tests {
 
     #[test]
     fn title_scene_kept_not_logged() {
-        let mut q = Queue::new();
+        let (mut q, mut s) = (Queue::new(), Slots::new());
         let a = q.reserve();
         q.push(
+            &mut s,
             a,
             req("set_part"),
             "不想上班".into(),
@@ -589,6 +637,7 @@ mod tests {
         .unwrap();
         let b = q.reserve();
         q.push(
+            &mut s,
             b,
             GenReq {
                 style: String::new(),
@@ -598,12 +647,12 @@ mod tests {
             "{}".into(),
         )
         .unwrap();
-        let v = &q.views()[1];
+        let v = &q.views(&s)[1];
         assert_eq!((v.id, v.kind, v.style.as_str()), (a, "set", "clay"));
         assert_eq!(v.title, "不想上班");
         assert_eq!(v.scene, r#"{"secret":"做法"}"#);
         assert_eq!(
-            (q.views()[0].kind, q.views()[0].style.as_str()),
+            (q.views(&s)[0].kind, q.views(&s)[0].style.as_str()),
             ("act", "自定义")
         );
         let logged = format!("{q:?} {v:?}");
@@ -614,16 +663,20 @@ mod tests {
 
     #[test]
     fn unknown_kind_not_queued() {
-        let mut q = Queue::new();
+        let (mut q, mut s) = (Queue::new(), Slots::new());
         let a = q.reserve();
-        assert!(q.push(a, req("blah"), "x".into(), "{}".into()).is_err());
-        assert!(q.views().is_empty());
-        q.push(a, req(SET_PARTS), "x".into(), "{}".into()).unwrap();
-        assert_eq!(q.views()[0].kind, "set");
+        assert!(
+            q.push(&mut s, a, req("blah"), "x".into(), "{}".into())
+                .is_err()
+        );
+        assert!(q.views(&s).is_empty());
+        q.push(&mut s, a, req(SET_PARTS), "x".into(), "{}".into())
+            .unwrap();
+        assert_eq!(q.views(&s)[0].kind, "set");
         // 分 4 次重画只占一个名额
-        q.next();
+        q.next(&mut s);
         assert!(!q.cancelled(a));
-        q.cancel(a);
+        q.cancel(&mut s, a);
         assert!(q.cancelled(a));
     }
 

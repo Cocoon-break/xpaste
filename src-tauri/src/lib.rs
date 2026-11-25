@@ -13,6 +13,7 @@ mod float_drag;
 mod float_hide;
 #[cfg(debug_assertions)]
 mod focus_check;
+mod gen_slots;
 mod hotkey;
 mod housekeeping;
 mod imagegen;
@@ -50,6 +51,7 @@ use xpaste_core::Store;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     log_panics();
+    gen_slots::on_free(meme_tasks::pump);
     let override_ = data_dir_override(std::env::var_os("XPASTE_DATA_DIR"));
     let timing = timing_enabled(std::env::var_os("XPASTE_TIMING"));
     let builder = tauri::Builder::default();
