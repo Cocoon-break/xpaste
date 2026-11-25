@@ -34,7 +34,7 @@ fn gates() {
     if std::env::var_os("XPASTE_TEXTEDIT_GATES").is_none() {
         return;
     }
-    let _ = log::set_logger(&Ear);
+    log::set_logger(&Ear).expect("日志被别处占了，收不到自检的数值");
     log::set_max_level(log::LevelFilter::Info);
     let mut held = None;
     for row in std::io::stdin().lock().lines() {
@@ -127,8 +127,12 @@ fn answer(held: &mut Option<(String, Live)>, v: &Value) -> Result<Value, AppErro
             let s = xpaste_pro::te_strip(&live.img, line.get(live)?.0);
             Ok(json!({ "range": r.range, "quad": span(&s, r.range), "m": r.m, "h": r.h }))
         }
+        // 给不给改：页面提交时后端查的那一遍
+        "check" => live.check(&get::<Draft>(v, "draft")?).map(|_| json!({})),
         "local" => {
             let s = live.check(&get::<Draft>(v, "draft")?)?;
+            // 记着的上一次结果不会再写日志
+            *lock(&live.local) = None;
             let l = live.local(&s);
             let said = lock(&SAID).clone();
             let Some(l) = l else {
