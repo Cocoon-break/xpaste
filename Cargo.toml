@@ -36,7 +36,7 @@ debug = false
 
 # Pro 里有逐像素的图像处理，不优化的话开发版卡、测试要跑几分钟
 [profile.dev.package.xpaste-pro]
-opt-level = 1
+opt-level = 2
 
 [profile.release]
 codegen-units = 1

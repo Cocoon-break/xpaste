@@ -423,10 +423,10 @@ pub fn te_erase(_img: &TeImg, _line: TeQuad, _range: [f32; 2]) -> Option<TeLocal
 
 pub fn te_move(
     _img: &TeImg,
-    _line: TeQuad,
+    _lines: &[(String, TeQuad, Vec<[f32; 2]>)],
+    _target: usize,
     _range: [f32; 2],
-    _src_line: TeQuad,
-    _src_range: [f32; 2],
+    _src: &TeSource,
 ) -> Option<TeLocal> {
     None
 }
@@ -436,7 +436,7 @@ pub fn te_find_sources(
     _lines: &[(String, TeQuad, Vec<[f32; 2]>)],
     _target: usize,
     _chars: &[char],
-) -> Option<Vec<(usize, [f32; 2])>> {
+) -> Option<Vec<TeSource>> {
     None
 }
 

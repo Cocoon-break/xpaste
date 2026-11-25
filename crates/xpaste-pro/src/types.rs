@@ -385,6 +385,17 @@ pub struct TePaste {
     pub soft: bool,
 }
 
+/// 搬字的来源
+#[derive(Clone, Debug)]
+pub struct TeSource {
+    /// 第几行
+    pub line: usize,
+    /// 那一行 `te_strip` 条带里的左右边
+    pub range: [f32; 2],
+    /// 认定和要改的那一行是同一款字体；不是的最多“没把握”
+    pub sure: bool,
+}
+
 /// 本机改完自检的结果，越往后越差
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TeVerdict {
