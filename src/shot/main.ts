@@ -4,8 +4,8 @@ import './shot.css';
 // 拼音原样上屏去掉分隔空格（文字标注、卡片原文框，见 ime.ts）
 import '../ime';
 import {
-  onShotBegin, onShotClaim, onShotEnd, onShotTranslateDelta, recStart, shotAlive, shotCancel, shotClaim, shotCopyText, shotEditClip, shotEngines,
-  shotFinish, shotFrame, shotLongStart, shotReady, shotTranslateAgain, shotTyping, type BeginPayload, type ShotAction, type ShotOutcome,
+  onShotBegin, onShotClaim, onShotEnd, onShotTranslateDelta, recStart, shotAlive, shotCancel, shotClaim, shotCopyText, shotEditCard, shotEditClip, shotEngines,
+  shotFinish, shotFrame, shotLongStart, shotReady, shotTranslateAgain, shotTyping, type BeginPayload, type ShotAction, type ShotClip, type ShotOutcome,
 } from '../api/shot';
 import { error as logError, info } from '../api/log';
 import type { AppError, Engines } from '../api/types';
@@ -92,7 +92,7 @@ const S = {
   /** 改字可用：有“改字”按钮和 E */
   edit: false,
   /** 框选改字时的“用刚复制的图” */
-  clip: null as BeginPayload['clip'],
+  clip: null as ShotClip | null,
   /** 本次录屏的系统声音、麦克风开关；麦克风为 null 表示本机不支持（macOS 15 以下） */
   sys: false, mic: null as boolean | null,
   /** 录屏输出缩放与帧率（设置“录屏清晰度”“录屏帧率”），尺寸标签显示输出像素（M24 规则 3） */
@@ -138,7 +138,7 @@ async function begin(p: BeginPayload) {
     void info(`shot 屏 ${p.index} 缩放不一致：载荷 ${p.scale}，帧 ${f.w}×${f.h} / 窗口 ${W}×${H}`);
   }
   Object.assign(S, {
-    index: p.index, scale, saveCopy: p.saveCopy, mode: p.mode, edit: p.edit, clip: p.clip, sys: p.systemAudio, mic: p.microphone, recScale: p.recScale, fps: p.recFps, locked: false, rects: p.rects, phase: 'idle', here: !!p.cursor, sel: null, drag: null,
+    index: p.index, scale, saveCopy: p.saveCopy, mode: p.mode, edit: p.edit, clip: null, sys: p.systemAudio, mic: p.microphone, recScale: p.recScale, fps: p.recFps, locked: false, rects: p.rects, phase: 'idle', here: !!p.cursor, sel: null, drag: null,
     tool: null, color: 0, size: 1, objs: [], redo: [], cur: null, editing: null,
     mx: p.cursor?.[0] ?? 0, my: p.cursor?.[1] ?? 0,
   });
@@ -157,11 +157,7 @@ async function begin(p: BeginPayload) {
   ov.classList.remove('out');
   tc = getComputedStyle(ov).getPropertyValue('--tc').trim() || tc;
   buildBar();
-  const keys = p.editKey.split(' + ').filter(Boolean).map((k) => `<kbd>${k}</kbd>`).join('');
-  hint.innerHTML = (p.mode === 'rec' ? '<span><b>选择录制区域</b></span>' : p.mode === 'edit' ? '<span><b>框住要改的图</b></span>' : '')
-    + '<span><b>单击</b>选中窗口</span><span><b>拖动</b>框选</span><span><kbd>F</kbd>全屏</span><span><kbd>Esc</kbd>退出</span>'
-    + (p.mode === 'edit' && !p.clip ? `<span>先复制图片再按 ${keys || '快捷键'} 能改原图</span>` : '');
-  buildClip();
+  paintHint('');
   restart(hint, 'hintbar');
   setCursor();
   update();
@@ -169,6 +165,19 @@ async function begin(p: BeginPayload) {
   setTimeout(() => ov.classList.remove('in'), 120);
   readyGen = gen;
   await shotReady(gen);
+  // 卡片要读文件头，上屏之后再取，不拖慢上屏
+  if (p.mode !== 'edit') return;
+  const clip = await shotEditCard(gen).catch(() => null);
+  if (!live(gen)) return;
+  S.clip = clip;
+  if (clip) buildClip(clip);
+  else paintHint(`<span>先复制图片再按 ${p.editKey.split(' + ').filter(Boolean).map((k) => `<kbd>${k}</kbd>`).join('') || '快捷键'} 能改原图</span>`);
+  update();
+}
+/** 左下角的操作提示 */
+function paintHint(more: string) {
+  hint.innerHTML = (S.mode === 'rec' ? '<span><b>选择录制区域</b></span>' : S.mode === 'edit' ? '<span><b>框住要改的图</b></span>' : '')
+    + '<span><b>单击</b>选中窗口</span><span><b>拖动</b>框选</span><span><kbd>F</kbd>全屏</span><span><kbd>Esc</kbd>退出</span>' + more;
 }
 
 /** 退出截图：遮罩淡出后后端隐藏全部遮罩。 */
@@ -264,9 +273,7 @@ clipEl.type = 'button';
 clipEl.className = 'just';
 clipEl.hidden = true;
 ov.appendChild(clipEl);
-function buildClip() {
-  const c = S.clip;
-  if (!c) return;
+function buildClip(c: ShotClip) {
   clipEl.innerHTML = `<span class="j-th">${svg('edit')}</span><span class="j-tx"><b>用刚复制的图<kbd>空格</kbd></b><small>原图 ${c.w} × ${c.h}</small></span>`;
   if (!c.thumb) return;
   const img = new Image();

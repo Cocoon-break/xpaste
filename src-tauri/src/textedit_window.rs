@@ -62,13 +62,15 @@ fn place(app: &AppHandle, w: &WebviewWindow) -> tauri::Result<()> {
     crate::shot::place(w, (r.x * k, r.y * k), (r.w * k, r.h * k))
 }
 
-/// 显示并拿键盘。`fresh` 时先摆到光标所在屏中央（已开着的不动，用户可能拖过）。主线程调用。
-pub fn show(app: &AppHandle, fresh: bool) {
+/// 显示并拿键盘。没开着的先摆到光标所在屏中央（已开着的不动，用户可能拖过）。主线程调用。
+pub fn show(app: &AppHandle) {
     let Some(w) = app.get_webview_window(LABEL) else {
         log::warn!("找不到改字窗口");
         return;
     };
-    if fresh && let Err(e) = place(app, &w) {
+    if !w.is_visible().unwrap_or(false)
+        && let Err(e) = place(app, &w)
+    {
         log::warn!("改字窗口定位失败：{e}");
     }
     if let Err(e) = crate::trcard::front(app, &w, true) {

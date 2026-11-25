@@ -174,9 +174,16 @@ pub fn refresh_target() -> Option<String> {
     rt.open.then(|| rt.origin.target.clone()).flatten()
 }
 
+/// 前台窗口（只有 Windows 有）和前台应用的名字
+pub(crate) type Front = (Option<isize>, Option<String>);
+
 /// 此刻的前台窗口和前台应用的名字（同采集时的来源应用名）
-pub(crate) fn foreground() -> (Option<isize>, Option<String>) {
-    let back = xpaste_platform::foreground_window();
+pub(crate) fn foreground() -> Front {
+    foreground_of(xpaste_platform::foreground_window())
+}
+
+/// 前台窗口已经记好时（截图遮罩进来之前记的）：它和应用的名字；macOS 上名字取此刻最前面的应用
+pub(crate) fn foreground_of(back: Option<isize>) -> Front {
     // Windows 的 frontmost_app 先看剪切板所有者，这里要的是前台窗口所属的应用（已排除本进程）
     #[cfg(windows)]
     let name = back.and_then(xpaste_platform::window_app_name);

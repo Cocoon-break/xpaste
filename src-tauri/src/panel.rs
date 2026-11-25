@@ -356,6 +356,7 @@ pub fn frontend_ready(app: &AppHandle) {
         log::info!("网页就绪，补显示就绪前的唤起（{trigger:?}）");
         show(app, None, trigger);
     }
+    crate::textedit::panel_ready(app);
 }
 
 /// 面板页面把事件都听上、列表画好了没有
@@ -398,7 +399,7 @@ pub fn paste_target(trigger: Trigger, foreground: Option<isize>) -> isize {
 
 /// 截图、录屏遮罩或长截图进行中：这时唤起面板，它在遮罩下面看不见，却会拿走键盘，遮罩里按 Esc 就失效了；
 /// 长截图还全局占着回车、Esc、空格，面板里这三个键不起作用。快捷键、托盘、再次启动都不唤起也不切换
-fn under_overlay(app: &AppHandle) -> bool {
+pub(crate) fn under_overlay(app: &AppHandle) -> bool {
     crate::shot::active(app) || crate::longshot::active()
 }
 

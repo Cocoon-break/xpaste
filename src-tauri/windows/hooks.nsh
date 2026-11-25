@@ -44,6 +44,8 @@
   !if "$%XPASTE_PRO%" == "1"
     WriteRegStr HKCU "Software\Classes\xPaste.Image" "" "图片"
     WriteRegStr HKCU "Software\Classes\xPaste.Image\DefaultIcon" "" "$INSTDIR\${MAINBINARYNAME}.exe,0"
+    ; 选中几个一起打开时资源管理器只给一个（应用那边也只用第一个）
+    WriteRegStr HKCU "Software\Classes\xPaste.Image\shell\open" "MultiSelectModel" "Single"
     WriteRegStr HKCU "Software\Classes\xPaste.Image\shell\open\command" "" '"$INSTDIR\${MAINBINARYNAME}.exe" "%1"'
     !insertmacro XPASTE_EACH_IMAGE_EXT XPASTE_OPENWITH_ADD
   !else

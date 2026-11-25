@@ -493,6 +493,7 @@ pub fn run() {
             commands::shot::shot_typing,
             commands::shot::shot_cancel,
             commands::shot::overlay_begin,
+            commands::shot::shot_edit_card,
             commands::shot::shot_edit_clip,
             commands::shot::shot_finish,
             commands::shot::shot_copy_text,

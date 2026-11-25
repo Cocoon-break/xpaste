@@ -320,9 +320,9 @@ export type BeginPayload = {
   edit: boolean;
   /** 改字快捷键的显示（框选改字的提示用，没设为空） */
   editKey: string;
-  /** 框选改字时的“用刚复制的图”：缩略图和原图尺寸 */
-  clip: { thumb: string | null; w: number; h: number } | null;
 };
+/** 框选改字的“用刚复制的图”卡片：缩略图和原图尺寸，对应 `shot::Clip`。 */
+export type ShotClip = { thumb: string | null; w: number; h: number };
 export type ShotAction = 'copy' | 'save' | 'ocr' | 'pin' | 'translate' | 'edit';
 /** 对应 `shot::ShotOutcome`；`text` 为完整译文、`engine` 为翻译方式标签，只有翻译动作有值。 */
 export type ShotOutcome = { action: ShotAction; chars: number | null; file: string | null; copied: boolean; text: string | null; engine: string | null };

@@ -252,6 +252,13 @@ fn hotkeys_changed(changed: &[&str]) -> bool {
     .any(|k| changed.contains(k))
 }
 
+/// 改了托盘菜单里的“表情包制作…”（开关、快捷键）或改字那两项（开关）
+fn tray_changed(changed: &[&str]) -> bool {
+    ["memeEnabled", "memeHotkey", "editEnabled"]
+        .iter()
+        .any(|k| changed.contains(k))
+}
+
 /// 开关开机启动；开发构建从不改系统登录项。失败只记日志（错误里可能带路径，只在 debug 级别输出）。
 fn set_autostart(app: &AppHandle, on: bool) {
     if cfg!(debug_assertions) {
@@ -467,8 +474,8 @@ pub fn save_settings(
         let on = state.settings().mixer_enabled;
         crate::mixer::configure(&app, on);
     }
-    // 表情包：总开关关掉时托盘入口随即隐藏，制作窗口开着就关掉
-    if changed.contains(&"memeEnabled") || changed.contains(&"memeHotkey") {
+    // 表情包、改字：总开关关掉时托盘入口随即隐藏，窗口开着就关掉
+    if tray_changed(&changed) {
         crate::tray::refresh_menu(&app);
     }
     if !state.settings().meme_enabled {
@@ -746,6 +753,22 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn tray_follows_edit_switch() {
+        let old = Settings::default();
+        let tray = |f: fn(&mut Settings)| {
+            let mut new = old.clone();
+            f(&mut new);
+            tray_changed(&changed_fields(&old, &new))
+        };
+        assert!(tray(|s| s.edit_enabled = false));
+        assert!(tray(|s| s.meme_enabled = false));
+        assert!(tray(|s| s.meme_hotkey.clear()));
+        // 改字的菜单项不带快捷键
+        assert!(!tray(|s| s.edit_hotkey.clear()));
+        assert!(!tray(|s| s.mixer_enabled = false));
     }
 
     #[test]

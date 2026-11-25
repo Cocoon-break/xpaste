@@ -116,6 +116,7 @@ grep FOCUS .xpaste-dev/logs/xPaste.log | tail -12    # 最后一行：FOCUS 完�
     cargo test -p xpaste --lib e2e_against_local_issuance -- --ignored --nocapture
     ```
 - **签名团队校验**：macOS 正式构建（release）只有用团队 `GP6QC26B5F` 的 Developer ID 证书签名时才启用 Pro，没签名、ad-hoc 签名或别的证书重签的副本表现同开源版（没有晾衣绳和“Pro”标签）。开发构建（`make dev-isolated`）不查。本地打测试用的 Pro 安装包要带上签名身份：`APPLE_SIGNING_IDENTITY="Developer ID Application: …（GP6QC26B5F）" pnpm tauri build --bundles dmg`（不设 `APPLE_ID` 等就只签名不公证）。Windows 安装包没签名，不做这项校验。
+- **“打开方式”的登记**：带 `pro/` 时 `make release` 打的安装包在系统的“打开方式”里登记 xPaste（改字，备选，不改默认应用）。直接跑 `pnpm tauri build` 不登记：macOS 的文件关联在 `src-tauri/tauri.macos.pro.conf.json`，Windows 由 `src-tauri/windows/hooks.nsh` 按环境变量 `XPASTE_PRO` 写注册表，两样都由 Makefile 带上。
 - 维护者须知：删掉数据目录里的 `pro.json` 会重新开始 14 天试用，测试试用与到期时可以用它。
 - **发版前**：在公开仓库的 Settings → Secrets and variables → Actions → Variables 里设好 `XPASTE_SITE`；把 `pro/rust/license.rs` 的 `PUBLIC_KEY` 换成正式授权服务的公钥，并删掉它上面的 `LOCAL-E2E-KEY` 标记。正式版标签（不带 `-`）缺任何一项，`release.yml` 都会停下并说明原因；内测标签不拦。
 - **发版**：`release.yml` 用 Secret `PRO_DEPLOY_KEY`（`xpaste-pro` 仓库的只读 deploy key）拉取 `pro/`，所以官方安装包带 Pro；没配置时拉取失败，发版会直接停下。流程还会检查安装包的 Rust 一侧带上了 Pro：在二进制里查找标记字符串 `pro.json.tmp`（出自 `pro/rust/trial.rs`）。改了那个文件名要两处同步。

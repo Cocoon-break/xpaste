@@ -343,11 +343,9 @@ pub struct BeginPayload {
     edit: bool,
     /// 改字快捷键的显示（框选改字的提示用；没设为空）
     edit_key: String,
-    /// 框选改字时的“用刚复制的图”；没有为 `None`
-    clip: Option<Clip>,
 }
 
-/// “用刚复制的图”卡片：缩略图（asset URL）和原图尺寸。是哪条记录只记在会话里
+/// 框选改字的“用刚复制的图”卡片：缩略图（asset URL）和原图尺寸。是哪条记录只记在会话里
 #[derive(Serialize, Clone, PartialEq, Debug)]
 pub struct Clip {
     thumb: Option<String>,
@@ -595,11 +593,10 @@ fn freeze(app: &AppHandle, generation: u64, settle: bool, mode: Mode) {
         )
     };
     let edit = crate::textedit::on(app);
-    let (clip, edit_key) = if edit && mode == Mode::Edit {
-        let key = crate::hotkey::label(&app.state::<AppState>().settings().edit_hotkey);
-        (clip_card(app), key)
+    let edit_key = if mode == Mode::Edit {
+        crate::hotkey::label(&app.state::<AppState>().settings().edit_hotkey)
     } else {
-        (None, String::new())
+        String::new()
     };
     let payloads: Vec<BeginPayload> = frames
         .iter()
@@ -621,7 +618,6 @@ fn freeze(app: &AppHandle, generation: u64, settle: bool, mode: Mode) {
             rec_fps,
             edit,
             edit_key: edit_key.clone(),
-            clip: clip.as_ref().map(|c| c.1.clone()),
         })
         .collect();
     // 显示器比遮罩多（启动后接了新屏）：补建，等页面加载完。新遮罩仍可能赶不上下面推送的事件
@@ -647,7 +643,6 @@ fn freeze(app: &AppHandle, generation: u64, settle: bool, mode: Mode) {
             return;
         }
         s.cursor = cursor.map(|(i, _)| i);
-        s.clip = clip.map(|c| c.0);
         s.set_frames(screens);
         s.set_payloads(payloads.clone());
     }
@@ -657,15 +652,29 @@ fn freeze(app: &AppHandle, generation: u64, settle: bool, mode: Mode) {
     }
 }
 
-/// 剪切板里是图片、采集管道已经收下时：那条记录和卡片内容；收下的图读不出尺寸的不出卡片。
-fn clip_card(app: &AppHandle) -> Option<(i64, Clip)> {
+/// 框选改字的“用刚复制的图”卡片，遮罩上屏后才来取（读文件头可能慢）；顺便在会话里记下是哪条记录。
+/// 剪切板里不是图片、采集管道没收下、读不出尺寸的没有卡片。
+pub fn edit_card(app: &AppHandle, generation: u64) -> Option<Clip> {
+    if !session(app).is_current(generation) || !crate::textedit::on(app) {
+        return None;
+    }
     let key = crate::meme::clip_image(app)?;
     let state = app.state::<AppState>();
     let path = crate::record_image::path_of(&state, key.id, key.file)?;
     let (w, h) = crate::textedit::dims(&path)?;
-    let thumb = state.store().live_summary(key.id).ok()??.thumb;
-    let thumb = thumb.map(|t| crate::assets::asset_url(Path::new(&t)));
-    Some((key.id, Clip { thumb, w, h }))
+    let thumb = clip_thumb(key.file, state.store().live_summary(key.id).ok()??.thumb);
+    let mut s = session(app);
+    if !s.is_current(generation) {
+        return None;
+    }
+    s.clip = Some(key.id);
+    Some(Clip { thumb, w, h })
+}
+
+/// 记录的缩略图是它的第一个文件的：要打开的是后面的文件（第一个不是图片）时不用它。
+fn clip_thumb(file: Option<u32>, thumb: Option<String>) -> Option<String> {
+    let thumb = thumb.filter(|_| file.unwrap_or(0) == 0)?;
+    Some(crate::assets::asset_url(Path::new(&thumb)))
 }
 
 /// 只结束 `generation` 这一次截图（`shot_cancel`、冻结失败）：上一次截图迟到的退出（提示条、淡出计时）
@@ -1337,16 +1346,17 @@ pub fn edit_clip(app: &AppHandle, generation: u64) -> Result<(), AppError> {
     to_edit(app, generation, Source::Clip { record })
 }
 
-/// 结束这次截图、撤掉遮罩，再打开改字窗口。键盘不还给原来的应用，也不还给截图时开着的面板：改字窗口接着就要拿
-/// （面板由打开改字窗口收起）。
+/// 结束这次截图、撤掉遮罩，再打开改字窗口；打不开的先报出来，遮罩留着。键盘不还给原来的应用，也不还给截图时开着的面板：
+/// 改字窗口接着就要拿（面板由打开改字窗口收起）。截图前的前台窗口交给改字窗口：撤了遮罩再问就不是它了。
 fn to_edit(app: &AppHandle, generation: u64, src: Source) -> Result<(), AppError> {
-    crate::textedit::check_on(app)?;
-    session(app)
+    crate::textedit::check(app, &src)?;
+    let previous = session(app)
         .end_if_current(generation)
         .map_err(|()| AppError::Invalid("截图已结束".into()))?;
+    let front = crate::meme::foreground_of(previous);
     PANEL_HAD_KEY.store(false, Ordering::SeqCst);
     after_end(app, generation, None);
-    crate::textedit::open_bg(app, src);
+    crate::textedit::open_bg_from(app, src, front);
     Ok(())
 }
 
@@ -1921,20 +1931,27 @@ mod tests {
             rec_fps: 30,
             edit: true,
             edit_key: "⌥ + Shift + G".into(),
-            clip: Some(Clip {
-                thumb: None,
-                w: 640,
-                h: 480,
-            }),
         };
         let v = serde_json::to_value(&p).unwrap();
         assert_eq!(v["mode"], "edit");
         assert_eq!(v["edit"], true);
         assert_eq!(v["editKey"], "⌥ + Shift + G");
+        let (thumb, w, h) = (None, 640, 480);
         assert_eq!(
-            v["clip"],
+            serde_json::to_value(Clip { thumb, w, h }).unwrap(),
             serde_json::json!({ "thumb": null, "w": 640, "h": 480 })
         );
+    }
+
+    /// 卡片上的缩略图就是要打开的那张
+    #[test]
+    fn clip_thumb_is_the_one_opened() {
+        let t = |file| clip_thumb(file, Some("/t/1.png".into()));
+        let url = crate::assets::asset_url(Path::new("/t/1.png"));
+        assert_eq!(t(None), Some(url.clone()));
+        assert_eq!(t(Some(0)), Some(url));
+        assert_eq!(t(Some(1)), None);
+        assert_eq!(clip_thumb(None, None), None);
     }
 
     /// 换掉贴图：只换文件，尺寸不同的不换（窗口的位置和缩放都不动）；贴图已经关了的不写回来
@@ -2273,7 +2290,6 @@ mod tests {
             rec_fps: 60,
             edit: false,
             edit_key: String::new(),
-            clip: None,
         };
         s.set_payloads(vec![p(0, 1.0), p(1, 2.0)]);
         assert_eq!(s.payload(1), Some(p(1, 2.0)));

@@ -9,9 +9,9 @@ import { currentMonitor, getCurrentWindow, primaryMonitor } from '@tauri-apps/ap
 
 import { translateEngines } from './commands';
 import { TRANSLATE_DELTA } from './events';
-import type { BeginPayload, Engines, LRect, ShotAction, ShotOutcome, TranslateDelta } from './types';
+import type { BeginPayload, Engines, LRect, ShotAction, ShotClip, ShotOutcome, TranslateDelta } from './types';
 
-export type { BeginPayload, LRect, ShotAction, ShotOutcome };
+export type { BeginPayload, LRect, ShotAction, ShotClip, ShotOutcome };
 /** 冻结帧：物理像素，RGBA（非预乘）。 */
 export type Frame = { w: number; h: number; rgba: Uint8ClampedArray<ArrayBuffer> };
 /**
@@ -88,6 +88,8 @@ export const recStart = (a: { generation: number; index: number; rect: LRect; sy
 export const shotLongStart = (a: { generation: number; index: number; rect: LRect }) =>
   stub ? dev.recStart() : invoke<void>('shot_long_start', a);
 
+/** 框选改字的“用刚复制的图”卡片；不急着上屏的时候要 */
+export const shotEditCard = (generation: number): Promise<ShotClip | null> => (stub ? dev.editCard() : invoke<ShotClip | null>('shot_edit_card', { generation }));
 /** 框选改字时的“用刚复制的图”。成功时后端已结束这次截图、去开改字窗口。 */
 export const shotEditClip = (generation: number) => (stub ? dev.recStart() : invoke<void>('shot_edit_clip', { generation }));
 
@@ -234,7 +236,6 @@ const dev = {
       mode: this.q.has('rec') ? 'rec' : this.q.has('edit') ? 'edit' : 'shot', systemAudio: false, microphone: this.q.get('mic') === 'none' ? null : false,
       recScale: 1, recFps: 30,
       edit: this.q.has('edit'), editKey: '⌥ + Shift + G',
-      clip: this.q.get('edit') === 'clip' ? { thumb: `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="124" height="92"><rect width="124" height="92" fill="#E8C07A"/></svg>')}`, w: 1400, h: 1016 } : null,
     };
   },
   frame(): Frame {
@@ -278,6 +279,10 @@ const dev = {
   },
   async cancel() {
     setTimeout(() => this.begin?.(this.payload()), 800);
+  },
+  async editCard(): Promise<ShotClip | null> {
+    await new Promise((r) => setTimeout(r, 200));
+    return this.q.get('edit') === 'clip' ? { thumb: `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="124" height="92"><rect width="124" height="92" fill="#E8C07A"/></svg>')}`, w: 1400, h: 1016 } : null;
   },
   async recStart() {
     await new Promise((r) => setTimeout(r, 60));

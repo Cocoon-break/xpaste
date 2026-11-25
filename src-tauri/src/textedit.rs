@@ -4,8 +4,9 @@
 
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
+use std::time::{Duration, Instant};
 
 use image::{DynamicImage, ImageDecoder, ImageReader};
 use serde::Serialize;
@@ -14,7 +15,7 @@ use xpaste_pro::TeImg;
 
 use crate::error::AppError;
 use crate::events::{self, emit_to};
-use crate::meme::{self, Entry, Origin};
+use crate::meme::{self, Entry, Front, Origin};
 use crate::panel::{Rect, on_main};
 use crate::state::AppState;
 use crate::textedit_job::{self as job, GONE, JobView, Live, lock, no, not_saved};
@@ -119,9 +120,9 @@ pub fn decode(bytes: &[u8]) -> Result<(TeImg, Option<Vec<u8>>), OpenFail> {
     Ok((img, icc))
 }
 
-/// 图片文件摆正后的宽高，只读文件头
-pub fn dims(path: &Path) -> Option<(u32, u32)> {
-    let r = ImageReader::open(path).ok()?.with_guessed_format().ok()?;
+/// 摆正后的宽高，只读文件头
+fn head(r: impl std::io::BufRead + std::io::Seek) -> Option<(u32, u32)> {
+    let r = ImageReader::new(r).with_guessed_format().ok()?;
     let mut d = r.into_decoder().ok()?;
     let (w, h) = d.dimensions();
     use image::metadata::Orientation::*;
@@ -131,16 +132,20 @@ pub fn dims(path: &Path) -> Option<(u32, u32)> {
     })
 }
 
-/// 来源的图片文件字节
-fn bytes_of(state: &AppState, src: &mut Source) -> Result<Vec<u8>, AppError> {
+/// 图片文件摆正后的宽高
+pub fn dims(path: &Path) -> Option<(u32, u32)> {
+    head(std::io::BufReader::new(std::fs::File::open(path).ok()?))
+}
+
+/// 来源的图片文件；`Shot` 没有
+fn path_of(state: &AppState, src: &Source) -> Result<PathBuf, AppError> {
     let unreadable = || no(OpenFail::Unreadable.text());
     let path = match src {
-        Source::Shot { png, .. } => return Ok(std::mem::take(png)),
         Source::Clip { record } => record_path(state, *record, None)?,
         Source::Panel { record, file } => record_path(state, *record, *file)?,
         Source::Pin { n } => state.data_dir.join("pins").join(format!("{n}.png")),
         Source::File(p) => p.clone(),
-        Source::Blank | Source::Recent(_) => return Err(unreadable()),
+        Source::Shot { .. } | Source::Blank | Source::Recent(_) => return Err(unreadable()),
     };
     // 只收普通文件：管道、设备读起来没有头
     let m = std::fs::metadata(&path).map_err(|_| unreadable())?;
@@ -150,7 +155,38 @@ fn bytes_of(state: &AppState, src: &mut Source) -> Result<Vec<u8>, AppError> {
     if m.len() > MAX_BYTES {
         return Err(no(OpenFail::TooBig.text()));
     }
-    std::fs::read(&path).map_err(|_| unreadable())
+    Ok(path)
+}
+
+/// 来源的图片文件字节
+fn bytes_of(state: &AppState, src: &mut Source) -> Result<Vec<u8>, AppError> {
+    if let Source::Shot { png, .. } = src {
+        return Ok(std::mem::take(png));
+    }
+    let path = path_of(state, src)?;
+    std::fs::read(&path).map_err(|_| no(OpenFail::Unreadable.text()))
+}
+
+/// 不解码，只按文件头看打不打得开
+fn peek(state: &AppState, src: &Source) -> Result<(), AppError> {
+    let size = match src {
+        Source::Shot { png, .. } => head(Cursor::new(png)),
+        _ => dims(&path_of(state, src)?),
+    };
+    let (w, h) = size.ok_or_else(|| no(OpenFail::Unreadable.text()))?;
+    if u64::from(w) * u64::from(h) > MAX_PX {
+        return Err(no(OpenFail::TooBig.text()));
+    }
+    Ok(())
+}
+
+/// 打开之前先看行不行：开着、图打得开（试用结束时不看图，照常开窗口）
+pub fn check(app: &AppHandle, src: &Source) -> Result<(), AppError> {
+    check_on(app)?;
+    if expired(app) {
+        return Ok(());
+    }
+    peek(&app.state::<AppState>(), src)
 }
 
 /// 历史记录的图；没说第几个文件的，文件记录取第一个图片文件
@@ -201,6 +237,8 @@ struct Runtime {
     unseen: u32,
     /// 上屏的（或作废的）最大的打开号
     shown: u64,
+    /// 正在打开“打开方式”来的文件；同一批后到的让它打开后提示一句
+    batch: Option<Option<&'static str>>,
 }
 
 /// 这个号还轮得到上屏：比上过屏的新
@@ -220,11 +258,25 @@ impl Runtime {
             cur: None,
             unseen: 0,
             shown: 0,
+            batch: None,
         }
     }
 
+    /// 窗口里的还是不是这一次打开的（后面又开了一张、已经关了就不是）
+    fn shows(&self, seq: u64) -> bool {
+        self.open && self.shown == seq
+    }
+
+    /// 开着一张图：再点“改字…”时留着它
+    fn busy(&self) -> bool {
+        self.open && self.cur.is_some()
+    }
+
     /// 页面就绪了就交回去发，没有就先留着
-    fn deliver(&mut self, o: Opening) -> Option<Opening> {
+    fn deliver(&mut self, mut o: Opening) -> Option<Opening> {
+        if o.0.from == "file" {
+            o.1 = o.1.or(self.batch.take().flatten());
+        }
         if self.ready {
             return Some(o);
         }
@@ -236,6 +288,30 @@ impl Runtime {
     fn page_ready(&mut self) -> Option<Opening> {
         self.ready = true;
         self.held.take()
+    }
+
+    /// 同一批又来了文件：提示跟着那次打开一起发。返回要不要现在就发（已经打开了）
+    fn extra(&mut self) -> bool {
+        if let Some(note) = &mut self.batch {
+            *note = Some(ONE);
+        } else if let Some(held) = &mut self.held {
+            held.1 = Some(ONE);
+        } else {
+            return self.open;
+        }
+        false
+    }
+
+    /// 记成关闭，`opens` 号为止还没上屏的打开作废；没开着时返回 None
+    fn shut(&mut self, opens: u64) -> Option<(Origin, Option<Arc<Live>>)> {
+        self.shown = opens;
+        if !self.open {
+            return None;
+        }
+        self.open = false;
+        self.held = None;
+        let origin = std::mem::replace(&mut self.origin, meme::NOWHERE);
+        Some((origin, self.cur.take()))
     }
 }
 
@@ -328,32 +404,51 @@ pub fn find(app: &AppHandle, id: &str) -> Result<Arc<Live>, AppError> {
 
 /// 打开一张图，换掉窗口里的。粘贴目标按这一刻的前台应用记。要读文件、解码，不在主线程调用
 pub fn open(app: &AppHandle, src: Source) -> Result<(), AppError> {
-    open_noted(app, src, None)
+    open_from(app, src, None, None)
 }
 
-/// 同 `open`，窗口里另给一句提示
-fn open_noted(app: &AppHandle, src: Source, note: Option<&'static str>) -> Result<(), AppError> {
+/// 同 `open`，窗口里另给一句提示 `note`；`front` 是已经记好的前台
+fn open_from(
+    app: &AppHandle,
+    src: Source,
+    note: Option<&'static str>,
+    front: Option<Front>,
+) -> Result<(), AppError> {
     let from = src.kind();
     let entry = match src {
         Source::Panel { .. } => Entry::Panel,
         Source::Blank => Entry::Tray,
         _ => Entry::Other,
     };
-    open_as(app, src, from, Some(entry), note)
+    open_as(app, src, from, Some((entry, front)), note)
 }
 
 /// 主线程上的入口用：到后台打开，打不开的提示
 pub fn open_bg(app: &AppHandle, src: Source) {
-    open_noted_bg(app, src, None);
+    spawn_open(app, src, None, None);
 }
 
-fn open_noted_bg(app: &AppHandle, src: Source, note: Option<&'static str>) {
+/// 同 `open_bg`，前台已经记好（从截图遮罩进来）
+pub fn open_bg_from(app: &AppHandle, src: Source, front: Front) {
+    spawn_open(app, src, None, Some(front));
+}
+
+fn spawn_open(app: &AppHandle, src: Source, note: Option<&'static str>, front: Option<Front>) {
     let app = app.clone();
+    let file = matches!(src, Source::File(_));
     crate::housekeeping::spawn("xpaste-textedit-open", move || {
-        if let Err(e) = open_noted(&app, src, note) {
+        if let Err(e) = open_from(&app, src, note, front) {
+            if file {
+                lock(&RT).batch = None;
+            }
             toast(&app, &e.to_string());
         }
     });
+}
+
+/// 来处：从窗口里换图的没有（不变）；前台没有记好的按这一刻取
+fn origin_of(entry: Option<(Entry, Option<Front>)>, now: impl FnOnce() -> Front) -> Option<Origin> {
+    entry.map(|(e, front)| meme::arrive(None, e, || front.unwrap_or_else(now)))
 }
 
 /// 窗口里换一张（`⌘V`、最近的图、最近改过）：来处和粘贴目标不变
@@ -406,31 +501,121 @@ fn route_files(on: bool, files: &[PathBuf]) -> Option<Result<Picked<'_>, &'stati
 /// 应用还没启动完就来的文件（macOS 上被文件拉起时系统在启动完成之前就发来）
 static EARLY: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
+/// 接连到的文件算同一批：Windows 上选中几个一起打开，会起几个进程、一个一个转发过来
+struct Batch {
+    last: Option<Instant>,
+    /// 这一批提示过“一次改一张”了
+    noted: bool,
+}
+
+#[derive(Debug, PartialEq)]
+enum Join {
+    Open,
+    /// 同一批后到的：不打开，提示一次
+    Note,
+    Skip,
+}
+
+const BATCH_GAP: Duration = Duration::from_secs(1);
+
+impl Batch {
+    /// 这一刻又来了 `n` 个文件
+    fn join(&mut self, now: Instant, n: usize) -> Join {
+        let same = self
+            .last
+            .replace(now)
+            .is_some_and(|t| now.saturating_duration_since(t) <= BATCH_GAP);
+        if !same {
+            self.noted = n > 1;
+            Join::Open
+        } else if std::mem::replace(&mut self.noted, true) {
+            Join::Skip
+        } else {
+            Join::Note
+        }
+    }
+}
+
+static BATCH: Mutex<Batch> = Mutex::new(Batch {
+    last: None,
+    noted: false,
+});
+
+/// 遮罩或长截图结束后再打开的文件
+static WAITING: Mutex<Option<Vec<PathBuf>>> = Mutex::new(None);
+
+/// 面板还没就绪时来的“改字没有开启”，就绪后补发
+static OFF_DUE: AtomicBool = AtomicBool::new(false);
+
 /// 系统“打开方式”带来的文件。没有文件、这个构建没有改字时返回 false，调用方照常
 pub fn opened(app: &AppHandle, files: Vec<PathBuf>) -> bool {
     if files.is_empty() || !crate::hotkey::edit_enabled() {
         return false;
     }
     if app.try_state::<AppState>().is_none() {
-        *lock(&EARLY) = files;
+        lock(&EARLY).extend(files);
         return true;
     }
-    match route_files(on(app), &files) {
-        None => return false,
-        Some(Ok((p, note))) => open_noted_bg(app, Source::File(p.into()), note),
-        Some(Err(why)) => {
+    let join = lock(&BATCH).join(Instant::now(), files.len());
+    match join {
+        Join::Open if crate::panel::under_overlay(app) => wait(app, files),
+        Join::Open => open_files(app, &files),
+        Join::Note => {
+            if let Some(w) = &mut *lock(&WAITING) {
+                w.extend(files);
+            } else if on(app) && lock(&RT).extra() {
+                emit_to(app, LABEL, events::TE_TOAST, ONE);
+            }
+        }
+        Join::Skip => {}
+    }
+    true
+}
+
+/// 等遮罩、长截图结束再打开（窗口会压在遮罩下面、拿走键盘）；等的时候又来一批，用后来的
+fn wait(app: &AppHandle, files: Vec<PathBuf>) {
+    if lock(&WAITING).replace(files).is_some() {
+        return;
+    }
+    let app = app.clone();
+    // ponytail: 每 300 ms 看一次，不在遮罩、长截图的每条结束路径上挂钩子
+    let spawned = crate::housekeeping::spawn("xpaste-textedit-wait", move || {
+        while crate::panel::under_overlay(&app) {
+            std::thread::sleep(Duration::from_millis(300));
+        }
+        let files = lock(&WAITING).take();
+        if let Some(files) = files {
+            open_files(&app, &files);
+        }
+    });
+    if !spawned {
+        *lock(&WAITING) = None;
+    }
+}
+
+fn open_files(app: &AppHandle, files: &[PathBuf]) {
+    match route_files(on(app), files) {
+        None => {}
+        Some(Ok((p, note))) => {
+            lock(&RT).batch = Some(None);
+            spawn_open(app, Source::File(p.into()), note, None);
+        }
+        Some(Err(_)) => {
             log::info!("改字 没有开启，不打开文件");
-            // 面板页面还没就绪（刚启动）时它收不到，改发系统通知
+            crate::panel::show(app, None, crate::panel::Trigger::Tray);
+            OFF_DUE.store(true, Ordering::SeqCst);
             if crate::panel::page_ready() {
-                crate::panel::show(app, None, crate::panel::Trigger::Tray);
-                // 排在面板显示之后发：panel-shown 会重画列表
-                on_main(app, |app| emit_to(app, "panel", events::TE_OFF, ()));
-            } else {
-                crate::notify(app, why);
+                panel_ready(app);
             }
         }
     }
-    true
+}
+
+/// 面板页面就绪（刚启动）：补发“改字没有开启”。排在面板显示之后发：panel-shown 会重画列表
+pub fn panel_ready(app: &AppHandle) {
+    if OFF_DUE.swap(false, Ordering::SeqCst) {
+        on_main(app, |app| emit_to(app, "panel", events::TE_OFF, ()));
+    }
 }
 
 /// 启动完成：打开启动参数和启动完成之前来的文件
@@ -447,12 +632,25 @@ fn open_as(
     app: &AppHandle,
     mut src: Source,
     from: &'static str,
-    entry: Option<Entry>,
+    entry: Option<(Entry, Option<Front>)>,
     note: Option<&'static str>,
 ) -> Result<(), AppError> {
     check_on(app)?;
+    // 开着一张图时再点“改字…”：只拿到前面，不换成空白的
+    if matches!(src, Source::Blank) && lock(&RT).busy() {
+        log::info!("改字 窗口拿到前面");
+        if crate::panel::visible(app) {
+            crate::panel::hide(app);
+        }
+        on_main(app, |app| {
+            if window_open() {
+                textedit_window::show(app);
+            }
+        });
+        return Ok(());
+    }
     let seq = OPENS.fetch_add(1, Ordering::SeqCst) + 1;
-    let origin = entry.map(|e| meme::arrive(None, e, meme::foreground));
+    let origin = origin_of(entry, meme::foreground);
     let expired = expired(app);
     let live = match &src {
         Source::Blank => None,
@@ -465,7 +663,7 @@ fn open_as(
             Some(enlist(Live::fresh(img, icc), None))
         }
     };
-    let (target, fresh) = {
+    let target = {
         let mut rt = lock(&RT);
         // 又开了一张，或者窗口里换图时窗口已经关了
         if (origin.is_none() && !rt.open) || !admit(&mut rt.shown, seq) {
@@ -474,10 +672,10 @@ fn open_as(
         if let Some(o) = origin {
             rt.origin = o;
         }
-        let fresh = !std::mem::replace(&mut rt.open, true);
+        rt.open = true;
         rt.unseen = 0;
         rt.cur.clone_from(&live);
-        (rt.origin.target.clone(), fresh)
+        rt.origin.target.clone()
     };
     tasks().sweep();
     log::info!(
@@ -501,14 +699,17 @@ fn open_as(
         expired,
         config: config(app),
     };
-    show(app, (payload, note), fresh);
+    show(app, (payload, note), seq);
     Ok(())
 }
 
-/// 显示窗口，把载荷发给页面；页面还没把事件听上时先留着。`fresh` 时先摆好位置
-fn show(app: &AppHandle, opening: Opening, fresh: bool) {
+/// 显示窗口，把载荷发给页面；页面还没把事件听上时先留着。轮到主线程时已经关了、又开了一张的不显示
+fn show(app: &AppHandle, opening: Opening, seq: u64) {
     on_main(app, move |app| {
-        textedit_window::show(app, fresh);
+        if !lock(&RT).shows(seq) {
+            return;
+        }
+        textedit_window::show(app);
         let now = lock(&RT).deliver(opening);
         send(app, now);
     });
@@ -547,20 +748,7 @@ pub fn window_open() -> bool {
 
 /// 窗口记成关闭，放开那张图（有任务的由任务拿着），返回来处；没开着时返回 None
 fn shut() -> Option<Origin> {
-    let (origin, _cur) = {
-        let mut rt = lock(&RT);
-        // 还没解完的那几次打开作废
-        rt.shown = OPENS.load(Ordering::SeqCst);
-        if !rt.open {
-            return None;
-        }
-        rt.open = false;
-        rt.held = None;
-        (
-            std::mem::replace(&mut rt.origin, meme::NOWHERE),
-            rt.cur.take(),
-        )
-    };
+    let (origin, _cur) = lock(&RT).shut(OPENS.load(Ordering::SeqCst))?;
     tasks().sweep();
     Some(origin)
 }
@@ -982,10 +1170,8 @@ mod tests {
         assert_eq!(route_files(false, &[]), None);
     }
 
-    /// 页面没就绪：先留着最后一次打开（连同提示），就绪后补发一次；就绪以后直接发
-    #[test]
-    fn open_before_window_ready_is_held() {
-        let p = |from| OpenPayload {
+    fn payload(from: &'static str) -> OpenPayload {
+        OpenPayload {
             job: None,
             from,
             target: None,
@@ -994,7 +1180,13 @@ mod tests {
                 mode: "local".into(),
                 api: false,
             },
-        };
+        }
+    }
+
+    /// 页面没就绪：先留着最后一次打开（连同提示），就绪后补发一次；就绪以后直接发
+    #[test]
+    fn open_before_window_ready_is_held() {
+        let p = payload;
         let mut rt = Runtime::new();
         assert!(rt.deliver((p("blank"), None)).is_none());
         assert!(rt.deliver((p("file"), Some(ONE))).is_none());
@@ -1002,11 +1194,122 @@ mod tests {
         assert_eq!((held.from, note), ("file", Some("一次改一张")));
         assert!(rt.page_ready().is_none());
         assert_eq!(rt.deliver((p("shot"), None)).unwrap().0.from, "shot");
-        // 页面重新加载，没就绪之前关掉的不补发
+        // 没就绪之前关掉的不补发，那之前的打开轮到上屏也不显示
         let mut rt = Runtime::new();
+        (rt.open, rt.shown) = (true, 3);
+        assert!(rt.shows(3) && !rt.shows(2));
         assert!(rt.deliver((p("blank"), None)).is_none());
-        rt.held = None;
+        assert!(rt.shut(3).is_some());
+        assert!(!rt.shows(3));
         assert!(rt.page_ready().is_none());
+        assert!(rt.shut(5).is_none());
+        assert_eq!(rt.shown, 5);
+    }
+
+    /// 选中几个文件一起打开，一个一个到：只开第一个，提示一次
+    #[test]
+    fn files_in_a_row_are_one_batch() {
+        let t = Instant::now();
+        let at = |ms| t + Duration::from_millis(ms);
+        let new = || Batch {
+            last: None,
+            noted: false,
+        };
+        let mut b = new();
+        assert_eq!(b.join(at(0), 1), Join::Open);
+        assert_eq!(b.join(at(700), 1), Join::Note);
+        // 一个接一个，从上一个算起
+        assert_eq!(b.join(at(1500), 1), Join::Skip);
+        assert_eq!(b.join(at(2600), 1), Join::Open);
+        assert_eq!(b.join(at(2700), 1), Join::Note);
+        // 一次就给了几个的，打开时已经提示了
+        let mut b = new();
+        assert_eq!(b.join(at(0), 3), Join::Open);
+        assert_eq!(b.join(at(100), 1), Join::Skip);
+    }
+
+    /// 后到的提示：还在打开、页面没就绪的跟着那次打开发；开好了现在发；打不开的不发
+    #[test]
+    fn batch_note_goes_with_its_open() {
+        let mut rt = Runtime::new();
+        rt.batch = Some(None);
+        assert!(!rt.extra());
+        rt.ready = true;
+        // 别的打开不带走
+        assert_eq!(rt.deliver((payload("shot"), None)).unwrap().1, None);
+        assert_eq!(rt.deliver((payload("file"), None)).unwrap().1, Some(ONE));
+        assert_eq!(rt.deliver((payload("file"), None)).unwrap().1, None);
+        let mut rt = Runtime::new();
+        rt.open = true;
+        assert!(rt.deliver((payload("file"), None)).is_none());
+        assert!(!rt.extra());
+        assert_eq!(rt.page_ready().unwrap().1, Some(ONE));
+        assert!(rt.extra());
+        rt.shut(0);
+        assert!(!rt.extra());
+    }
+
+    /// 开着一张图时“改字…”不换成空白；空白的、没开着的照常
+    #[test]
+    fn blank_keeps_open_image() {
+        let mut rt = Runtime::new();
+        assert!(!rt.busy());
+        rt.open = true;
+        assert!(!rt.busy());
+        rt.cur = Some(live());
+        assert!(rt.busy());
+        rt.shut(0);
+        assert!(!rt.busy());
+    }
+
+    /// 从遮罩进来用截图前记好的前台，不再问；别处进来问这一刻的
+    #[test]
+    fn overlay_front_is_kept() {
+        let front = || (Some(7), Some("微信".to_string()));
+        let o = origin_of(Some((Entry::Other, Some(front()))), || panic!("已经记好")).unwrap();
+        assert_eq!((o.back, o.target.as_deref()), (Some(7), Some("微信")));
+        // 截图前没有前台窗口也不再问
+        let o = origin_of(Some((Entry::Other, Some((None, None)))), || {
+            panic!("已经记好")
+        });
+        assert_eq!(o.unwrap().back, None);
+        assert_eq!(
+            origin_of(Some((Entry::Other, None)), front).unwrap().back,
+            Some(7)
+        );
+        assert!(origin_of(None, || panic!("窗口里换图不问")).is_none());
+        assert_eq!(meme::foreground_of(Some(7)).0, Some(7));
+    }
+
+    /// 撤遮罩之前先看：太大、读不出来的都报出来
+    #[test]
+    fn peek_before_leaving_overlay() {
+        let state = AppState::for_test();
+        let tmp = Tmp::new();
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 1.0,
+            h: 1.0,
+        };
+        let shot = |png| peek(&state, &Source::Shot { rect, png });
+        assert!(shot(png_head(40, 30)).is_ok());
+        assert_eq!(msg(shot(png_head(20_000, 20_000))), "图太大，改不了");
+        assert_eq!(msg(shot(b"x".to_vec())), "这张图读不出来");
+        let f = tmp.0.join("a.png");
+        assert_eq!(
+            msg(peek(&state, &Source::File(f.clone()))),
+            "这张图读不出来"
+        );
+        std::fs::write(&f, png_head(20_000, 20_000)).unwrap();
+        assert_eq!(
+            msg(peek(&state, &Source::File(f.clone()))),
+            "图太大，改不了"
+        );
+        std::fs::write(&f, png_head(40, 30)).unwrap();
+        assert!(peek(&state, &Source::File(f.clone())).is_ok());
+        assert_eq!(dims(&f), Some((40, 30)));
+        assert_eq!(msg(peek(&state, &Source::Clip { record: 999 })), UNUSABLE);
     }
 
     fn job_on_disk(l: &Live, dir: &Path) -> store::Job {

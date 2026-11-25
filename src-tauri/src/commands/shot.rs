@@ -58,6 +58,12 @@ pub fn overlay_begin(app: AppHandle, mode: shot::Mode) {
     shot::begin(&app, mode);
 }
 
+/// 框选改字的“用刚复制的图”卡片，没有为 `null`。
+#[tauri::command(async)]
+pub fn shot_edit_card(app: AppHandle, generation: u64) -> Option<shot::Clip> {
+    shot::edit_card(&app, generation)
+}
+
 /// 框选改字时的“用刚复制的图”：结束这次截图，带着那条记录的原图打开改字窗口。
 #[tauri::command(async)]
 pub fn shot_edit_clip(app: AppHandle, generation: u64) -> Result<(), AppError> {
