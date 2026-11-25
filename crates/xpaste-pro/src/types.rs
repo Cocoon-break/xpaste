@@ -384,3 +384,28 @@ pub struct TePaste {
     /// 可能有痕迹
     pub soft: bool,
 }
+
+/// 不给改的图的类别
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TeBlock {
+    Id,
+    Receipt,
+    Contract,
+    Stamped,
+    Medical,
+    Approved,
+}
+
+impl TeBlock {
+    /// 给用户看的类别名；日志也用它
+    pub fn label(&self) -> &'static str {
+        match self {
+            TeBlock::Id => "证件",
+            TeBlock::Receipt => "票据",
+            TeBlock::Contract => "合同",
+            TeBlock::Stamped => "盖章文件",
+            TeBlock::Medical => "病历",
+            TeBlock::Approved => "已签批的单据",
+        }
+    }
+}

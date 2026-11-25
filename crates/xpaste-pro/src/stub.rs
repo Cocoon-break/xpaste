@@ -397,6 +397,22 @@ pub fn te_crop(_img: &TeImg, _line: TeQuad, _range: [f32; 2], _neighbors: usize)
     }
 }
 
+pub fn te_block(_texts: &[&str], _img: &TeImg) -> Option<TeBlock> {
+    None
+}
+
+pub fn te_block_text(_old: &str, _new: &str) -> Option<TeBlock> {
+    None
+}
+
+pub fn te_signature_spans(_lines: &[(String, TeQuad)]) -> Vec<TeQuad> {
+    Vec::new()
+}
+
+pub fn te_prompt(_old: &str, _new: &str, _realign: Option<&str>) -> String {
+    String::new()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
