@@ -17,7 +17,46 @@
   ${EndIf}
 !macroend
 
+; 系统的“打开方式”（Pro 的改字）：只登记成可选，不改默认应用
+!macro XPASTE_EACH_IMAGE_EXT DO
+  !insertmacro ${DO} "png"
+  !insertmacro ${DO} "jpg"
+  !insertmacro ${DO} "jpeg"
+  !insertmacro ${DO} "webp"
+  !insertmacro ${DO} "bmp"
+  !insertmacro ${DO} "tif"
+  !insertmacro ${DO} "tiff"
+  !insertmacro ${DO} "gif"
+!macroend
+!macro XPASTE_OPENWITH_ADD EXT
+  WriteRegStr HKCU "Software\Classes\.${EXT}\OpenWithProgids" "xPaste.Image" ""
+!macroend
+!macro XPASTE_OPENWITH_DEL EXT
+  DeleteRegValue HKCU "Software\Classes\.${EXT}\OpenWithProgids" "xPaste.Image"
+!macroend
+!macro XPASTE_OPENWITH_CLEAR
+  !insertmacro XPASTE_EACH_IMAGE_EXT XPASTE_OPENWITH_DEL
+  DeleteRegKey HKCU "Software\Classes\xPaste.Image"
+!macroend
+
+!macro NSIS_HOOK_POSTINSTALL
+  ; 打包时 Makefile 在带 pro/ 时设 XPASTE_PRO=1；没有 Pro 的安装程序不登记，装在带 Pro 的上面时清掉原来的
+  !if "$%XPASTE_PRO%" == "1"
+    WriteRegStr HKCU "Software\Classes\xPaste.Image" "" "图片"
+    WriteRegStr HKCU "Software\Classes\xPaste.Image\DefaultIcon" "" "$INSTDIR\${MAINBINARYNAME}.exe,0"
+    WriteRegStr HKCU "Software\Classes\xPaste.Image\shell\open\command" "" '"$INSTDIR\${MAINBINARYNAME}.exe" "%1"'
+    !insertmacro XPASTE_EACH_IMAGE_EXT XPASTE_OPENWITH_ADD
+  !else
+    !insertmacro XPASTE_OPENWITH_CLEAR
+  !endif
+  ; SHCNE_ASSOCCHANGED：让资源管理器重读
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
+!macroend
+
 !macro NSIS_HOOK_POSTUNINSTALL
+  ${If} $UpdateMode <> 1
+    !insertmacro XPASTE_OPENWITH_CLEAR
+  ${EndIf}
   ; 开机启动项（tauri-plugin-autostart → auto-launch，值名为 productName）
   ; 与 Tauri 模板一致：更新模式（/UPDATE）下保留，只有真正卸载时删除
   ${If} $UpdateMode <> 1
