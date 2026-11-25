@@ -1,5 +1,5 @@
 //! 改字的留存和存成文件。数据目录的 `textedit/` 下一张图一个文件夹（文件夹名是 id）：`orig.png` 原图、
-//! `job.json` 每处改动、每个候选一张 PNG。只有用户能删：不跟保留天数、最多条数、清空历史走。
+//! `icc` 原图的色彩配置（有才写）、`job.json` 每处改动、每个候选一张 PNG。只有用户能删：不跟保留天数、最多条数、清空历史走。
 
 use std::fs;
 use std::io::{self, ErrorKind, Write};
@@ -88,23 +88,30 @@ impl Job {
 }
 
 const ORIG: &str = "orig.png";
+const ICC: &str = "icc";
 const JOB: &str = "job.json";
 const TRASH: &str = "trash";
 
-fn bad(e: image::ImageError) -> io::Error {
-    io::Error::new(ErrorKind::InvalidData, e)
+/// 自己起的名字：32 位十六进制
+fn is_id(s: &str) -> bool {
+    s.len() == 32 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// id 会从页面传回来：只认自己起的（32 位十六进制），不让它指到别的地方
+/// id 会从页面传回来：只认自己起的，不让它指到别的地方
 fn job_dir(dir: &Path, id: &str) -> io::Result<PathBuf> {
-    let ok = id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit());
-    ok.then(|| dir.join(id))
+    is_id(id)
+        .then(|| dir.join(id))
         .ok_or_else(|| ErrorKind::InvalidInput.into())
 }
 
-fn write_png(path: &Path, img: &TeImg) -> io::Result<()> {
-    let png = img_meta::encode_png(img.w, img.h, &img.px).map_err(bad)?;
-    fs::write(path, png)
+fn write_sync(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut f = fs::File::create(path)?;
+    f.write_all(bytes)?;
+    f.sync_all()
+}
+
+fn write_png(path: &Path, img: &TeImg, icc: Option<&[u8]>) -> io::Result<()> {
+    write_sync(path, &img_meta::encode_png(img.w, img.h, &img.px, icc)?)
 }
 
 fn read_png(path: &Path) -> io::Result<TeImg> {
@@ -112,7 +119,10 @@ fn read_png(path: &Path) -> io::Result<TeImg> {
     let mut r = ImageReader::with_format(file, ImageFormat::Png);
     // 自己存的，尺寸打开时查过
     r.no_limits();
-    let img = r.decode().map_err(bad)?.into_rgba8();
+    let img = r
+        .decode()
+        .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?
+        .into_rgba8();
     Ok(TeImg {
         w: img.width(),
         h: img.height(),
@@ -120,9 +130,9 @@ fn read_png(path: &Path) -> io::Result<TeImg> {
     })
 }
 
-/// 存下原图，起一个新的
+/// 存下原图和它的 ICC，起一个新的
 #[allow(dead_code)] // 改字的任务接入后删
-pub fn create(dir: &Path, img: &TeImg) -> io::Result<Job> {
+pub fn create(dir: &Path, img: &TeImg, icc: Option<&[u8]>) -> io::Result<Job> {
     let job = Job {
         id: crate::meme_gen::uuid(),
         w: img.w,
@@ -134,14 +144,18 @@ pub fn create(dir: &Path, img: &TeImg) -> io::Result<Job> {
     fs::create_dir_all(&d)?;
     // 先写 job.json：中途退出的，启动时认得出是空的
     save(dir, &job)
-        .and_then(|()| write_png(&d.join(ORIG), img))
+        .and_then(|()| match icc {
+            Some(i) if !i.is_empty() => write_sync(&d.join(ICC), i),
+            _ => Ok(()),
+        })
+        .and_then(|()| write_png(&d.join(ORIG), img, icc))
         .inspect_err(|_| {
             let _ = fs::remove_dir_all(&d);
         })?;
     Ok(job)
 }
 
-/// 先写临时文件再改名。同一个 job 的几次保存由调用方排队；文件夹不在了（删了）就报错，不重新建
+/// 先写临时文件、落到盘上再改名。同一个 job 的几次保存由调用方排队；文件夹不在了（删了）就报错，不重新建
 pub fn save(dir: &Path, job: &Job) -> io::Result<()> {
     let nums = |e: &Edit| {
         e.line
@@ -156,16 +170,18 @@ pub fn save(dir: &Path, job: &Job) -> io::Result<()> {
     }
     let path = job_dir(dir, &job.id)?.join(JOB);
     let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, serde_json::to_vec(job)?)
+    write_sync(&tmp, &serde_json::to_vec(job)?)
         .and_then(|()| fs::rename(&tmp, &path))
         .inspect_err(|_| {
             let _ = fs::remove_file(&tmp);
         })
 }
 
+/// 名字不是自己起的（会指到文件夹外面）也算坏了
 fn read(dir: &Path, id: &str) -> io::Result<Job> {
     let job: Job = serde_json::from_slice(&fs::read(job_dir(dir, id)?.join(JOB))?)?;
-    if job.id != id {
+    let named = |c: &Cand| c.file.strip_suffix(".png").is_some_and(is_id);
+    if job.id != id || !job.edits.iter().flat_map(|e| &e.cands).all(named) {
         return Err(ErrorKind::InvalidData.into());
     }
     Ok(job)
@@ -200,7 +216,14 @@ pub fn list(dir: &Path) -> Vec<Job> {
     jobs
 }
 
-/// 给 id 为 `edit` 的那处加一个候选并存盘，返回它是第几个。不改选中的；没贴好的由调用方改 `placed` 再存
+/// 原图的 ICC，存出去的都要带上
+#[allow(dead_code)] // 改字的任务接入后删
+pub fn load_icc(dir: &Path, id: &str) -> Option<Vec<u8>> {
+    fs::read(job_dir(dir, id).ok()?.join(ICC)).ok()
+}
+
+/// 给 id 为 `edit` 的那处加一个候选并存盘，返回它是第几个。不改选中的。`placed`：贴好了，没贴好的只留着。
+/// 没存成时不留下文件，`job` 也照旧
 #[allow(dead_code)] // 改字的任务接入后删
 pub fn add_cand(
     dir: &Path,
@@ -209,6 +232,7 @@ pub fn add_cand(
     paste: &TePaste,
     by: By,
     note: &str,
+    placed: bool,
 ) -> io::Result<usize> {
     let at = job
         .edits
@@ -218,7 +242,6 @@ pub fn add_cand(
     // 名字不用序号：候选都要留，不能撞上旧的
     let file = format!("{}.png", crate::meme_gen::uuid());
     let path = job_dir(dir, &job.id)?.join(&file);
-    write_png(&path, &paste.patch)?;
     job.edits[at].cands.push(Cand {
         file,
         x: paste.x,
@@ -226,9 +249,9 @@ pub fn add_cand(
         by,
         soft: paste.soft,
         note: note.into(),
-        placed: true,
+        placed,
     });
-    if let Err(e) = save(dir, job) {
+    if let Err(e) = write_png(&path, &paste.patch, None).and_then(|()| save(dir, job)) {
         job.edits[at].cands.pop();
         let _ = fs::remove_file(&path);
         return Err(e);
@@ -332,28 +355,32 @@ pub fn clean(dir: &Path) {
     }
 }
 
-/// “最近改过”有几张、占多少字节
+/// 清空时删的各个文件夹：“最近改过”的和坏了的。打开着、还没出过结果的不在里面
+fn clearable(dir: &Path) -> Vec<PathBuf> {
+    ids(dir)
+        .iter()
+        .filter(|id| read(dir, id).map_or(true, |j| j.kept()))
+        .map(|id| dir.join(id))
+        .collect()
+}
+
+/// “最近改过”有几张、清空能腾出多少字节。坏了的不算张数、算字节：0 张但占地方时也要能清空
 #[allow(dead_code)] // 改字的任务接入后删
 pub fn stats(dir: &Path) -> (u64, u64) {
-    let jobs = list(dir);
-    let bytes = jobs
+    let bytes = clearable(dir)
         .iter()
-        .filter_map(|j| fs::read_dir(dir.join(&j.id)).ok())
+        .filter_map(|d| fs::read_dir(d).ok())
         .flat_map(|rd| rd.flatten())
         .filter_map(|e| e.metadata().ok())
         .map(|m| m.len())
         .sum();
-    (jobs.len() as u64, bytes)
+    (list(dir).len() as u64, bytes)
 }
 
-/// 清空“最近改过”，坏了的和 `trash/` 一起删；打开着还没出过结果的不在里面，不删
+/// 清空“最近改过”，坏了的和 `trash/` 一起删
 #[allow(dead_code)] // 改字的任务接入后删
 pub fn clear(dir: &Path) -> io::Result<()> {
-    let mut gone: Vec<PathBuf> = ids(dir)
-        .iter()
-        .filter(|id| read(dir, id).map_or(true, |j| j.kept()))
-        .map(|id| dir.join(id))
-        .collect();
+    let mut gone = clearable(dir);
     gone.push(dir.join(TRASH));
     // 有一张删不掉，别的照删
     let mut out = Ok(());
@@ -392,17 +419,29 @@ pub fn out_path(src: &Path) -> PathBuf {
     }))
 }
 
-/// 在原图旁边另存一份，绝不覆盖；`ai` 是图里有没有 AI 出的（`Job::ai`）
+/// 在原图旁边另存一份，绝不覆盖；`icc` 是原图的（`load_icc`），`ai` 是图里有没有 AI 出的（`Job::ai`）。
+/// 名字是 JPEG、图里却有透明的（改过扩展名）存成 PNG
 #[allow(dead_code)] // 改字的任务接入后删
-pub fn write_beside(src: &Path, img: &TeImg, ai: bool) -> Result<PathBuf, SaveFail> {
-    let bytes = if ImageFormat::from_path(src).is_ok_and(|f| f == ImageFormat::Jpeg) {
-        img_meta::encode_jpeg(img.w, img.h, &img.px).map(|b| img_meta::mark_jpeg(b, ai))
-    } else {
-        img_meta::encode_png(img.w, img.h, &img.px).map(|b| img_meta::mark_png(b, ai))
+pub fn write_beside(
+    src: &Path,
+    img: &TeImg,
+    icc: Option<&[u8]>,
+    ai: bool,
+) -> Result<PathBuf, SaveFail> {
+    let mut src = src.to_path_buf();
+    let mut jpeg = ImageFormat::from_path(&src).is_ok_and(|f| f == ImageFormat::Jpeg);
+    if jpeg && img.px.as_chunks::<4>().0.iter().any(|p| p[3] < 255) {
+        jpeg = false;
+        src.set_extension("png");
     }
-    .map_err(|e| SaveFail::Io(bad(e)))?;
+    let bytes = if jpeg {
+        img_meta::encode_jpeg(img.w, img.h, &img.px, icc).map(|b| img_meta::mark_jpeg(b, ai))
+    } else {
+        img_meta::encode_png(img.w, img.h, &img.px, icc).map(|b| img_meta::mark_png(b, ai))
+    }
+    .map_err(SaveFail::Io)?;
     use ErrorKind::*;
-    shot::write_new(|| out_path(src), |f| f.write_all(&bytes)).map_err(|e| match e.kind() {
+    shot::write_new(|| out_path(&src), |f| f.write_all(&bytes)).map_err(|e| match e.kind() {
         PermissionDenied | NotFound | NotADirectory | ReadOnlyFilesystem | InvalidFilename => {
             SaveFail::Dir
         }
@@ -439,6 +478,12 @@ mod tests {
             .collect();
         px[..4].copy_from_slice(&[9, 8, 7, 0]);
         TeImg { w, h, px }
+    }
+
+    fn opaque(w: u32, h: u32) -> TeImg {
+        let mut i = img(w, h);
+        i.px[3] = 255;
+        i
     }
 
     /// 原图 `(x, y)` 起 w × h 的矩形，其中 `hit`（原图坐标）涂成 `c`
@@ -486,10 +531,10 @@ mod tests {
     /// 一张 16 × 8 的图，一处改动，一个选中的候选（(2, 2) 涂红）
     fn one(dir: &Path) -> (Job, TeImg) {
         let base = img(16, 8);
-        let mut job = create(dir, &base).unwrap();
+        let mut job = create(dir, &base, None).unwrap();
         job.edits.push(edit(1));
         let p = paste(&base, (1, 1, 4, 4), &[(2, 2)], RED);
-        job.edits[0].pick = add_cand(dir, &mut job, 1, &p, By::Local, "").unwrap();
+        job.edits[0].pick = add_cand(dir, &mut job, 1, &p, By::Local, "", true).unwrap();
         save(dir, &job).unwrap();
         (job, base)
     }
@@ -533,12 +578,145 @@ mod tests {
         let t = Tmp::new();
         let d = t.te();
         one(&d);
-        for id in ["", ".", "..", "../textedit", "trash", "a/b", "/"] {
+        // 前三个恰好 32 个字符
+        let long = [
+            format!("../{}", "a".repeat(29)),
+            format!("{}/..", "a".repeat(29)),
+            "a".repeat(31) + "g",
+            "a".repeat(33),
+        ];
+        let short = ["", ".", "..", "../textedit", "trash", "a/b", "/"].map(String::from);
+        for id in short.iter().chain(&long) {
             assert!(load(&d, id).is_err());
             assert!(remove(&d, id).is_err());
             assert!(restore(&d, id).is_err());
+            assert!(load_icc(&d, id).is_none());
         }
         assert_eq!(list(&d).len(), 1);
+    }
+
+    /// 候选的文件名也只认自己起的：指到文件夹外面的当损坏
+    #[test]
+    fn bad_cand_file_rejected() {
+        let t = Tmp::new();
+        let d = t.te();
+        let (job, _) = one(&d);
+        let hex = "a".repeat(32);
+        let names = [
+            "../x.png".into(),
+            t.0.join("x.png").to_string_lossy().into_owned(),
+            r"\\host\share\x.png".into(),
+            r"C:\x.png".into(),
+            format!("../{hex}.png"),
+            format!("{hex}/../{hex}.png"),
+            format!("{hex}.png/"),
+            format!("{hex}.jpg"),
+            hex,
+            String::new(),
+        ];
+        for name in names {
+            let mut j = job.clone();
+            j.edits[0].cands[0].file = name;
+            save(&d, &j).unwrap();
+            assert!(load(&d, &job.id).is_err());
+            assert!(list(&d).is_empty());
+            // 当损坏：启动时不删
+            clean(&d);
+            assert!(d.join(&job.id).is_dir());
+        }
+        save(&d, &job).unwrap();
+        assert!(load(&d, &job.id).is_ok());
+    }
+
+    /// 尺寸和字节数对不上：报错，不崩
+    #[test]
+    fn bad_size_rejected() {
+        let t = Tmp::new();
+        let d = t.te();
+        let short = || TeImg {
+            w: 4,
+            h: 4,
+            px: vec![255; 63],
+        };
+        let e = create(&d, &short(), None).err().unwrap();
+        assert_eq!(e.kind(), ErrorKind::InvalidInput);
+        assert_eq!(fs::read_dir(&d).unwrap().count(), 0);
+        let (mut job, _) = one(&d);
+        let p = TePaste {
+            patch: short(),
+            x: 0,
+            y: 0,
+            exact: false,
+            soft: false,
+        };
+        let e = add_cand(&d, &mut job, 1, &p, By::Ai, "", true)
+            .err()
+            .unwrap();
+        assert_eq!(e.kind(), ErrorKind::InvalidInput);
+        for name in ["a.png", "a.jpg"] {
+            let r = write_beside(&t.0.join(name), &short(), None, false);
+            assert!(matches!(r, Err(SaveFail::Io(e)) if e.kind() == ErrorKind::InvalidInput));
+        }
+        let files = fs::read_dir(&t.0).unwrap().flatten();
+        assert_eq!(files.filter(|e| e.path().is_file()).count(), 0);
+    }
+
+    /// 图写好了、job.json 没存成：那张图删掉，内存里的也撤掉
+    #[test]
+    fn add_cand_fail_leaves_nothing() {
+        let t = Tmp::new();
+        let d = t.te();
+        let (mut job, base) = one(&d);
+        job.edits[0].range[0] = f32::NAN;
+        let p = paste(&base, (0, 0, 2, 2), &[], RED);
+        assert!(add_cand(&d, &mut job, 1, &p, By::Ai, "", true).is_err());
+        assert_eq!(job.edits[0].cands.len(), 1);
+        assert_eq!(fs::read_dir(d.join(&job.id)).unwrap().count(), 3);
+    }
+
+    fn icc_of(bytes: &[u8]) -> Option<Vec<u8>> {
+        use image::ImageDecoder;
+        let r = ImageReader::new(io::Cursor::new(bytes));
+        let mut d = r.with_guessed_format().unwrap().into_decoder().unwrap();
+        d.icc_profile().unwrap()
+    }
+
+    /// 原图的 ICC 留着，存出来的都带；像素不变。比 JPEG 的一段长
+    #[test]
+    fn icc_kept() {
+        let t = Tmp::new();
+        let d = t.te();
+        let icc: Vec<u8> = (0..70_000u32).map(|i| (i * 31 % 253) as u8).collect();
+        let base = img(16, 8);
+        let job = create(&d, &base, Some(&icc)).unwrap();
+        assert!(load_icc(&d, &job.id).as_ref() == Some(&icc));
+        let orig = fs::read(d.join(&job.id).join(ORIG)).unwrap();
+        assert!(icc_of(&orig).as_ref() == Some(&icc));
+        check(&render(&d, &job).unwrap(), &base, &[]);
+
+        let opaque = opaque(16, 16);
+        let save = |name, icc| {
+            let p = write_beside(&t.0.join(name), &opaque, icc, true)
+                .ok()
+                .unwrap();
+            fs::read(p).unwrap()
+        };
+        for name in ["a.png", "a.jpg"] {
+            let (with, without) = (save(name, Some(&icc[..])), save(name, None));
+            assert!(icc_of(&with).as_ref() == Some(&icc));
+            assert!(icc_of(&without).is_none());
+            let px = |b| image::load_from_memory(b).unwrap().into_rgba8().into_raw();
+            assert!(px(&with) == px(&without));
+            assert!(name == "a.jpg" || px(&with) == opaque.px);
+        }
+        // 没有的、空的不写
+        for icc in [None, Some(&[][..])] {
+            let job = create(&d, &base, icc).unwrap();
+            assert!(load_icc(&d, &job.id).is_none());
+            let dir = d.join(&job.id);
+            assert_eq!(fs::read_dir(&dir).unwrap().count(), 2);
+            assert!(icc_of(&fs::read(dir.join(ORIG)).unwrap()).is_none());
+        }
     }
 
     /// 存不成：不留半截文件夹
@@ -550,7 +728,7 @@ mod tests {
             h: 0,
             px: vec![],
         };
-        assert!(create(&t.te(), &bad).is_err());
+        assert!(create(&t.te(), &bad, None).is_err());
         assert_eq!(fs::read_dir(t.te()).unwrap().count(), 0);
     }
 
@@ -559,7 +737,7 @@ mod tests {
         let t = Tmp::new();
         let d = t.te();
         assert!(list(&d).is_empty());
-        let mut job = create(&d, &img(4, 4)).unwrap();
+        let mut job = create(&d, &img(4, 4), None).unwrap();
         assert!(list(&d).is_empty());
         // 有一处，但还没出过结果
         job.edits.push(edit(1));
@@ -567,7 +745,7 @@ mod tests {
         assert!(list(&d).is_empty());
         assert_eq!(stats(&d), (0, 0));
         let p = paste(&img(4, 4), (0, 0, 1, 1), &[], RED);
-        add_cand(&d, &mut job, 1, &p, By::Ai, "").unwrap();
+        add_cand(&d, &mut job, 1, &p, By::Ai, "", true).unwrap();
         assert_eq!(list(&d).len(), 1);
     }
 
@@ -603,7 +781,7 @@ mod tests {
         let (mut job, base) = one(&d);
         for c in [BLUE, [0, 255, 0, 255]] {
             let p = paste(&base, (1, 1, 4, 4), &[(3, 3)], c);
-            add_cand(&d, &mut job, 1, &p, By::Ai, "").unwrap();
+            add_cand(&d, &mut job, 1, &p, By::Ai, "", true).unwrap();
         }
         // 加候选不改选中的
         assert_eq!(load(&d, &job.id).unwrap().edits[0].pick, 0);
@@ -626,11 +804,11 @@ mod tests {
         let d = t.te();
         let (mut job, base) = one(&d);
         let p = paste(&base, (0, 0, 2, 2), &[], RED);
-        assert!(add_cand(&d, &mut job, 9, &p, By::Ai, "").is_err());
+        assert!(add_cand(&d, &mut job, 9, &p, By::Ai, "", true).is_err());
         assert_eq!(fs::read_dir(d.join(&job.id)).unwrap().count(), 3);
         // 文件夹不在了（删了）：不重新建出来，也不留在列表里
         remove(&d, &job.id).unwrap();
-        assert!(add_cand(&d, &mut job, 1, &p, By::Ai, "").is_err());
+        assert!(add_cand(&d, &mut job, 1, &p, By::Ai, "", true).is_err());
         assert_eq!(job.edits[0].cands.len(), 1);
         assert!(save(&d, &job).is_err());
         assert!(list(&d).is_empty());
@@ -649,8 +827,8 @@ mod tests {
             exact: false,
             soft: false,
         };
-        let i = add_cand(&d, &mut job, 1, &p, By::Ai, "AI 出的图对不上").unwrap();
-        job.edits[0].cands[i].placed = false;
+        let i = add_cand(&d, &mut job, 1, &p, By::Ai, "AI 出的图对不上", false).unwrap();
+        assert!(!load(&d, &job.id).unwrap().edits[0].cands[i].placed);
         job.edits[0].pick = i;
         save(&d, &job).unwrap();
         let back = load(&d, &job.id).unwrap();
@@ -668,7 +846,7 @@ mod tests {
         let d = t.te();
         let (mut job, base) = one(&d);
         let p = paste(&base, (1, 1, 2, 2), &[(1, 1)], RED);
-        let i = add_cand(&d, &mut job, 1, &p, By::Ai, "").unwrap();
+        let i = add_cand(&d, &mut job, 1, &p, By::Ai, "", true).unwrap();
         assert!(!job.ai());
         job.edits[0].pick = i;
         assert!(job.ai());
@@ -685,7 +863,7 @@ mod tests {
         job.edits.push(edit(2));
         let mut p = paste(&base, (0, 0, 2, 2), &[(0, 0), (1, 0), (0, 1), (1, 1)], BLUE);
         (p.x, p.y) = (15, 7);
-        job.edits[1].pick = add_cand(&d, &mut job, 2, &p, By::Local, "").unwrap();
+        job.edits[1].pick = add_cand(&d, &mut job, 2, &p, By::Local, "", true).unwrap();
         check(
             &render(&d, &job).unwrap(),
             &base,
@@ -701,14 +879,14 @@ mod tests {
         let (mut job, base) = one(&d);
         job.edits.push(edit(2));
         let p = paste(&base, (0, 0, 10, 6), &[(7, 4)], BLUE);
-        job.edits[1].pick = add_cand(&d, &mut job, 2, &p, By::Ai, "").unwrap();
+        job.edits[1].pick = add_cand(&d, &mut job, 2, &p, By::Ai, "", true).unwrap();
         check(
             &render(&d, &job).unwrap(),
             &base,
             &[((2, 2), RED), ((7, 4), BLUE)],
         );
         let p = paste(&base, (0, 0, 10, 6), &[(2, 2), (7, 4)], BLUE);
-        job.edits[1].pick = add_cand(&d, &mut job, 2, &p, By::Ai, "").unwrap();
+        job.edits[1].pick = add_cand(&d, &mut job, 2, &p, By::Ai, "", true).unwrap();
         check(
             &render(&d, &job).unwrap(),
             &base,
@@ -748,6 +926,12 @@ mod tests {
         let got: Vec<String> = list(&d).into_iter().map(|j| j.id).collect();
         assert_eq!(got, [good.id]);
         assert!(load(&d, &bad.id).is_err());
+        // 坏了的不算张数，但算占的地方：清空能腾出来。刚打开的都不算
+        create(&d, &img(4, 4), None).unwrap();
+        let one = stats(&d);
+        assert_eq!(one.0, 1);
+        fs::write(d.join(&bad.id).join("big"), vec![0; 5000]).unwrap();
+        assert_eq!(stats(&d), (1, one.1 + 5000));
         // 坏了的不自动删：里面的候选可能花了钱
         clean(&d);
         assert!(d.join(&bad.id).is_dir());
@@ -755,6 +939,7 @@ mod tests {
         // 用户清空时一起删
         clear(&d).unwrap();
         assert!(!d.join(&bad.id).exists());
+        assert_eq!(stats(&d), (0, 0));
     }
 
     #[test]
@@ -796,7 +981,7 @@ mod tests {
         let (kept, _) = one(&d);
         let (gone, _) = one(&d);
         // 打开过、一处都没改好的，不留
-        let opened = create(&d, &img(4, 4)).unwrap();
+        let opened = create(&d, &img(4, 4), None).unwrap();
         remove(&d, &gone.id).unwrap();
         clean(&d);
         assert!(!d.join("trash").exists());
@@ -813,7 +998,7 @@ mod tests {
         let (a, _) = one(&d);
         one(&d);
         // 窗口里刚打开、还没改好的不算“最近改过”，不清
-        let opened = create(&d, &img(4, 4)).unwrap();
+        let opened = create(&d, &img(4, 4), None).unwrap();
         remove(&d, &a.id).unwrap();
         clear(&d).unwrap();
         assert!(list(&d).is_empty());
@@ -879,7 +1064,7 @@ mod tests {
         // 几处同时存：名字都不同
         let mut got: Vec<PathBuf> = std::thread::scope(|s| {
             let hs: Vec<_> = (0..6)
-                .map(|_| s.spawn(|| write_beside(&src, &img(8, 8), false).ok().unwrap()))
+                .map(|_| s.spawn(|| write_beside(&src, &img(8, 8), None, false).ok().unwrap()))
                 .collect();
             hs.into_iter().map(|h| h.join().unwrap()).collect()
         });
@@ -900,7 +1085,7 @@ mod tests {
     #[test]
     fn write_formats() {
         let t = Tmp::new();
-        let p = write_beside(&t.0.join("a.webp"), &img(8, 8), true)
+        let p = write_beside(&t.0.join("a.webp"), &img(8, 8), None, true)
             .ok()
             .unwrap();
         let png = fs::read(&p).unwrap();
@@ -910,7 +1095,7 @@ mod tests {
         let back = image::load_from_memory(&png).unwrap().into_rgba8();
         assert!(back.into_raw() == img(8, 8).px);
 
-        let p = write_beside(&t.0.join("a.JPG"), &img(16, 16), false)
+        let p = write_beside(&t.0.join("a.JPG"), &opaque(16, 16), None, false)
             .ok()
             .unwrap();
         let jpg = fs::read(&p).unwrap();
@@ -926,6 +1111,13 @@ mod tests {
         assert_eq!(jpg[dqt + 5], 2);
         let back = image::load_from_memory(&jpg).unwrap();
         assert_eq!((back.width(), back.height()), (16, 16));
+
+        // 名字是 JPEG、图里有透明的（改过扩展名的 PNG）：存成 PNG，透明的地方还在
+        let p = write_beside(&t.0.join("b.JPG"), &img(8, 8), None, false)
+            .ok()
+            .unwrap();
+        assert_eq!(p, t.0.join("b 改字.png"));
+        assert!(image::open(p).unwrap().into_rgba8().into_raw() == img(8, 8).px);
     }
 
     #[test]
@@ -937,7 +1129,7 @@ mod tests {
         // 文件夹没了：不新建
         let gone = t.0.join("gone");
         assert!(matches!(
-            write_beside(&gone.join("a.png"), &out, false),
+            write_beside(&gone.join("a.png"), &out, None, false),
             Err(SaveFail::Dir)
         ));
         assert!(!gone.exists());
@@ -949,7 +1141,7 @@ mod tests {
             fs::write(ro.join("a.png"), b"src").unwrap();
             let mode = |m| fs::set_permissions(&ro, fs::Permissions::from_mode(m)).unwrap();
             mode(0o555);
-            let r = write_beside(&ro.join("a.png"), &out, false);
+            let r = write_beside(&ro.join("a.png"), &out, None, false);
             mode(0o755);
             assert!(matches!(r, Err(SaveFail::Dir)));
             assert_eq!(fs::read_dir(&ro).unwrap().count(), 1);
@@ -957,7 +1149,7 @@ mod tests {
         // 文件名太长，加不了后缀：也改走另存为
         let long = format!("{}.png", "a".repeat(250));
         assert!(matches!(
-            write_beside(&t.0.join(long), &out, false),
+            write_beside(&t.0.join(long), &out, None, false),
             Err(SaveFail::Dir)
         ));
         let back = load(&d, &job.id).unwrap();
@@ -967,7 +1159,7 @@ mod tests {
     #[test]
     fn write_source_gone() {
         let t = Tmp::new();
-        let p = write_beside(&t.0.join("a.jpg"), &img(8, 8), false)
+        let p = write_beside(&t.0.join("a.jpg"), &opaque(8, 8), None, false)
             .ok()
             .unwrap();
         assert_eq!(p, t.0.join("a 改字.jpg"));

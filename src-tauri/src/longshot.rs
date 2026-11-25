@@ -763,7 +763,7 @@ fn encode(w: usize, h: usize, rgba: Vec<u8>) -> Result<Vec<u8>, AppError> {
     if rgba.len() != w * h * 4 {
         return Err(AppError::Invalid("长截图尺寸无效".into()));
     }
-    crate::img_meta::encode_png(w as u32, h as u32, &rgba)
+    crate::img_meta::encode_png(w as u32, h as u32, &rgba, None)
         .map_err(|e| AppError::Invalid(format!("长截图编码失败：{e}")))
 }
 

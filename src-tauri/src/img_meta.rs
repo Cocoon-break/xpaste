@@ -1,20 +1,46 @@
 //! 图片编码和元数据：改字的成品写明用 xPaste 改过，含 AI 生成内容的另按 IPTC 注明。用 XMP，PNG、JPEG 都带。
 
+use std::io;
+
 use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
-use image::{ExtendedColorType, ImageEncoder, ImageResult};
+use image::{ExtendedColorType, ImageEncoder};
+
+fn bad(e: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, e)
+}
+
+/// 字节数对不上的，编码器会 panic
+fn check(w: u32, h: u32, rgba: &[u8]) -> io::Result<()> {
+    if rgba.len() as u128 != u128::from(w) * u128::from(h) * 4 {
+        return Err(io::ErrorKind::InvalidInput.into());
+    }
+    Ok(())
+}
+
+fn set_icc(enc: &mut impl ImageEncoder, icc: Option<&[u8]>) -> io::Result<()> {
+    match icc {
+        Some(i) if !i.is_empty() => enc.set_icc_profile(i.to_vec()).map_err(bad),
+        _ => Ok(()),
+    }
+}
 
 /// 快速压缩档：大图默认档在 release 下也要近 2 秒（2818 × 3872），快速档不到 0.1 秒，文件大 2%–55%。
 /// 像素照写，全透明处的 RGB 也在
-pub fn encode_png(w: u32, h: u32, rgba: &[u8]) -> ImageResult<Vec<u8>> {
+pub fn encode_png(w: u32, h: u32, rgba: &[u8], icc: Option<&[u8]>) -> io::Result<Vec<u8>> {
+    check(w, h, rgba)?;
     let mut png = Vec::new();
-    PngEncoder::new_with_quality(&mut png, CompressionType::Fast, FilterType::Adaptive)
-        .write_image(rgba, w, h, ExtendedColorType::Rgba8)?;
+    let mut enc =
+        PngEncoder::new_with_quality(&mut png, CompressionType::Fast, FilterType::Adaptive);
+    set_icc(&mut enc, icc)?;
+    enc.write_image(rgba, w, h, ExtendedColorType::Rgba8)
+        .map_err(bad)?;
     Ok(png)
 }
 
 /// 质量 95。`image` 的编码器三个分量都不降采样（4:4:4）
-pub fn encode_jpeg(w: u32, h: u32, rgba: &[u8]) -> ImageResult<Vec<u8>> {
+pub fn encode_jpeg(w: u32, h: u32, rgba: &[u8], icc: Option<&[u8]>) -> io::Result<Vec<u8>> {
+    check(w, h, rgba)?;
     let rgb: Vec<u8> = rgba
         .as_chunks::<4>()
         .0
@@ -22,7 +48,10 @@ pub fn encode_jpeg(w: u32, h: u32, rgba: &[u8]) -> ImageResult<Vec<u8>> {
         .flat_map(|p| [p[0], p[1], p[2]])
         .collect();
     let mut jpg = Vec::new();
-    JpegEncoder::new_with_quality(&mut jpg, 95).encode(&rgb, w, h, ExtendedColorType::Rgb8)?;
+    let mut enc = JpegEncoder::new_with_quality(&mut jpg, 95);
+    set_icc(&mut enc, icc)?;
+    enc.write_image(&rgb, w, h, ExtendedColorType::Rgb8)
+        .map_err(bad)?;
     Ok(jpg)
 }
 
@@ -117,7 +146,7 @@ mod tests {
     #[test]
     fn png_meta() {
         let px = rgba(5, 3);
-        let plain = encode_png(5, 3, &px).unwrap();
+        let plain = encode_png(5, 3, &px, None).unwrap();
         for ai in [false, true] {
             let png = mark_png(plain.clone(), ai);
             let c = chunks(&png);
