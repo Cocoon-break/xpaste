@@ -6,7 +6,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Instant;
 
 use serde::Serialize;
@@ -18,7 +18,7 @@ use crate::gen_slots::{self, Slots, Who};
 use crate::imagegen::{self, EditReq, ImageCfg, ImgFail};
 use crate::state::AppState;
 use crate::textedit;
-use crate::textedit_job::{self as job, Draft, Late, Live, MISREAD, Ocr, Spot, lock};
+use crate::textedit_job::{self as job, Draft, GONE, LOCKED, Late, Live, MISREAD, Ocr, Spot, lock};
 use crate::textedit_store as store;
 use crate::translate::Fail;
 
@@ -137,13 +137,11 @@ impl Tasks {
         self.q().tasks.iter().all(|t| t.view.id != id)
     }
 
-    /// 在改的结束了，让出名额。返回改好了没有；取消了的算没有
-    fn finish(&self, id: u64, r: Result<(), String>) -> bool {
+    /// 在改的结束了，让出名额。返回改好了没有；取消了的为 None
+    pub fn finish(&self, id: u64, r: Result<(), String>) -> Option<bool> {
         let mut q = self.q();
         lock(self.slots).release();
-        let Some(t) = q.tasks.iter_mut().find(|t| t.view.id == id) else {
-            return false;
-        };
+        let t = q.tasks.iter_mut().find(|t| t.view.id == id)?;
         t.live = None;
         match r {
             Ok(()) => t.view.status = Status::Done,
@@ -152,7 +150,19 @@ impl Tasks {
                 t.view.reason = why;
             }
         }
-        t.view.status == Status::Done
+        Some(t.view.status == Status::Done)
+    }
+
+    /// 没存进去的结果存进去了：算改好；`why` 是没贴好的，照旧没改出来
+    pub fn saved(&self, id: u64, why: Option<&str>) {
+        let mut q = self.q();
+        let t = q.tasks.iter_mut().find(|t| t.view.id == id);
+        if let Some(t) = t.filter(|t| t.view.status == Status::Failed) {
+            if why.is_none() {
+                t.view.status = Status::Done;
+            }
+            t.view.reason = why.unwrap_or("").into();
+        }
     }
 
     /// 按条件拿掉。在改的请求不中止：结果回来照样存成候选、不选中，名额到那时才让
@@ -177,6 +187,27 @@ impl Tasks {
     /// 这几处被替换了、改回去了：在改的取消，没改出来的也从列表拿掉
     pub fn cancel_edits(&self, job: &str, edits: &[u64]) {
         self.cancel_if(|v| v.job == job && edits.contains(&v.edit));
+    }
+
+    /// 图删了、清空了：它排队的任务拿掉，撤销也不恢复
+    pub fn cancel_gone(&self, dir: &Path) {
+        self.cancel_if(|v| v.status == Status::Waiting && !store::exists(dir, &v.job));
+    }
+
+    /// 还没结束的一样的任务：同一张图、同四角、同范围、同文字
+    fn twin(&self, job: &str, s: &Spot) -> Option<(u64, u64)> {
+        let near = |a: [f32; 2]| (0..2).all(|k| (a[k] - s.range[k]).abs() < 0.5);
+        let q = self.q();
+        q.tasks
+            .iter()
+            .filter(|t| matches!(t.view.status, Status::Waiting | Status::Running))
+            .find(|t| {
+                let o = &t.spot;
+                t.view.job == job
+                    && (o.line, &o.old, &o.new) == (s.line, &s.old, &s.new)
+                    && near(o.range)
+            })
+            .map(|t| (t.view.id, t.view.edit))
     }
 
     /// 没改出来的重新入队，回到队尾；不在了、不是没改出来的返回 false
@@ -243,6 +274,10 @@ impl Tasks {
         }
         let s = live.check(d)?;
         live.commit(self, dir, |job| {
+            // 连着提交两次一样的：只发一次
+            if let Some(same) = self.twin(&live.id, &s) {
+                return Ok(same);
+            }
             let (edit, also) = job::put(job, &s)?;
             let gone = job::replace(&live.img, job, edit, also);
             store::save(dir, job).map_err(job::not_saved)?;
@@ -251,9 +286,10 @@ impl Tasks {
         })
     }
 
-    /// 重试一个没改出来的。`find` 按 id 找图；照样重新查一遍
+    /// 重试一个没改出来的。`find` 按 id 找图；照样重新查一遍。出了图只是没存进去的，再存一次，不发请求
     pub fn retry(
         self,
+        dir: &Path,
         id: u64,
         mask: bool,
         api: bool,
@@ -261,10 +297,16 @@ impl Tasks {
     ) -> Result<(), AppError> {
         let gone = || job::no(TASK_GONE);
         let (job, edit, s) = self.failed(id).ok_or_else(gone)?;
+        let live = find(&job)?;
+        if let Some(r) = live.save_late(self, dir, id) {
+            return r;
+        }
+        if live.gone(dir) {
+            return Err(job::no(GONE));
+        }
         if !api {
             return Err(job::no(&imagegen::reason(&ImgFail::Base(Fail::Config))));
         }
-        let live = find(&job)?;
         live.check(&Draft {
             edit: Some(edit),
             line: s.line,
@@ -288,7 +330,7 @@ pub struct Env {
     pub ocr: Ocr,
 }
 
-/// 当场拒绝过遮罩的接口（地址加模型）。只在内存里
+/// 当场拒绝过遮罩的接口（地址加模型）。只在内存里：重开应用后最多多试一次，不把接口地址写到盘上
 static MASKLESS: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Default::default);
 
 fn provider(c: &ImageCfg) -> String {
@@ -341,6 +383,10 @@ async fn work(
         if t.canceled(id) {
             return Err((String::new(), None));
         }
+        // 删了的图，出了也没处放
+        if spec.live.gone(&env.dir) {
+            return Err((GONE.into(), None));
+        }
         let started = Instant::now();
         let req = EditReq {
             prompt: &prompt,
@@ -352,7 +398,7 @@ async fn work(
             "改字 任务 {id} 发出 1 次请求{} {} 字节 改 {} 字 {} 耗时 {} ms",
             if mask { "（带遮罩）" } else { "" },
             crop.png.len(),
-            job::graphemes(&spec.spot.new).len(),
+            job::changed_count(&spec.spot.old, &spec.spot.new),
             r.as_ref()
                 .map_or_else(tag, |b| format!("收到 {} 字节", b.len())),
             started.elapsed().as_millis()
@@ -375,37 +421,42 @@ async fn work(
             paste,
             note,
             placed,
-            pick: false,
+            pick: placed,
         };
         let r = xpaste_pro::te_paste(&live.img, line, range, &crop, &png, &s.old, &s.new);
         let out = match r {
+            // 范围外面一圈碰到签名：留着看，不放上去
+            Ok(p) if live.spoils_locked(&p) => (Some(LOCKED), Some(late(p, LOCKED, false))),
             Ok(p) => {
                 let wrong = job::misread(&live.img, &line, &p, &s.new, ocr);
-                Ok(late(p, if wrong { MISREAD } else { "" }, true))
+                (None, Some(late(p, if wrong { MISREAD } else { "" }, true)))
             }
-            Err(_) => Err(whole(&png).map(|p| late(p, UNALIGNED, false))),
+            Err(_) => (
+                Some(UNALIGNED),
+                whole(&png).map(|p| late(p, UNALIGNED, false)),
+            ),
         };
         log::info!(
             "改字 任务 {id} 贴回 {} 耗时 {} ms",
-            how(&out),
+            out.0.map_or_else(|| how(out.1.as_ref()), |_| "没贴好"),
             started.elapsed().as_millis()
         );
         out
     });
     match pasted.await.ok_or_else(bad)? {
-        Ok(l) => Ok(l),
-        Err(l) => Err((UNALIGNED.into(), l)),
+        (None, Some(l)) => Ok(l),
+        (why, l) => Err((why.unwrap_or(UNALIGNED).into(), l)),
     }
 }
 
 /// 贴成什么样，写日志用
-fn how(r: &Result<Late, Option<Late>>) -> &'static str {
-    match r.as_ref().map(|l| (l.paste.exact, l.paste.soft)) {
-        Ok((true, false)) => "框外没动过",
-        Ok((true, true)) => "框外没动过（可能有痕迹）",
-        Ok((false, false)) => "框外动过",
-        Ok((false, true)) => "框外动过（可能有痕迹）",
-        Err(_) => "没贴好",
+fn how(l: Option<&Late>) -> &'static str {
+    match l.map(|l| (l.paste.exact, l.paste.soft)) {
+        Some((true, false)) => "框外没动过",
+        Some((true, true)) => "框外没动过（可能有痕迹）",
+        Some((false, false)) => "框外动过",
+        Some((false, true)) => "框外动过（可能有痕迹）",
+        None => "没贴好",
     }
 }
 
@@ -433,18 +484,11 @@ async fn run(t: Tasks, env: &Env, cfg: &ImageCfg, id: u64, spec: Spec) -> bool {
         Err((why, l)) => (Some(why), l),
     };
     let (live, dir) = (spec.live.clone(), env.dir.clone());
-    let saved = blocking(move || match late {
-        Some(l) => live.land(t, &dir, l, || !t.canceled(id)),
-        None => Ok(()),
+    let done = blocking(move || live.land(t, &dir, id, late, why)).await;
+    done.unwrap_or_else(|| {
+        let why = imagegen::reason(&ImgFail::Base(Fail::Bad));
+        t.finish(id, Err(why)) == Some(true)
     })
-    .await;
-    let r = match (why, saved) {
-        (_, Some(Err(e))) => Err(e.to_string()),
-        (Some(why), _) => Err(why),
-        (None, None) => Err(imagegen::reason(&ImgFail::Base(Fail::Bad))),
-        (None, Some(Ok(()))) => Ok(()),
-    };
-    t.finish(id, r)
 }
 
 // ---- 运行时 ----
@@ -463,6 +507,16 @@ pub fn tasks() -> Tasks {
     }
 }
 
+/// 记下来给后台补存的用
+static APP: OnceLock<AppHandle> = OnceLock::new();
+
+/// 后台补存了结果：告诉页面
+pub fn saved_later() {
+    if let Some(app) = APP.get() {
+        changed(app);
+    }
+}
+
 /// 任务或图变了：叫醒共用名额的每一家（自己在 `pump` 里接上排队的、发列表）
 pub fn changed(app: &AppHandle) {
     gen_slots::freed(app);
@@ -470,6 +524,7 @@ pub fn changed(app: &AppHandle) {
 
 /// 空出来的名额接上排队的，再把整份列表发给改字窗口。启动时登记给 `gen_slots::on_free`
 pub fn pump(app: &AppHandle) {
+    APP.get_or_init(|| app.clone());
     let t = tasks();
     loop {
         let next = t.next();
@@ -501,7 +556,7 @@ pub mod tests {
     use crate::imagegen::Format;
     use crate::imagegen::tests::{Reply, Req, b64, fake, json_reply};
     use crate::textedit_job::tests::*;
-    use crate::textedit_job::{GONE, Read, no};
+    use crate::textedit_job::{Read, no};
     use crate::textedit_store::{By, NO_PICK};
     use serde_json::json;
     use std::net::TcpListener;
@@ -588,6 +643,16 @@ pub mod tests {
 
     /// 像样的模型：遮罩里擦干净、写一个新字，别处不动
     fn model(r: &Req) -> Reply {
+        write(r, 80)
+    }
+
+    /// 新字的一横写出遮罩一点
+    fn spill(r: &Req) -> Reply {
+        write(r, 106)
+    }
+
+    /// 一竖一横，一横到遮罩宽的百分之 `to`
+    fn write(r: &Req, to: u32) -> Reply {
         let p = pngs(&r.body);
         let (mut img, mask) = (rgba(&p[0]), rgba(&p[1]));
         let hole: Vec<(u32, u32)> = mask
@@ -598,20 +663,17 @@ pub mod tests {
         let (x0, y0) = hole[0];
         let (x1, y1) = hole[hole.len() - 1];
         let (w, h) = (x1 - x0, y1 - y0);
-        for (x, y) in hole {
-            let (u, v) = ((x - x0) * 100 / w, (y - y0) * 100 / h);
-            let on = (20..80).contains(&u)
-                && (20..80).contains(&v)
-                && ((44..56).contains(&u) || (62..74).contains(&v));
-            img.put_pixel(
-                x,
-                y,
-                image::Rgba(if on {
-                    [20, 24, 30, 255]
-                } else {
-                    [240, 238, 232, 255]
-                }),
-            );
+        for y in y0..=y1 {
+            for x in x0..=x1 + w * to.saturating_sub(100) / 100 {
+                let (u, v) = ((x - x0) * 100 / w, (y - y0) * 100 / h);
+                let on = (44..56).contains(&u) && (20..80).contains(&v)
+                    || (20..to).contains(&u) && (62..74).contains(&v);
+                if on {
+                    img.put_pixel(x, y, image::Rgba([20, 24, 30, 255]));
+                } else if x <= x1 {
+                    img.put_pixel(x, y, image::Rgba([240, 238, 232, 255]));
+                }
+            }
         }
         reply(&img)
     }
@@ -818,9 +880,9 @@ pub mod tests {
         let env = env(&tmp.0, no_engine);
         assert!(!go(t, &env, &cfg(&url)));
         assert_eq!(one(t, id).reason, "生图接口出错（HTTP 500）");
-        t.retry(id, true, true, |_| Ok(l.clone())).unwrap();
+        t.retry(&tmp.0, id, true, true, |_| Ok(l.clone())).unwrap();
         go(t, &env, &cfg(&url));
-        t.retry(id, true, true, |_| Ok(l.clone())).unwrap();
+        t.retry(&tmp.0, id, true, true, |_| Ok(l.clone())).unwrap();
         // 另一个模型：照带，被拒后不带的也是 400，不再发
         let other = ImageCfg {
             model: "m2".into(),
@@ -889,10 +951,10 @@ pub mod tests {
         let env = env(&tmp.0, no_engine);
         go(t, &env, &cfg(&url));
         assert_eq!(
-            msg(t.retry(id, false, false, |_| Ok(l.clone()))),
+            msg(t.retry(&tmp.0, id, false, false, |_| Ok(l.clone()))),
             "生图接口还没配好"
         );
-        t.retry(id, false, true, |_| Ok(l.clone())).unwrap();
+        t.retry(&tmp.0, id, false, true, |_| Ok(l.clone())).unwrap();
         assert_eq!(
             (one(t, id).status, one(t, id).reason.as_str()),
             (Status::Waiting, "")
@@ -904,15 +966,21 @@ pub mod tests {
             [2, 1]
         );
         // 图删了、图不给改了都不重试
-        assert_eq!(msg(t.retry(id, true, true, |_| Err(no("没了")))), "没了");
+        assert_eq!(
+            msg(t.retry(&tmp.0, id, true, true, |_| Err(no("没了")))),
+            "没了"
+        );
         let bad = live_with(Read {
             blocked: Some(TeBlock::Id),
             ..read()
         });
-        assert!(t.retry(id, true, true, |_| Ok(bad)).is_err());
+        assert!(t.retry(&tmp.0, id, true, true, |_| Ok(bad)).is_err());
         assert_eq!(one(t, id).status, Status::Failed);
         t.drop(id);
-        assert_eq!(msg(t.retry(id, true, true, |_| panic!())), TASK_GONE);
+        assert_eq!(
+            msg(t.retry(&tmp.0, id, true, true, |_| panic!())),
+            TASK_GONE
+        );
     }
 
     /// 还没发就取消了：不发
@@ -1106,7 +1174,7 @@ pub mod tests {
             (0, 1)
         );
         // 再来一次成了：选新的，本机那张留着
-        t.retry(id, true, true, |_| Ok(l.clone())).unwrap();
+        t.retry(&tmp.0, id, true, true, |_| Ok(l.clone())).unwrap();
         assert!(go(t, &env, &cfg(&url)));
         assert_eq!(
             (edit_of(&l, edit).pick, edit_of(&l, edit).cands.len()),
@@ -1153,7 +1221,252 @@ pub mod tests {
         let back = store::load(&tmp.0, &job).unwrap();
         let e = back.edits.iter().find(|e| e.id == edit).unwrap();
         assert_eq!((e.pick, e.cands.len()), (0, 1));
-        assert!(t.views().is_empty());
+        assert_eq!(
+            (one(t, id).status, one(t, id).reason.as_str()),
+            (Status::Done, "")
+        );
+    }
+
+    /// 出了图只是没存进去：重试先补存，不再发请求；补不上的报错，也不发
+    #[cfg(unix)]
+    #[test]
+    fn retry_saves_instead_of_paying_again() {
+        use std::os::unix::fs::PermissionsExt;
+        if !xpaste_pro::AVAILABLE {
+            return eprintln!("这个构建不含 Pro，跳过");
+        }
+        let (t, tmp) = (tasks(), Tmp::new());
+        let l = live();
+        let (id, edit) = t
+            .submit(&tmp.0, &l, &draft(NEW, range(4, 5)), true, true)
+            .unwrap();
+        let mode = {
+            let dir = tmp.0.join(&l.id);
+            move |m| std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(m)).unwrap()
+        };
+        let (url, h) = fake(1, {
+            let mode = mode.clone();
+            move |r| {
+                mode(0o555);
+                model(r)
+            }
+        });
+        assert!(!go(t, &env(&tmp.0, no_engine), &cfg(&url)));
+        assert_eq!(h.join().unwrap().len(), 1);
+        assert_eq!(one(t, id).status, Status::Failed);
+        let why = one(t, id).reason;
+        assert_eq!(msg(t.retry(&tmp.0, id, true, true, |_| Ok(l.clone()))), why);
+        assert!(t.next().is_none() && one(t, id).status == Status::Failed);
+        mode(0o755);
+        // 接口没配也能补存
+        t.retry(&tmp.0, id, true, false, |_| Ok(l.clone())).unwrap();
+        assert!(t.next().is_none());
+        assert_eq!(
+            (one(t, id).status, edit_of(&l, edit).pick),
+            (Status::Done, 0)
+        );
+        let back = store::load(&tmp.0, &l.id).unwrap();
+        assert_eq!(back.edits[0].cands.len(), 1);
+    }
+
+    /// 取消了的又没存进去：补存之后也不选中
+    #[cfg(unix)]
+    #[test]
+    fn canceled_unsaved_result_not_selected() {
+        use std::os::unix::fs::PermissionsExt;
+        if !xpaste_pro::AVAILABLE {
+            return eprintln!("这个构建不含 Pro，跳过");
+        }
+        let (t, tmp) = (tasks(), Tmp::new());
+        let l = live();
+        let (id, edit) = t
+            .submit(&tmp.0, &l, &draft(NEW, range(4, 5)), true, true)
+            .unwrap();
+        let dir = tmp.0.join(&l.id);
+        let mode =
+            |d: &Path, m| std::fs::set_permissions(d, std::fs::Permissions::from_mode(m)).unwrap();
+        let (url, _h) = fake(1, {
+            let dir = dir.clone();
+            move |r| {
+                t.cancel(id);
+                mode(&dir, 0o555);
+                model(r)
+            }
+        });
+        assert!(!go(t, &env(&tmp.0, no_engine), &cfg(&url)));
+        assert!(edit_of(&l, edit).cands.is_empty());
+        mode(&dir, 0o755);
+        job::retry_late(t, &tmp.0, &l.id);
+        let e = edit_of(&l, edit);
+        assert_eq!((e.pick, e.cands.len()), (NO_PICK, 1));
+    }
+
+    /// 没存进去的过一会儿自己补存
+    #[cfg(unix)]
+    #[test]
+    fn unsaved_result_saved_later() {
+        use std::os::unix::fs::PermissionsExt;
+        if !xpaste_pro::AVAILABLE {
+            return eprintln!("这个构建不含 Pro，跳过");
+        }
+        let (t, tmp) = (tasks(), Tmp::new());
+        let l = live();
+        let (id, edit) = t
+            .submit(&tmp.0, &l, &draft(NEW, range(4, 5)), true, true)
+            .unwrap();
+        let mode = {
+            let dir = tmp.0.join(&l.id);
+            move |m| std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(m)).unwrap()
+        };
+        let (url, _h) = fake(1, {
+            let mode = mode.clone();
+            move |r| {
+                mode(0o555);
+                model(r)
+            }
+        });
+        assert!(!go(t, &env(&tmp.0, no_engine), &cfg(&url)));
+        // 第一次补存还是不行，下一次成
+        std::thread::sleep(std::time::Duration::from_millis(1300));
+        assert_eq!(one(t, id).status, Status::Failed);
+        mode(0o755);
+        for _ in 0..40 {
+            if one(t, id).status == Status::Done {
+                assert_eq!(edit_of(&l, edit).pick, 0);
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        panic!("没有补存");
+    }
+
+    /// 删了图：排队的拿掉、撤销也不恢复；轮到了还没发的不发；没改出来的不重试
+    #[test]
+    fn deleted_job_sends_nothing() {
+        if !xpaste_pro::AVAILABLE {
+            return eprintln!("这个构建不含 Pro，跳过");
+        }
+        let (t, tmp) = (tasks(), Tmp::new());
+        let (l, other) = (live(), live());
+        let sub = |l: &Arc<Live>, k: usize, new: &str| {
+            t.submit(&tmp.0, l, &draft(new, range(k, k + 1)), true, true)
+                .unwrap()
+                .0
+        };
+        let first = sub(&l, 4, NEW);
+        let second = sub(&l, 1, "会政改到三点");
+        let kept = sub(&other, 4, NEW);
+        let (id, spec) = t.next().unwrap();
+        assert_eq!(id, first);
+        textedit::remove(t, &tmp.0, &l.id).unwrap();
+        let ids = |t: Tasks| t.views().iter().map(|v| v.id).collect::<Vec<_>>();
+        assert_eq!(ids(t), [first, kept]);
+        let srv = refused();
+        let env = env(&tmp.0, no_engine);
+        assert!(!tauri::async_runtime::block_on(run(
+            t,
+            &env,
+            &cfg(&url(&srv)),
+            id,
+            spec
+        )));
+        assert!(srv.accept().is_err(), "删了的还发");
+        assert_eq!(one(t, first).reason, GONE);
+        assert_eq!(
+            msg(t.retry(&tmp.0, first, true, true, |_| Ok(l.clone()))),
+            GONE
+        );
+        textedit::restore(t, &tmp.0, &l.id).unwrap();
+        assert!(!ids(t).contains(&second));
+        t.retry(&tmp.0, first, true, true, |_| Ok(l.clone()))
+            .unwrap();
+        // 清空也一样；还没出过结果的图不在清空里
+        put_local(
+            t,
+            &tmp.0,
+            &l,
+            &draft("会议正到三点", range(2, 3)),
+            2,
+            [255, 0, 0],
+        )
+        .unwrap();
+        textedit::clear(t, &tmp.0).unwrap();
+        assert_eq!(ids(t), [kept]);
+    }
+
+    /// 连着提交两次一样的只发一次；改好之后再提交是再来一张
+    #[test]
+    fn same_submit_twice_is_one_task() {
+        if !xpaste_pro::AVAILABLE {
+            return eprintln!("这个构建不含 Pro，跳过");
+        }
+        let (t, tmp) = (tasks(), Tmp::new());
+        let l = live();
+        let d = draft("会议改到三点半", range(6, 6));
+        let first = t.submit(&tmp.0, &l, &d, true, true).unwrap();
+        assert_eq!(t.submit(&tmp.0, &l, &d, true, true).unwrap(), first);
+        let (id, _spec) = t.next().unwrap();
+        assert_eq!(t.submit(&tmp.0, &l, &d, true, true).unwrap(), first);
+        assert_eq!((l.view().edits.len(), t.views().len()), (1, 1));
+        t.finish(id, Ok(()));
+        assert_ne!(t.submit(&tmp.0, &l, &d, true, true).unwrap().0, id);
+    }
+
+    /// 重写到一半取消：结果留着，选中的还是原来那张
+    #[test]
+    fn canceled_rewrite_keeps_old_pick() {
+        if !xpaste_pro::AVAILABLE {
+            return eprintln!("这个构建不含 Pro，跳过");
+        }
+        let (t, tmp) = (tasks(), Tmp::new());
+        let l = live();
+        let d = draft(NEW, range(4, 5));
+        let edit = put_local(t, &tmp.0, &l, &d, 4, [255, 0, 0]).unwrap();
+        let again = Draft {
+            edit: Some(edit),
+            range: Some(edit_of(&l, edit).range),
+            ..d
+        };
+        let (id, _) = t.submit(&tmp.0, &l, &again, true, true).unwrap();
+        let (url, _h) = fake(1, move |r| {
+            t.cancel(id);
+            model(r)
+        });
+        assert!(!go(t, &env(&tmp.0, no_engine), &cfg(&url)));
+        let e = edit_of(&l, edit);
+        assert_eq!((e.pick, e.cands.len()), (0, 2));
+        let back = store::load(&tmp.0, &l.id).unwrap();
+        assert_eq!(back.edits[0].pick, 0);
+    }
+
+    /// 写出范围、碰到紧挨着的签名：不放上去，图留着
+    #[test]
+    fn result_touching_signature_not_placed() {
+        if !xpaste_pro::AVAILABLE {
+            return eprintln!("这个构建不含 Pro，跳过");
+        }
+        let (t, tmp) = (tasks(), Tmp::new());
+        let r = range(4, 5);
+        let s = xpaste_pro::te_strip(&scene(), LINE);
+        let right = 76.0 + r[1] * 352.0 / s.img.w as f32 + 0.5;
+        let sig = [[right, 64.0], [640.0, 64.0], [640.0, 126.0], [right, 126.0]];
+        for locked in [vec![], vec![sig]] {
+            let l = live_with(Read {
+                locked: locked.clone(),
+                ..read()
+            });
+            let (url, _h) = fake(1, spill);
+            let (id, edit) = t.submit(&tmp.0, &l, &draft(NEW, r), true, true).unwrap();
+            let ok = go(t, &env(&tmp.0, no_engine), &cfg(&url));
+            let e = edit_of(&l, edit);
+            assert_eq!(
+                (ok, e.cands[0].placed),
+                (locked.is_empty(), locked.is_empty())
+            );
+            if !ok {
+                assert_eq!((e.pick, one(t, id).reason.as_str()), (NO_PICK, LOCKED));
+            }
+        }
     }
 
     /// 清空时还在改的：结果到了重新落盘，钱不白花
@@ -1218,7 +1531,7 @@ pub mod tests {
         let v = one(t, ids[0]);
         assert!(v.status == Status::Running && v.started_at.is_some());
         assert_eq!((v.old.as_str(), v.new.as_str()), (OLD, "公议改到三点"));
-        assert!(!t.finish(ids[0], Err("超时".into())));
+        assert_eq!(t.finish(ids[0], Err("超时".into())), Some(false));
         assert_eq!(next(), Some(ids[2]));
         // 取消排队的直接拿掉；在改的占着名额等结果
         t.cancel(ids[3]);
@@ -1229,16 +1542,16 @@ pub mod tests {
         );
         let five = sub(5, "会议改到三占");
         assert_eq!(next(), None);
-        assert!(!t.finish(ids[1], Ok(())));
+        assert_eq!(t.finish(ids[1], Ok(())), None);
         assert_eq!(next(), Some(five));
         // 改好的、没改出来的去掉；在改的去不掉
         t.drop(five);
-        assert!(t.finish(five, Ok(())));
+        assert_eq!(t.finish(five, Ok(())), Some(true));
         t.drop(five);
         t.drop(ids[0]);
         assert_eq!(t.views().iter().map(|v| v.id).collect::<Vec<_>>(), [ids[2]]);
         // 没改出来的：被替换时从列表拿掉，候选照旧
-        assert!(!t.finish(ids[2], Err("超时".into())));
+        assert_eq!(t.finish(ids[2], Err("超时".into())), Some(false));
         put_local(
             t,
             &tmp.0,
@@ -1316,7 +1629,7 @@ pub mod tests {
         let (id, _) = t.submit(&tmp.0, &l, &d, true, true).unwrap();
         let env = env(&tmp.0, reads);
         assert!(!go(t, &env, &cfg(&url)));
-        t.retry(id, true, true, |_| Ok(l.clone())).unwrap();
+        t.retry(&tmp.0, id, true, true, |_| Ok(l.clone())).unwrap();
         assert!(go(t, &env, &cfg(&url)));
         let bad = Draft {
             new: "身份证号11010519491231002X".into(),

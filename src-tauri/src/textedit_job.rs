@@ -12,6 +12,7 @@ use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
@@ -19,6 +20,7 @@ use xpaste_platform::{OcrError, OcrLine};
 use xpaste_pro::{TeBlock, TeImg, TeLocal, TePaste, TeQuad, TeSource, TeStrip, TeVerdict};
 
 use crate::error::AppError;
+use crate::housekeeping::{self, UNDO_WINDOW};
 use crate::textedit_store::{self as store, Edit, Job, NO_PICK};
 use crate::textedit_tasks::Tasks;
 
@@ -26,9 +28,10 @@ use crate::textedit_tasks::Tasks;
 const MAX: usize = 60;
 const OCR_SIDE: u32 = 8000;
 
-pub const BLOCKED: &str = "这张图不支持改字";
+pub const UNREADABLE: &str = "这张图读不出来";
+const BLOCKED: &str = "这张图不支持改字";
 const BLOCKED_TEXT: &str = "这行字不支持改";
-const LOCKED: &str = "签名的那一段改不了";
+pub const LOCKED: &str = "签名的那一段改不了";
 const NOT_CHANGED: &str = "新旧一样，或者是空的";
 const TOO_LONG: &str = "一行最多 60 个字";
 const BAD_RANGE: &str = "改动范围不对";
@@ -42,13 +45,17 @@ pub fn no(msg: &str) -> AppError {
     AppError::Invalid(msg.into())
 }
 
-/// 存盘出错：文件夹不在了（删掉、清空了）和别的
-pub fn not_saved(e: std::io::Error) -> AppError {
+/// 存盘出错的原因：文件夹不在了（删掉、清空了）和别的
+fn not_saved_text(e: &std::io::Error) -> &'static str {
     if e.kind() == ErrorKind::NotFound {
-        return no(GONE);
+        return GONE;
     }
     log::warn!("改字 存盘失败：{:?}", e.kind());
-    no(NOT_SAVED)
+    NOT_SAVED
+}
+
+pub fn not_saved(e: std::io::Error) -> AppError {
+    no(not_saved_text(&e))
 }
 
 pub fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -70,6 +77,8 @@ pub struct Read {
     pub locked: Vec<TeQuad>,
     /// 有没有识别引擎（识别出错的算有）
     pub engine: bool,
+    /// 给不给改没判断成：不许改
+    pub failed: bool,
 }
 
 impl Read {
@@ -88,6 +97,7 @@ impl Read {
             locked: locked.iter().map(|q| clip(q, img.w, img.h)).collect(),
             lines,
             engine,
+            failed: false,
         }
     }
 }
@@ -168,7 +178,7 @@ impl Live {
 
     /// 读字、判断给不给改，耗时
     pub fn start(&self, ocr: Ocr) {
-        let t = std::time::Instant::now();
+        let t = Instant::now();
         let r = self.read.get_or_init(|| Read::new(&self.img, ocr));
         log::info!(
             "改字 读字 {} 行 锁住 {} 段{}{} 耗时 {} ms",
@@ -183,6 +193,17 @@ impl Live {
                 .map_or(String::new(), |b| format!(" 不给改：{}", b.label())),
             t.elapsed().as_millis()
         );
+    }
+
+    /// 读字的线程起不来
+    pub fn no_reading(&self) {
+        let _ = self.read.set(Read {
+            lines: Vec::new(),
+            blocked: None,
+            locked: Vec::new(),
+            engine: false,
+            failed: true,
+        });
     }
 
     /// 读字的结果，没读完就等
@@ -213,9 +234,9 @@ impl Live {
                 st.late.insert(0, l);
                 return Err(e);
             }
-            t.drop(l.task);
+            t.saved(l.task, (!l.placed).then_some(l.note));
         }
-        lock(&KEPT).retain(|l| l.id != self.id);
+        lock(&KEPT).retain(|k| k.live.id != self.id);
         Ok(())
     }
 
@@ -235,32 +256,84 @@ impl Live {
         Ok(out)
     }
 
-    /// 存一个 AI 结果，没存成的留着等下次。选不选中（`pick`）拿到锁才问：任务可能刚被取消
+    /// 任务结束：存结果（选中它），再让任务结束；一直拿着锁，途中取消的不选中。没存成的留着等下次。
+    /// `why` 是没改出来的原因，这时也可能有要存的（没贴好的）。返回改好了没有
     pub fn land(
         self: &Arc<Self>,
         t: Tasks,
         dir: &Path,
-        mut l: Late,
-        pick: impl FnOnce() -> bool,
-    ) -> Result<(), AppError> {
+        task: u64,
+        late: Option<Late>,
+        why: Option<String>,
+    ) -> bool {
         let mut st = lock(&self.st);
-        l.pick = l.placed && pick();
-        let saved = self
-            .settle(t, dir, &mut st)
-            .and_then(|()| add(dir, &mut st, &l));
-        saved.map_err(|e| {
-            st.late.push(l);
-            keep(self, dir);
-            not_saved(e)
-        })
+        let pick = |job: &Job, id: u64| job.edits.iter().find(|e| e.id == id).map(|e| e.pick);
+        let before = late.as_ref().and_then(|l| pick(&st.job, l.edit));
+        let saved = late.as_ref().map_or(Ok(()), |l| {
+            self.settle(t, dir, &mut st)?;
+            add(dir, &mut st, l)
+        });
+        let r = match (&saved, why) {
+            (Err(e), _) => Err(not_saved_text(e).to_owned()),
+            (_, Some(why)) => Err(why),
+            _ => Ok(()),
+        };
+        let done = t.finish(task, r);
+        let Some(mut l) = late else {
+            return done == Some(true);
+        };
+        let canceled = done.is_none();
+        match saved {
+            Err(_) => {
+                l.pick &= !canceled;
+                st.late.push(l);
+                keep(self, t, dir);
+            }
+            Ok(()) if canceled && l.pick => {
+                let mut job = st.job.clone();
+                if let Some(e) = job.edits.iter_mut().find(|e| e.id == l.edit) {
+                    e.pick = before.unwrap_or(NO_PICK);
+                }
+                if let Err(e) = store::save(dir, &job) {
+                    log::warn!("改字 存盘失败：{:?}", e.kind());
+                }
+                st.job = job;
+                st.rev = next_rev();
+            }
+            Ok(()) => {}
+        }
+        done == Some(true)
     }
 
+    /// 没存进去的再存一次
     fn retry_late(&self, t: Tasks, dir: &Path) {
         let mut st = lock(&self.st);
         if !st.late.is_empty()
             && let Err(e) = self.settle(t, dir, &mut st)
         {
             log::warn!("改字 补存失败：{:?}", e.kind());
+        }
+    }
+
+    /// 这个任务的结果还没存进去的，现在存。没有为 None
+    pub fn save_late(&self, t: Tasks, dir: &Path, task: u64) -> Option<Result<(), AppError>> {
+        let mut st = lock(&self.st);
+        st.late
+            .iter()
+            .any(|l| l.task == task)
+            .then(|| self.settle(t, dir, &mut st).map_err(not_saved))
+    }
+
+    /// 落过盘，文件夹没了：删了
+    pub fn gone(&self, dir: &Path) -> bool {
+        lock(&self.st).stored && !store::exists(dir, &self.id)
+    }
+
+    /// 改动以盘上的为准（读进来之后，登记之前，别处可能改过）
+    pub fn reload(&mut self, dir: &Path) {
+        if let Ok(job) = store::load(dir, &self.id) {
+            let st = self.st.get_mut().unwrap_or_else(PoisonError::into_inner);
+            st.job = job;
         }
     }
 
@@ -325,29 +398,65 @@ fn add(dir: &Path, st: &mut St, l: &Late) -> std::io::Result<()> {
     Ok(())
 }
 
-/// 有结果没存进去的图，留在内存里
-static KEPT: Mutex<Vec<Arc<Live>>> = Mutex::new(Vec::new());
+/// 有结果没存进去的图
+struct Kept {
+    live: Arc<Live>,
+    /// 最近一次没存进去
+    at: Instant,
+}
+
+static KEPT: Mutex<Vec<Kept>> = Mutex::new(Vec::new());
+
+/// 隔多久补存一次；文件夹没了的过这么久（撤销期之后）就放开
+const KEEP_FOR: Duration = if cfg!(test) {
+    Duration::from_secs(1)
+} else {
+    UNDO_WINDOW.saturating_add(Duration::from_secs(1))
+};
+/// 自己补存几次，之后等下一次操作
+const KEEP_TRIES: u32 = 20;
 
 /// 撤销了删除：没存进去的再存一次
 pub fn retry_late(t: Tasks, dir: &Path, id: &str) {
-    let kept: Vec<Arc<Live>> = lock(&KEPT).iter().filter(|l| l.id == id).cloned().collect();
-    for l in kept {
+    let live = lock(&KEPT)
+        .iter()
+        .find(|k| k.live.id == id)
+        .map(|k| k.live.clone());
+    if let Some(l) = live {
         l.retry_late(t, dir);
     }
 }
 
-/// 撤销期过了、文件夹还是没有：是真删了，不再留
-fn keep(live: &Arc<Live>, dir: &Path) {
-    let mut kept = lock(&KEPT);
-    if kept.iter().any(|l| l.id == live.id) {
-        return;
+/// 留在内存里，过一会儿自己补存
+fn keep(live: &Arc<Live>, t: Tasks, dir: &Path) {
+    let at = Instant::now();
+    {
+        let mut kept = lock(&KEPT);
+        kept.retain(|k| k.live.id != live.id);
+        kept.push(Kept {
+            live: live.clone(),
+            at,
+        });
     }
-    kept.push(live.clone());
     let (id, dir) = (live.id.clone(), dir.to_path_buf());
-    crate::housekeeping::spawn("xpaste-textedit-kept", move || {
-        std::thread::sleep(crate::housekeeping::UNDO_WINDOW + std::time::Duration::from_secs(1));
-        if !store::exists(&dir, &id) {
-            lock(&KEPT).retain(|l| l.id != id);
+    housekeeping::spawn("xpaste-textedit-kept", move || {
+        for _ in 0..KEEP_TRIES {
+            std::thread::sleep(KEEP_FOR);
+            let live = {
+                let mut kept = lock(&KEPT);
+                // 存进去了，或者又没存进去一次（有新的线程管）
+                let Some(i) = kept.iter().position(|k| k.live.id == id && k.at == at) else {
+                    return;
+                };
+                if !store::exists(&dir, &id) {
+                    // 撤销期过了：是真删了
+                    kept.remove(i);
+                    return;
+                }
+                kept[i].live.clone()
+            };
+            live.retry_late(t, &dir);
+            crate::textedit_tasks::saved_later();
         }
     });
 }
@@ -395,10 +504,20 @@ fn overlap(a: &TeQuad, b: &TeQuad) -> f64 {
     area(&p).abs()
 }
 
-/// 两处改动算不算改在同一个地方：重叠超过较小那个的一成
+/// 点在不在四角里
+fn inside(q: &TeQuad, x: f32, y: f32) -> bool {
+    let side = |k: usize| {
+        let (a, b) = (q[k], q[(k + 1) % 4]);
+        (b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0])
+    };
+    (0..4).all(|k| side(k) >= 0.0) || (0..4).all(|k| side(k) <= 0.0)
+}
+
+/// 两处改动算不算改在同一个地方：重叠超过较小那个的一成。行距紧时上下两行的框会叠上一点：有一方只看中间七成
 fn clash(a: &TeQuad, b: &TeQuad) -> bool {
-    let least = area(&pts(a)).abs().min(area(&pts(b)).abs());
-    least > 0.0 && overlap(a, b) > 0.1 * least
+    let mid = |q: &TeQuad| band(q, 0.15, 0.85);
+    let least = 0.7 * area(&pts(a)).abs().min(area(&pts(b)).abs());
+    least > 0.0 && overlap(&mid(a), b).max(overlap(a, &mid(b))) > 0.1 * least
 }
 
 /// 沿行的左右边之间取一段（0–1 是四角的上下）
@@ -539,6 +658,17 @@ pub fn graphemes(s: &str) -> Vec<&str> {
     s.graphemes(true).collect()
 }
 
+/// 改了几个字：去掉相同的头和尾，新旧里多的那个
+pub fn changed_count(old: &str, new: &str) -> usize {
+    let (a, b) = (graphemes(old), graphemes(new));
+    let least = a.len().min(b.len());
+    let head = (0..least).take_while(|&i| a[i] == b[i]).count();
+    let tail = (0..least - head)
+        .take_while(|&i| a[a.len() - 1 - i] == b[b.len() - 1 - i])
+        .count();
+    a.len().max(b.len()) - head - tail
+}
+
 /// 按字宽算有几个字：数字、半角标点和字母算半个
 fn weight(s: &[&str]) -> f32 {
     s.iter()
@@ -635,6 +765,9 @@ impl Live {
     /// 这张图、这几个字给不给改
     fn allow(&self, d: &Draft) -> Result<(), AppError> {
         let r = self.read();
+        if r.failed {
+            return Err(no(UNREADABLE));
+        }
         if r.blocked.is_some() {
             return Err(no(BLOCKED));
         }
@@ -654,10 +787,31 @@ impl Live {
         Ok(())
     }
 
-    /// 碰没碰到签名的那一段。上下只看中间一半：挨着的行，框会叠上一点
+    /// 碰没碰到签名的那一段。挨着的行，框会叠上一点：上下有一方只看中间一半，哪一方的碰到都算（框可以很高）
     fn touches_locked(&self, q: &TeQuad) -> bool {
-        let q = band(q, 0.25, 0.75);
-        self.read().locked.iter().any(|l| overlap(&q, l) > 0.5)
+        let mid = |q: &TeQuad| band(q, 0.25, 0.75);
+        self.read()
+            .locked
+            .iter()
+            .any(|l| overlap(&mid(q), l) > 0.5 || overlap(q, &mid(l)) > 0.5)
+    }
+
+    /// 真正变了的像素碰没碰到签名的那一段（改动范围外面一圈也会动）。上下边各让一成
+    pub fn spoils_locked(&self, p: &TePaste) -> bool {
+        let at = |x: u32, y: u32| (y as usize * self.img.w as usize + x as usize) * 4;
+        self.read().locked.iter().any(|l| {
+            let l = band(l, 0.1, 0.9);
+            (0..p.patch.h).any(|j| {
+                (0..p.patch.w).any(|i| {
+                    let (x, y) = (p.x + i, p.y + j);
+                    let k = (j as usize * p.patch.w as usize + i as usize) * 4;
+                    x < self.img.w
+                        && y < self.img.h
+                        && inside(&l, x as f32 + 0.5, y as f32 + 0.5)
+                        && self.img.px[at(x, y)..][..4] != p.patch.px[k..][..4]
+                })
+            })
+        })
     }
 
     /// `range` 在图里，没碰到签名
@@ -755,8 +909,9 @@ pub fn replace(img: &TeImg, job: &mut Job, keep: u64, also: Option<u64>) -> Vec<
 
 /// 选中第 `i` 个候选
 pub fn pick(t: Tasks, dir: &Path, live: &Live, edit: u64, i: usize) -> Result<(), AppError> {
-    if live.read().blocked.is_some() {
-        return Err(no(BLOCKED));
+    let r = live.read();
+    if r.failed || r.blocked.is_some() {
+        return Err(no(if r.failed { UNREADABLE } else { BLOCKED }));
     }
     live.commit(t, dir, |job| {
         let e = job.edits.iter_mut().find(|e| e.id == edit);
@@ -856,9 +1011,29 @@ impl Live {
         } else {
             None
         };
-        let l = l.map(Arc::new);
+        // 范围外面一圈碰到签名的不能用
+        let l = l.filter(|l| !self.spoils_locked(&l.paste)).map(Arc::new);
         *last = Some((s.clone(), l.clone()));
         l
+    }
+
+    /// 能搬字的各行，最后是要改的这一行（按用户写的原文，`n` 个字）。签名里的、自己框的和读出来的是同一行的不要
+    fn rows(&self, s: &Spot, n: usize) -> Vec<Row> {
+        let r = self.read();
+        let least = |q: &TeQuad| area(&pts(q)).abs().min(area(&pts(&s.line)).abs());
+        let mut rows = Vec::new();
+        let mut mine = Vec::new();
+        for l in &r.lines {
+            if l.quad == s.line && l.chars.len() == n {
+                mine.clone_from(&l.chars);
+            }
+            let same = overlap(&l.quad, &s.line) > 0.5 * least(&l.quad);
+            if !same && !r.locked.iter().any(|q| overlap(&l.quad, q) > 0.5) {
+                rows.push((l.text.clone(), l.quad, l.chars.clone()));
+            }
+        }
+        rows.push((s.old.clone(), s.line, mine));
+        rows
     }
 
     /// 从同一张图里搬字，最多两个
@@ -876,30 +1051,10 @@ impl Live {
         if chars.is_empty() || chars.len() > 2 {
             return None;
         }
-        let r = self.read();
-        // 不从签名里搬；要改的这一行按用户写的原文
-        let mut lines: Vec<(String, TeQuad, Vec<[f32; 2]>)> = Vec::new();
-        let mut mine = Vec::new();
-        for l in &r.lines {
-            if l.quad == s.line {
-                mine.clone_from(&l.chars);
-            } else if !r.locked.iter().any(|q| overlap(&l.quad, q) > 0.5) {
-                lines.push((l.text.clone(), l.quad, l.chars.clone()));
-            }
-        }
-        if mine.len() != o.len() {
-            mine.clear();
-        }
+        let lines = self.rows(s, o.len());
+        let me = lines.len() - 1;
         let strip = xpaste_pro::te_strip(&self.img, s.line);
-        let mut to: Vec<[f32; 2]> = at
-            .iter()
-            .map(|&i| xpaste_pro::te_range(&strip, o.len(), &mine, i, i + 1))
-            .collect();
-        // 两头用页面给的（用户可能拖过）
-        to.first_mut()?[0] = s.range[0];
-        to.last_mut()?[1] = s.range[1];
-        let me = lines.len();
-        lines.push((s.old.clone(), s.line, mine));
+        let to = targets(&strip, o.len(), &lines[me].2, &at, s.range)?;
         let from = xpaste_pro::te_find_sources(&self.img, &lines, me, &chars)?;
         // 同一行里连着签名的
         let signed = |f: &TeSource| {
@@ -960,6 +1115,27 @@ impl Live {
     }
 }
 
+/// 一行的文字、四角、逐字框
+type Row = (String, TeQuad, Vec<[f32; 2]>);
+
+/// 第 `at` 几个字各自的范围，两头用页面给的（用户可能拖过），都不超出它；有一个够不着就是 None
+fn targets(
+    s: &TeStrip,
+    n: usize,
+    chars: &[[f32; 2]],
+    at: &[usize],
+    range: [f32; 2],
+) -> Option<Vec<[f32; 2]>> {
+    let one = |&i: &usize| xpaste_pro::te_range(s, n, chars, i, i + 1);
+    let mut to: Vec<[f32; 2]> = at.iter().map(one).collect();
+    to.first_mut()?[0] = range[0];
+    to.last_mut()?[1] = range[1];
+    for r in &mut to {
+        *r = [r[0].max(range[0]), r[1].min(range[1])];
+    }
+    to.iter().all(|r| r[0] < r[1]).then_some(to)
+}
+
 /// 用本机的做法改这一处
 pub fn run_local(t: Tasks, dir: &Path, live: &Live, d: &Draft) -> Result<u64, AppError> {
     let s = live.check(d)?;
@@ -997,7 +1173,12 @@ pub fn local_patch(
         return Err(no(NOT_CHANGED));
     }
     let real = [lo as f32, hi as f32];
-    live.within(&strip, real)?;
+    // 交回来的得是这一行的
+    let whole = span(&strip, [0.0, w as f32]);
+    let least = area(&pts(&whole)).abs().min(area(&pts(&d.line)).abs());
+    if overlap(&whole, &d.line) < 0.5 * least {
+        return Err(no(BAD_RANGE));
+    }
     let line = xpaste_pro::te_strip(&live.img, d.line);
     let mut range = xpaste_pro::te_remap(&strip, &line, real);
     if let Some(r) = d.range.filter(|r| finite(r)) {
@@ -1006,6 +1187,9 @@ pub fn local_patch(
     live.within(&line, range)?;
     let paste = xpaste_pro::te_strip_paste(&live.img, &strip, px);
     let paste = paste.ok_or_else(|| no(NOT_CHANGED))?;
+    if live.spoils_locked(&paste) {
+        return Err(no(LOCKED));
+    }
     place(t, dir, live, &spot(d, range), &paste)
 }
 
@@ -1230,6 +1414,7 @@ pub mod tests {
             blocked: None,
             locked: Vec::new(),
             engine: true,
+            failed: false,
         }
     }
 
@@ -1369,6 +1554,11 @@ pub mod tests {
         let wide = [[0.0, 0.0], [100.0, 0.0], [100.0, 10.0], [0.0, 10.0]];
         assert!(clash(&wide, &moved(&UNIT, 98.0, 0.0)));
         assert!(!clash(&UNIT, &[[5.0; 2]; 4]));
+        // 行距紧的上下两行，框叠上一点：不算。框得很高、把另一处整个装进去的算
+        assert!(!clash(&UNIT, &moved(&UNIT, 0.0, 8.6)));
+        assert!(clash(&UNIT, &moved(&UNIT, 0.0, 6.0)));
+        let tall = [[0.0, 0.0], [10.0, 0.0], [10.0, 60.0], [0.0, 60.0]];
+        assert!(clash(&tall, &UNIT) && clash(&UNIT, &tall));
     }
 
     #[test]
@@ -1622,7 +1812,7 @@ pub mod tests {
         let d = draft("会议政到三点", range(2, 3));
         assert_eq!(msg(put_local(t, &tmp.0, &l, &d, 4, RED)), LOCKED);
         assert!(put_local(t, &tmp.0, &l, &d, 2, RED).is_ok());
-        // 说的是这一行，交回来的条带在签名那一行
+        // 说的是这一行，交回来的条带在别的行
         let below = lock_at(76.0, 70.0);
         let (q, px) = {
             let line = LineRef::Quad(moved(&LINE, 0.0, 70.0));
@@ -1631,7 +1821,14 @@ pub mod tests {
             px[i..i + 3].copy_from_slice(&RED);
             (h.quad, px)
         };
-        assert_eq!(msg(local_patch(t, &tmp.0, &below, &d, &q, &px)), LOCKED);
+        assert_eq!(msg(local_patch(t, &tmp.0, &below, &d, &q, &px)), BAD_RANGE);
+        // 条带取得很高，把下面的签名也带进来改了
+        let both = [LINE[0], LINE[1], [428.0, 190.0], [76.0, 190.0]];
+        let (h, mut px) = strip(&below, &LineRef::Quad(both), Extend::default()).unwrap();
+        let i = (100 * h.w as usize + 150) * 4;
+        px[i..i + 3].copy_from_slice(&RED);
+        let d = draft("会议政到三点", range(2, 3));
+        assert_eq!(msg(local_patch(t, &tmp.0, &below, &d, &both, &px)), LOCKED);
         // 字数变多、占到签名那段的也拒绝
         assert_eq!(
             msg(l.check(&draft("会议改到三点半钟", range(3, 4)))),
@@ -1644,6 +1841,88 @@ pub mod tests {
             msg(lock_at(430.0, 0.0).check(&draft("会议改到三点半", range(6, 6)))),
             LOCKED
         );
+    }
+
+    /// 框得很高、签名只占框的上面一截：也拒绝
+    #[test]
+    fn tall_box_over_signature_rejected() {
+        if !xpaste_pro::AVAILABLE {
+            return eprintln!("这个构建不含 Pro，跳过");
+        }
+        let sig = [[314.0, 64.0], [640.0, 64.0], [640.0, 88.0], [314.0, 88.0]];
+        let l = live_with(Read {
+            locked: vec![sig],
+            ..read()
+        });
+        for bottom in [126.0, 190.0] {
+            let line = [[76.0, 64.0], [428.0, 64.0], [428.0, bottom], [76.0, bottom]];
+            let k = xpaste_pro::te_strip(&scene(), line).img.w as f32 / 352.0;
+            let d = |a: f32, b: f32| Draft {
+                line,
+                ..draft(NEW, [a * k, b * k])
+            };
+            assert_eq!(msg(l.check(&d(242.0, 296.0))), LOCKED, "{bottom}");
+            assert!(l.check(&d(122.0, 176.0)).is_ok(), "{bottom}");
+        }
+    }
+
+    /// 真正变了的像素在签名里才算；上下边让一点
+    #[test]
+    fn spoiled_pixels() {
+        let sig = [[300.0, 60.0], [400.0, 60.0], [400.0, 100.0], [300.0, 100.0]];
+        let l = live_with(Read {
+            locked: vec![sig],
+            ..read()
+        });
+        let hits = |at: Option<(u32, u32)>| {
+            let mut patch = cut(&l.img, [280, 50, 420, 110]);
+            if let Some((x, y)) = at {
+                patch.px[(((y - 50) * 140 + x - 280) * 4) as usize] ^= 0x40;
+            }
+            l.spoils_locked(&TePaste {
+                patch,
+                x: 280,
+                y: 50,
+                exact: true,
+                soft: false,
+            })
+        };
+        assert!(!hits(None) && !hits(Some((299, 80))) && !hits(Some((350, 61))));
+        assert!(hits(Some((300, 80))) && hits(Some((399, 65))));
+    }
+
+    /// 给不给改没判断成：什么都不许改
+    #[test]
+    fn no_reading_no_editing() {
+        let (t, tmp) = (new_tasks(), Tmp::new());
+        let l = unread();
+        l.no_reading();
+        let d = draft(NEW, [0.0, 10.0]);
+        assert_eq!(msg(l.check(&d)), UNREADABLE);
+        assert_eq!(msg(l.plan(&d, false, true)), UNREADABLE);
+        assert_eq!(
+            msg(local_patch(t, &tmp.0, &l, &d, &LINE, &[0; 8])),
+            UNREADABLE
+        );
+        assert_eq!(msg(pick(t, &tmp.0, &l, 1, 0)), UNREADABLE);
+        assert!(!l.read().engine);
+        // 晚到的读字结果不改主意
+        l.start(|_| Ok(Some(vec![])));
+        assert_eq!(msg(l.check(&d)), UNREADABLE);
+    }
+
+    #[test]
+    fn counts_changed_chars() {
+        for (old, new, n) in [
+            (OLD, NEW, 1),
+            (OLD, "会议改到三点半", 1),
+            (OLD, "会议改到", 2),
+            ("aa", "aaa", 1),
+            ("甲乙", "丙丁戊", 3),
+            (OLD, OLD, 0),
+        ] {
+            assert_eq!(changed_count(old, new), n, "{old} {new}");
+        }
     }
 
     // ---- 范围 ----
@@ -1777,6 +2056,16 @@ pub mod tests {
         assert!(at(&l, &tmp.0, 80 + 240 + 32, 100)[0] > 200);
         // 来源没动
         assert_eq!(at(&l, &tmp.0, 84, 100), [20, 24, 30]);
+        // 拖窄了的范围只到第 6 个字：够不着第 5 个
+        let narrow = draft("会议改到会议", range(5, 6));
+        assert_eq!(l.plan(&narrow, false, true).unwrap().way, "ai");
+        let s = xpaste_pro::te_strip(&scene(), LINE);
+        let get = |at: &[usize], r| targets(&s, 6, &chars(), at, r);
+        let two = get(&[1, 4], [range(1, 2)[0] - 3.0, range(4, 5)[1]]).unwrap();
+        assert_eq!(two[0], [range(1, 2)[0] - 3.0, range(1, 2)[1]]);
+        assert_eq!(two[1], range(4, 5));
+        // 中间的边也不超出
+        assert!(get(&[4, 5], range(5, 6)).is_none() && get(&[4, 5], range(4, 5)).is_none());
         // 签名里的不搬
         let d = draft("会会改到三点", range(1, 2));
         assert_ne!(l.plan(&d, false, true).unwrap().way, "ai");
@@ -1786,6 +2075,28 @@ pub mod tests {
             ..read()
         });
         assert_eq!(l.plan(&d, false, true).unwrap().way, "ai");
+    }
+
+    /// 搬字的来源里没有和要改的这行是同一行的
+    #[test]
+    fn own_line_not_a_source() {
+        let far = [[76.0, 140.0], [428.0, 140.0], [428.0, 196.0], [76.0, 196.0]];
+        let l = live_with(Read {
+            lines: vec![row(OLD, LINE, chars()), row("别的行", far, vec![])],
+            ..read()
+        });
+        for (line, chars) in [(LINE, 6), (moved(&LINE, 3.0, -4.0), 0)] {
+            let d = Draft {
+                line,
+                ..draft(NEW, [0.0, 1.0])
+            };
+            let rows = l.rows(&spot(&d, [0.0, 1.0]), 6);
+            assert_eq!(rows.len(), 2);
+            assert!(rows[0].1 == far && rows[1].1 == line && rows[1].2.len() == chars);
+        }
+        // 用户改过原文，字数对不上：逐字框不能用
+        let d = draft(NEW, [0.0, 1.0]);
+        assert!(l.rows(&spot(&d, [0.0, 1.0]), 5)[1].2.is_empty());
     }
 
     // ---- 替换 ----
@@ -1884,20 +2195,20 @@ pub mod tests {
         let (first, a) = t
             .submit(&tmp.0, &l, &d("会议改到三点半"), true, true)
             .unwrap();
-        let (_, b) = t
+        let (second, b) = t
             .submit(&tmp.0, &l, &d("会议改到三点一刻"), true, true)
             .unwrap();
         assert_ne!(a, b);
         assert!(t.views().iter().all(|v| v.id != first));
+        t.cancel(second);
         // 再出一张：范围已经扩过，不再变宽，还是那一处
         let more = Draft {
             edit: Some(b),
             range: Some(edit_of(&l, b).range),
             ..d("会议改到三点一刻")
         };
-        let (task, same) = t.submit(&tmp.0, &l, &more, true, true).unwrap();
+        let (_, same) = t.submit(&tmp.0, &l, &more, true, true).unwrap();
         assert_eq!(same, b);
-        t.cancel(task);
         // 在别处加的不相干
         let (other, _) = t
             .submit(&tmp.0, &l, &draft("会政改到三点", range(1, 2)), true, true)

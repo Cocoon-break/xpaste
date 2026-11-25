@@ -69,7 +69,7 @@ pub enum OpenFail {
 impl OpenFail {
     pub fn text(&self) -> &'static str {
         match self {
-            OpenFail::Unreadable => "这张图读不出来",
+            OpenFail::Unreadable => job::UNREADABLE,
             OpenFail::TooBig => "图太大，改不了",
         }
     }
@@ -117,7 +117,12 @@ fn bytes_of(state: &AppState, src: &mut Source) -> Result<Vec<u8>, AppError> {
         Source::File(p) => p.clone(),
         Source::Blank | Source::Recent(_) => return Err(unreadable()),
     };
-    if std::fs::metadata(&path).is_ok_and(|m| m.len() > MAX_BYTES) {
+    // 只收普通文件：管道、设备读起来没有头
+    let m = std::fs::metadata(&path).map_err(|_| unreadable())?;
+    if !m.is_file() {
+        return Err(unreadable());
+    }
+    if m.len() > MAX_BYTES {
         return Err(no(OpenFail::TooBig.text()));
     }
     std::fs::read(&path).map_err(|_| unreadable())
@@ -166,6 +171,15 @@ struct Runtime {
     cur: Option<Arc<Live>>,
     /// 窗口关着时改好了几处
     unseen: u32,
+    /// 上屏的（或作废的）最大的打开号
+    shown: u64,
+}
+
+/// 这个号还轮得到上屏：比上过屏的新
+fn admit(shown: &mut u64, seq: u64) -> bool {
+    let ok = seq > *shown;
+    *shown = seq.max(*shown);
+    ok
 }
 
 static RT: Mutex<Runtime> = Mutex::new(Runtime {
@@ -175,12 +189,13 @@ static RT: Mutex<Runtime> = Mutex::new(Runtime {
     origin: meme::NOWHERE,
     cur: None,
     unseen: 0,
+    shown: 0,
 });
 
 /// 还有人拿着的图：窗口里的、有任务没结束的。同一张图只有一份
 static LIVE: Mutex<Vec<Weak<Live>>> = Mutex::new(Vec::new());
 
-/// 第几次打开：先开的图解得慢、后开的已经上屏了，就不换回去
+/// 打开的号：先开的图解得慢、后开的已经上屏了，就不换回去。打不开的不算
 static OPENS: AtomicU64 = AtomicU64::new(0);
 
 pub fn dir(app: &AppHandle) -> PathBuf {
@@ -217,10 +232,9 @@ pub fn config(app: &AppHandle) -> Config {
     }
 }
 
-/// 登记，开始读字；同一张已经有了就用那一份
-fn enlist(live: Live) -> Arc<Live> {
-    let live = Arc::new(live);
-    {
+/// 登记，开始读字；同一张已经有了就用那一份。从盘上读回来的给 `dir`：读图要一会儿，这中间可能有人改完又放手了
+fn enlist(mut live: Live, dir: Option<&Path>) -> Arc<Live> {
+    let live = {
         let mut all = lock(&LIVE);
         all.retain(|l| l.strong_count() > 0);
         if let Some(l) = all
@@ -230,10 +244,17 @@ fn enlist(live: Live) -> Arc<Live> {
         {
             return l;
         }
+        if let Some(dir) = dir {
+            live.reload(dir);
+        }
+        let live = Arc::new(live);
         all.push(Arc::downgrade(&live));
-    }
+        live
+    };
     let l = live.clone();
-    crate::housekeeping::spawn("xpaste-textedit-read", move || l.start(job::ocr));
+    if !crate::housekeeping::spawn("xpaste-textedit-read", move || l.start(job::ocr)) {
+        live.no_reading();
+    }
     live
 }
 
@@ -246,7 +267,9 @@ pub fn find(app: &AppHandle, id: &str) -> Result<Arc<Live>, AppError> {
     {
         return Ok(l);
     }
-    Ok(enlist(Live::load(&dir(app), id).map_err(|_| no(GONE))?))
+    let dir = dir(app);
+    let live = Live::load(&dir, id).map_err(|_| no(GONE))?;
+    Ok(enlist(live, Some(&dir)))
 }
 
 /// 打开一张图，换掉窗口里的。粘贴目标按这一刻的前台应用记。要读文件、解码，不在主线程调用
@@ -296,13 +319,13 @@ fn open_as(
         _ => {
             let bytes = bytes_of(&app.state::<AppState>(), &mut src)?;
             let (img, icc) = decode(&bytes).map_err(|e| no(e.text()))?;
-            Some(enlist(Live::fresh(img, icc)))
+            Some(enlist(Live::fresh(img, icc), None))
         }
     };
     let target = {
         let mut rt = lock(&RT);
         // 又开了一张，或者窗口里换图时窗口已经关了
-        if OPENS.load(Ordering::SeqCst) != seq || (origin.is_none() && !rt.open) {
+        if (origin.is_none() && !rt.open) || !admit(&mut rt.shown, seq) {
             return Ok(());
         }
         if let Some(o) = origin {
@@ -386,10 +409,10 @@ pub fn window_open() -> bool {
 
 /// 窗口记成关闭，放开那张图（有任务的由任务拿着），返回来处；没开着时返回 None
 fn shut() -> Option<Origin> {
-    // 还没解完的那次打开作废
-    OPENS.fetch_add(1, Ordering::SeqCst);
     let (origin, _cur) = {
         let mut rt = lock(&RT);
+        // 还没解完的那几次打开作废
+        rt.shown = OPENS.load(Ordering::SeqCst);
         if !rt.open {
             return None;
         }
@@ -489,8 +512,10 @@ pub fn recent(dir: &Path) -> Vec<Recent> {
         .collect()
 }
 
-/// 缩略图的 PNG，长边不超过 320
+/// 缩略图的 PNG，长边不超过 320。一张一张来：都是整张解出来再缩，十几张一起会占很多内存
 pub fn thumb(dir: &Path, id: &str) -> Result<Vec<u8>, AppError> {
+    static ONE: Mutex<()> = Mutex::new(());
+    let _one = lock(&ONE);
     let img = store::load(dir, id)
         .and_then(|j| store::render(dir, &j))
         .map_err(|_| no(GONE))?;
@@ -500,6 +525,13 @@ pub fn thumb(dir: &Path, id: &str) -> Result<Vec<u8>, AppError> {
     img.write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
         .map_err(|_| no(GONE))?;
     Ok(png)
+}
+
+/// 删一张：排队的任务拿掉
+pub fn remove(t: Tasks, dir: &Path, id: &str) -> Result<(), AppError> {
+    store::remove(dir, id).map_err(not_saved)?;
+    t.cancel_gone(dir);
+    Ok(())
 }
 
 /// 撤销删除，没存进去的结果再存一次
@@ -512,6 +544,7 @@ pub fn restore(t: Tasks, dir: &Path, id: &str) -> Result<(), AppError> {
 /// 清空：正拿着的图下次再存时重新落盘
 pub fn clear(t: Tasks, dir: &Path) -> Result<(), AppError> {
     let out = store::clear(dir);
+    t.cancel_gone(dir);
     let all: Vec<Arc<Live>> = lock(&LIVE).iter().filter_map(Weak::upgrade).collect();
     for l in all {
         l.wiped(t, dir);
@@ -671,6 +704,14 @@ mod tests {
         assert_eq!(panel(record, Some(2)).unwrap(), b"c");
         assert_eq!(get(Source::File(tmp.0.join("c.png"))).unwrap(), b"c");
         assert_eq!(msg(panel(999, None)), UNUSABLE);
+        // 文件夹、设备不收
+        #[cfg(unix)]
+        assert_eq!(msg(get(Source::File("/dev/null".into()))), "这张图读不出来");
+        std::fs::create_dir(tmp.0.join("夹子.png")).unwrap();
+        assert_eq!(
+            msg(get(Source::File(tmp.0.join("夹子.png")))),
+            "这张图读不出来"
+        );
         assert_eq!(msg(get(Source::Pin { n: 1 << 40 })), "这张图读不出来");
         std::fs::remove_file(tmp.0.join("b.png")).unwrap();
         assert_eq!(msg(get(Source::Clip { record })), "这张图读不出来");
@@ -715,13 +756,57 @@ mod tests {
         assert_eq!(at(&l, &tmp.0, 76 + 260, 90), BLUE);
     }
 
+    /// 先开的解得慢：后开的上了屏就不换回去；后开的打不开，先开的照样上屏
+    #[test]
+    fn slow_open_does_not_come_back() {
+        let mut shown = 0;
+        assert!(admit(&mut shown, 2) && !admit(&mut shown, 1));
+        let mut shown = 0;
+        // 2 号打不开，没来
+        assert!(admit(&mut shown, 1) && admit(&mut shown, 3));
+        // 关了窗口：还没解完的作废，之后的照常
+        let mut shown = 5;
+        assert!(!admit(&mut shown, 4) && !admit(&mut shown, 5) && admit(&mut shown, 6));
+    }
+
+    /// 读进来之后、登记之前，别处改过又放手了：以盘上的为准
+    #[test]
+    fn enlist_rereads_job() {
+        let tmp = Tmp::new();
+        let l = live();
+        let first = job_on_disk(&l, &tmp.0);
+        let stale = Live::load(&tmp.0, &l.id).unwrap();
+        stale.no_reading();
+        let mut job = first;
+        job.edits.push(store::Edit {
+            id: 7,
+            line: LINE,
+            range: [0.0, 1.0],
+            old: "甲".into(),
+            new: "乙".into(),
+            pick: store::NO_PICK,
+            cands: vec![],
+        });
+        store::save(&tmp.0, &job).unwrap();
+        let got = enlist(stale, Some(&tmp.0));
+        assert_eq!(got.view().edits.len(), 1);
+        assert_eq!(got.view().edits[0].id, 7);
+    }
+
+    fn job_on_disk(l: &Live, dir: &Path) -> store::Job {
+        let mut job = store::Job::new(&l.img);
+        job.id.clone_from(&l.id);
+        store::create(dir, &job, &l.img, None).unwrap();
+        job
+    }
+
     /// 有人拿着的图只有一份
     #[test]
     fn one_live_per_job() {
-        let l = enlist(Live::fresh(scene(), None));
+        let l = enlist(Live::fresh(scene(), None), None);
         let mut twin = Live::fresh(scene(), None);
         twin.id.clone_from(&l.id);
-        assert!(Arc::ptr_eq(&l, &enlist(twin)));
+        assert!(Arc::ptr_eq(&l, &enlist(twin, None)));
         let id = l.id.clone();
         // 读字的线程放手之后
         l.read();

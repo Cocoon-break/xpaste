@@ -55,8 +55,11 @@ fn prune(app: &AppHandle) {
     }
 }
 
-pub(crate) fn spawn(name: &str, f: impl FnOnce() + Send + 'static) {
-    if let Err(e) = std::thread::Builder::new().name(name.into()).spawn(f) {
+/// 起不来时只记日志，返回起来了没有
+pub(crate) fn spawn(name: &str, f: impl FnOnce() + Send + 'static) -> bool {
+    let r = std::thread::Builder::new().name(name.into()).spawn(f);
+    if let Err(e) = &r {
         log::warn!("线程 {name} 启动失败：{e}");
     }
+    r.is_ok()
 }

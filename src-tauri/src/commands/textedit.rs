@@ -328,7 +328,9 @@ pub async fn te_retry(app: AppHandle, task: u64, mask: bool) -> Result<(), AppEr
     textedit::editable(&app)?;
     bg(move || {
         let api = textedit::config(&app).api;
-        tasks().retry(task, mask, api, |id| textedit::find(&app, id))?;
+        tasks().retry(&textedit::dir(&app), task, mask, api, |id| {
+            textedit::find(&app, id)
+        })?;
         log::info!(
             "改字 任务 {task} 重试{}",
             if mask { "" } else { "（不带遮罩）" }
@@ -363,7 +365,12 @@ pub async fn te_thumb(app: AppHandle, id: String) -> Result<Response, AppError> 
 /// 删一张，5 秒内可撤销
 #[tauri::command]
 pub async fn te_recent_remove(app: AppHandle, id: String) -> Result<(), AppError> {
-    bg(move || store::remove(&textedit::dir(&app), &id).map_err(te::not_saved)).await
+    bg(move || {
+        textedit::remove(tasks(), &textedit::dir(&app), &id)?;
+        tasks::changed(&app);
+        Ok(())
+    })
+    .await
 }
 
 /// 撤销删除
