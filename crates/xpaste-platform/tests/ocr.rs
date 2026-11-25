@@ -98,19 +98,14 @@ fn lines_have_quads() {
     let l = &lines[0];
     assert_eq!(l.text, "会议改到三点");
     let [x0, y0, x1, y1] = ink_bbox(&png);
-    // 水平 ±6 px；竖直要求包住墨迹（容差 6 px：Vision 的框贴着墨迹且略带倾斜，实测上沿比墨迹低 1–4 px），且行框高不超过墨迹高的 2 倍（Vision 行框取字体行高，比墨迹高）
-    assert!((l.quad[0][0] - x0).abs() <= 6.0, "{:?}", l.quad);
-    assert!((l.quad[1][0] - x1).abs() <= 6.0, "{:?}", l.quad);
-    assert!(
-        l.quad[0][1] <= y0 + 6.0 && l.quad[3][1] >= y1 - 6.0,
-        "{:?}",
-        l.quad
-    );
-    assert!(
-        l.quad[3][1] - l.quad[0][1] <= 2.0 * (y1 - y0),
-        "{:?}",
-        l.quad
-    );
+    // 四个角都落在画字矩形（墨迹外框）±6 px 内
+    for (q, want) in l.quad.iter().zip([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]) {
+        assert!(
+            (q[0] - want[0]).abs() <= 6.0 && (q[1] - want[1]).abs() <= 6.0,
+            "{:?}",
+            l.quad
+        );
+    }
     assert_eq!(l.chars.len(), 6);
     assert!(
         l.chars
