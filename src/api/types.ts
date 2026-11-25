@@ -84,6 +84,12 @@ export interface Settings {
   memeEnabled: boolean;
   /** 打开表情包制作窗口的全局快捷键；'' 表示不启用 */
   memeHotkey: string;
+  /** 改字（Pro）总开关 */
+  editEnabled: boolean;
+  /** 打开改字窗口的全局快捷键；'' 表示不启用 */
+  editHotkey: string;
+  /** 怎么改：只在本机改 | 交给生图接口 */
+  editMode: 'local' | 'ai';
   /** 生图服务商预设键名，或 custom */
   memeImageProvider: string;
   memeImageFormat: 'openai' | 'ark' | 'gemini';
@@ -219,6 +225,7 @@ export interface AppError {
     | 'beltHotkeyTaken'
     | 'mixerHotkeyTaken'
     | 'memeHotkeyTaken'
+    | 'editHotkeyTaken'
     | 'invalidSettings'
     | 'invalid'
     | 'internal'

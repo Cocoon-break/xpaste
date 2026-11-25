@@ -25,6 +25,8 @@ pub enum AppError {
     MixerHotkeyTaken,
     #[error("表情包快捷键已被其他应用占用，请换一个")]
     MemeHotkeyTaken,
+    #[error("改字快捷键已被其他应用占用，请换一个")]
+    EditHotkeyTaken,
     /// 参数不合法（非 http 链接、记录不存在等）
     #[error("{0}")]
     Invalid(String),
@@ -83,6 +85,7 @@ impl AppError {
             Self::BeltHotkeyTaken => "beltHotkeyTaken",
             Self::MixerHotkeyTaken => "mixerHotkeyTaken",
             Self::MemeHotkeyTaken => "memeHotkeyTaken",
+            Self::EditHotkeyTaken => "editHotkeyTaken",
             Self::Invalid(_) => "invalid",
             Self::TranslateConfig => "translateConfig",
             Self::TranslatePack { .. } => "translatePack",

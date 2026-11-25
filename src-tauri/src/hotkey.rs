@@ -9,44 +9,71 @@ use crate::state::AppState;
 /// 录屏只在 macOS 上做（M24）：Windows 上从不注册录屏快捷键。
 const REC_SUPPORTED: bool = cfg!(target_os = "macos");
 
-/// 注销全部后注册唤起、截图、录屏、翻译、便签、传送带、搅拌机与表情包快捷键（后七个为空串表示不启用，跳过；不含晾衣绳的版本不注册便签）；任何失败都视为被占用。
-/// 八个都会尝试注册，按唤起、截图、录屏、翻译、便签、传送带、搅拌机、表情包的顺序返回第一个失败：
-/// `HotkeyTaken` / `ShotHotkeyTaken` / `RecHotkeyTaken` / `TranslateHotkeyTaken` / `LineHotkeyTaken` / `BeltHotkeyTaken` / `MixerHotkeyTaken` / `MemeHotkeyTaken`。
-// ponytail: 每个快捷键一个参数，再多就该改成结构体
-#[allow(clippy::too_many_arguments)]
-pub fn register(
-    app: &AppHandle,
-    panel: &str,
-    shot: &str,
-    rec: &str,
-    translate: &str,
-    line: &str,
-    belt: &str,
-    mixer: &str,
-    meme: &str,
-) -> Result<(), AppError> {
+/// 九个全局快捷键，空串表示不启用。
+#[derive(Clone, Copy)]
+pub struct Keys<'a> {
+    pub panel: &'a str,
+    pub shot: &'a str,
+    pub rec: &'a str,
+    pub translate: &'a str,
+    pub line: &'a str,
+    pub belt: &'a str,
+    pub mixer: &'a str,
+    pub meme: &'a str,
+    pub edit: &'a str,
+}
+
+impl<'a> Keys<'a> {
+    /// 按设置取：便签、传送带、搅拌机、表情包、改字的总开关关着时为空串
+    pub fn of(s: &'a xpaste_core::Settings) -> Self {
+        Keys {
+            panel: &s.hotkey,
+            shot: &s.shot_hotkey,
+            rec: &s.rec_hotkey,
+            translate: &s.translate_hotkey,
+            line: s.effective_line_hotkey(),
+            belt: s.effective_belt_hotkey(),
+            mixer: s.effective_mixer_hotkey(),
+            meme: s.effective_meme_hotkey(),
+            edit: s.effective_edit_hotkey(),
+        }
+    }
+}
+
+/// 改字（Pro）是否编入此构建；没有 Pro 时不注册快捷键。设置里的总开关由 `effective_edit_hotkey` 体现。
+pub fn edit_enabled() -> bool {
+    xpaste_pro::AVAILABLE
+}
+
+/// 注销全部后注册唤起、截图、录屏、翻译、便签、传送带、搅拌机、表情包与改字快捷键（后八个为空串表示不启用，跳过；不含晾衣绳的版本不注册便签）；任何失败都视为被占用。
+/// 九个都会尝试注册，按唤起、截图、录屏、翻译、便签、传送带、搅拌机、表情包、改字的顺序返回第一个失败：
+/// `HotkeyTaken` / `ShotHotkeyTaken` / `RecHotkeyTaken` / `TranslateHotkeyTaken` / `LineHotkeyTaken` / `BeltHotkeyTaken` / `MixerHotkeyTaken` / `MemeHotkeyTaken` / `EditHotkeyTaken`。
+pub fn register(app: &AppHandle, k: &Keys) -> Result<(), AppError> {
     let gs = app.global_shortcut();
     let taken = |e: tauri_plugin_global_shortcut::Error| log::debug!("全局快捷键插件错误：{e}");
     let panel_ok = gs
         .unregister_all()
-        .and_then(|()| gs.register(panel))
+        .and_then(|()| gs.register(k.panel))
         .map_err(taken)
         .is_ok();
     // 传送带的退回快捷键也跟着注销了，它按需另行注册
     crate::belt::forget_back();
-    let shot_ok = shot.is_empty() || gs.register(shot).map_err(taken).is_ok();
-    let rec_ok = !REC_SUPPORTED || rec.is_empty() || gs.register(rec).map_err(taken).is_ok();
-    let tr_ok = translate.is_empty() || gs.register(translate).map_err(taken).is_ok();
+    let shot_ok = k.shot.is_empty() || gs.register(k.shot).map_err(taken).is_ok();
+    let rec_ok = !REC_SUPPORTED || k.rec.is_empty() || gs.register(k.rec).map_err(taken).is_ok();
+    let tr_ok = k.translate.is_empty() || gs.register(k.translate).map_err(taken).is_ok();
     let line_ok =
-        !crate::line::enabled() || line.is_empty() || gs.register(line).map_err(taken).is_ok();
+        !crate::line::enabled() || k.line.is_empty() || gs.register(k.line).map_err(taken).is_ok();
     let belt_ok =
-        !crate::belt::enabled() || belt.is_empty() || gs.register(belt).map_err(taken).is_ok();
-    let mixer_ok =
-        !crate::mixer::enabled() || mixer.is_empty() || gs.register(mixer).map_err(taken).is_ok();
+        !crate::belt::enabled() || k.belt.is_empty() || gs.register(k.belt).map_err(taken).is_ok();
+    let mixer_ok = !crate::mixer::enabled()
+        || k.mixer.is_empty()
+        || gs.register(k.mixer).map_err(taken).is_ok();
     let meme_ok =
-        !crate::meme::enabled() || meme.is_empty() || gs.register(meme).map_err(taken).is_ok();
+        !crate::meme::enabled() || k.meme.is_empty() || gs.register(k.meme).map_err(taken).is_ok();
+    let edit_ok =
+        !edit_enabled() || k.edit.is_empty() || gs.register(k.edit).map_err(taken).is_ok();
     first_failure(
-        panel_ok, shot_ok, rec_ok, tr_ok, line_ok, belt_ok, mixer_ok, meme_ok,
+        panel_ok, shot_ok, rec_ok, tr_ok, line_ok, belt_ok, mixer_ok, meme_ok, edit_ok,
     )
 }
 
@@ -61,16 +88,18 @@ fn first_failure(
     belt: bool,
     mixer: bool,
     meme: bool,
+    edit: bool,
 ) -> Result<(), AppError> {
-    match (panel, shot, rec, translate, line, belt, mixer, meme) {
+    match (panel, shot, rec, translate, line, belt, mixer, meme, edit) {
         (false, ..) => Err(AppError::HotkeyTaken),
         (_, false, ..) => Err(AppError::ShotHotkeyTaken),
         (_, _, false, ..) => Err(AppError::RecHotkeyTaken),
         (_, _, _, false, ..) => Err(AppError::TranslateHotkeyTaken),
         (_, _, _, _, false, ..) => Err(AppError::LineHotkeyTaken),
         (_, _, _, _, _, false, ..) => Err(AppError::BeltHotkeyTaken),
-        (_, _, _, _, _, _, false, _) => Err(AppError::MixerHotkeyTaken),
-        (_, _, _, _, _, _, _, false) => Err(AppError::MemeHotkeyTaken),
+        (_, _, _, _, _, _, false, ..) => Err(AppError::MixerHotkeyTaken),
+        (_, _, _, _, _, _, _, false, _) => Err(AppError::MemeHotkeyTaken),
+        (_, _, _, _, _, _, _, _, false) => Err(AppError::EditHotkeyTaken),
         _ => Ok(()),
     }
 }
@@ -87,7 +116,8 @@ pub fn unregistered(
     belt: &str,
     mixer: &str,
     meme: &str,
-) -> (bool, bool, bool, bool, bool, bool, bool) {
+    edit: &str,
+) -> (bool, bool, bool, bool, bool, bool, bool, bool) {
     let gs = app.global_shortcut();
     let missing = |s: &str| !s.is_empty() && !gs.is_registered(s);
     (
@@ -98,6 +128,7 @@ pub fn unregistered(
         crate::belt::enabled() && missing(belt),
         crate::mixer::enabled() && missing(mixer),
         crate::meme::enabled() && missing(meme),
+        edit_enabled() && missing(edit),
     )
 }
 
@@ -111,6 +142,7 @@ pub enum Role {
     Belt,
     Mixer,
     Meme,
+    Edit,
 }
 
 /// 触发的快捷键是哪一个（M23 规则 1、M24、M26 规则 18）：按解析后的组合比较；截图、录屏、翻译为空串时不认。
@@ -126,6 +158,7 @@ pub fn role_of(
     belt: &str,
     mixer: &str,
     meme: &str,
+    edit: &str,
 ) -> Option<Role> {
     let is = |s: &str| !s.is_empty() && s.parse::<Shortcut>().is_ok_and(|k| k == *pressed);
     if is(panel) {
@@ -144,6 +177,8 @@ pub fn role_of(
         Some(Role::Mixer)
     } else if crate::meme::enabled() && is(meme) {
         Some(Role::Meme)
+    } else if edit_enabled() && is(edit) {
+        Some(Role::Edit)
     } else {
         None
     }
@@ -236,6 +271,7 @@ pub fn failure_notice(
     belt_failed: bool,
     mixer_failed: bool,
     meme_failed: bool,
+    edit_failed: bool,
 ) -> Option<String> {
     let names: Vec<_> = [
         (panel_failed, "唤起"),
@@ -246,6 +282,7 @@ pub fn failure_notice(
         (belt_failed, "传送带"),
         (mixer_failed, "搅拌机"),
         (meme_failed, "表情包"),
+        (edit_failed, "改字"),
     ]
     .into_iter()
     .filter_map(|(failed, name)| failed.then_some(name))
@@ -319,7 +356,7 @@ mod tests {
     #[test]
     fn failure_notice_names_every_taken_hotkey() {
         let tail = "快捷键被其他应用占用，请在设置中更换";
-        let n = |p, s, r| failure_notice(p, s, r, false, false, false, false, false);
+        let n = |p, s, r| failure_notice(p, s, r, false, false, false, false, false, false);
         assert_eq!(n(false, false, false), None);
         for (flags, names) in [
             ((true, false, false), "唤起"),
@@ -333,31 +370,31 @@ mod tests {
             assert_eq!(n(flags.0, flags.1, flags.2), Some(format!("{names}{tail}")));
         }
         assert_eq!(
-            failure_notice(false, false, false, true, false, false, false, false),
+            failure_notice(false, false, false, true, false, false, false, false, false),
             Some(format!("翻译{tail}"))
         );
         assert_eq!(
-            failure_notice(true, true, true, true, false, false, false, false),
+            failure_notice(true, true, true, true, false, false, false, false, false),
             Some(format!("唤起、截图、录屏与翻译{tail}"))
         );
         assert_eq!(
-            failure_notice(false, false, false, false, true, false, false, false),
+            failure_notice(false, false, false, false, true, false, false, false, false),
             Some(format!("便签{tail}"))
         );
         assert_eq!(
-            failure_notice(true, true, true, true, true, false, false, false),
+            failure_notice(true, true, true, true, true, false, false, false, false),
             Some(format!("唤起、截图、录屏、翻译与便签{tail}"))
         );
         assert_eq!(
-            failure_notice(false, false, false, false, false, true, false, false),
+            failure_notice(false, false, false, false, false, true, false, false, false),
             Some(format!("传送带{tail}"))
         );
         assert_eq!(
-            failure_notice(false, false, false, false, true, true, false, false),
+            failure_notice(false, false, false, false, true, true, false, false, false),
             Some(format!("便签与传送带{tail}"))
         );
         assert_eq!(
-            failure_notice(false, false, false, false, false, true, true, false),
+            failure_notice(false, false, false, false, false, true, true, false, false),
             Some(format!("传送带与搅拌机{tail}"))
         );
     }
@@ -370,21 +407,24 @@ mod tests {
         let (p, s, r) = ("CommandOrControl+Shift+V", "Alt+Shift+A", "Alt+Shift+R");
         let t = "Alt+Shift+T";
         let l = "Alt+Shift+N";
-        assert_eq!(role_of(&shot, p, s, r, t, l, "", "", ""), Some(Role::Shot));
         assert_eq!(
-            role_of(&panel, p, s, r, t, l, "", "", ""),
+            role_of(&shot, p, s, r, t, l, "", "", "", ""),
+            Some(Role::Shot)
+        );
+        assert_eq!(
+            role_of(&panel, p, s, r, t, l, "", "", "", ""),
             Some(Role::Panel)
         );
         // Windows 不注册录屏快捷键（REC_SUPPORTED），也就不认
         assert_eq!(
-            role_of(&rec, p, s, r, t, l, "", "", ""),
+            role_of(&rec, p, s, r, t, l, "", "", "", ""),
             REC_SUPPORTED.then_some(Role::Rec)
         );
         // 截图、录屏为空串表示不启用：不认
-        assert_eq!(role_of(&shot, p, "", r, t, l, "", "", ""), None);
-        assert_eq!(role_of(&rec, p, s, "", t, l, "", "", ""), None);
+        assert_eq!(role_of(&shot, p, "", r, t, l, "", "", "", ""), None);
+        assert_eq!(role_of(&rec, p, s, "", t, l, "", "", "", ""), None);
         assert_eq!(
-            role_of(&panel, p, "", "", "", "", "", "", ""),
+            role_of(&panel, p, "", "", "", "", "", "", "", ""),
             Some(Role::Panel)
         );
     }
@@ -394,11 +434,11 @@ mod tests {
         let tr = "Alt+Shift+T".parse().unwrap();
         let (p, s, r) = ("CommandOrControl+Shift+V", "Alt+Shift+A", "Alt+Shift+R");
         assert_eq!(
-            role_of(&tr, p, s, r, "alt+shift+t", "", "", "", ""),
+            role_of(&tr, p, s, r, "alt+shift+t", "", "", "", "", ""),
             Some(Role::Translate)
         );
         // 为空串表示不启用：不认
-        assert_eq!(role_of(&tr, p, s, r, "", "", "", "", ""), None);
+        assert_eq!(role_of(&tr, p, s, r, "", "", "", "", "", ""), None);
         // Windows 上录屏不注册（M24）：翻译用了留着默认值的录屏组合时按翻译认，不能开录屏
         let rec = "Alt+Shift+R".parse().unwrap();
         let want = if cfg!(target_os = "macos") {
@@ -406,7 +446,7 @@ mod tests {
         } else {
             Role::Translate
         };
-        assert_eq!(role_of(&rec, p, s, r, r, "", "", "", ""), Some(want));
+        assert_eq!(role_of(&rec, p, s, r, r, "", "", "", "", ""), Some(want));
     }
 
     #[test]
@@ -420,11 +460,11 @@ mod tests {
         );
         // 不含晾衣绳的版本不注册便签，也就不认
         assert_eq!(
-            role_of(&key, p, s, r, t, "alt+shift+n", "", "", ""),
+            role_of(&key, p, s, r, t, "alt+shift+n", "", "", "", ""),
             crate::line::enabled().then_some(Role::Line)
         );
         // 为空串表示不启用：不认
-        assert_eq!(role_of(&key, p, s, r, t, "", "", "", ""), None);
+        assert_eq!(role_of(&key, p, s, r, t, "", "", "", "", ""), None);
     }
 
     #[test]
@@ -437,10 +477,10 @@ mod tests {
             "Alt+Shift+T",
         );
         assert_eq!(
-            role_of(&key, p, s, r, t, "", "alt+shift+b", "", ""),
+            role_of(&key, p, s, r, t, "", "alt+shift+b", "", "", ""),
             crate::belt::enabled().then_some(Role::Belt)
         );
-        assert_eq!(role_of(&key, p, s, r, t, "", "", "", ""), None);
+        assert_eq!(role_of(&key, p, s, r, t, "", "", "", "", ""), None);
     }
 
     #[test]
@@ -453,10 +493,10 @@ mod tests {
             "Alt+Shift+T",
         );
         assert_eq!(
-            role_of(&key, p, s, r, t, "", "", "alt+shift+m", ""),
+            role_of(&key, p, s, r, t, "", "", "alt+shift+m", "", ""),
             crate::mixer::enabled().then_some(Role::Mixer)
         );
-        assert_eq!(role_of(&key, p, s, r, t, "", "", "", ""), None);
+        assert_eq!(role_of(&key, p, s, r, t, "", "", "", "", ""), None);
     }
 
     #[test]
@@ -469,57 +509,63 @@ mod tests {
             "Alt+Shift+T",
         );
         assert_eq!(
-            role_of(&key, p, s, r, t, "", "", "", "alt+shift+e"),
+            role_of(&key, p, s, r, t, "", "", "", "alt+shift+e", ""),
             crate::meme::enabled().then_some(Role::Meme)
         );
-        assert_eq!(role_of(&key, p, s, r, t, "", "", "", ""), None);
+        assert_eq!(role_of(&key, p, s, r, t, "", "", "", "", ""), None);
+    }
+
+    #[test]
+    fn role_of_edit() {
+        let key = "Alt+Shift+G".parse().unwrap();
+        let (p, s, r, t) = (
+            "CommandOrControl+Shift+V",
+            "Alt+Shift+A",
+            "Alt+Shift+R",
+            "Alt+Shift+T",
+        );
+        assert_eq!(
+            role_of(&key, p, s, r, t, "", "", "", "", "alt+shift+g"),
+            super::edit_enabled().then_some(Role::Edit)
+        );
+        assert_eq!(role_of(&key, p, s, r, t, "", "", "", "", ""), None);
     }
 
     #[test]
     fn register_reports_first_failure_in_order() {
-        let kind =
-            |f: [bool; 8]| match first_failure(f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7]) {
-                Ok(()) => "ok",
-                Err(AppError::HotkeyTaken) => "panel",
-                Err(AppError::ShotHotkeyTaken) => "shot",
-                Err(AppError::RecHotkeyTaken) => "rec",
-                Err(AppError::TranslateHotkeyTaken) => "translate",
-                Err(AppError::LineHotkeyTaken) => "line",
-                Err(AppError::BeltHotkeyTaken) => "belt",
-                Err(AppError::MixerHotkeyTaken) => "mixer",
-                Err(AppError::MemeHotkeyTaken) => "meme",
-                Err(_) => "other",
-            };
-        assert_eq!(kind([true; 8]), "ok");
-        assert_eq!(
-            kind([true, true, true, true, true, true, true, false]),
-            "meme"
-        );
-        assert_eq!(
-            kind([true, true, true, true, true, true, false, false]),
-            "mixer"
-        );
-        assert_eq!(
-            kind([true, true, true, true, true, false, false, false]),
-            "belt"
-        );
-        assert_eq!(
-            kind([true, true, true, true, false, false, false, false]),
-            "line"
-        );
-        assert_eq!(
-            kind([true, true, true, false, false, false, false, false]),
-            "translate"
-        );
-        assert_eq!(
-            kind([true, true, false, false, false, false, false, false]),
-            "rec"
-        );
-        assert_eq!(
-            kind([true, false, false, false, false, false, false, false]),
-            "shot"
-        );
-        assert_eq!(kind([false; 8]), "panel");
+        let kind = |f: [bool; 9]| match first_failure(
+            f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8],
+        ) {
+            Ok(()) => "ok",
+            Err(AppError::HotkeyTaken) => "panel",
+            Err(AppError::ShotHotkeyTaken) => "shot",
+            Err(AppError::RecHotkeyTaken) => "rec",
+            Err(AppError::TranslateHotkeyTaken) => "translate",
+            Err(AppError::LineHotkeyTaken) => "line",
+            Err(AppError::BeltHotkeyTaken) => "belt",
+            Err(AppError::MixerHotkeyTaken) => "mixer",
+            Err(AppError::MemeHotkeyTaken) => "meme",
+            Err(AppError::EditHotkeyTaken) => "edit",
+            Err(_) => "other",
+        };
+        assert_eq!(kind([true; 9]), "ok");
+        // 第 i 个起往后都失败时，报的是第 i 个
+        let names = [
+            "panel",
+            "shot",
+            "rec",
+            "translate",
+            "line",
+            "belt",
+            "mixer",
+            "meme",
+            "edit",
+        ];
+        for (i, name) in names.iter().enumerate() {
+            let mut f = [true; 9];
+            f[i..].fill(false);
+            assert_eq!(kind(f), *name);
+        }
     }
 
     #[test]

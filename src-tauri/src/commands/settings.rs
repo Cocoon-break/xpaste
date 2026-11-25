@@ -8,6 +8,7 @@ use xpaste_core::{RecordSummary, Settings};
 use crate::clock::now_ms;
 use crate::error::AppError;
 use crate::events::{PAUSED_CHANGED, emit, emit_removed};
+use crate::hotkey::Keys;
 use crate::state::AppState;
 use tauri_plugin_autostart::ManagerExt;
 
@@ -193,6 +194,9 @@ pub fn changed_fields(old: &Settings, new: &Settings) -> Vec<&'static str> {
         ("mixerRecipes", old.mixer_recipes != new.mixer_recipes),
         ("memeEnabled", old.meme_enabled != new.meme_enabled),
         ("memeHotkey", old.meme_hotkey != new.meme_hotkey),
+        ("editEnabled", old.edit_enabled != new.edit_enabled),
+        ("editHotkey", old.edit_hotkey != new.edit_hotkey),
+        ("editMode", old.edit_mode != new.edit_mode),
         (
             "beltBackHotkey",
             old.belt_back_hotkey != new.belt_back_hotkey,
@@ -241,6 +245,8 @@ fn hotkeys_changed(changed: &[&str]) -> bool {
         "mixerEnabled",
         "memeHotkey",
         "memeEnabled",
+        "editHotkey",
+        "editEnabled",
     ]
     .iter()
     .any(|k| changed.contains(k))
@@ -260,16 +266,15 @@ fn set_autostart(app: &AppHandle, on: bool) {
     }
 }
 
-/// 注册唤起、截图、录屏、翻译、便签、传送带、搅拌机、表情包快捷键。
-type RegisterFn<'a> =
-    dyn FnMut(&str, &str, &str, &str, &str, &str, &str, &str) -> Result<(), AppError> + 'a;
+/// 注册九个快捷键。
+type RegisterFn<'a> = dyn FnMut(&Keys) -> Result<(), AppError> + 'a;
 
 /// 校验 → 快捷键改了就注册新的唤起、截图、录屏、翻译与便签快捷键（失败恢复旧的五个）→ 持久化（失败也恢复）；返回变化的字段名。
-/// `register(唤起, 截图, 录屏, 翻译, 便签, 传送带, 搅拌机, 表情包)` 是唯一注入点（正式为 `hotkey::register`），测试借此模拟快捷键被占用。
+/// `register(Keys)` 是唯一注入点（正式为 `hotkey::register`），测试借此模拟快捷键被占用。
 pub fn commit_settings(
     state: &AppState,
     mut settings: Settings,
-    mut register: impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str) -> Result<(), AppError>,
+    mut register: impl FnMut(&Keys) -> Result<(), AppError>,
 ) -> Result<Vec<&'static str>, AppError> {
     // 先去空白再校验、比较：粘贴带空格的 Base URL 不该报错，也不该算作改动（M26 规则 6）
     settings.normalize();
@@ -291,6 +296,10 @@ pub fn commit_settings(
         settings.yield_meme_hotkey();
     }
     crate::meme::normalize_settings(&mut settings);
+    // 不含 Pro 的版本里设置页没有改字快捷键：同样让出
+    if !crate::hotkey::edit_enabled() {
+        settings.yield_edit_hotkey();
+    }
     settings.validate()?;
     let old = state.settings().clone();
     // 面板尺寸只由拖动记忆（panel::remember_size）写；这里只为 changed 不含 panelSize，落库时 save_settings_inner 持锁再取
@@ -301,16 +310,7 @@ pub fn commit_settings(
     // register 会先注销全部快捷键，失败时要把旧的五个注册回去
     let restore = |register: &mut RegisterFn| {
         // 截图、录屏、翻译键在被占用时恢复不了很常见（多半正是它被占用），只记 debug
-        match register(
-            &old.hotkey,
-            &old.shot_hotkey,
-            &old.rec_hotkey,
-            &old.translate_hotkey,
-            old.effective_line_hotkey(),
-            old.effective_belt_hotkey(),
-            old.effective_mixer_hotkey(),
-            old.effective_meme_hotkey(),
-        ) {
+        match register(&Keys::of(&old)) {
             Err(e @ AppError::HotkeyTaken) => log::warn!("恢复原快捷键失败：{e}"),
             Err(e) => log::debug!("恢复原截图、录屏或翻译快捷键失败：{e}"),
             Ok(()) => {}
@@ -323,21 +323,15 @@ pub fn commit_settings(
     // 搅拌机同理
     let mixer_switch_only = changed.contains(&"mixerEnabled") && !changed.contains(&"mixerHotkey");
     let meme_switch_only = changed.contains(&"memeEnabled") && !changed.contains(&"memeHotkey");
+    // 改字同理，它排在最后
+    let edit_switch_only = changed.contains(&"editEnabled") && !changed.contains(&"editHotkey");
     if hotkey_changed
-        && let Err(e) = register(
-            &settings.hotkey,
-            &settings.shot_hotkey,
-            &settings.rec_hotkey,
-            &settings.translate_hotkey,
-            settings.effective_line_hotkey(),
-            settings.effective_belt_hotkey(),
-            settings.effective_mixer_hotkey(),
-            settings.effective_meme_hotkey(),
-        )
+        && let Err(e) = register(&Keys::of(&settings))
         && !(line_switch_only && matches!(e, AppError::LineHotkeyTaken))
         && !(belt_switch_only && matches!(e, AppError::BeltHotkeyTaken))
         && !(mixer_switch_only && matches!(e, AppError::MixerHotkeyTaken))
         && !(meme_switch_only && matches!(e, AppError::MemeHotkeyTaken))
+        && !(edit_switch_only && matches!(e, AppError::EditHotkeyTaken))
     {
         restore(&mut register);
         return Err(e);
@@ -366,6 +360,7 @@ pub fn save_settings(
         belt_hotkey,
         mixer_hotkey,
         meme_hotkey,
+        edit_hotkey,
     ) = (
         settings.hotkey.clone(),
         settings.shot_hotkey.clone(),
@@ -375,6 +370,7 @@ pub fn save_settings(
         settings.effective_belt_hotkey().to_owned(),
         settings.effective_mixer_hotkey().to_owned(),
         settings.effective_meme_hotkey().to_owned(),
+        settings.effective_edit_hotkey().to_owned(),
     );
     let (belt_on, belt_auto) = {
         let s = state.settings();
@@ -386,11 +382,9 @@ pub fn save_settings(
         settings.ocr_enabled,
         settings.update_check,
     );
-    let changed = commit_settings(&state, settings, |p, s, r, t, l, b, m, e| {
-        crate::hotkey::register(&app, p, s, r, t, l, b, m, e)
-    })
-    // 注册失败时 register 恢复了旧的快捷键，传送带开着的话把退回快捷键也补回来
-    .inspect_err(|_| crate::belt::configure(&app, belt_on, belt_auto))?;
+    let changed = commit_settings(&state, settings, |k| crate::hotkey::register(&app, k))
+        // 注册失败时 register 恢复了旧的快捷键，传送带开着的话把退回快捷键也补回来
+        .inspect_err(|_| crate::belt::configure(&app, belt_on, belt_auto))?;
     // 快捷键改了必为 Register，与 commit_settings 内一致；没改时只决定是否尽力重试
     let (
         shot_missing,
@@ -400,6 +394,7 @@ pub fn save_settings(
         belt_missing,
         mixer_missing,
         meme_missing,
+        edit_missing,
     ) = crate::hotkey::unregistered(
         &app,
         &shot_hotkey,
@@ -409,6 +404,7 @@ pub fn save_settings(
         &belt_hotkey,
         &mixer_hotkey,
         &meme_hotkey,
+        &edit_hotkey,
     );
     let action = hotkey_action(
         hotkeys_changed(&changed),
@@ -419,7 +415,8 @@ pub fn save_settings(
             || line_missing
             || belt_missing
             || mixer_missing
-            || meme_missing,
+            || meme_missing
+            || edit_missing,
     );
     log::info!("设置已保存 changed=[{}]", changed.join(", "));
     // 设置已持久化并生效：以下步骤失败不回滚、不算保存失败（都只记日志）
@@ -438,14 +435,17 @@ pub fn save_settings(
             if !matches!(
                 crate::hotkey::register(
                     &app,
-                    &hotkey,
-                    &shot_hotkey,
-                    &rec_hotkey,
-                    &tr_hotkey,
-                    &line_hotkey,
-                    &belt_hotkey,
-                    &mixer_hotkey,
-                    &meme_hotkey
+                    &Keys {
+                        panel: &hotkey,
+                        shot: &shot_hotkey,
+                        rec: &rec_hotkey,
+                        translate: &tr_hotkey,
+                        line: &line_hotkey,
+                        belt: &belt_hotkey,
+                        mixer: &mixer_hotkey,
+                        meme: &meme_hotkey,
+                        edit: &edit_hotkey,
+                    }
                 ),
                 Err(AppError::HotkeyTaken)
             ) {
@@ -694,7 +694,7 @@ mod tests {
             hotkey: "Alt+Shift+N".into(),
             ..Settings::default()
         };
-        let r = commit_settings(&state, new, |_, _, _, _, _, _, _, _| Ok(()));
+        let r = commit_settings(&state, new, |_| Ok(()));
         if crate::line::enabled() {
             assert!(matches!(
                 r,
@@ -723,7 +723,7 @@ mod tests {
             translate_model: " m ".into(),
             ..Settings::default()
         };
-        let changed = commit_settings(&state, new, |_, _, _, _, _, _, _, _| Ok(())).unwrap();
+        let changed = commit_settings(&state, new, |_| Ok(())).unwrap();
         assert_eq!(changed, ["translateBaseUrl", "translateModel"]);
         let saved = state.store().load_settings();
         assert_eq!(
@@ -739,7 +739,7 @@ mod tests {
             ..saved
         };
         assert!(
-            commit_settings(&state, same, |_, _, _, _, _, _, _, _| Ok(()))
+            commit_settings(&state, same, |_| Ok(()))
                 .unwrap()
                 .is_empty()
         );
@@ -849,7 +849,8 @@ mod tests {
             ..Settings::default()
         };
         let mut calls = Vec::new();
-        let r = commit_settings(&state, new, |p, s, _, _, _, _, _, _| {
+        let r = commit_settings(&state, new, |k| {
+            let (p, s) = (k.panel, k.shot);
             calls.push((p.to_string(), s.to_string()));
             if p == "CommandOrControl+Alt+C" {
                 Err(AppError::HotkeyTaken)
@@ -876,7 +877,8 @@ mod tests {
             ..Settings::default()
         };
         let mut calls = Vec::new();
-        let r = commit_settings(&state, new, |p, s, _, _, _, _, _, _| {
+        let r = commit_settings(&state, new, |k| {
+            let (p, s) = (k.panel, k.shot);
             calls.push((p.to_string(), s.to_string()));
             if s == "Alt+Shift+S" {
                 Err(AppError::ShotHotkeyTaken)
@@ -905,7 +907,8 @@ mod tests {
             ..Settings::default()
         };
         let mut calls = Vec::new();
-        let r = commit_settings(&state, new, |p, s, r, _, _, _, _, _| {
+        let r = commit_settings(&state, new, |k| {
+            let (p, s, r) = (k.panel, k.shot, k.rec);
             calls.push([p, s, r].map(String::from));
             if r == "Alt+Shift+Y" {
                 Err(AppError::RecHotkeyTaken)
@@ -935,7 +938,8 @@ mod tests {
             ..Settings::default()
         };
         let mut calls = Vec::new();
-        let r = commit_settings(&state, new, |p, s, r, t, _, _, _, _| {
+        let r = commit_settings(&state, new, |k| {
+            let (p, s, r, t) = (k.panel, k.shot, k.rec, k.translate);
             calls.push([p, s, r, t].map(String::from));
             if t == "Alt+Shift+U" {
                 Err(AppError::TranslateHotkeyTaken)
@@ -963,13 +967,14 @@ mod tests {
             line_enabled: false,
             ..Settings::default()
         };
-        commit_settings(&state, off, |_, _, _, _, _, _, _, _| Ok(())).unwrap();
+        commit_settings(&state, off, |_| Ok(())).unwrap();
         // 便签快捷键被别的应用占着：开关照样打开并保存，没注册上的提示由 hotkey_status 给
         // 保存时会整理配方列表，期望值也先整理，才能整体比较
         let mut on = Settings::default();
         crate::mixer::normalize_settings(&mut on);
         crate::meme::normalize_settings(&mut on);
-        let changed = commit_settings(&state, on.clone(), |_, _, _, _, l, _, _, _| {
+        let changed = commit_settings(&state, on.clone(), |k| {
+            let (l,) = (k.line,);
             if l.is_empty() {
                 Ok(())
             } else {
@@ -985,7 +990,8 @@ mod tests {
             line_hotkey: "Alt+Shift+J".into(),
             ..Settings::default()
         };
-        let r = commit_settings(&state, new, |_, _, _, _, l, _, _, _| {
+        let r = commit_settings(&state, new, |k| {
+            let (l,) = (k.line,);
             if l == "Alt+Shift+J" {
                 Err(AppError::LineHotkeyTaken)
             } else {
@@ -1004,7 +1010,7 @@ mod tests {
             ..Settings::default()
         };
         let mut calls = 0;
-        let changed = commit_settings(&state, new, |_, _, _, _, _, _, _, _| {
+        let changed = commit_settings(&state, new, |_| {
             calls += 1;
             Ok(())
         })
@@ -1017,7 +1023,7 @@ mod tests {
             line_hotkey: "Alt+Shift+J".into(),
             ..Settings::default()
         };
-        let changed = commit_settings(&state, new, |_, _, _, _, _, _, _, _| {
+        let changed = commit_settings(&state, new, |_| {
             calls += 1;
             Ok(())
         })
@@ -1058,11 +1064,12 @@ pub struct HotkeyStatus {
     belt: bool,
     mixer: bool,
     meme: bool,
+    edit: bool,
 }
 
 #[tauri::command]
 pub fn hotkey_status(app: AppHandle, state: State<'_, AppState>) -> HotkeyStatus {
-    let (shot, rec, tr, line, belt, mixer, meme) = {
+    let (shot, rec, tr, line, belt, mixer, meme, edit) = {
         let s = state.settings();
         (
             s.shot_hotkey.clone(),
@@ -1072,10 +1079,11 @@ pub fn hotkey_status(app: AppHandle, state: State<'_, AppState>) -> HotkeyStatus
             s.effective_belt_hotkey().to_owned(),
             s.effective_mixer_hotkey().to_owned(),
             s.effective_meme_hotkey().to_owned(),
+            s.effective_edit_hotkey().to_owned(),
         )
     };
-    let (shot, rec, translate, line, belt, mixer, meme) =
-        crate::hotkey::unregistered(&app, &shot, &rec, &tr, &line, &belt, &mixer, &meme);
+    let (shot, rec, translate, line, belt, mixer, meme, edit) =
+        crate::hotkey::unregistered(&app, &shot, &rec, &tr, &line, &belt, &mixer, &meme, &edit);
     HotkeyStatus {
         panel: crate::tray::hotkey_failed(),
         shot,
@@ -1085,5 +1093,6 @@ pub fn hotkey_status(app: AppHandle, state: State<'_, AppState>) -> HotkeyStatus
         belt,
         mixer,
         meme,
+        edit,
     }
 }

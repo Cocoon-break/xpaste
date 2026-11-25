@@ -136,6 +136,7 @@ pub fn run() {
                 belt_hotkey,
                 mixer_hotkey,
                 meme_hotkey,
+                edit_hotkey,
                 appearance,
             ) = (
                 settings.hotkey.clone(),
@@ -146,6 +147,7 @@ pub fn run() {
                 settings.effective_belt_hotkey().to_owned(),
                 settings.effective_mixer_hotkey().to_owned(),
                 settings.effective_meme_hotkey().to_owned(),
+                settings.effective_edit_hotkey().to_owned(),
                 settings.appearance,
             );
             line::configure(
@@ -179,14 +181,17 @@ pub fn run() {
             }
             if let Err(e) = hotkey::register(
                 app.handle(),
-                &hotkey,
-                &shot_hotkey,
-                &rec_hotkey,
-                &tr_hotkey,
-                &line_hotkey,
-                &belt_hotkey,
-                &mixer_hotkey,
-                &meme_hotkey,
+                &hotkey::Keys {
+                    panel: &hotkey,
+                    shot: &shot_hotkey,
+                    rec: &rec_hotkey,
+                    translate: &tr_hotkey,
+                    line: &line_hotkey,
+                    belt: &belt_hotkey,
+                    mixer: &mixer_hotkey,
+                    meme: &meme_hotkey,
+                    edit: &edit_hotkey,
+                },
             ) {
                 log::warn!("快捷键注册失败：{e}");
                 // register 只报第一个失败，截图、录屏、翻译、便签、传送带、搅拌机是否注册上另查；它们失败只提示，不标记托盘
@@ -199,6 +204,7 @@ pub fn run() {
                     belt_failed,
                     mixer_failed,
                     meme_failed,
+                    edit_failed,
                 ) = hotkey::unregistered(
                     app.handle(),
                     &shot_hotkey,
@@ -208,6 +214,7 @@ pub fn run() {
                     &belt_hotkey,
                     &mixer_hotkey,
                     &meme_hotkey,
+                    &edit_hotkey,
                 );
                 if let Some(body) = hotkey::failure_notice(
                     panel_failed,
@@ -218,6 +225,7 @@ pub fn run() {
                     belt_failed,
                     mixer_failed,
                     meme_failed,
+                    edit_failed,
                 ) {
                     notify(app.handle(), &body);
                 }
@@ -293,7 +301,7 @@ pub fn run() {
                     if belt::back_pressed(app, shortcut) {
                         return;
                     }
-                    let (p, s, r, t, l, b, m, e) = {
+                    let (p, s, r, t, l, b, m, e, g) = {
                         let st = app.state::<AppState>();
                         let s = st.settings();
                         (
@@ -305,9 +313,10 @@ pub fn run() {
                             s.effective_belt_hotkey().to_owned(),
                             s.effective_mixer_hotkey().to_owned(),
                             s.effective_meme_hotkey().to_owned(),
+                            s.effective_edit_hotkey().to_owned(),
                         )
                     };
-                    match hotkey::role_of(shortcut, &p, &s, &r, &t, &l, &b, &m, &e) {
+                    match hotkey::role_of(shortcut, &p, &s, &r, &t, &l, &b, &m, &e, &g) {
                         Some(hotkey::Role::Panel) => {
                             panel::toggle(app, timing.then(now_unix_ms), panel::Trigger::Hotkey)
                         }
@@ -318,6 +327,8 @@ pub fn run() {
                         Some(hotkey::Role::Belt) => belt::hotkey_pressed(app),
                         Some(hotkey::Role::Mixer) => mixer::hotkey_pressed(app),
                         Some(hotkey::Role::Meme) => meme::hotkey_pressed(app),
+                        // 打开改字窗口由后面的任务接上
+                        Some(hotkey::Role::Edit) => log::info!("edit 快捷键按下"),
                         None => {}
                     }
                 })

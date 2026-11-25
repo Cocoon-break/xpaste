@@ -54,7 +54,7 @@ export const settings: Settings = {
   lineLeave: 'normal',
   beltEnabled: true, beltAuto: false, beltHotkey: 'Alt+Shift+B', beltBackHotkey: 'Alt+Shift+Z',
   mixerEnabled: true, mixerHotkey: 'Alt+Shift+M', mixerRecipes: [],
-  memeEnabled: true, memeHotkey: 'Alt+Shift+E', memeImageProvider: 'openai', memeImageFormat: 'openai',
+  memeEnabled: true, memeHotkey: 'Alt+Shift+E', editEnabled: true, editHotkey: 'Alt+Shift+G', editMode: 'local', memeImageProvider: 'openai', memeImageFormat: 'openai',
   memeImageBaseUrl: 'https://api.openai.com/v1', memeImageApiKey: '', memeImageModel: 'gpt-image-2', memeStylesUsed: [], memeStylesCustom: [], memeLastStyle: 'q', memeLastTextStyle: 'stroke', memeLastTextPos: 'bottom', memeMoreOpen: false,
 };
 

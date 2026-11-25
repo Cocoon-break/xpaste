@@ -200,6 +200,12 @@ pub struct Settings {
     pub meme_enabled: bool,
     /// 打开表情包制作窗口的全局快捷键；空字符串表示不启用
     pub meme_hotkey: String,
+    /// 改字（Pro）总开关；关掉后改字快捷键不注册，数据保留
+    pub edit_enabled: bool,
+    /// 打开改字窗口的全局快捷键；空字符串表示不启用
+    pub edit_hotkey: String,
+    /// 怎么改：local（只在本机改）| ai（交给生图接口）
+    pub edit_mode: String,
     /// 生图服务商：预设键名（openai | gemini | ark | qwen）或 custom；只影响设置页的显示，请求只看格式、地址和模型 ID
     pub meme_image_provider: String,
     /// 生图接口格式：openai | ark | gemini
@@ -325,6 +331,15 @@ impl Settings {
         }
     }
 
+    /// 实际该注册的改字快捷键：总开关关着时为空串（不注册）
+    pub fn effective_edit_hotkey(&self) -> &str {
+        if self.edit_enabled {
+            &self.edit_hotkey
+        } else {
+            ""
+        }
+    }
+
     /// 实际该注册的便签快捷键：总开关关着时为空串（不注册）
     pub fn effective_line_hotkey(&self) -> &str {
         if self.line_enabled {
@@ -425,6 +440,9 @@ impl Default for Settings {
             mixer_recipes: Vec::new(),
             meme_enabled: true,
             meme_hotkey: "Alt+Shift+E".into(),
+            edit_enabled: true,
+            edit_hotkey: "Alt+Shift+G".into(),
+            edit_mode: "local".into(),
             meme_image_provider: "openai".into(),
             meme_image_format: "openai".into(),
             meme_image_base_url: "https://api.openai.com/v1".into(),
@@ -547,6 +565,7 @@ impl Settings {
         self.yield_belt_hotkeys();
         self.yield_mixer_hotkey();
         self.yield_meme_hotkey();
+        self.yield_edit_hotkey();
     }
 
     /// 便签快捷键与别的快捷键冲突时停用它（读出设置时用；不含晾衣绳的版本保存设置时也用，用户看不到这一项）。
@@ -581,6 +600,42 @@ impl Settings {
         if self.meme_hotkey_clash().is_some() {
             self.meme_hotkey.clear();
         }
+    }
+
+    /// 改字快捷键与别的快捷键冲突时停用它（读出设置时用）。
+    pub fn yield_edit_hotkey(&mut self) {
+        if self.edit_hotkey_clash().is_some() {
+            self.edit_hotkey.clear();
+        }
+    }
+
+    /// 改字快捷键与哪个快捷键是同一组合（含表情包）；录屏只在 macOS 上比。
+    fn edit_hotkey_clash(&self) -> Option<&'static str> {
+        if self.edit_hotkey.is_empty() {
+            return None;
+        }
+        let key = hotkey_key(&self.edit_hotkey);
+        [
+            ("唤起", self.hotkey.as_str()),
+            ("截图", self.shot_hotkey.as_str()),
+            (
+                "录屏",
+                if cfg!(target_os = "macos") {
+                    self.rec_hotkey.as_str()
+                } else {
+                    ""
+                },
+            ),
+            ("翻译", self.translate_hotkey.as_str()),
+            ("便签", self.line_hotkey.as_str()),
+            ("传送带", self.belt_hotkey.as_str()),
+            ("退回", self.belt_back_hotkey.as_str()),
+            ("搅拌机", self.mixer_hotkey.as_str()),
+            ("表情包", self.meme_hotkey.as_str()),
+        ]
+        .into_iter()
+        .find(|(_, c)| !c.is_empty() && hotkey_key(c) == key)
+        .map(|(name, _)| name)
     }
 
     /// 表情包快捷键与哪个快捷键是同一组合（含搅拌机）；录屏只在 macOS 上比。
@@ -793,6 +848,15 @@ impl Settings {
         }
         if let Some(name) = self.meme_hotkey_clash() {
             return fail(&format!("表情包快捷键不能与{name}快捷键相同"));
+        }
+        if !self.edit_hotkey.is_empty() && !has_modifier(&self.edit_hotkey) {
+            return fail("改字快捷键至少需要包含 Mod 或 Alt");
+        }
+        if let Some(name) = self.edit_hotkey_clash() {
+            return fail(&format!("改字快捷键不能与{name}快捷键相同"));
+        }
+        if !matches!(self.edit_mode.as_str(), "local" | "ai") {
+            return fail("改字方式只能是只在本机改或交给生图接口");
         }
         let url = self.meme_image_base_url.to_ascii_lowercase();
         if !url.is_empty() && !url.starts_with("http://") && !url.starts_with("https://") {
@@ -1792,6 +1856,72 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(s.effective_meme_hotkey(), "");
+    }
+
+    #[test]
+    fn edit_defaults() {
+        let s = Settings::default();
+        assert!(s.edit_enabled);
+        assert_eq!(s.edit_hotkey, "Alt+Shift+G");
+        assert_eq!(s.edit_mode, "local");
+        assert_eq!(s.effective_edit_hotkey(), "Alt+Shift+G");
+    }
+
+    #[test]
+    fn edit_mode_rejects_other() {
+        let s = Settings {
+            edit_mode: "x".into(),
+            ..Default::default()
+        };
+        assert_eq!(invalid(&s), "改字方式只能是只在本机改或交给生图接口");
+        let (s, dropped) = Settings::from_json_lenient(r#"{"editMode":"x"}"#).unwrap();
+        assert_eq!(s.edit_mode, "local");
+        assert_eq!(dropped, ["editMode"]);
+        let s = Settings {
+            edit_mode: "ai".into(),
+            ..Default::default()
+        };
+        assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn edit_hotkey_yields_to_others() {
+        let s = Settings {
+            edit_hotkey: "Alt+Shift+E".into(),
+            ..Default::default()
+        };
+        assert_eq!(invalid(&s), "改字快捷键不能与表情包快捷键相同");
+        let mut s = s;
+        s.yield_edit_hotkey();
+        assert_eq!(s.edit_hotkey, "");
+        assert_eq!(s.meme_hotkey, "Alt+Shift+E");
+        let (s, dropped) = Settings::from_json_lenient(r#"{"editHotkey":"Alt+Shift+E"}"#).unwrap();
+        assert_eq!(s.edit_hotkey, "");
+        assert!(dropped.is_empty(), "{dropped:?}");
+        let s = Settings {
+            edit_hotkey: "G".into(),
+            ..Default::default()
+        };
+        assert_eq!(invalid(&s), "改字快捷键至少需要包含 Mod 或 Alt");
+    }
+
+    #[test]
+    fn edit_hotkey_off_when_disabled() {
+        let s = Settings {
+            edit_enabled: false,
+            ..Default::default()
+        };
+        assert_eq!(s.effective_edit_hotkey(), "");
+        assert_eq!(s.edit_hotkey, "Alt+Shift+G");
+    }
+
+    #[test]
+    fn settings_roundtrip_old_json() {
+        let (s, dropped) = Settings::from_json_lenient(r#"{"maxRecords":1000}"#).unwrap();
+        assert!(dropped.is_empty());
+        assert!(s.edit_enabled && s.edit_mode == "local" && s.edit_hotkey == "Alt+Shift+G");
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.edit_hotkey, "Alt+Shift+G");
     }
 
     #[test]
