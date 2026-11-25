@@ -87,15 +87,19 @@ pub fn mark_png(mut png: Vec<u8>, ai: bool) -> Vec<u8> {
     png
 }
 
-/// 在 SOI 后面加一段 APP1。只给自己编码的 JPEG 用
+/// 加一段 APP1：有 APP0（JFIF）的加在它后面（JFIF 要求 APP0 紧跟 SOI），没有的加在 SOI 后面。只给自己编码的 JPEG 用
 pub fn mark_jpeg(mut jpg: Vec<u8>, ai: bool) -> Vec<u8> {
+    let at = match jpg.get(2..6) {
+        Some(&[0xFF, 0xE0, a, b]) => (4 + usize::from(u16::from_be_bytes([a, b]))).min(jpg.len()),
+        _ => 2,
+    };
     let mut body = b"http://ns.adobe.com/xap/1.0/\0".to_vec();
     body.extend(xmp(ai).as_bytes());
     let mut seg = vec![0xFF, 0xE1];
     // 段长含自己两个字节，内容不到 1 KB
     seg.extend((body.len() as u16 + 2).to_be_bytes());
     seg.extend(body);
-    jpg.splice(2..2, seg);
+    jpg.splice(at..at, seg);
     jpg
 }
 
@@ -174,21 +178,29 @@ mod tests {
         image::codecs::jpeg::JpegEncoder::new_with_quality(&mut plain, 95)
             .encode(&[90; 8 * 8 * 3], 8, 8, image::ExtendedColorType::Rgb8)
             .unwrap();
-        for ai in [false, true] {
-            let jpg = mark_jpeg(plain.clone(), ai);
-            assert_eq!(jpg[..4], [0xFF, 0xD8, 0xFF, 0xE1]);
-            let len = u16::from_be_bytes([jpg[4], jpg[5]]) as usize;
-            let xmp = jpg[6..4 + len]
-                .strip_prefix(b"http://ns.adobe.com/xap/1.0/\0")
-                .unwrap();
-            let xmp = std::str::from_utf8(xmp).unwrap();
-            assert!(xmp.contains(TOOL));
-            assert_eq!(xmp.contains(AI), ai);
-            assert_eq!(xmp.contains("DigitalSourceType"), ai);
-            // 后面原样；能解，像素不变
-            assert_eq!(jpg[4 + len..], plain[2..]);
-            let px = |b: &[u8]| image::load_from_memory(b).unwrap().into_rgb8().into_raw();
-            assert_eq!(px(&jpg), px(&plain));
+        // 编码器写了 APP0（JFIF）：XMP 跟在它后面
+        assert_eq!(plain[2..4], [0xFF, 0xE0]);
+        let app0 = 4 + u16::from_be_bytes([plain[4], plain[5]]) as usize;
+        // 去掉 APP0 的：XMP 跟在 SOI 后面
+        let bare = [&plain[..2], &plain[app0..]].concat();
+        for (plain, at) in [(plain.clone(), app0), (bare, 2)] {
+            for ai in [false, true] {
+                let jpg = mark_jpeg(plain.clone(), ai);
+                assert_eq!(jpg[..at], plain[..at]);
+                assert_eq!(jpg[at..at + 2], [0xFF, 0xE1]);
+                let len = u16::from_be_bytes([jpg[at + 2], jpg[at + 3]]) as usize;
+                let xmp = jpg[at + 4..at + 2 + len]
+                    .strip_prefix(b"http://ns.adobe.com/xap/1.0/\0")
+                    .unwrap();
+                let xmp = std::str::from_utf8(xmp).unwrap();
+                assert!(xmp.contains(TOOL));
+                assert_eq!(xmp.contains(AI), ai);
+                assert_eq!(xmp.contains("DigitalSourceType"), ai);
+                // 后面原样；能解，像素不变
+                assert_eq!(jpg[at + 2 + len..], plain[at..]);
+                let px = |b: &[u8]| image::load_from_memory(b).unwrap().into_rgb8().into_raw();
+                assert_eq!(px(&jpg), px(&plain));
+            }
         }
     }
 }

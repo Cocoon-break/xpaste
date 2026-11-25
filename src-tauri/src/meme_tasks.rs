@@ -178,10 +178,16 @@ impl Queue {
         Ok(())
     }
 
-    /// 轮到自己且有名额时，把排头标成在画并返回它（取消了还没回来的也占名额）
+    /// 轮到自己且有名额时，把排头标成在画并返回它（取消了还没回来的也占名额）。
+    /// 排着的号在列表里已经没有了的，让出刚占的名额、看下一个
     pub fn next(&mut self, slots: &mut Slots) -> Option<u64> {
-        let id = slots.take(Who::Meme)?;
-        let i = self.at(id)?;
+        let (id, i) = loop {
+            let id = slots.take(Who::Meme)?;
+            match self.at(id) {
+                Some(i) => break (id, i),
+                None => slots.release(),
+            }
+        };
         let v = &mut self.tasks[i].view;
         v.state = TaskState::Run;
         v.started_ms = Some(u64::try_from(crate::clock::now_ms()).unwrap_or(0));
@@ -489,6 +495,17 @@ mod tests {
                 .started_ms
                 .is_some()
         );
+    }
+
+    /// 排着的号在列表里没有了：不占名额，接着跑后面的
+    #[test]
+    fn stale_id_frees_its_slot() {
+        let (mut q, mut s) = (Queue::new(), Slots::new());
+        s.enqueue(Who::Meme, 99);
+        let (a, b) = (push(&mut q, &mut s), push(&mut q, &mut s));
+        assert_eq!(q.next(&mut s), Some(a));
+        assert_eq!(q.next(&mut s), Some(b));
+        assert_eq!(q.next(&mut s), None);
     }
 
     #[test]

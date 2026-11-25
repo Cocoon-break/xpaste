@@ -89,19 +89,33 @@ fn fixture(name: &str) -> Vec<u8> {
     .unwrap()
 }
 
+/// 带位置的识别。系统识别偶发出错（同一进程里连着几次都见过），出错再试两次，三次都错才算失败
+#[cfg(target_os = "macos")]
+fn lines_of(png: &[u8]) -> Vec<xpaste_platform::OcrLine> {
+    let mut last = None;
+    for _ in 0..3 {
+        match xpaste_platform::ocr_lines(png, 8000) {
+            Ok(r) => return r.expect("macOS 总有识别引擎"),
+            Err(e) => last = Some(e),
+        }
+    }
+    panic!("识别连着出错三次：{last:?}")
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn lines_have_quads() {
     let png = fixture("ocr-line.png");
-    let lines = xpaste_platform::ocr_lines(&png, 8000).unwrap().unwrap();
+    let lines = lines_of(&png);
     assert_eq!(lines.len(), 1);
     let l = &lines[0];
     assert_eq!(l.text, "会议改到三点");
     let [x0, y0, x1, y1] = ink_bbox(&png);
-    // 四个角都落在画字矩形（墨迹外框）±6 px 内
+    // 四个角都落在画字矩形（墨迹外框）±8 px 内。本机（macOS 27）实测最多差 3.9 px（行高 73 px），
+    // 系统升级会换识别模型、框跟着变，留一倍的余量；8 px 约行高的 11%，偏得更多就框不住字了
     for (q, want) in l.quad.iter().zip([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]) {
         assert!(
-            (q[0] - want[0]).abs() <= 6.0 && (q[1] - want[1]).abs() <= 6.0,
+            (q[0] - want[0]).abs() <= 8.0 && (q[1] - want[1]).abs() <= 8.0,
             "{:?}",
             l.quad
         );
@@ -137,16 +151,15 @@ fn lines_have_quads() {
 #[cfg(target_os = "macos")]
 #[test]
 fn tilted_line_quad() {
-    let lines = xpaste_platform::ocr_lines(&fixture("ocr-line-tilt.png"), 8000)
-        .unwrap()
-        .unwrap();
+    let lines = lines_of(&fixture("ocr-line-tilt.png"));
     assert_eq!(lines.len(), 1);
     let q = lines[0].quad;
     let width = (q[1][0] - q[0][0]).hypot(q[1][1] - q[0][1]);
     assert!(q[1][1] - q[0][1] >= 0.15 * width, "{q:?}");
-    // 上边长约等于画字宽度（原图水平字宽 / cos12°，±10%）
+    // 上边长约等于画字宽度（原图水平字宽 / cos12°）。本机实测只差 0.4%，放到 ±15%：
+    // 斜行的框比正行的更随模型变；15% 约 71 px，不到一个字宽（约 78 px），差不到一个字还算框住了这行
     let [x0, _, x1, _] = ink_bbox(&fixture("ocr-line.png"));
     let drawn = x1 - x0;
-    assert!((width - drawn).abs() <= 0.1 * drawn, "{width} vs {drawn}");
+    assert!((width - drawn).abs() <= 0.15 * drawn, "{width} vs {drawn}");
     assert_eq!(lines[0].chars.len(), 6);
 }

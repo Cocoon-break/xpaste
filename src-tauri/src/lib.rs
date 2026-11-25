@@ -125,9 +125,7 @@ pub fn run() {
             if isolated {
                 log::info!("数据目录已由 XPASTE_DATA_DIR 覆盖，不启用单实例");
                 // tauri.conf.json 的 assetProtocol.scope 只覆盖默认数据目录
-                for sub in [
-                    "images", "thumbs", "icons", "pins", "line", "memes", "textedit",
-                ] {
+                for sub in ["images", "thumbs", "icons", "pins", "line", "memes"] {
                     if let Err(e) = app
                         .asset_protocol_scope()
                         .allow_directory(data_dir.join(sub), true)

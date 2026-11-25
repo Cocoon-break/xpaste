@@ -492,7 +492,31 @@ pub fn write_beside(
         src.set_extension("png");
     }
     let bytes = encode(jpeg, img, icc, ai).map_err(SaveFail::Io)?;
-    Ok(shot::write_new(|| out_path(&src), |f| f.write_all(&bytes))?)
+    Ok(put_new(|| out_path(&src), &bytes)?)
+}
+
+/// 写一个新文件，不盖已有的，写完了才出现：先写隐藏的临时文件，再硬链接到 `next` 给的名字（被占了换下一个），
+/// 最后删掉临时文件。进程中途退出最多留下一个隐藏的 `.tmp`，不会有写了一半的成品。
+/// 建不了临时文件、文件系统不支持硬链接的，直接写新文件
+fn put_new(next: impl Fn() -> PathBuf, bytes: &[u8]) -> io::Result<PathBuf> {
+    let tmp = next().with_file_name(format!(".{}.tmp", crate::meme_gen::uuid()));
+    if fs::File::create_new(&tmp).is_ok() {
+        let linked = write_sync(&tmp, bytes).and_then(|()| {
+            let mut tries = 0;
+            loop {
+                let to = next();
+                match fs::hard_link(&tmp, &to) {
+                    Err(e) if e.kind() == ErrorKind::AlreadyExists && tries < 10 => tries += 1,
+                    r => return r.map(|()| to),
+                }
+            }
+        });
+        let _ = fs::remove_file(&tmp);
+        if let Ok(to) = linked {
+            return Ok(to);
+        }
+    }
+    shot::write_new(next, |f| f.write_all(bytes))
 }
 
 /// 写到 `to`，有的换掉。先写好 `tmp` 再换上：写到一半失败，原来那个还在。文件夹里建不了 `tmp`、
@@ -539,7 +563,7 @@ pub fn write_as(
             .find(|p| p.symlink_metadata().is_err())
             .expect("总有不重名的序号")
     };
-    Ok(shot::write_new(next, |f| f.write_all(&bytes))?)
+    Ok(put_new(next, &bytes)?)
 }
 
 #[cfg(test)]
@@ -1188,6 +1212,13 @@ mod tests {
         assert_eq!(fs::read(t.0.join("a 改字.png")).unwrap(), b"mine");
         #[cfg(unix)]
         assert!(!t.0.join("nowhere").exists());
+        // 写完的临时文件都删了
+        let hidden = fs::read_dir(&t.0).unwrap().flatten();
+        assert!(
+            !hidden
+                .into_iter()
+                .any(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+        );
         for p in got {
             assert!(image::open(p).unwrap().into_rgba8().into_raw() == img(8, 8).px);
         }

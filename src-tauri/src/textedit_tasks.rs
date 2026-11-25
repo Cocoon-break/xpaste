@@ -382,6 +382,8 @@ async fn work(
     });
     let (line, range, crop, prompt) = made.await.ok_or_else(bad)?;
     let mut mask = spec.mask && !lock(&MASKLESS).contains(&provider(cfg));
+    // 这一次被拒了遮罩、改成不带的：不带的那次成了才记下这个接口不带遮罩，也失败了不记，原因按那次的
+    let mut dropped = false;
     let png = loop {
         if t.canceled(id) {
             return Err((String::new(), None));
@@ -407,10 +409,15 @@ async fn work(
             started.elapsed().as_millis()
         );
         match r {
-            Ok(png) => break png,
+            Ok(png) => {
+                if dropped {
+                    lock(&MASKLESS).insert(provider(cfg));
+                }
+                break png;
+            }
             Err(ImgFail::MaskRejected) if mask => {
-                lock(&MASKLESS).insert(provider(cfg));
                 mask = false;
+                dropped = true;
             }
             Err(e) => return Err((imagegen::edit_reason(&e), None)),
         }
@@ -915,39 +922,58 @@ pub mod tests {
         }
     }
 
-    /// 遮罩被拒：去掉遮罩重发一次，只这一次；这个接口以后都不带，别的模型照带
+    /// 遮罩被拒：去掉遮罩重发一次，只这一次。不带的那次成了，这个接口以后才都不带；
+    /// 不带的也出错、也被拒的不记，原因按那次的。别的模型照带
     #[test]
     fn mask_rejected_resends_once() {
         if !xpaste_pro::AVAILABLE {
             return eprintln!("这个构建不含 Pro，跳过");
         }
-        let (t, tmp) = (tasks(), Tmp::new());
-        let l = live();
+        use std::sync::atomic::{AtomicUsize, Ordering};
         let masked = |r: &Req| String::from_utf8_lossy(&r.body).contains("name=\"mask\"");
-        let (url, h) = fake(5, move |r| {
+        // m1：带遮罩 400；不带的头一次 500，之后成（原样送回裁块）。m2：带不带都 400
+        let bare = AtomicUsize::new(0);
+        let (url, h) = fake(9, move |r| {
             let m2 = String::from_utf8_lossy(&r.body).contains("\r\n\r\nm2\r\n");
-            let s = if masked(r) || m2 { 400 } else { 500 };
-            (s, "text/plain", b"x".to_vec())
+            if masked(r) || m2 {
+                (400, "text/plain", b"x".to_vec())
+            } else if bare.fetch_add(1, Ordering::SeqCst) == 0 {
+                (500, "text/plain", b"x".to_vec())
+            } else {
+                reply(&rgba(&pngs(&r.body)[0]))
+            }
         });
-        let (id, _) = t
-            .submit(&tmp.0, &l, &draft(NEW, range(4, 5)), true, true)
-            .unwrap();
+        let tmp = Tmp::new();
         let env = env(&tmp.0, no_engine);
+        let d = draft(NEW, range(4, 5));
+        // 400 → 不带又 500：不记
+        let (t, l) = (tasks(), live());
+        let (id, _) = t.submit(&tmp.0, &l, &d, true, true).unwrap();
         assert!(!go(t, &env, &cfg(&url)));
         assert_eq!(one(t, id).reason, "生图接口出错（HTTP 500）");
+        // 还带：400 → 不带成了，记下
         t.retry(&tmp.0, id, true, true, |_| Ok(l.clone())).unwrap();
         go(t, &env, &cfg(&url));
-        t.retry(&tmp.0, id, true, true, |_| Ok(l.clone())).unwrap();
-        // 另一个模型：照带，被拒后不带的也是 400，不再发
+        let (t, l) = (tasks(), live());
+        t.submit(&tmp.0, &l, &d, true, true).unwrap();
+        go(t, &env, &cfg(&url));
+        // 另一个模型：照带；400 → 不带又 400，不记，下次还带
         let other = ImageCfg {
             model: "m2".into(),
             ..cfg(&url)
         };
+        let (t, l) = (tasks(), live());
+        let (id, _) = t.submit(&tmp.0, &l, &d, true, true).unwrap();
+        assert!(!go(t, &env, &other));
+        assert_eq!(one(t, id).reason, "这个模型不能改图，换一个模型再试");
+        t.retry(&tmp.0, id, true, true, |_| Ok(l.clone())).unwrap();
         go(t, &env, &other);
         let seen = h.join().unwrap();
         let with: Vec<bool> = seen.iter().map(masked).collect();
-        assert_eq!(with, [true, false, false, true, false]);
-        assert_eq!(one(t, id).reason, "这个模型不能改图，换一个模型再试");
+        assert_eq!(
+            with,
+            [true, false, true, false, false, true, false, true, false]
+        );
     }
 
     /// 没改出来的不自动重发：限流、网关超时、断线

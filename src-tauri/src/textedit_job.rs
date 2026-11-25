@@ -66,6 +66,16 @@ pub fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 /// 带位置的识别，第二项是识别时长边最多多少像素；`Ok(None)` 是没有能用的引擎
 pub type Ocr = fn(&[u8], u32) -> Result<Option<Vec<OcrLine>>, OcrError>;
 
+/// 跑 `f`，它 panic 了当 None，免得等它结果的一直等下去。只在开发构建里有用：正式构建是 `panic = "abort"`，
+/// panic 就整个退出，接不住。退出时盘上不会留下写了一半、又被当成好的文件：`job.json` 和换掉的文件都先写临时文件
+/// 再改名，候选图写完才记进 `job.json`，另存一份的写完才出现（见 `textedit_store`）
+pub fn or_none<T>(what: &str, f: impl FnOnce() -> Option<T>) -> Option<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|_| {
+        log::error!("改字 {what}出错（panic）");
+        None
+    })
+}
+
 pub fn ocr(png: &[u8], max_side: u32) -> Result<Option<Vec<OcrLine>>, OcrError> {
     xpaste_platform::ocr_lines(png, max_side)
 }
@@ -246,8 +256,13 @@ impl Live {
     pub fn start(&self, ocr: Ocr) {
         let t = Instant::now();
         let _ = self.ocr.set(ocr);
-        let r = self.read.get_or_init(|| Read::new(&self.img, ocr));
-        r.log("读字", t);
+        // 读字出错（panic）的当读不出来：不许改，页面提示这张图读不出来
+        match or_none("读字", || {
+            Some(self.read.get_or_init(|| Read::new(&self.img, ocr)))
+        }) {
+            Some(r) => r.log("读字", t),
+            None => self.no_reading(),
+        }
     }
 
     /// 要改之前：识别出错、没读成的再读一次，给不给改才有的判断。只再读这一次，几处同时要改的等同一次；
@@ -1124,16 +1139,19 @@ impl Live {
             return l.clone();
         }
         let (o, n) = (graphemes(&s.old), graphemes(&s.new));
-        let l = if n.len() < o.len() {
-            // 删末尾几个字；居中、靠右要整行挪
-            (s.align == Align::Left && o.starts_with(&n))
-                .then(|| xpaste_pro::te_erase(&self.img, s.line, s.range))
-                .flatten()
-        } else if n.len() == o.len() {
-            self.borrow(s, &o, &n)
-        } else {
-            None
-        };
+        // 自检出错（panic）的当本机做不了，走 AI
+        let l = or_none("本机自检", || {
+            if n.len() < o.len() {
+                // 删末尾几个字；居中、靠右要整行挪
+                (s.align == Align::Left && o.starts_with(&n))
+                    .then(|| xpaste_pro::te_erase(&self.img, s.line, s.range))
+                    .flatten()
+            } else if n.len() == o.len() {
+                self.borrow(s, &o, &n)
+            } else {
+                None
+            }
+        });
         // 范围外面一圈碰到签名的不能用
         let l = l.filter(|l| !self.spoils_locked(&l.paste)).map(Arc::new);
         *last = Some((s.clone(), l.clone()));
@@ -2178,6 +2196,18 @@ pub mod tests {
     }
 
     /// 给不给改没判断成：什么都不许改
+    /// 本机自检出错（panic）当本机做不了，走 AI；没出错的照原样
+    #[test]
+    fn local_panic_is_none() {
+        assert_eq!(
+            or_none("本机自检", || -> Option<u8> { panic!("自检出错") }),
+            None
+        );
+        assert_eq!(or_none("本机自检", || Some(1)), Some(1));
+        let plan = plan_of(false, true, None);
+        assert_eq!((plan.way, plan.could), ("ai", vec!["ai"]));
+    }
+
     #[test]
     fn no_reading_no_editing() {
         let (t, tmp) = (new_tasks(), Tmp::new());
@@ -2192,6 +2222,11 @@ pub mod tests {
         );
         assert_eq!(msg(pick(t, &tmp.0, &l, 1, 0)), UNREADABLE);
         assert!(!l.read().engine);
+        // 读字出错（panic）的一样：不许改，不卡住
+        let p = unread();
+        p.start(|_, _| panic!("识别出错"));
+        assert!(p.read().failed);
+        assert_eq!(msg(p.check(&d)), UNREADABLE);
         // 晚到的读字结果不改主意
         l.start(|_, _| Ok(Some(vec![])));
         assert_eq!(msg(l.check(&d)), UNREADABLE);
