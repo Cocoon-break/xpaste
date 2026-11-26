@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Settings } from './api/types';
 import {
-  editApiState, editClearAsk, editRecentText, memeCaptionState, memeStatsText, MEME_PRESETS, memePreset, providerAfterEdit, addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFrequent, parseIgnored, parseLimit, pickerOptions, removeIgnored, retentionFromOption,
+  editApiState, imageApiReady, editClearAsk, editRecentText, memeCaptionState, memeStatsText, MEME_PRESETS, memePreset, providerAfterEdit, addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFrequent, parseIgnored, parseLimit, pickerOptions, removeIgnored, retentionFromOption,
 } from './settings-form.ts';
 
 test('parseLimit 只接受 50–5000 的 50 倍数', () => {
@@ -126,10 +126,14 @@ test('memeCaptionState 看翻译的地址和模型是否都填了', () => {
 });
 
 test('editApiState：没配时按“怎么改”写清后果', () => {
-  assert.deepEqual(editApiState('local', ' https://a/v1 ', ' m '), { text: '已配好 · 和“表情包制作”共用', go: '去设置' });
-  assert.deepEqual(editApiState('ai', 'https://a/v1', 'm'), { text: '已配好 · 和“表情包制作”共用', go: '去设置' });
-  assert.deepEqual(editApiState('local', '', 'm'), { text: '还没配好，只能改本机做得了的', go: '现在配' });
-  assert.deepEqual(editApiState('ai', 'https://a/v1', ' '), { text: '还没配接口：要用 AI 的改不了；本机做得了的，写字时选“这次用本机改”', go: '现在配' });
+  assert.deepEqual(editApiState('local', ' https://a/v1 ', ' m ', ''), { text: '已配好 · 和“表情包制作”共用', go: '去设置' });
+  assert.deepEqual(editApiState('ai', 'https://a/v1', 'm', ''), { text: '已配好 · 和“表情包制作”共用', go: '去设置' });
+  assert.deepEqual(editApiState('local', '', 'm', 'k'), { text: '还没配好，只能改本机做得了的', go: '现在配' });
+  assert.deepEqual(editApiState('ai', 'https://a/v1', ' ', 'k'), { text: '还没配接口：要用 AI 的改不了；本机做得了的，写字时选“这次用本机改”', go: '现在配' });
+  // 服务商自己的地址没填 Key：同后端，算没配好
+  assert.deepEqual(editApiState('local', 'https://api.openai.com/v1', 'gpt-image-2', ' '), { text: '还没配好，只能改本机做得了的', go: '现在配' });
+  assert.deepEqual(editApiState('local', 'https://ark.cn-beijing.volces.com/api/v3', 'm', 'k'), { text: '已配好 · 和“表情包制作”共用', go: '去设置' });
+  assert.equal(imageApiReady('https://api.openai.com.example.org/v1', 'm', ''), true);
 });
 
 test('editRecentText：张数和占用；0 张也可能占地方', () => {

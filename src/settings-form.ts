@@ -142,9 +142,21 @@ export const memeStatsText = (count: number, bytes: number): string =>
 export const memeCaptionState = (baseUrl: string, model: string): string =>
   baseUrl.trim() && model.trim() ? `已配置：${model.trim()}` : '还没配好';
 
-/** 改字的“生图接口”一行：和表情包制作共用（取表单里未保存的值，口径同后端：地址和模型 ID 都填了）；没配好时按“怎么改”写后果。 */
-export function editApiState(mode: Settings['editMode'], baseUrl: string, model: string): { text: string; go: string } {
-  if (baseUrl.trim() && model.trim()) return { text: '已配好 · 和“表情包制作”共用', go: '去设置' };
+/** 服务商自己的地址（OpenAI、Google、火山方舟、阿里云）没有 Key 一定被拒 */
+const OFFICIAL_HOSTS = ['openai.com', 'googleapis.com', 'volces.com', 'aliyuncs.com'];
+const needsKey = (baseUrl: string): boolean => {
+  const rest = baseUrl.trim().toLowerCase().replace(/^[a-z]+:\/\//, '');
+  const host = rest.split(/[/:?#]/)[0];
+  return OFFICIAL_HOSTS.some((d) => host === d || host.endsWith(`.${d}`));
+};
+
+/** 生图接口配好没有，口径同后端 `imagegen::unconfigured`：地址、模型 ID 都要填；服务商自己的地址还要有 Key（自建、中转的可以不填）。 */
+export const imageApiReady = (baseUrl: string, model: string, apiKey: string): boolean =>
+  !!baseUrl.trim() && !!model.trim() && (!!apiKey.trim() || !needsKey(baseUrl));
+
+/** 改字的“生图接口”一行：和表情包制作共用（取表单里未保存的值）；没配好时按“怎么改”写后果。 */
+export function editApiState(mode: Settings['editMode'], baseUrl: string, model: string, apiKey: string): { text: string; go: string } {
+  if (imageApiReady(baseUrl, model, apiKey)) return { text: '已配好 · 和“表情包制作”共用', go: '去设置' };
   return { text: mode === 'ai' ? '还没配接口：要用 AI 的改不了；本机做得了的，写字时选“这次用本机改”' : '还没配好，只能改本机做得了的', go: '现在配' };
 }
 

@@ -53,8 +53,23 @@ const EDIT_TIMEOUTS: Timeouts = Timeouts {
 const REF_EDGE: u32 = 1024;
 const REF_MAX_BYTES: usize = 4_194_304;
 
+/// 地址或模型 ID 为空算没配好。Key 可以为空（自建或中转的接口不要 Key），
+/// 但地址是服务商自己的（OpenAI、Google、火山方舟、阿里云）时没有 Key 一定被拒，也算没配好，不发请求。
 pub fn unconfigured(c: &ImageCfg) -> bool {
-    c.base_url.trim().is_empty() || c.model.trim().is_empty()
+    c.base_url.trim().is_empty()
+        || c.model.trim().is_empty()
+        || (c.api_key.trim().is_empty() && needs_key(&c.base_url))
+}
+
+/// 服务商自己的地址：要 Key
+fn needs_key(base_url: &str) -> bool {
+    const OFFICIAL: [&str; 4] = ["openai.com", "googleapis.com", "volces.com", "aliyuncs.com"];
+    let url = base_url.trim().to_ascii_lowercase();
+    let rest = url.split_once("://").map_or(url.as_str(), |(_, r)| r);
+    let host = rest.split(['/', ':', '?', '#']).next().unwrap_or("");
+    OFFICIAL
+        .iter()
+        .any(|d| host == *d || host.ends_with(&format!(".{d}")))
 }
 
 pub async fn generate(c: &ImageCfg, prompt: &str, refs: &[Vec<u8>]) -> Result<Vec<u8>, ImgFail> {
@@ -617,6 +632,29 @@ pub(crate) mod tests {
             .err()
             .unwrap();
         assert!(matches!(e, ImgFail::Moderation));
+    }
+
+    #[test]
+    fn official_host_without_key_is_unconfigured() {
+        for base in [
+            "https://api.openai.com/v1",
+            "https://generativelanguage.googleapis.com/v1beta",
+            "https://ark.cn-beijing.volces.com/api/v3",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "HTTPS://API.OPENAI.COM/v1",
+        ] {
+            let mut c = cfg(Format::Openai, base);
+            assert!(!unconfigured(&c), "{base} 有 Key");
+            c.api_key = " ".into();
+            assert!(unconfigured(&c), "{base} 没 Key");
+        }
+        // 自建或中转的地址可以不带 Key
+        let mut c = cfg(Format::Openai, "http://127.0.0.1:8080/v1");
+        c.api_key = "".into();
+        assert!(!unconfigured(&c));
+        let mut c = cfg(Format::Openai, "https://api.openai.com.example.org/v1");
+        c.api_key = "".into();
+        assert!(!unconfigured(&c));
     }
 
     #[test]

@@ -34,7 +34,12 @@ pub async fn meme_test_image(cfg: ImageCfgDto) -> Result<tauri::ipc::Response, S
         model: cfg.model.trim().to_owned(),
     };
     if imagegen::unconfigured(&cfg) {
-        return Err("接口地址和模型 ID 都要填".into());
+        return Err(if cfg.base_url.is_empty() || cfg.model.is_empty() {
+            "接口地址和模型 ID 都要填"
+        } else {
+            "这个服务商要填 API Key"
+        }
+        .into());
     }
     let started = std::time::Instant::now();
     let r = imagegen::generate(&cfg, TEST_PROMPT, &[]).await;

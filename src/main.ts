@@ -51,7 +51,7 @@ import {
   centerWin, clampWin, DAY, followNow, HOUR, layoutBars, minorDayTicks, miniWin, panWin, sameColumns, spanOf, spectrumStat, staggerIndex,
   ticks as winTicks, winLabel, xOf, zoomWin, type Layout, type Win,
 } from './spectrum';
-import { editApiState, editClearAsk, editRecentText, MEME_PRESETS, memeCaptionState, type MemeField, type MemeFormat, memePreset, memeStatsText, providerAfterEdit, addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFrequent, parseLimit, pickerOptions, removeIgnored } from './settings-form';
+import { editApiState, imageApiReady, editClearAsk, editRecentText, MEME_PRESETS, memeCaptionState, type MemeField, type MemeFormat, memePreset, memeStatsText, providerAfterEdit, addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFrequent, parseLimit, pickerOptions, removeIgnored } from './settings-form';
 import { composing, justComposed } from './ime';
 import { errorControl, revealsFocus, shownTabTarget } from './settings-tabs';
 import {
@@ -2443,6 +2443,7 @@ memeTestBtn.addEventListener('click', () => {
   const urlErr = baseUrlError(baseUrl);
   if (urlErr) return paintMemeUrlErr(urlErr);
   if (!baseUrl || !model) return setMemeResult('接口地址和模型 ID 都要填', 'is-err');
+  if (!imageApiReady(baseUrl, model, memeKeyIn.value)) return setMemeResult('这个服务商要填 API Key', 'is-err');
   memeTestBtn.disabled = true;
   setMemeResult('测试中…');
   void memeTestImage({ format: memeFormat, baseUrl, apiKey: memeKeyIn.value.trim(), model }).then(
@@ -2466,7 +2467,7 @@ const editOnIn = $<HTMLInputElement>('#editOn'), editOnQuick = $<HTMLInputElemen
 const editClearBtn = $<HTMLButtonElement>('#editClear'), editRecentEl = $('#editRecent'), editClearErr = $('#editClearErr');
 let draftEditMode: Settings['editMode'] = 'local';
 function paintEditApi() {
-  const s = editApiState(draftEditMode, memeUrlIn.value, memeModelIn.value);
+  const s = editApiState(draftEditMode, memeUrlIn.value, memeModelIn.value, memeKeyIn.value);
   $('#editApi').textContent = s.text;
   $('#editApiGo').textContent = s.go;
 }
