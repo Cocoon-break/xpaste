@@ -843,7 +843,7 @@ pub fn ocr_lines(png: &[u8], max_side_px: u32) -> Result<Option<Vec<OcrLine>>, O
                 // 每个字位簇取 boundingBoxForRange（UTF-16 范围）四角在行方向上的投影
                 let mut at = 0;
                 // 任何一个字取不到框就整行不给 chars（空）
-                let chars = text
+                let mut chars = text
                     .graphemes(true)
                     .map(|g| {
                         let n = g.encode_utf16().count();
@@ -862,6 +862,7 @@ pub fn ocr_lines(png: &[u8], max_side_px: u32) -> Result<Option<Vec<OcrLine>>, O
                     })
                     .collect::<Option<Vec<_>>>()
                     .unwrap_or_default();
+                crate::fill_blank_chars(&mut chars);
                 Some(OcrLine {
                     text,
                     quad,

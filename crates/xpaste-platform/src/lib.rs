@@ -127,6 +127,21 @@ pub struct OcrLine {
     pub chars: Vec<[f32; 2]>,
 }
 
+/// 系统识别给空格的框是空的（macOS 是 [0, 0]）：补成前后两个字之间的空隙，不然按框算的范围会跑到行头
+pub fn fill_blank_chars(chars: &mut [[f32; 2]]) {
+    for i in 0..chars.len() {
+        if chars[i][1] > chars[i][0] {
+            continue;
+        }
+        let prev = if i == 0 { 0.0 } else { chars[i - 1][1] };
+        let next = chars[i + 1..]
+            .iter()
+            .find(|c| c[1] > c[0])
+            .map_or(prev, |c| c[0].max(prev));
+        chars[i] = [prev, next];
+    }
+}
+
 /// `ocr_lines` 识别前的放大倍数：短边不到 1000 时为 `min(3, 1000/短边)`，否则 1。
 pub fn ocr_scale(w: u32, h: u32) -> f32 {
     let short = w.min(h).max(1) as f32;
@@ -288,6 +303,17 @@ pub use windows::*;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn blank_chars_fill_the_gap() {
+        // “ab cd”：空格的框是 [0, 0]，行头、行尾的也补
+        let mut c = [[0.0, 0.2], [0.2, 0.4], [0.0, 0.0], [0.5, 0.7], [0.7, 1.0]];
+        super::fill_blank_chars(&mut c);
+        assert_eq!(c[2], [0.4, 0.5]);
+        let mut c = [[0.0, 0.0], [0.1, 0.5], [0.0, 0.0]];
+        super::fill_blank_chars(&mut c);
+        assert_eq!(c, [[0.0, 0.1], [0.1, 0.5], [0.5, 0.5]]);
+    }
+
     #[test]
     fn os_is_a_supported_platform() {
         assert!(matches!(super::OS, "macos" | "windows"));

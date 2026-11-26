@@ -106,7 +106,7 @@ fn answer(held: &mut Option<(String, Live)>, v: &Value) -> Result<Value, AppErro
             let lines = r
                 .lines
                 .iter()
-                .map(|l| json!({ "text": l.text, "quad": l.quad, "chars": l.chars.len() }));
+                .map(|l| json!({ "text": l.text, "quad": l.quad, "chars": l.chars.len(), "boxes": l.chars }));
             Ok(json!({
                 "w": live.img.w, "h": live.img.h,
                 "engine": r.engine, "failed": r.failed, "locked": r.locked.len(),
@@ -123,9 +123,17 @@ fn answer(held: &mut Option<(String, Live)>, v: &Value) -> Result<Value, AppErro
                 get(v, "from")?,
                 get(v, "to")?,
             );
-            let r = ranges(live, &line, n, Vec::new(), from, to)?;
+            // 页面给的是读出来的逐字框（字数对得上时）
+            let chars = if v["chars"].is_null() {
+                Vec::new()
+            } else {
+                get(v, "chars")?
+            };
+            let r = ranges(live, &line, n, chars, from, to)?;
             let s = xpaste_pro::te_strip(&live.img, line.get(live)?.0);
-            Ok(json!({ "range": r.range, "quad": span(&s, r.range), "m": r.m, "h": r.h }))
+            Ok(
+                json!({ "range": r.range, "quad": span(&s, r.range), "m": r.m, "h": r.h, "w": r.w, "room": r.room }),
+            )
         }
         // 给不给改：页面提交时后端查的那一遍
         "check" => live.check(&get::<Draft>(v, "draft")?).map(|_| json!({})),
@@ -143,10 +151,16 @@ fn answer(held: &mut Option<(String, Live)>, v: &Value) -> Result<Value, AppErro
             Ok(json!({ "verdict": verdict, "why": l.why, "said": said }))
         }
         "strip" => {
-            let (h, px) = strip(live, &get(v, "line")?, Extend::default())?;
+            // 摸底时照页面往外推
+            let ext = if v["extend"].is_null() {
+                Extend::default()
+            } else {
+                get(v, "extend")?
+            };
+            let (h, px) = strip(live, &get(v, "line")?, ext)?;
             let img = TeImg { w: h.w, h: h.h, px };
             save(v, "out", &img, None)?;
-            Ok(json!({ "quad": h.quad }))
+            Ok(json!({ "quad": h.quad, "w": h.w, "h": h.h }))
         }
         // 改过的条带盖回去
         "back" => {

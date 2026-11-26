@@ -80,6 +80,27 @@ pub fn ocr(png: &[u8], max_side: u32) -> Result<Option<Vec<OcrLine>>, OcrError> 
     xpaste_platform::ocr_lines(png, max_side)
 }
 
+/// 识别给的四角上下差不到这么多像素的当水平：截图本来是正的，这点歪是识别的误差，照它转正反倒把字转斜了
+const LEVEL_PX: f32 = 2.5;
+
+/// 横排、几乎水平的行框摆正成矩形；别的原样
+fn level(q: TeQuad) -> TeQuad {
+    let near = |a: f32, b: f32| (a - b).abs() <= LEVEL_PX;
+    let [a, b, c, d] = q;
+    if b[0] <= a[0]
+        || !(near(a[1], b[1]) && near(d[1], c[1]) && near(a[0], d[0]) && near(b[0], c[0]))
+    {
+        return q;
+    }
+    let (x0, x1, y0, y1) = (
+        a[0].min(d[0]),
+        b[0].max(c[0]),
+        a[1].min(b[1]),
+        c[1].max(d[1]),
+    );
+    [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+}
+
 /// 读出来的字和给不给改。带用户文字，不派生 Debug
 pub struct Read {
     pub lines: Vec<OcrLine>,
@@ -131,11 +152,12 @@ impl Read {
         let (got, again) = recognize(img, ocr);
         let failed = matches!(got, Err(OcrError::Decode));
         let unread = matches!(got, Err(OcrError::Engine(_) | OcrError::Timeout));
-        let (lines, engine) = match got {
+        let (mut lines, engine) = match got {
             Ok(Some(l)) => (l, true),
             Ok(None) => (Vec::new(), false),
             Err(_) => (Vec::new(), true),
         };
+        lines.iter_mut().for_each(|l| l.quad = level(l.quad));
         let texts: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
         let rows: Vec<(String, TeQuad)> = lines.iter().map(|l| (l.text.clone(), l.quad)).collect();
         let locked = xpaste_pro::te_signature_spans(&rows);
@@ -2698,6 +2720,21 @@ pub mod tests {
         assert_eq!(msg(local_patch(t, &tmp.0, &l, &d, &q, &px[4..])), BAD_RANGE);
         let (_, same) = strip(&l, &LineRef::Quad(LINE), Extend::default()).unwrap();
         assert_eq!(msg(local_patch(t, &tmp.0, &l, &d, &q, &same)), NOT_CHANGED);
+    }
+
+    #[test]
+    fn level_snaps_tiny_tilt_only() {
+        // 识别框歪了 2 像素：摆正
+        let q = [[58.0, 160.0], [322.0, 162.0], [322.0, 215.0], [57.0, 213.0]];
+        assert_eq!(
+            level(q),
+            [[57.0, 160.0], [322.0, 160.0], [322.0, 215.0], [57.0, 215.0]]
+        );
+        // 真斜的、竖排的不动
+        let tilt = [[0.0, 0.0], [300.0, 20.0], [298.0, 60.0], [-2.0, 40.0]];
+        assert_eq!(level(tilt), tilt);
+        let tall = [[50.0, 0.0], [50.0, 200.0], [10.0, 200.0], [10.0, 0.0]];
+        assert_eq!(level(tall), tall);
     }
 
     // ---- 留存 ----
