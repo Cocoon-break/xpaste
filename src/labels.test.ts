@@ -1,6 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { copyVerb, escHint, exportNote, fileTextHelp, importNote, openLabel, snippetExportName } from './labels.ts';
+import { copyVerb, escHint, exportNote, fileTextHelp, importNote, keptNote, openLabel, snippetExportName } from './labels.ts';
+
+test('keptNote：开着表情包制作时说表情包也保留', () => {
+  assert.equal(keptNote(true), '置顶记录、片段和表情包会保留');
+  assert.equal(keptNote(false), '置顶记录与片段会保留');
+});
 
 test('copyVerb 按能否粘贴给出动词', () => {
   assert.equal(copyVerb(true), '粘贴');

@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import type {
+  BeginPayload,
   Bootstrap,
   CopyResult,
   OcrProgress,
@@ -32,7 +33,7 @@ export const accessibilityGranted = () => invoke<boolean>('accessibility_granted
 export const requestScreenCapture = () => invoke<void>('request_screen_capture');
 export const screenCaptureGranted = () => invoke<boolean>('screen_capture_granted');
 /** 设置开着时按截图或录屏快捷键、焦点不在录制框里：开始截图或录屏（面板与对话框保留）。 */
-export const overlayBegin = (rec: boolean) => invoke<void>('overlay_begin', { rec });
+export const overlayBegin = (mode: BeginPayload['mode']) => invoke<void>('overlay_begin', { mode });
 /** 设置开着时按翻译快捷键、焦点不在录制框里：照常弹划词翻译卡片（M15 交互规则 4、M26 规则 18）。 */
 export const trcardPress = () => invoke<void>('trcard_press');
 /** 系统的选择文件夹对话框；取消返回 null。 */
@@ -74,7 +75,7 @@ export const setPaused = (on: boolean) => invoke<void>('set_paused', { on });
 export const finishOnboarding = () => invoke<void>('finish_onboarding');
 export const installedApps = () => invoke<string[]>('installed_apps');
 /** 哪些快捷键设了却没注册上（启动时被其他应用占用），打开设置时在录制框下标红 */
-export const hotkeyStatus = () => invoke<{ panel: boolean; shot: boolean; rec: boolean; translate: boolean }>('hotkey_status');
+export const hotkeyStatus = () => invoke<{ panel: boolean; shot: boolean; rec: boolean; translate: boolean; line: boolean; belt: boolean; mixer: boolean; meme: boolean; edit: boolean }>('hotkey_status');
 
 /** again 为 false 且已有存库译文时直接返回它，不发请求；只有“重新翻译”传 true（M26 规则 4）。 */
 export const translateRecord = (id: number, again: boolean, engine?: 'system' | 'openai') =>

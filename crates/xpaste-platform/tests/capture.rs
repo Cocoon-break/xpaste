@@ -88,6 +88,7 @@ fn area_stream_matches_capture_rect() {
         rect,
         scale: main.scale,
         exclude_window: None,
+        also_exclude: Vec::new(),
         native,
     })
     .unwrap();

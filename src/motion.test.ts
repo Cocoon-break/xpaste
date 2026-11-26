@@ -83,7 +83,7 @@ test('M20-6 切换分类 380ms enter，选中块滑动，列表逐行浮现；�
   assert.doesNotMatch(ts, /tabsOver\.style\.background|tabColor/);
   assert.match(ts, /round 7px\)`/);
   assert.match(ts, /renderList\(\{ stagger: !instant \}\);/);
-  assert.match(ts, /case 'filter': return setFilter\(cycleFilter\(S\.filter, a\.d\), true\);/);
+  assert.match(ts, /case 'filter': return setFilter\(cycleFilter\(S\.filter, a\.d, memeTab\(\)\), true\);/);
   assert.match(ts, /setFilter\(t\.dataset\.f as Filter, e\.detail === 0\)/);
 });
 
@@ -196,7 +196,7 @@ test('M20-频谱开关 chevron 140ms enter：收起时旋转 180°，减少动�
 
 test('原则 2 键盘触发走 instant：方向键按住、分类、置顶、菜单、主题', () => {
   assert.match(keymap, /instant: e\.repeat/);
-  assert.match(ts, /case 'filter': return setFilter\(cycleFilter\(S\.filter, a\.d\), true\);/);
+  assert.match(ts, /case 'filter': return setFilter\(cycleFilter\(S\.filter, a\.d, memeTab\(\)\), true\);/);
   assert.match(ts, /case 'pin': return void \(sel !== null && togglePin\(sel, false\)\);/);
   assert.match(ts, /if \(r && sel !== null\) openMenu\(sel, r\.left \+ 48, r\.bottom, true\);/);
   assert.match(ts, /pinBtn\.addEventListener\('click', \(e\) => S\.sel !== null && togglePin\(S\.sel, e\.detail !== 0\)\)/);

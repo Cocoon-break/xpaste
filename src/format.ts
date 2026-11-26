@@ -58,14 +58,16 @@ export const fmtBytes = (n: number): string =>
 export const LABEL: Record<Kind, string> = {
   text: '文本', link: '链接', code: '代码', image: '图片', video: '视频', file: '文件',
 };
-export type Filter = 'all' | 'fav' | 'snip' | Kind;
-export const FILTERS: [Filter, string][] = [['all', '全部'], ['fav', '常用'], ['snip', '片段'], ...(Object.entries(LABEL) as [Kind, string][])];
+export type Filter = 'all' | 'fav' | 'snip' | 'meme' | Kind;
+export const FILTERS: [Filter, string][] = [['all', '全部'], ['fav', '常用'], ['snip', '片段'], ['meme', '表情包'], ...(Object.entries(LABEL) as [Kind, string][])];
 export const FL = Object.fromEntries(FILTERS) as Record<Filter, string>;
 
 // “常用”不是内容类型，而是按使用次数聚合的视图；阈值 `min` 来自设置 frequentMinUses
 export const isSnip = (r: { snippetBody: string | null }): boolean => r.snippetBody !== null;
-// 片段不进“常用”（M25 规则 8）
-export const isFav = (r: { uses: number; snippetBody: string | null }, min: number): boolean => !isSnip(r) && r.uses >= min;
+/** 表情包库里的一个：同片段，是用户自己的东西，不算历史 */
+export const isMeme = (r: { meme?: unknown }): boolean => r.meme != null;
+// 片段、表情包不进“常用”（M25 规则 8）
+export const isFav = (r: { uses: number; snippetBody: string | null; meme?: unknown }, min: number): boolean => !isSnip(r) && !isMeme(r) && r.uses >= min;
 
 export const truncate = (s: string, n: number): string => {
   const cs = [...s];

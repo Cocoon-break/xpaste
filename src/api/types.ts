@@ -1,4 +1,5 @@
 // 与 crates/xpaste-core/src/model.rs、src-tauri/src/commands/*.rs 对应，改字段时同步两边
+import type { LineView } from './line';
 
 export type Kind = 'text' | 'link' | 'code' | 'image' | 'video' | 'file';
 
@@ -53,7 +54,63 @@ export interface Settings {
   translateLang: string;
   /** 划词翻译全局快捷键；'' 表示不启用（M15、M26 规则 18） */
   translateHotkey: string;
+  /** 把最近复制或面板选中的记录挂上晾衣绳的全局快捷键；'' 表示不启用 */
+  lineHotkey: string;
+  /** 晾衣绳样式，各项是选项键 */
+  lineStyle: LineStyle;
+  /** 晾衣绳总开关 */
+  lineEnabled: boolean;
+  lineSide: LineSide;
+  /** 一直显示晾衣绳：空白处点击穿透 */
+  linePinned: boolean;
+  /** 晾衣绳碰边出现、离开收起的快慢 */
+  lineAppear: Pace;
+  lineLeave: Pace;
+  /** 传送带总开关 */
+  beltEnabled: boolean;
+  /** 开启方式为自动：30 秒内复制满 3 次时带子探出一截，问要不要按顺序贴 */
+  beltAuto: boolean;
+  /** 打开或关闭传送带的全局快捷键（面板开着时放上选中的）；'' 表示不启用 */
+  beltHotkey: string;
+  /** 退回上一条的全局快捷键；'' 表示不启用 */
+  beltBackHotkey: string;
+  /** 搅拌机总开关 */
+  mixerEnabled: boolean;
+  /** 打开或关闭搅拌机的全局快捷键；'' 表示不启用 */
+  mixerHotkey: string;
+  /** 配方列表；空表示还没存过，运行时补齐自带配方 */
+  mixerRecipes: Recipe[];
+  /** 表情包制作总开关 */
+  memeEnabled: boolean;
+  /** 打开表情包制作窗口的全局快捷键；'' 表示不启用 */
+  memeHotkey: string;
+  /** 改字（Pro）总开关 */
+  editEnabled: boolean;
+  /** 打开改字窗口的全局快捷键；'' 表示不启用 */
+  editHotkey: string;
+  /** 怎么改：先在本机改 | 直接用 AI */
+  editMode: 'local' | 'ai';
+  /** 生图服务商预设键名，或 custom */
+  memeImageProvider: string;
+  memeImageFormat: 'openai' | 'ark' | 'gemini';
+  memeImageBaseUrl: string;
+  memeImageApiKey: string;
+  memeImageModel: string;
+  memeStylesUsed: string[];
+  memeStylesCustom: string[];
+  memeLastStyle: string;
+  memeLastTextStyle: string;
+  memeLastTextPos: string;
+  memeMoreOpen: boolean;
 }
+
+/** 搅拌机的配方；builtin 是自带配方的键名，自定义的为 null */
+export interface Recipe { name: string; prompt: string; show: boolean; builtin: string | null }
+
+export type LineSide = 'top' | 'left' | 'right';
+export type Pace = 'fast' | 'normal' | 'slow';
+
+export interface LineStyle { rope: string; thick: string; peg: string; paper: string; edge: string }
 
 export interface PlatformInfo {
   os: 'macos' | 'windows';
@@ -64,6 +121,8 @@ export interface PlatformInfo {
 
 export interface Bootstrap {
   settings: Settings;
+  /** 晾衣绳：这个构建带不带、Pro 状态、已挂的记录 */
+  line: LineView;
   platform: PlatformInfo;
   records: RecordSummary[];
   firstRun: boolean;
@@ -98,6 +157,9 @@ export interface RecordSummary {
   lines: number | null;
   url: string | null;
   fileCount: number | null;
+  /** 不为 null 即表情包；source 为 final（成品）或 ai（生成），style 是风格的显示名，gif 是动图；
+   *  set 是套编号（AI 一次出的一套共用一个，面板里叠成一格），不是一套（和旧数据）时为 null */
+  meme: { source: string; name: string; style: string | null; gif: boolean; set: string | null } | null;
 }
 
 /** 已识别（有文字或无文字）的图片数 / 图片总数；`supported` 为本机是否有可用识别引擎。 */
@@ -159,17 +221,39 @@ export interface AppError {
     | 'shotHotkeyTaken'
     | 'recHotkeyTaken'
     | 'translateHotkeyTaken'
+    | 'lineHotkeyTaken'
+    | 'beltHotkeyTaken'
+    | 'mixerHotkeyTaken'
+    | 'memeHotkeyTaken'
+    | 'editHotkeyTaken'
     | 'invalidSettings'
     | 'invalid'
     | 'internal'
     | 'translateConfig'
     | 'translatePack'
     | 'translateOs'
-    | 'translate';
+    | 'translate'
+    | 'line'
+    | 'deviceLimit'
+    | 'lineExpired'
+    | 'duplicate';
   message: string;
   /** 只有 translatePack：识别出的源语言代码与目标语言代码，下载语言包并重试时用（M26 规则 17） */
   source?: string;
   target?: string;
+  /** 只有 duplicate：已经挂着的那张便签的 id */
+  id?: number;
+  /** 只有 deviceLimit：授权码当前绑定着的设备，解绑一台后才能激活这台 */
+  devices?: BoundDevice[];
+}
+
+/** 授权码绑定着的一台设备（对应 `license::Device`） */
+export interface BoundDevice {
+  id: number;
+  /** 激活时上报的电脑名 */
+  name: string;
+  /** 激活时间，RFC 3339 */
+  activatedAt: string;
 }
 
 /** `translate_record` 的结果：去掉首尾空白的译文与实际翻成的语言代码（M26 规则 8、9）。 */
@@ -222,8 +306,8 @@ export type BeginPayload = {
   scale: number;
   /** 设置“保存截图时同时复制” */
   saveCopy: boolean;
-  /** 截图（M23）或选录屏区域（M24） */
-  mode: 'shot' | 'rec';
+  /** 截图（M23）、选录屏区域（M24）或框选改字 */
+  mode: 'shot' | 'rec' | 'edit';
   /** 设置“录制系统声音”，录屏开关的初值 */
   systemAudio: boolean;
   /** 设置“录制麦克风”；本机不支持（macOS 15 以下）为 null */
@@ -232,8 +316,14 @@ export type BeginPayload = {
   recScale: number;
   /** 设置“录屏帧率” */
   recFps: number;
+  /** 改字可用 */
+  edit: boolean;
+  /** 改字快捷键的显示（框选改字的提示用，没设为空） */
+  editKey: string;
 };
-export type ShotAction = 'copy' | 'save' | 'ocr' | 'pin' | 'translate';
+/** 框选改字的“用刚复制的图”卡片：缩略图和原图尺寸，对应 `shot::Clip`。 */
+export type ShotClip = { thumb: string | null; w: number; h: number };
+export type ShotAction = 'copy' | 'save' | 'ocr' | 'pin' | 'translate' | 'edit';
 /** 对应 `shot::ShotOutcome`；`text` 为完整译文、`engine` 为翻译方式标签，只有翻译动作有值。 */
 export type ShotOutcome = { action: ShotAction; chars: number | null; file: string | null; copied: boolean; text: string | null; engine: string | null };
 

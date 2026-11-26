@@ -271,7 +271,11 @@ fn launch(
         fps: cur.rec_fps,
         system_audio,
         microphone,
-        exclude_window: exclude,
+        // 浮层整场照常显示、能用，只是不录进去（录屏只在 macOS 上有，见 `float_hide`）
+        exclude_windows: exclude
+            .into_iter()
+            .chain(crate::float_hide::window_numbers(app))
+            .collect(),
         path: path.clone(),
     };
     let recorder = match xpaste_platform::start_recording(opts) {
@@ -426,7 +430,7 @@ fn wrap_up(app: &AppHandle, (recorder, path, copy): Taken<Recorder>, interrupted
     let notice = match result {
         Ok(outcome @ RecordOutcome::Saved { duration_ms, bytes }) => {
             log::info!("rec 结束 {duration_ms}ms {bytes} 字节");
-            let copied = copy && copy_file(&path);
+            let copied = copy && copy_file(app, &path);
             outcome_notice(&outcome, copied, interrupted)
         }
         Ok(RecordOutcome::Empty) => {
@@ -444,19 +448,13 @@ fn wrap_up(app: &AppHandle, (recorder, path, copy): Taken<Recorder>, interrupted
 }
 
 /// 文件引用写剪切板，不标记为自身写入：监听器照常把它作为视频记录入库（M01 规则 5 的例外，同截图复制）。
-fn copy_file(path: &Path) -> bool {
+fn copy_file(app: &AppHandle, path: &Path) -> bool {
     let flavors = xpaste_platform::file_flavors(path);
     if flavors.is_empty() {
         log::warn!("录屏写剪切板失败：生成文件引用失败");
         return false;
     }
-    match xpaste_platform::write(&flavors) {
-        Ok(_) => true,
-        Err(e) => {
-            log::warn!("录屏写剪切板失败：{e}");
-            false
-        }
-    }
+    crate::clipboard::write_own(&app.state::<crate::state::AppState>(), &flavors, "录屏").is_ok()
 }
 
 /// 摆好并显示边框窗口（铺满该屏、鼠标穿透、不抢焦点），返回它的窗口编号供录制排除（macOS）。

@@ -21,17 +21,27 @@ import {
   onShotNeedPermission,
   onTranslateDelta,
 } from './api/events';
-import type { AppError, Appearance, Engines, FileEntry, PanelStyle, PlatformInfo, RecordDetail, RecordSummary, Settings } from './api/types';
+import { lineDragDrop, lineDragHover, lineHangFromPanel, lineHide, lineSideHint, onLineChanged, onLineHangSelected, onProLink, proActivate, proBuy, proDeactivate, proStatus, proTakeLink, proUnbind, type LineView } from './api/line';
+import { beltPut, onBeltPutSelected } from './api/belt';
+import { mixerDefaults, mixerPut, onMixerPutSelected } from './api/mixer';
+import { memeLibraryStats, memeOpen, memeOpenScene, memeTaskOpen, memeTasks, memeTestImage, onMemeBack, onMemeReveal, onMemeTasks, type TaskView } from './api/meme';
+import { onTeOff, teOpen, teRecentClear, teRecentStats } from './api/textedit';
+import { cellClick, cellHTML, foldSets, gridMove, ofSource, previewHTML, restackOnRemove, taskCellHTML, taskTick, type Arrow, type MemeSource } from './meme-grid';
+import { mountRecipes } from './recipes';
+import { deviceLine, proCard, proControls, proLine } from './pro-status';
+import { popSelect } from './select-pop';
+import { installTips } from './tip';
+import type { AppError, Appearance, BoundDevice, Engines, FileEntry, LineSide, LineStyle, Pace, PanelStyle, PlatformInfo, Recipe, RecordDetail, RecordSummary, Settings } from './api/types';
 import { appCounts, bestApp, freshSug, fromApp, type Sug } from './source';
 import { COMPACT, compactGroups, compactHeadH, rowParts } from './compact';
 import { copyToast, needsAccessibility } from './copy-status';
 import {
-  canInlinePlay, esc, FILTERS, FL, fmtBytes, fmtDateTime, fmtDur, fmtInt, hl, hlCode, host, isFav, isHttpUrl, isSnip, LABEL, rel, truncate, videoChips,
+  canInlinePlay, esc, FILTERS, FL, fmtBytes, fmtDateTime, fmtDur, fmtInt, hl, hlCode, host, isFav, isHttpUrl, isMeme, isSnip, LABEL, rel, truncate, videoChips,
   type Filter,
 } from './format';
 import { hotkeyFromEvent, hotkeyHint, hotkeyLabel } from './hotkey';
 import { keyAction } from './keymap';
-import { copyVerb, escHint, exportNote, fileTextHelp, importNote, openLabel, snippetExportName } from './labels';
+import { copyVerb, escHint, keptNote, exportNote, fileTextHelp, importNote, openLabel, snippetExportName } from './labels';
 import { ocrLabel, ocrProgressLabel, snippetHTML } from './ocr-label';
 import { searchGate } from './search-gate';
 import { otherEngine, staleDelta, translatable, trAfterDelta, trAfterEnd, trBlockHTML, type Engine, type Tr } from './translate';
@@ -41,11 +51,11 @@ import {
   centerWin, clampWin, DAY, followNow, HOUR, layoutBars, minorDayTicks, miniWin, panWin, sameColumns, spanOf, spectrumStat, staggerIndex,
   ticks as winTicks, winLabel, xOf, zoomWin, type Layout, type Win,
 } from './spectrum';
-import { addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFrequent, parseLimit, pickerOptions, removeIgnored } from './settings-form';
+import { editApiState, imageApiReady, editClearAsk, editRecentText, MEME_PRESETS, memeCaptionState, type MemeField, type MemeFormat, memePreset, memeStatsText, providerAfterEdit, addIgnored, baseUrlError, formToSettings, optionFromRetention, parseFrequent, parseLimit, pickerOptions, removeIgnored } from './settings-form';
 import { composing, justComposed } from './ime';
 import { errorControl, revealsFocus, shownTabTarget } from './settings-tabs';
 import {
-  armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, isTextKind, extendRange, mergeable, nextSelection, pruneMulti, snippetTextChange, UNDO_MS, visible, type UndoState,
+  armUndo, canUndo, counts, cycleFilter, ensureSelection, groups, inFilter, isStale, isTextKind, extendRange, memeCategory, mergeable, nextSelection, pruneMulti, putOrder, snippetTextChange, tabFilters, UNDO_MS, visible, type UndoState,
 } from './view';
 import { layout, range, ROW_H, scrollTo, topOf, type Cell } from './virtual-list';
 
@@ -84,6 +94,16 @@ const I = {
   pencil: '<path d="M4 16l1-4 8-8 3 3-8 8z"/><path d="M11.5 5.5l3 3"/>',
   // 翻译：“文”与“A”（M26 规则 2）
   translate: '<path d="M3 5h7M6.5 3.5V5M8.7 5c-.7 3-2.5 5.2-5.2 6.5M5.2 7.6c.9 1.7 2.3 2.9 4 3.6"/><path d="m10.5 16.5 3-7.5 3 7.5M11.6 14h3.8"/>',
+  // 挂到晾衣绳：衣架
+  hang: '<path d="M8 5.5a2 2 0 1 1 2 2V9"/><path d="M10 9 3 14.5h14z"/>',
+  // 放上传送带：带子上两个箱子（同设置里传送带那一行；向下的箭头像下载，不用）
+  belt: '<rect x="2.5" y="12.5" width="15" height="4" rx="2"/><rect x="4.5" y="6" width="4.5" height="4" rx="1"/><rect x="11" y="6" width="4.5" height="4" rx="1"/>',
+  // 放进搅拌机：量杯
+  cup: '<path d="M5.5 4h9l-1.2 8.5H6.7z"/><path d="M6.7 12.5h6.6l.7 3.5H6z"/><path d="M8 8.5h4"/>',
+  // 改字：T 和一支笔
+  editText: '<path d="M4 5.5V4h9v1.5M8.5 4v9M6.5 13h4"/><path d="m12.2 15.9 4.6-4.6 1.5 1.5-4.6 4.6-2 .5z"/>',
+  // 做表情包：笑脸
+  smile: '<circle cx="10" cy="10" r="7"/><path d="M7 11.8c.8 1 1.8 1.5 3 1.5s2.2-.5 3-1.5"/><path d="M7.6 8h.01M12.4 8h.01" stroke-width="2.2"/>',
 };
 const svg = (n: keyof typeof I, cls = '') =>
   `<svg class="ic ${cls}" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n]}</svg>`;
@@ -95,6 +115,7 @@ document.querySelectorAll<HTMLElement>('[data-icon]').forEach((el) => {
 const $ = <T extends HTMLElement = HTMLElement>(s: string) => document.querySelector<T>(s)!;
 const root = document.documentElement;
 const reduced = matchMedia('(prefers-reduced-motion: reduce)');
+installTips();
 const EASE_ENTER = 'cubic-bezier(.22,1,.36,1)', EASE_MOVE = 'cubic-bezier(.25,1,.5,1)', EASE_SPRING = 'cubic-bezier(.34,1.56,.64,1)';
 const fx = (el: Element | null, kf: Keyframe[], opts: KeyframeAnimationOptions) => {
   if (el && !reduced.matches) el.animate(kf, opts);
@@ -114,7 +135,7 @@ const hf = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit'
 const win = $('#win'), list = $('#list'), rowsEl = $('#rows'), ind = $('#ind'), q = $<HTMLInputElement>('#q'), clearQ = $('#clearQ');
 const tabs = $('#tabs'), tabsBase = $('#tabsBase'), tabsOver = $('#tabsOver');
 const ptype = $('#ptype'), pbody = $('#pbody'), pmeta = $('#pmeta'), countEl = $('#count');
-const pinBtn = $<HTMLButtonElement>('#pinBtn'), copyBtn = $<HTMLButtonElement>('#copyBtn');
+const pinBtn = $<HTMLButtonElement>('#pinBtn'), copyBtn = $<HTMLButtonElement>('#copyBtn'), pactEl = $('.pact');
 const trBtn = $<HTMLButtonElement>('#trBtn');
 const delBtn = $<HTMLButtonElement>('#delBtn'), saveSnipBtn = $<HTMLButtonElement>('#saveSnipBtn'), editSnipBtn = $<HTMLButtonElement>('#editSnipBtn');
 const snipBar = $('#snipBar');
@@ -122,6 +143,8 @@ const moreMenu = $('#moreMenu'), moreBtn = $('#moreBtn'), qChip = $('#qChip'), p
 const menu = $('#menu'), mOpen = $<HTMLButtonElement>('[data-m="open"]'), toastEl = $('#toast'), toastMsg = $('#toastMsg'), undoBtn = $<HTMLButtonElement>('#undoBtn'), toastAct = $<HTMLButtonElement>('#toastAct'), pauseBtn = $('#pauseBtn');
 const spBars = $('#spBars'), spTrack = $('#spTrack'), spBeam = $('#spBeam'), spTip = $('#spTip');
 const spMini = $('#spMini'), spPresets = $('#spPresets');
+// “表情包”分类的网格（列表区换成它）与状态栏
+const memesEl = $('#memes'), memeGridEl = $('#memeGrid'), memeAddEl = $<HTMLButtonElement>('#memeAdd'), memeTasksEl = $('#memeTasks'), memeSrcEl = $('#memeSrc'), statusbar = $('.statusbar');
 
 // —— 状态 ——
 const S = {
@@ -157,8 +180,16 @@ const S = {
   engines: null as Engines | null,
   cells: [] as Cell[],
   total: 0,
+  /** “表情包”网格上方的筛选：全部 / 做好的 / AI 出的 */
+  memeSrc: 'all' as MemeSource,
+  /** 网格里摊开的那一套（套编号）；点套外的格子、切走分类、面板隐藏时收回 */
+  openSet: null as string | null,
+  /** AI 任务列表（后端整份发来，新的在前），网格里“＋ 做一个”后面每个一格 */
+  memeTasks: [] as TaskView[],
   /** 当前可见条数，供 aria-setsize */
   count: 0,
+  /** 晾衣绳：不含晾衣绳的版本 available 为 false，挂钩按钮、已挂刻线与“Pro”标签都不出现 */
+  line: { available: false, edit: false, pro: { state: 'unavailable' }, notes: [], hung: [], hotkey: '', style: { rope: 'jute', thick: 'mid', peg: 'plastic', paper: 'parch', edge: 'auto' }, on: true, side: 'top', pinned: false, leaveMs: 350, hookX: null, recovered: false, canBuy: false } as LineView,
 };
 const menuOpen = () => menu.dataset.open === 'true' || moreMenu.dataset.open === 'true';
 
@@ -175,14 +206,28 @@ async function paintVerb() {
 
 // —— 数据视图 ——
 const favMin = () => S.settings.frequentMinUses;
-const vis = () => fromApp(visible(S.records, S.filter, S.matchIds, favMin()), S.app);
+// 关掉表情包制作时表情包整个不出现（搜索里也没有），数据保留；网格里再按“全部 / 做好的 / AI 出的”筛
+const memeShown = (r: RecordSummary) => !isMeme(r) || (memeOn() && (S.filter !== 'meme' || ofSource(r, S.memeSrc)));
+const listed = () => fromApp(visible(S.records, S.filter, S.matchIds, favMin()), S.app).filter(memeShown);
+/** 网格里看得见的格子：一套收成一格（搜索时不叠） */
+// 正在删的一叠显示的那一张不画，这一叠立刻换成下一张；别的正在删的格子照常画（带 is-removing 淡出）
+const restack = new Set<number>();
+const memeCells = (v: RecordSummary[]) =>
+  foldSets(v.filter((r) => !restack.has(r.id)).map((r) => ({ id: r.id, set: r.meme?.set ?? null, r })), S.openSet, S.matchIds !== null);
+/** 看得见的记录；网格里是看得见的格子（方向键、Mod+1–9、↩ 都按它算，选中一叠就是显示的那一张） */
+const vis = () => (memeGrid() ? memeCells(listed()).map((c) => c.item.r) : listed());
 /** 当前分类下、不看搜索词的记录：建议的条数与胶囊下的总数都按它算（M29 规则 1、3） */
 const inCategory = () => [...S.records.values()].filter((r) => inFilter(r, S.filter, favMin(), false));
-const matches = (r: RecordSummary) => inFilter(r, S.filter, favMin(), S.matchIds !== null) && (S.matchIds === null || S.matchIds.has(r.id)) && (S.app === null || (r.app?.name === S.app && !isSnip(r)));
+const matches = (r: RecordSummary) => memeShown(r) && inFilter(r, S.filter, favMin(), S.matchIds !== null) && (S.matchIds === null || S.matchIds.has(r.id)) && (S.app === null || (r.app?.name === S.app && !isSnip(r)));
 const rowEl = (id: number | null) => (id === null ? null : document.getElementById('opt-' + id));
 const source = (r: RecordSummary) => r.app?.name || '未知来源';
-/** 行、选中光标与预览标签的类型色：片段统一用片段色（M25 规则 2） */
-const typeOf = (r: RecordSummary) => (isSnip(r) ? 'snip' : r.kind);
+/** 行、选中光标与预览标签的类型色：片段统一用片段色（M25 规则 2），表情包用同一个品红 */
+const typeOf = (r: RecordSummary) => (isSnip(r) ? 'snip' : isMeme(r) ? 'meme' : r.kind);
+/** 片段和表情包是用户自己的东西，不算历史：不画在频谱上 */
+const isLib = (r: RecordSummary) => isSnip(r) || isMeme(r);
+/** 分类栏里有“表情包”；在这个分类里列表区换成网格 */
+const memeTab = () => memeCategory(S.line.available, S.settings.memeEnabled, compact());
+const memeGrid = () => S.filter === 'meme' && memeTab();
 const modKey = () => (S.platform.os === 'macos' ? '⌘' : 'Ctrl');
 /** 精简模式（M27）：根元素 data-style 换布局，行更矮 */
 const compact = () => S.settings.panelStyle === 'compact';
@@ -207,6 +252,7 @@ const thumb = (r: RecordSummary) =>
 
 const metaLine = (r: RecordSummary) => {
   // 片段：内容摘要 + 用过 N 次，不显示来源与时间（M25 规则 2）
+  if (r.meme) return r.meme.source === 'ai' ? 'AI 出的' : '做好的';
   const parts = r.snippetBody !== null ? [`<span class="snip-of">${hl(r.snippetBody, S.q)}</span>`, `用过 ${fmtInt(r.uses)} 次`]
     : [...(S.app === null ? [esc(source(r))] : []), rel(r.copiedAt), r.kind === 'video' && r.durationSec !== null ? fmtDur(r.durationSec) : fmtBytes(r.size)];
   if (isFav(r, favMin())) parts.push(`<span class="uses">用过 ${fmtInt(r.uses)} 次</span>`);
@@ -216,9 +262,9 @@ const metaLine = (r: RecordSummary) => {
   return parts.join(' · ');
 };
 
-const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id === S.newId) => `
+const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id === S.newId, hung = lineOn() && S.line.hung.includes(r.id)) => `
     <div class="item${isNew ? ' is-new' : ''}${S.removing.has(r.id) ? ' is-removing' : ''}${S.multi.has(r.id) ? ' is-multi' : ''}${stagger && i < 12 ? ' stg' : ''}" data-id="${r.id}" style="--i:${i}">
-      <div class="row" role="option" id="opt-${r.id}" aria-selected="false" aria-posinset="${i + 1}" aria-label="${esc(r.title)}，${isSnip(r) ? '片段，' : ''}${LABEL[r.kind]}${S.snippets.has(r.id) ? `，识别文字中含“${esc(S.snippets.get(r.id))}”` : ''}" data-type="${typeOf(r)}">
+      <div class="row" role="option" id="opt-${r.id}" aria-selected="false" aria-posinset="${i + 1}" aria-label="${esc(r.title)}，${isSnip(r) ? '片段，' : isMeme(r) ? '表情包，' : ''}${LABEL[r.kind]}${S.snippets.has(r.id) ? `，识别文字中含“${esc(S.snippets.get(r.id))}”` : ''}${hung ? '，已挂在晾衣绳上' : ''}" data-type="${typeOf(r)}">
         <div class="row-in">
           ${thumb(r)}
           <div class="main">
@@ -226,10 +272,15 @@ const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id ===
             <div class="meta">${metaLine(r)}</div>
           </div>
           <div class="tail">
-            ${r.pinned ? `<span class="pin-mark">${svg('pinFill')}</span>` : ''}${i < 9 ? `<kbd class="idx">${idxLabel(i)}</kbd>` : ''}
+            ${hung ? '<span class="hung" role="img" aria-label="已挂在晾衣绳上"></span>' : ''}${r.pinned ? `<span class="pin-mark">${svg('pinFill')}</span>` : ''}${i < 9 ? `<kbd class="idx">${idxLabel(i)}</kbd>` : ''}
             <span class="qa" aria-hidden="true">
               ${isSnip(r) ? `<button type="button" tabindex="-1" data-qa="edit" title="编辑片段">${svg('pencil')}</button>`
-                : `<button type="button" tabindex="-1" data-qa="pin" title="${r.pinned ? '取消置顶' : '置顶'}">${svg(r.pinned ? 'pinFill' : 'pin')}</button>`}
+                : isMeme(r) ? '' : `<button type="button" tabindex="-1" data-qa="pin" title="${r.pinned ? '取消置顶' : '置顶'}">${svg(r.pinned ? 'pinFill' : 'pin')}</button>`}
+              ${lineOn() && !isMeme(r) ? `<button type="button" tabindex="-1" data-qa="hang" title="挂到晾衣绳">${svg('hang')}</button>` : ''}
+              ${beltOn() && !isMeme(r) ? `<button type="button" tabindex="-1" data-qa="belt" title="放上传送带">${svg('belt')}</button>` : ''}
+              ${mixerOn() && r.kind !== 'video' && !isMeme(r) ? `<button type="button" tabindex="-1" data-qa="mixer" data-tip="放进搅拌机">${svg('cup')}</button>` : ''}
+              ${memeOn() && memeable(r) ? `<button type="button" tabindex="-1" data-qa="meme" data-tip="做表情包">${svg('smile')}</button>` : ''}
+              ${editOn() && textEditable(r) ? `<button type="button" tabindex="-1" data-qa="editText" data-tip="改字 ${modKey()} G">${svg('editText')}</button>` : ''}
               <button type="button" tabindex="-1" data-qa="copy" title="${copyVerb(S.canPaste)}">${svg('copy')}</button>
             </span>
           </div>
@@ -241,7 +292,8 @@ const rowHTML = (r: RecordSummary, i: number, stagger: boolean, isNew = r.id ===
 function setCount(n: number) {
   const c = counts(S.records, favMin());
   // 有来源胶囊时分母是这个应用在当前分类下的条数（M29 规则 3）
-  const total = S.app !== null ? fromApp(inCategory(), S.app).length : S.filter === 'snip' ? c.snip : S.filter === 'all' && S.matchIds ? c.all + c.snip : c.all;
+  const total = S.app !== null ? fromApp(inCategory(), S.app).length : S.filter === 'snip' ? c.snip : S.filter === 'meme' ? c.meme
+    : S.filter === 'all' && S.matchIds ? c.all + c.snip + (memeOn() ? c.meme : 0) : c.all;
   // 精简模式只在有搜索词或分类标签时显示“N 条”（M27 规则 7）
   const html = !compact() ? `${fmtInt(n)}<small>/ ${fmtInt(total)}</small>` : S.q.trim() || S.filter !== 'all' || S.app !== null ? `${fmtInt(n)} 条` : '';
   if (countEl.innerHTML === html) return;
@@ -373,6 +425,7 @@ rowsEl.addEventListener('transitionend', (e) => {
 
 // aria-activedescendant 只指向已渲染的行
 function markSel() {
+  if (memeGrid()) return markMemeSel();
   rowsEl.querySelectorAll('.row[aria-selected="true"]').forEach((r) => r.setAttribute('aria-selected', 'false'));
   const r = rowEl(S.sel);
   r?.setAttribute('aria-selected', 'true');
@@ -394,6 +447,7 @@ const schedulePaint = () => {
 };
 
 function renderList({ scroll = false, stagger = false, base = 0, glide = '' } = {}) {
+  if (paintMemeMode()) return renderMemes();
   const v = vis();
   S.count = v.length;
   setCount(v.length);
@@ -449,6 +503,10 @@ type SelectOpts = { scroll?: boolean; glide?: boolean; instant?: boolean; fade?:
 function select(id: number | null, { scroll = false, glide = true, instant = false, fade = true, indDur, indEase, pan }: SelectOpts = {}) {
   const changed = S.sel !== id;
   S.sel = id;
+  if (memeGrid()) {
+    markMemeSel();
+    return renderPreview(changed && fade && !instant);
+  }
   // 没有选中项（列表空了）时不留一块空的预览（M27 规则 8）
   if (id === null) setPeek(false);
   const top = id === null ? undefined : shownTop(id);
@@ -465,7 +523,7 @@ function select(id: number | null, { scroll = false, glide = true, instant = fal
   renderPreview(changed && fade && !instant);
   const r = id === null ? undefined : S.records.get(id);
   // 片段不在频谱上（M25 规则 8），不移窗口。24 小时外的记录不移窗口，光束隐藏。setWin 的重绘已按 smooth 摆好光束：再画一次会让同一帧里先 0ms 后 360ms，键盘出窗也滑
-  if (pan && spWin && r && !isSnip(r) && r.copiedAt >= spNow - DAY && xOf(spWin, r.copiedAt, spNow) === null) setWin(centerWin(r.copiedAt, spanOf(spWin), spNow), pan === 'smooth');
+  if (pan && spWin && r && !isLib(r) && r.copiedAt >= spNow - DAY && xOf(spWin, r.copiedAt, spNow) === null) setWin(centerWin(r.copiedAt, spanOf(spWin), spNow), pan === 'smooth');
   else paintSpectrumSel(!instant);
 }
 
@@ -494,6 +552,7 @@ function multiTo(id: number, range: boolean) {
 }
 // 键盘上下移动；extend（“片段”分类里 Shift + ↑ / ↓）把当前行和移到的那行加进多选，不带 Shift 的移动退出多选（M25 规则 6）
 function move(d: 1 | -1, instant: boolean, extend = false) {
+  if (memeGrid()) return memeStep(d > 0 ? 'ArrowDown' : 'ArrowUp');
   const v = vis().filter((r) => !S.removing.has(r.id));
   if (!v.length) return;
   const i = v.findIndex((r) => r.id === S.sel);
@@ -713,14 +772,18 @@ let detailSeq = 0, bodyFor: number | null = null;
 const details = new Map<number, RecordDetail>();
 // 片段的名字大字放在正文最上方，高亮与列表标题一致（M25 规则 4）
 const snipNameHTML = (r: RecordSummary) => `<h3 class="p-snip-name">${hl(r.title, S.marks.get(r.id) ?? S.q)}</h3>`;
+// 表情包的预览：大图用原文件（会动），按钮在正文里
+const memeBodyHTML = (r: RecordSummary, d: RecordDetail | null) =>
+  previewHTML(r, { nameHTML: hl(r.title, S.marks.get(r.id) ?? S.q), src: d?.image?.src ?? null, w: d?.image?.w ?? 0, h: d?.image?.h ?? 0, verb: copyVerb(S.canPaste), mod: modKey() });
 function showBody(d: RecordDetail | null, fade: boolean) {
   S.detail = d;
   pbody.style.opacity = pbody.style.filter = '';
   const cur = d && S.records.get(d.id);
   // 译文区块挂在正文最后：文本、代码在原文之后，图片、文件在图中文字之后（M26 规则 3）
-  pbody.innerHTML = d ? (cur && isSnip(cur) ? snipNameHTML(cur) : '') + bodyHTML(d) + `<div class="tr-slot">${trSlotHTML(d)}</div>` : '';
+  pbody.innerHTML = d && cur && isMeme(cur) ? memeBodyHTML(cur, d)
+    : d ? (cur && isSnip(cur) ? snipNameHTML(cur) : '') + bodyHTML(d) + `<div class="tr-slot">${trSlotHTML(d)}</div>` : '';
   pbody.scrollTop = 0;
-  if (cur) pmeta.innerHTML = metaHTML(cur, d);
+  if (cur) pmeta.innerHTML = isMeme(cur) ? '' : metaHTML(cur, d);
   if (fade) fx(pbody, [{ opacity: 0.35, transform: 'translateY(4px)', filter: 'blur(2px)' }, { opacity: 1, transform: 'none', filter: 'blur(0)' }], { duration: 180, easing: EASE_ENTER });
 }
 function renderPreview(fade = false) {
@@ -730,6 +793,8 @@ function renderPreview(fade = false) {
   const rs = bulk ? multiRecords() : [], canMerge = bulk && mergeable(rs);
   [pinBtn, copyBtn, delBtn, saveSnipBtn, editSnipBtn].forEach((b) => (b.disabled = !r || (bulk && b !== delBtn && !(b === copyBtn && canMerge))));
   pinBtn.hidden = saveSnipBtn.hidden = snip;
+  // 表情包的按钮（接着改、删除、粘贴）在预览正文里，没有信息栏；网格里没选中时也不放历史的按钮
+  pactEl.hidden = pmeta.hidden = memeGrid() || (!bulk && !!r && isMeme(r));
   // 翻译入口只对可翻译的单条记录出现（M26 规则 1）
   trBtn.hidden = $('#trHint').hidden = !r || bulk || !translatable(r);
   editSnipBtn.hidden = !snip;
@@ -761,12 +826,21 @@ function renderPreview(fade = false) {
     pbody.innerHTML = '<div class="p-empty">在左侧选择一条记录查看完整内容</div>';
     return;
   }
-  ptype.innerHTML = (snip ? `<span class="tchip" data-type="snip">${svg('snip')}片段</span>` : '')
-    + `<span class="tchip" data-type="${r.kind}">${svg(r.kind)}${LABEL[r.kind]}</span>`
-    + (isFav(r, favMin()) ? `<span class="tchip" data-type="fav">${svg('star')}常用</span>` : '')
-    + (r.lang ? `<span class="chip">${esc(r.lang)}</span>` : '');
+  // 表情包只标“表情包”，不再标“图片”
+  ptype.innerHTML = isMeme(r) ? `<span class="tchip" data-type="meme">${svg('smile')}表情包</span>`
+    : (snip ? `<span class="tchip" data-type="snip">${svg('snip')}片段</span>` : '')
+      + `<span class="tchip" data-type="${r.kind}">${svg(r.kind)}${LABEL[r.kind]}</span>`
+      + (isFav(r, favMin()) ? `<span class="tchip" data-type="fav">${svg('star')}常用</span>` : '')
+      + (r.lang ? `<span class="chip">${esc(r.lang)}</span>` : '');
   setPin(r.pinned, true);
-  pmeta.innerHTML = metaHTML(r, S.detail?.id === r.id ? S.detail : null);
+  pmeta.innerHTML = isMeme(r) ? '' : metaHTML(r, S.detail?.id === r.id ? S.detail : null);
+  if (bodyFor === r.id && isMeme(r)) {
+    // 搜索词、用过次数变了：只换名字与元信息，大图不重载（动图不从头播）
+    const d = S.detail?.id === r.id ? S.detail : null, tmp = document.createElement('div');
+    tmp.innerHTML = memeBodyHTML(r, d);
+    for (const c of ['.mnm', '.mmt']) pbody.querySelector(c)?.replaceWith(tmp.querySelector(c)!);
+    return;
+  }
   if (bodyFor === r.id) {
     // 搜索词变了、选中没变：只换名字的高亮
     const nm = pbody.querySelector('.p-snip-name');
@@ -882,10 +956,11 @@ function revealTr(id: number) {
   if (d) pbody.scrollBy({ top: d, behavior: reduced.matches ? 'auto' : 'smooth' });
 }
 // 设置已开着时停在原来的标签（M26 规则 19）
-const openTrSettings = () => {
-  if (!dlg.classList.contains('is-shown')) stTab = stTabs.findIndex((t) => t.id === 'st-tab-translate');
+const openSettingsAt = (tab: string) => {
+  if (!dlg.classList.contains('is-shown')) stTab = stTabs.findIndex((t) => t.id === tab);
   openSettings();
 };
+const openTrSettings = () => openSettingsAt('st-tab-translate');
 // 已有译文或正在翻译：只滚到区块，不发请求；上次失败、中断时等同重新翻译。again：先丢掉旧译文再请求。
 // engine：换用按钮单次指定的方式，不改设置；翻译中也能换用，后端中止进行中的请求（M26 规则 16）
 function doTranslate(id: number, again = false, engine?: Engine) {
@@ -963,7 +1038,7 @@ function renderSpectrum(freshId?: number, stat = true) {
   if (spWin) spWin = spWin.pinned ? followNow(spWin, spNow) : clampWin(spWin.start, spWin.end, spNow);
   // 统计不依赖轨道宽度，收起时照常更新
   if (stat) {
-    const { count, peak } = spectrumStat([...S.records.values()].filter((r) => !isSnip(r)), spNow);
+    const { count, peak } = spectrumStat([...S.records.values()].filter((r) => !isLib(r)), spNow);
     $('#spStat').textContent = `24 小时内复制 ${fmtInt(count)} 次${peak ? ` · 最忙 ${peak.hour} 点（${peak.n} 次）` : ''}`;
   }
   $('#spDesc').textContent = spWin ? winLabel(spWin, hf.format) : SP_DESC;
@@ -971,8 +1046,8 @@ function renderSpectrum(freshId?: number, stat = true) {
   for (const b of spPresets.querySelectorAll<HTMLElement>('[data-span]')) b.classList.toggle('on', +b.dataset.span! === span);
   if (spCollapsed()) return;
   // 删除中的记录不参与布局，否则重绘会把正在收起的光柱拉回来
-  // 片段不画（M25 规则 8）
-  const recs = [...S.records.values()].filter((r) => !S.removing.has(r.id) && !isSnip(r));
+  // 片段、表情包不画（M25 规则 8）
+  const recs = [...S.records.values()].filter((r) => !S.removing.has(r.id) && !isLib(r));
   const next = layoutBars(recs, spNow, spTrack.clientWidth, matches, freshId, spWin);
   const base = (b: Layout['bars'][number]) => `bar${b.ids.length > 1 ? ' multi' : ''}${b.dim ? ' dim' : ''}`;
   const n = next.bars.length;
@@ -1042,7 +1117,7 @@ function paintMiniDots(recs: RecordSummary[]) {
 function paintSpectrumSel(animate = true) {
   if (spCollapsed()) return;
   // 片段不画在频谱上（M25 规则 8）：选中片段时光束隐藏
-  const sel = S.sel === null ? undefined : S.records.get(S.sel), r = sel && !isSnip(sel) ? sel : undefined;
+  const sel = S.sel === null ? undefined : S.records.get(S.sel), r = sel && !isLib(sel) ? sel : undefined;
   const col = r && sp.colOf.get(r.id);
   const b = col === undefined ? null : spBars.children[col] ?? null;
   if (b !== spOn) {
@@ -1204,10 +1279,13 @@ spMini.addEventListener('click', (e) => {
 // —— 分类标签 ——
 function renderTabs(instant: boolean) {
   const c = counts(S.records, favMin());
-  const html = (real: boolean) => FILTERS.map(([k, l]) => {
-    const mark = k === 'fav' ? svg('star', 'star') : k === 'snip' ? svg('snip', 'star') : '<i class="dot"></i>';
+  // 关掉表情包制作、换成精简模式后没有“表情包”分类：回到“全部”（调用方随后重绘列表）
+  const fs = tabFilters(memeTab());
+  if (!fs.includes(S.filter)) S.filter = 'all';
+  const html = (real: boolean) => FILTERS.filter(([k]) => fs.includes(k)).map(([k, l]) => {
+    const mark = k === 'fav' ? svg('star', 'star') : k === 'snip' ? svg('snip', 'star') : k === 'meme' ? svg('smile', 'star') : '<i class="dot"></i>';
     const tag = real ? `button type="button" class="tab" data-f="${k}" aria-pressed="${S.filter === k}"` : 'span class="tab"';
-    return `<${tag} data-type="${k}">${mark}${l}<span class="n">${c[k]}</span></${real ? 'button' : 'span'}>${k === 'snip' ? '<span class="tabs-sep"></span>' : ''}`;
+    return `<${tag} data-type="${k}">${mark}${l}<span class="n">${c[k]}</span></${real ? 'button' : 'span'}>${k === (fs.includes('meme') ? 'meme' : 'snip') ? '<span class="tabs-sep"></span>' : ''}`;
   }).join('');
   const ae = document.activeElement as HTMLElement | null;
   const refocus = ae?.classList.contains('tab') ? ae.dataset.f : undefined;
@@ -1405,8 +1483,8 @@ function copyRecord(id: number, plain = false) {
 // 乐观更新，失败回滚；鼠标操作时 FLIP 平移到新分组，起点或终点没渲染就直接到位
 function togglePin(id: number, animate: boolean) {
   const r = S.records.get(id);
-  // 片段不能置顶（M25 规则 8）
-  if (!r || isSnip(r) || S.removing.has(id)) return;
+  // 片段、表情包不能置顶（M25 规则 8）
+  if (!r || isLib(r) || S.removing.has(id)) return;
   const on = !r.pinned;
   const setLocal = (pinned: boolean) => {
     const cur = S.records.get(id);
@@ -1458,13 +1536,18 @@ function remove(ids: number[]) {
   const v = vis().filter((x) => !S.removing.has(x.id));
   const at = new Map(v.map((x, i) => [x.id, i]));
   const last = ids.reduce((a, id) => ((at.get(id) ?? -1) > (at.get(a) ?? -1) ? id : a));
-  const next = nextSelection(v.filter((x) => x.id === last || !ids.includes(x.id)), last);
+  // 删的是收着的一叠显示的那一张：这一叠换成排在它后面的那张，选中跟过去（只剩两张时剩下那张单独成一格）
+  const re = memeGrid() ? restackOnRemove(memeCells(listed()), listed().map((r) => ({ id: r.id, set: r.meme?.set ?? null })), ids, S.removing) : null;
+  const keep = re?.keep;
+  if (re) restack.add(re.restack);
+  const next = keep ?? nextSelection(v.filter((x) => x.id === last || !ids.includes(x.id)), last);
   // 先退出多选再同步 p.h：之后的重绘与之相同，不会整行替换打断滑出
   S.multi.clear();
   for (const [i, id] of ids.entries()) {
     const p = painted.get('r' + id), c = S.cells.find((c) => c.kind === 'row' && c.id === id);
     S.removing.add(id);
     ownEcho.add(id);
+    document.getElementById('mc-' + id)?.classList.add('is-removing');
     if (p && c?.kind === 'row') {
       // 直接加类让过渡播放；同步 p.h，避免下一次重绘整行替换
       p.el.querySelector('.item')?.classList.add('is-removing');
@@ -1477,11 +1560,17 @@ function remove(ids: number[]) {
   }
   // 下方的行与 .item.is-removing 的收起同步上移（滚到底时整体按夹紧量修正，见 goneOf）
   paintRows({ glide: `transform 240ms ${EASE_MOVE} 100ms`, glideBusy: `transform 240ms ${EASE_MOVE}` });
+  // 一叠换代表：立刻重画网格（被删的那张已不画），选中留在原位
+  if (keep !== undefined) {
+    S.sel = keep;
+    renderList();
+  }
   // 光标目标是下一条补位后的位置：同组时就是被删行的位置，光标停住、下一条滑进来（原型 1384–1393）
   select(next, { scroll: true, indDur: 340 });
   deleteRecords(ids).then(
     () => {
       setTimeout(() => {
+        ids.forEach((id) => restack.delete(id));
         const done = ids.filter((id) => S.removing.delete(id));
         if (!done.length) return;
         done.forEach((id) => S.records.delete(id));
@@ -1490,7 +1579,7 @@ function remove(ids: number[]) {
         renderSpectrum();
       }, reduced.matches ? 0 : 360);
       const r = rs[0];
-      toast(ids.length > 1 ? `已删除 ${ids.length} ${multiUnit(rs)}` : `已删除${isSnip(r) ? '片段' : ''}“${truncate(r.title, 14)}”`, { undo: true, icon: 'trash' });
+      toast(ids.length > 1 ? `已删除 ${ids.length} ${multiUnit(rs)}` : isMeme(r) ? '已删除' : `已删除${isSnip(r) ? '片段' : ''}“${truncate(r.title, 14)}”`, { undo: true, icon: 'trash' });
       S.undo = armUndo(S.undo, ids, r.title, Date.now());
       paintUndoHint();
       setTimeout(paintUndoHint, UNDO_MS);
@@ -1498,10 +1587,12 @@ function remove(ids: number[]) {
     (err: AppError) => {
       ids.forEach((id) => {
         S.removing.delete(id);
+        restack.delete(id);
         ownEcho.delete(id);
       });
       // 重绘把光柱补回来：没重建过时原地路径取消收起动画，删除途中重建过时按新布局补上
       renderSpectrum();
+      if (memeGrid()) renderList();
       paintRows({ glide: ENTER_GLIDE });
       select(ids[0], { scroll: true, pan: 'smooth' });
       toast(err.message);
@@ -1555,10 +1646,10 @@ function openMenu(id: number, x: number, y: number, viaKb: boolean, detail = det
   $('[data-m="copy"]').hidden = bulk;
   $('[data-m="copyPlain"]').hidden = bulk || !plainable(r);
   $('[data-m="peek"]').hidden = bulk || !compact();
-  $('[data-m="pin"]').hidden = bulk || snip;
+  $('[data-m="pin"]').hidden = $('[data-m="saveSnippet"]').hidden = bulk || isLib(r);
   $('[data-m="editSnippet"]').hidden = bulk || !snip;
-  $('[data-m="saveSnippet"]').hidden = bulk || snip;
   $('[data-m="translate"]').hidden = bulk || !translatable(r);
+  $('[data-m="editText"]').hidden = bulk || !editOn() || !textEditable(r);
   $('#menu .sep').hidden = bulk;
   $('#mDel').textContent = bulk ? `删除 ${S.multi.size} ${multiUnit(multiRecords())}` : '删除';
   // stagger 序号按可见项重排，隐藏的项不留空拍
@@ -1652,6 +1743,7 @@ const handlers = {
   added: (s: RecordSummary) => {
     applyAdded(S.records, s);
     S.removing.delete(s.id);
+    restack.delete(s.id);
     const restored = restoring.delete(s.id) && !restoredSel;
     if (restored) restoredSel = true;
     const paint = () => {
@@ -1795,7 +1887,7 @@ async function confirmClear(): Promise<string | null> {
   try {
     const n = await countUnpinned();
     if (n === 0) msg = '没有可删除的记录';
-    else if (!(await confirm({ title: '清空历史', body: `将删除 ${n} 条未置顶的记录，置顶记录与片段会保留`, ok: `删除 ${n} 条记录`, danger: true }))) return null;
+    else if (!(await confirm({ title: '清空历史', body: `将删除 ${n} 条未置顶的记录，${keptNote(memeOn())}`, ok: `删除 ${n} 条记录`, danger: true }))) return null;
     else [msg, icon] = [`已删除 ${await clearHistory()} 条记录`, 'trash'];
   } catch (e) {
     msg = (e as AppError).message;
@@ -1822,6 +1914,12 @@ const themeOpts = [...themeSeg.querySelectorAll<HTMLElement>('[data-theme-opt]')
 const shotSaveCopyIn = $<HTMLInputElement>('#shotSaveCopy'), longAutoIn = $<HTMLInputElement>('#longAutoScroll'), shotPermRow = $('#shotPermRow');
 const recSystemAudioIn = $<HTMLInputElement>('#recSystemAudio'), recMicIn = $<HTMLInputElement>('#recMicrophone'), recCopyIn = $<HTMLInputElement>('#recCopy');
 const recQualityIn = $<HTMLSelectElement>('#recQuality'), recFpsIn = $<HTMLSelectElement>('#recFps');
+// 设置里的下拉都换成应用样式的弹层，不用系统原生的菜单
+function popSel(sel: HTMLSelectElement) {
+  popSelect(sel, dlg);
+  return sel;
+}
+for (const sel of [retainIn, recQualityIn, recFpsIn]) popSelect(sel, dlg);
 const HOTKEY_IDLE = '点击输入框，然后按下新的组合键', OPT_IDLE = '点击输入框后按下新的组合键；按 ⌫ 清空表示不启用';
 let pendingHotkey = '', dlgReturn: HTMLElement | null = null, closeTimer = 0, saving = false;
 
@@ -1846,6 +1944,8 @@ function selectStTab(i: number, instant = true) {
 function showStControl(el: HTMLElement) {
   const i = stPanes.findIndex((p) => p.contains(el));
   if (i !== stTab) selectStTab(i, false);
+  const page = el.closest<HTMLElement>('.pro-page');
+  if (page) proGo(page.id, null);
   el.focus();
 }
 // 出错项所在标签显示红点：跟着行内错误走（.err 显示着），改正或复原后消失
@@ -1912,6 +2012,528 @@ function recordKeys(input: HTMLInputElement, help: (msg: string) => void, record
 }
 const shotKey = optHotkey('shotHotkey'), recKey = optHotkey('recHotkey');
 const trKey = optHotkey('trHotkey', '在任何应用里选中文字后按下，译文显示在鼠标旁');
+const lineKey = optHotkey('lineHotkey', '把最近复制的一条挂到晾衣绳上；面板开着时挂选中的那条');
+const beltKey = optHotkey('beltHotkey', '打开或关闭传送带；面板开着时，把选中的记录放上去（多选则按选中的先后）');
+const beltBackKey = optHotkey('beltBackHotkey', '退回上一件：带子往回走一格');
+const memeKey = optHotkey('memeHotkey', '打开空白的表情包制作窗口；面板里选中记录时按 ⌘E 带着它打开');
+const editKey = optHotkey('editHotkey', '框屏幕上的图，或用刚复制的图');
+const mixerKey = optHotkey('mixerHotkey', '打开或关闭搅拌机；面板开着时，把选中的记录放进去');
+
+// “Pro”标签（只在含晾衣绳的版本里显示）：状态行、联网激活、设备满员时解绑、购买入口、在本机停用。
+// 出错写在输入框下方（提示条会被设置框盖住）
+const proStatusEl = $('#proStatus'), proCodeIn = $<HTMLInputElement>('#proCode'), proCodeErr = $('#proCodeErr'), proActBtn = $<HTMLButtonElement>('#proActBtn');
+const proActField = $('#proActField'), proDevicesEl = $('#proDevices'), proBuyBtn = $<HTMLButtonElement>('#proBuyBtn');
+const proOffBtn = $<HTMLButtonElement>('#proOffBtn'), proOffErr = $('#proOffErr');
+// 激活、解绑、停用进行中：状态行写着在做什么，按钮都不可点
+let proBusy = '';
+// 状态行是 live region：文字没变就不重写，免得读屏重复播报。没授权时显示输入框和购买入口，已授权时只显示停用
+function paintProStatus() {
+  const t = proBusy || proLine(S.line.pro);
+  if (proStatusEl.textContent !== t) proStatusEl.textContent = t;
+  const c = proControls(S.line.pro, S.line.canBuy);
+  // 焦点所在的控件要藏起来时，挪到换上来的那个上面
+  const held = document.activeElement, move = (!c.activate && proActField.contains(held)) || (!c.off && held === proOffBtn);
+  proActField.hidden = !c.activate;
+  proBuyBtn.hidden = !c.buy;
+  proOffBtn.hidden = !c.off;
+  if (!c.activate) paintProErr();
+  if (!c.off) paintProOffErr();
+  if (move) (c.off ? proOffBtn : c.activate ? proCodeIn : $('#st-tab-pro')).focus();
+  paintProHome();
+}
+function setProBusy(text: string) {
+  proBusy = text;
+  proActBtn.disabled = proOffBtn.disabled = !!text;
+  proCodeIn.readOnly = !!text;
+  for (const b of proDevicesEl.querySelectorAll('button')) b.disabled = !!text;
+  paintProStatus();
+}
+/** 输入框下方的错误；设备满员时下面列出已绑定的设备，每台一个“解绑” */
+function paintProErr(msg = '', devices: BoundDevice[] = []) {
+  proCodeErr.textContent = msg;
+  proCodeErr.hidden = !msg;
+  proCodeIn.setAttribute('aria-invalid', String(!!msg));
+  proDevicesEl.replaceChildren(...devices.map((d) => {
+    const row = document.createElement('div'), text = document.createElement('span'), name = document.createElement('b'), when = document.createElement('small'), btn = document.createElement('button');
+    row.className = 'line';
+    name.textContent = d.name || '未命名设备';
+    when.textContent = deviceLine(d.activatedAt);
+    text.append(name, when);
+    btn.type = 'button';
+    btn.className = 'btn sm';
+    btn.textContent = '解绑';
+    btn.setAttribute('aria-label', `解绑 ${name.textContent}`);
+    btn.addEventListener('click', () => unbindPro(d.id, devices));
+    row.append(text, btn);
+    return row;
+  }));
+  proDevicesEl.hidden = !devices.length;
+  paintStErr();
+}
+function paintProOffErr(msg = '') {
+  proOffErr.textContent = msg;
+  proOffErr.hidden = !msg;
+  paintStErr();
+}
+/** 激活、停用成功后：换上新状态，样式选择器跟着解锁或锁住 */
+function setPro(p: LineView['pro']) {
+  S.line.pro = p;
+  stylePicker?.set(draftLineStyle, lineLocked());
+}
+function activatePro() {
+  const code = proCodeIn.value.trim();
+  if (!code || proBusy) return;
+  setProBusy('正在激活…');
+  // 进行中按钮不可点，焦点会丢：结束后放到换上来的“停用”上，没成放回输入框
+  void proActivate(code).then((p) => {
+    setPro(p);
+    proCodeIn.value = '';
+    paintProErr();
+    setProBusy('');
+    proOffBtn.focus();
+  }, (err: AppError) => {
+    paintProErr(err.message, err.kind === 'deviceLimit' ? err.devices : []);
+    setProBusy('');
+    proCodeIn.focus();
+  });
+}
+/** 解绑列表里的一台，成了就用同一个授权码重新激活；没成（比如解绑次数用完）写在同一处，列表留着 */
+function unbindPro(id: number, devices: BoundDevice[]) {
+  const code = proCodeIn.value.trim();
+  if (!code || proBusy) return;
+  setProBusy('正在解绑…');
+  void proUnbind(code, id).then(() => {
+    setProBusy('');
+    activatePro();
+  }, (err: AppError) => {
+    paintProErr(err.message, devices);
+    setProBusy('');
+    proCodeIn.focus();
+  });
+}
+async function deactivatePro() {
+  if (proBusy) return;
+  const ok = await confirm({
+    title: '在这台设备上停用',
+    body: '停用后这台设备不再占用授权名额，之后可以用同一个授权码重新激活。停用前请确认授权码还找得到（在购买时收到的邮件里）',
+    ok: '停用',
+    danger: true,
+  });
+  if (!ok || proBusy) return;
+  paintProOffErr();
+  setProBusy('正在停用…');
+  void proDeactivate().then((p) => {
+    setPro(p);
+    setProBusy('');
+    proCodeIn.focus();
+  }, (err: AppError) => {
+    paintProOffErr(err.message);
+    setProBusy('');
+    proOffBtn.focus();
+  });
+}
+/** `xpaste://activate?code=…`：打开“Pro”标签，把授权码填进去并激活；已经授权了就只打开标签 */
+function activateFromLink() {
+  if (!S.line.available) return;
+  void proTakeLink().then((code) => {
+    if (!code) return;
+    openSettingsAt('st-tab-pro');
+    if (S.line.pro.state === 'licensed' || proBusy) return;
+    showStControl(proCodeIn);
+    proCodeIn.value = code;
+    paintProErr();
+    activatePro();
+  }, () => {});
+}
+proActBtn.addEventListener('click', activatePro);
+proOffBtn.addEventListener('click', () => void deactivatePro());
+proBuyBtn.addEventListener('click', () => void proBuy().catch((err: AppError) => paintProErr(err.message)));
+
+// 晾衣绳样式选择器只在带 pro/ 的构建里有；没有时 glob 为空，这一项一直隐藏。
+// 类型在这里写一份，不引用 pro/ 里的文件：公开源码里没有它，tsc 也得过
+type StylePicker = { set(value: LineStyle, locked: boolean): void };
+const stylePickerMods = import.meta.glob<{
+  mountStylePicker(el: HTMLElement, value: LineStyle, locked: boolean, onChange: (v: LineStyle) => void): StylePicker;
+}>('../pro/web/style/picker.ts');
+// 草稿只在保存时写回，取消丢弃；试用结束时选择器锁住
+let draftLineStyle: LineStyle, stylePicker: StylePicker | undefined, stylePickerLoading = false;
+const lineLocked = () => S.line.pro.state === 'expired';
+/** 打开设置时调：第一次载入选择器挂上去，之后把草稿和锁定状态交给它 */
+function paintLineStyle() {
+  if (stylePicker) return stylePicker.set(draftLineStyle, lineLocked());
+  const load = Object.values(stylePickerMods)[0];
+  if (!load || stylePickerLoading) return;
+  stylePickerLoading = true;
+  void load().then((m) => {
+    const el = $('#lineStyleField');
+    stylePicker = m.mountStylePicker(el, draftLineStyle, lineLocked(), (v) => void (draftLineStyle = v));
+    el.hidden = false;
+  }, (e: Error) => void info(`载入晾衣绳样式选择器失败：${e.message}`));
+}
+// 晾衣绳总开关与位置：草稿只在保存时写回，取消丢弃；开关关着时位置和样式两项变淡，仍可改
+const beltOnIn = $<HTMLInputElement>('#beltOn'), beltAutoIn = $<HTMLSelectElement>('#beltAuto');
+popSelect(beltAutoIn, dlg);
+const lineOnIn = $<HTMLInputElement>('#lineOn'), linePinIn = $<HTMLInputElement>('#linePin'), lineSideEl = $('#lineSide'), lineSideHintEl = $('#lineSideHint');
+const lineSideIns = [...lineSideEl.querySelectorAll<HTMLInputElement>('input')];
+const LINE_SIDE_HELP: Record<LineSide, string> = { top: '鼠标碰到屏幕顶端放下', left: '鼠标碰到屏幕左侧边缘放下', right: '鼠标碰到屏幕右侧边缘放下' };
+let draftLineEnabled = true, draftLineSide: LineSide = 'top', draftLinePinned = false, lineHintSeq = 0;
+function paintLineOn() {
+  lineOnIn.checked = draftLineEnabled;
+  $('#lineOnHelp').textContent = draftLineEnabled ? '鼠标碰到屏幕边缘、按快捷键时放下晾衣绳'
+    : '已关闭：碰边缘不放下，快捷键和面板上的挂钩按钮都不起作用；挂着的便签和提醒都留着，打开后恢复';
+  for (const f of ['#lineSideField', '#linePinField', '#linePaceField', '#lineStyleField']) $(f).classList.toggle('line-off', !draftLineEnabled);
+}
+/** 位置说明下面是程序坞提示：后端按当前屏幕算，为空不显示；连点几下只认最后一次的结果 */
+function paintLineSide() {
+  for (const i of lineSideIns) i.checked = i.value === draftLineSide;
+  $('#lineSideHelp').textContent = LINE_SIDE_HELP[draftLineSide];
+  // 先藏起上一个位置的提示，读到新的再显示；读不到就一直不显示
+  lineSideHintEl.hidden = true;
+  const seq = ++lineHintSeq;
+  void lineSideHint(draftLineSide).then((t) => {
+    if (seq !== lineHintSeq) return;
+    lineSideHintEl.textContent = t;
+    lineSideHintEl.hidden = !t;
+  }, (e: AppError) => void info(`读取程序坞提示失败 kind=${e.kind}`));
+}
+lineOnIn.addEventListener('change', () => {
+  draftLineEnabled = lineOnIn.checked;
+  paintLineOn();
+});
+linePinIn.addEventListener('change', () => void (draftLinePinned = linePinIn.checked));
+// 晾衣绳出现、收起的快慢：只改表单里的选择，随“保存设置”生效
+const PACES: Pace[] = ['fast', 'normal', 'slow'];
+const PACE_HELP: Record<'lineAppear' | 'lineLeave', Record<Pace, string>> = {
+  lineAppear: { fast: '鼠标碰到边缘停 0.1 秒就放下', normal: '鼠标碰到边缘停 0.2 秒放下', slow: '停 0.5 秒才放下，鼠标划过边缘不放下' },
+  lineLeave: { fast: '鼠标离开 0.25 秒就收起', normal: '鼠标离开 0.35 秒收起', slow: '鼠标离开 0.8 秒才收起' },
+};
+const draftPace: Record<'lineAppear' | 'lineLeave', Pace> = { lineAppear: 'normal', lineLeave: 'normal' };
+const paceSegs = [...document.querySelectorAll<HTMLElement>('[data-pace-seg]')];
+function paintPace() {
+  for (const seg of paceSegs) {
+    const k = seg.id as keyof typeof draftPace;
+    for (const b of seg.querySelectorAll<HTMLElement>('[data-pace]')) {
+      const on = b.dataset.pace === draftPace[k];
+      b.setAttribute('aria-checked', String(on));
+      b.tabIndex = on ? 0 : -1;
+    }
+    $(`#${k}Help`).textContent = PACE_HELP[k][draftPace[k]];
+  }
+}
+for (const seg of paceSegs) {
+  const k = seg.id as keyof typeof draftPace;
+  seg.addEventListener('click', (e) => {
+    const b = (e.target as Element).closest<HTMLElement>('[data-pace]');
+    if (!b) return;
+    draftPace[k] = b.dataset.pace as Pace;
+    paintPace();
+  });
+  seg.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    e.stopPropagation();
+    const i = PACES.indexOf(draftPace[k]) + (e.key === 'ArrowRight' ? 1 : -1);
+    draftPace[k] = PACES[Math.max(0, Math.min(PACES.length - 1, i))];
+    paintPace();
+    seg.querySelector<HTMLElement>(`[data-pace="${draftPace[k]}"]`)!.focus();
+  });
+}
+lineSideEl.addEventListener('change', (e) => {
+  draftLineSide = (e.target as HTMLInputElement).value as LineSide;
+  paintLineSide();
+});
+// 设置“Pro”：概览（授权卡片 + 功能清单）和授权、各功能的子页。切到别的标签再回来停在原来的子页，重新打开设置回到概览。
+// focus：undefined 时进子页聚焦“‹ Pro”、回概览聚焦刚才那一行；null 不动焦点（由调用方聚焦具体控件）
+const proPages = [...document.querySelectorAll<HTMLElement>('#st-pro .pro-page')];
+const proLicEl = $('#proLic'), proLicBuy = $<HTMLButtonElement>('#proLicBuy'), proLicCode = $<HTMLButtonElement>('#proLicCode'), proLicManage = $<HTMLButtonElement>('#proLicManage');
+const lineOnQuick = $<HTMLInputElement>('#lineOnQuick'), beltOnQuick = $<HTMLInputElement>('#beltOnQuick');
+// 搅拌机：总开关、快捷键与配方列表都是草稿，保存时写回。自带配方的默认值第一次打开设置时取
+const mixerOnIn = $<HTMLInputElement>('#mixerOn'), mixerOnQuick = $<HTMLInputElement>('#mixerOnQuick');
+let draftRecipes: Recipe[] = [];
+const mixerDefs: Recipe[] = [];
+const recipes = mountRecipes($('#mixerRecipes'), {
+  get: () => draftRecipes,
+  set: (l) => {
+    draftRecipes = l;
+    paintMixerSum();
+  },
+  defaults: mixerDefs,
+  composing,
+});
+// 编辑框里 Esc 只收起编辑（recipes.ts 已拦下）；旧 WebKit 仍会触发对话框的 cancel，按此标记拦下（同应用列表）
+$('#mixerRecipes').addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || !e.defaultPrevented) return;
+  escClosedList = true;
+  setTimeout(() => (escClosedList = false));
+});
+// 摘要里的配方数是打开的那几个
+const paintMixerSum = () => featSummary($('#proSumMixer'), mixerOnIn.checked, mixerKey.pending, `${draftRecipes.filter((r) => r.show).length} 个配方`);
+const LINE_SIDE_NAME: Record<LineSide, string> = { top: '顶部', left: '左侧', right: '右侧' };
+let proPage = 'proHome';
+function proGo(id: string, focus?: HTMLElement | null, animate = true) {
+  const from = proPage;
+  if (from !== id) {
+    proPage = id;
+    for (const p of proPages) {
+      p.hidden = p.id !== id;
+      p.classList.remove('in-r', 'in-l');
+    }
+    const cur = $(`#${id}`);
+    if (animate) {
+      void cur.offsetWidth;
+      cur.classList.add(id === 'proHome' ? 'in-l' : 'in-r');
+    }
+    $('#st-pro').scrollTop = 0;
+    if (id === 'proHome') paintProHome();
+    else if (id === 'proEditPage') paintEditApi();
+  }
+  if (id === 'proEditPage') {
+    paintEditClearErr();
+    void paintEditRecent();
+  }
+  if (focus === undefined) focus = id === 'proHome' ? $(`[data-pro-go="${from}"]`) : $(`#${id} .pro-back`);
+  focus?.focus({ preventScroll: true });
+}
+/** 功能行的摘要：快捷键 · 其余设置；关着写“已关闭” */
+function featSummary(el: HTMLElement, on: boolean, hotkey: string, rest: string) {
+  if (!on) return void (el.textContent = '已关闭');
+  const k = document.createElement(hotkey ? 'kbd' : 'span');
+  k.textContent = hotkey ? hotkeyLabel(hotkey, S.platform.os) : '没有快捷键';
+  el.replaceChildren(k, '·', rest);
+}
+/** 子页里关着时的一项：变淡、不可操作。录制框那一项只变淡：关着时快捷键冲突也写在它下面，要能改 */
+function dimItem(el: HTMLElement, off: boolean) {
+  el.classList.toggle('line-off', off);
+  el.inert = off && !el.querySelector('[id$="Hotkey"]');
+}
+function paintProHome() {
+  const c = proCard(S.line.pro, S.line.canBuy);
+  proLicEl.dataset.tone = c.tone;
+  $('#proLicTitle').textContent = c.title;
+  $('#proLicSub').textContent = c.sub;
+  proLicBuy.hidden = !c.buy;
+  proLicCode.hidden = !c.code;
+  proLicManage.hidden = !c.manage;
+  lineOnQuick.checked = draftLineEnabled;
+  beltOnQuick.checked = beltOnIn.checked;
+  featSummary($('#proSumLine'), draftLineEnabled, lineKey.pending, LINE_SIDE_NAME[draftLineSide] + (draftLinePinned ? ' · 一直显示' : ''));
+  featSummary($('#proSumBelt'), beltOnIn.checked, beltKey.pending, beltAutoIn.value === 'auto' ? '自动开启' : '手动开启');
+  mixerOnQuick.checked = mixerOnIn.checked;
+  paintMixerSum();
+  memeOnQuick.checked = memeOnIn.checked;
+  paintMemeSum();
+  paintMemeCaption();
+  $('#proFeatMeme').classList.toggle('off', !memeOnIn.checked);
+  editOnQuick.checked = editOnIn.checked;
+  featSummary($('#proSumEdit'), editOnIn.checked, editKey.pending, draftEditMode === 'ai' ? '直接用 AI' : '先在本机改');
+  $('#proFeatEdit').classList.toggle('off', !editOnIn.checked);
+  $('#proFeatLine').classList.toggle('off', !draftLineEnabled);
+  $('#proFeatBelt').classList.toggle('off', !beltOnIn.checked);
+  $('#proFeatMixer').classList.toggle('off', !mixerOnIn.checked);
+  // 传送带关着时下面几项变淡，仍可改（同晾衣绳）
+  for (const el of document.querySelectorAll('#proBeltPage > .line, #proBeltPage > .field')) el.classList.toggle('line-off', !beltOnIn.checked);
+  for (const el of document.querySelectorAll<HTMLElement>('#proMixerPage > .line, #proMixerPage > .field, #proMixerPage > .recipes')) dimItem(el, !mixerOnIn.checked);
+  // 生图接口和改字共用：表情包制作关着、改字开着时照常能填
+  for (const el of document.querySelectorAll<HTMLElement>('#proMemePage > .line, #proMemePage > .field, #proMemePage > .help'))
+    dimItem(el, !memeOnIn.checked && !('iface' in el.dataset && S.line.edit && editOnIn.checked));
+  // 改字关着时改过的图还在，照样能清空
+  for (const el of document.querySelectorAll<HTMLElement>('#proEditPage > .field, #proEditPage > .line:not(#editRecentRow)')) dimItem(el, !editOnIn.checked);
+}
+$('#st-pro').addEventListener('click', (e) => {
+  const t = e.target as Element, go = t.closest<HTMLElement>('[data-pro-go]');
+  if (go) proGo(go.dataset.proGo!);
+  else if (t.closest('[data-pro-back]')) proGo('proHome');
+});
+// 概览上的开关和子页里的是同一份草稿
+lineOnQuick.addEventListener('change', () => {
+  lineOnIn.checked = lineOnQuick.checked;
+  lineOnIn.dispatchEvent(new Event('change'));
+});
+beltOnQuick.addEventListener('change', () => {
+  beltOnIn.checked = beltOnQuick.checked;
+  paintProHome();
+});
+lineOnIn.addEventListener('change', paintProHome);
+beltOnIn.addEventListener('change', paintProHome);
+mixerOnQuick.addEventListener('change', () => {
+  mixerOnIn.checked = mixerOnQuick.checked;
+  paintProHome();
+});
+mixerOnIn.addEventListener('change', paintProHome);
+$('#mixerTrGo').addEventListener('click', () => showStControl(trBaseIn));
+// 表情包制作：开关、快捷键与生图接口都是草稿，保存时写回
+const memeOnIn = $<HTMLInputElement>('#memeOn'), memeOnQuick = $<HTMLInputElement>('#memeOnQuick');
+const memeProvEl = $('#memeProv'), memeFmtEl = $('#memeFmt');
+const memeUrlIn = $<HTMLInputElement>('#memeBaseUrl'), memeKeyIn = $<HTMLInputElement>('#memeApiKey'), memeModelIn = $<HTMLInputElement>('#memeModel');
+const memeUrlErr = $('#memeBaseUrlErr'), memeResult = $('#memeTestResult'), memeTestBtn = $<HTMLButtonElement>('#memeTestBtn'), memeImg = $<HTMLImageElement>('#memeTestImg');
+let memeProvider = 'openai', memeFormat: MemeFormat = 'openai';
+const paintMemeSum = () => featSummary($('#proSumMeme'), memeOnIn.checked, memeKey.pending, memeModelIn.value.trim() ? memeModelIn.value.trim() : '生图接口未配置');
+memeProvEl.replaceChildren(...[...MEME_PRESETS.map((p) => [p.key, p.label]), ['custom', '自定义']].map(([k, t]) => {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.setAttribute('role', 'radio');
+  b.dataset.prov = k;
+  b.textContent = t;
+  return b;
+}));
+function paintMemeIface() {
+  for (const b of memeProvEl.querySelectorAll<HTMLElement>('[data-prov]')) {
+    const on = b.dataset.prov === memeProvider;
+    b.setAttribute('aria-checked', String(on));
+    b.tabIndex = on ? 0 : -1;
+  }
+  for (const b of memeFmtEl.querySelectorAll<HTMLElement>('[data-fmt]')) {
+    const on = b.dataset.fmt === memeFormat;
+    b.setAttribute('aria-checked', String(on));
+    b.tabIndex = on ? 0 : -1;
+  }
+}
+const memeEdited = (f: MemeField) => {
+  memeProvider = providerAfterEdit(memeProvider, f);
+  paintMemeIface();
+};
+const paintMemeUrlErr = (msg: string | null) => {
+  memeUrlErr.textContent = msg ?? '';
+  memeUrlErr.hidden = !msg;
+  memeUrlIn.setAttribute('aria-invalid', String(!!msg));
+  paintStErr();
+};
+memeProvEl.addEventListener('click', (e) => {
+  const k = (e.target as Element).closest<HTMLElement>('[data-prov]')?.dataset.prov;
+  if (!k) return;
+  const p = memePreset(k);
+  memeProvider = k;
+  if (p) {
+    memeFormat = p.format;
+    memeUrlIn.value = p.baseUrl;
+    memeModelIn.value = p.model;
+    paintMemeUrlErr(null);
+    paintMemeSum();
+  }
+  paintMemeIface();
+});
+memeFmtEl.addEventListener('click', (e) => {
+  const f = (e.target as Element).closest<HTMLElement>('[data-fmt]')?.dataset.fmt as MemeFormat | undefined;
+  if (!f) return;
+  memeFormat = f;
+  memeEdited('format');
+});
+memeUrlIn.addEventListener('input', () => {
+  memeEdited('baseUrl');
+  if (!memeUrlErr.hidden && baseUrlError(memeUrlIn.value) === null) paintMemeUrlErr(null);
+});
+memeModelIn.addEventListener('input', () => {
+  memeEdited('model');
+  paintMemeSum();
+});
+$('#memeKeyBtn').addEventListener('click', () => {
+  const show = memeKeyIn.type === 'password';
+  memeKeyIn.type = show ? 'text' : 'password';
+  $('#memeKeyBtn').textContent = show ? '隐藏' : '显示';
+});
+const setMemeResult = (t: string, cls = '') => {
+  memeResult.textContent = t;
+  memeResult.className = `help tr-result ${cls}`;
+  if (memeImg.src.startsWith('blob:')) URL.revokeObjectURL(memeImg.src);
+  memeImg.hidden = true;
+};
+// 用当前（未保存）的接口配置生成一张小图；期间按钮不可再点
+memeTestBtn.addEventListener('click', () => {
+  const baseUrl = memeUrlIn.value.trim().replace(/\/+$/, ''), model = memeModelIn.value.trim();
+  const urlErr = baseUrlError(baseUrl);
+  if (urlErr) return paintMemeUrlErr(urlErr);
+  if (!baseUrl || !model) return setMemeResult('接口地址和模型 ID 都要填', 'is-err');
+  if (!imageApiReady(baseUrl, model, memeKeyIn.value)) return setMemeResult('这个服务商要填 API Key', 'is-err');
+  memeTestBtn.disabled = true;
+  setMemeResult('测试中…');
+  void memeTestImage({ format: memeFormat, baseUrl, apiKey: memeKeyIn.value.trim(), model }).then(
+    (png) => {
+      setMemeResult('✓ 能生成');
+      memeImg.src = URL.createObjectURL(new Blob([png], { type: 'image/png' }));
+      memeImg.hidden = false;
+    },
+    (e: unknown) => setMemeResult(typeof e === 'string' ? e : (e as AppError).message ?? '生成失败', 'is-err'),
+  ).finally(() => (memeTestBtn.disabled = false));
+});
+memeOnQuick.addEventListener('change', () => {
+  memeOnIn.checked = memeOnQuick.checked;
+  paintProHome();
+});
+memeOnIn.addEventListener('change', paintProHome);
+const paintMemeCaption = () => ($('#memeCaption').textContent = memeCaptionState(trBaseIn.value, trModelIn.value));
+$('#memeTrGo').addEventListener('click', () => showStControl(trBaseIn));
+// 改字：开关、快捷键、怎么改都是草稿，保存时写回；清空“最近改过”当场生效
+const editOnIn = $<HTMLInputElement>('#editOn'), editOnQuick = $<HTMLInputElement>('#editOnQuick'), editModeEl = $('#editMode');
+const editClearBtn = $<HTMLButtonElement>('#editClear'), editRecentEl = $('#editRecent'), editClearErr = $('#editClearErr');
+let draftEditMode: Settings['editMode'] = 'local';
+function paintEditApi() {
+  const s = editApiState(draftEditMode, memeUrlIn.value, memeModelIn.value, memeKeyIn.value);
+  $('#editApi').textContent = s.text;
+  $('#editApiGo').textContent = s.go;
+}
+function paintEditClearErr(msg = '') {
+  editClearErr.textContent = msg;
+  editClearErr.hidden = !msg;
+  // 在最底下，写出来时滚到看得见
+  if (msg) editClearErr.scrollIntoView({ block: 'nearest' });
+  paintStErr();
+}
+/** 取一次“最近改过”的张数和占用，返回张数；读不到返回 null。连着取几次只画最后一次的 */
+let editRecentSeq = 0;
+async function paintEditRecent(): Promise<number | null> {
+  const seq = ++editRecentSeq;
+  const got = await teRecentStats().catch((e: AppError) => {
+    void info(`读取“最近改过”统计失败 kind=${e.kind}`);
+    return null;
+  });
+  if (seq === editRecentSeq) {
+    editRecentEl.textContent = got ? editRecentText(...got) : '读不到有几张，现在不能清空';
+    editClearBtn.disabled = !got?.[1];
+  }
+  return got && got[0];
+}
+editOnQuick.addEventListener('change', () => {
+  editOnIn.checked = editOnQuick.checked;
+  paintProHome();
+});
+editOnIn.addEventListener('change', paintProHome);
+// 原生单选：点击与方向键切换都由浏览器处理
+editModeEl.addEventListener('change', (e) => {
+  draftEditMode = (e.target as HTMLInputElement).value as Settings['editMode'];
+  paintEditApi();
+});
+// 生图接口在“表情包制作”的子页里，从服务商那一项开始
+function goImageApi() {
+  showStControl(memeProvEl.querySelector<HTMLElement>('[aria-checked="true"]')!);
+  memeProvEl.closest('.field')!.scrollIntoView({ block: 'start' });
+}
+$('#editApiGo').addEventListener('click', goImageApi);
+editClearBtn.addEventListener('click', () => void (async () => {
+  paintEditClearErr();
+  // 张数以点的这一刻为准：设置开着时可能又改好了一张
+  const n = await paintEditRecent();
+  if (n === null || editClearBtn.disabled || !(await confirm(editClearAsk(n)))) return;
+  // 清空后按钮不可点，接不住焦点：确认框关了回到“‹ Pro”
+  cfReturn = $('#proEditPage .pro-back');
+  const err = await teRecentClear().then(() => null, (e: AppError) => e);
+  // 没清成的可能已经删了几张：重新取。清成了、取不到时照样说清空了
+  const left = await paintEditRecent();
+  if (err) paintEditClearErr(`没清成：${err.message}`);
+  else if (left === null) editRecentEl.textContent = '已清空';
+})());
+proLicCode.addEventListener('click', () => proGo('proLicPage', proCodeIn));
+proLicManage.addEventListener('click', () => proGo('proLicPage'));
+proLicBuy.addEventListener('click', () => void proBuy().catch((err: AppError) => {
+  proGo('proLicPage', null);
+  paintProErr(err.message);
+}));
+// 在输入框里按 Enter 是激活，不是保存设置
+proCodeIn.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' || e.isComposing) return;
+  e.preventDefault();
+  activatePro();
+});
+proCodeIn.addEventListener('input', () => paintProErr());
 
 // 截图、录屏文件夹：设置里存空字符串表示默认文件夹，输入框只显示默认路径的写法。
 // 取消选择不改；选好的路径只在保存时写回。失败写在这一行下方（提示条会被设置框盖住）
@@ -1948,7 +2570,7 @@ const recDir = dirField('recDir', () => '~/Movies/xPaste');
 // 两组各自配置、互不隐藏。stored 为空串（未选）时按本机能力显示，用户没动就保存时原样写回
 const trEngineEl = $('#trEngine'), trEngineIns = [...trEngineEl.querySelectorAll<HTMLInputElement>('input')];
 const trBaseIn = $<HTMLInputElement>('#trBaseUrl'), trKeyIn = $<HTMLInputElement>('#trApiKey'), trModelIn = $<HTMLInputElement>('#trModel');
-const trLangIn = $<HTMLSelectElement>('#trLang'), trBaseErr = $('#trBaseUrlErr'), trTestBtn = $<HTMLButtonElement>('#trTestBtn'), trResult = $('#trTestResult');
+const trLangIn = popSel($<HTMLSelectElement>('#trLang')), trBaseErr = $('#trBaseUrlErr'), trTestBtn = $<HTMLButtonElement>('#trTestBtn'), trResult = $('#trTestResult');
 const trPackRow = $('#trPackRow'), trPack = $('#trPack'), trPackBtn = $('#trPackBtn');
 // trKnown：本机能否用系统翻译。第一次查到之前按 macOS 能用先画，免得常见情况（macOS 26+）打开时闪一下接口三项；查到后跨打开保留
 let trKnown: boolean | null = null, trEngine: 'system' | 'openai' = 'openai', trTouched = false, trSeq = 0, trOpenSeq = 0;
@@ -2014,6 +2636,8 @@ function paintTrUrlErr(msg: string | null) {
   trBaseIn.setAttribute('aria-invalid', String(!!msg));
   paintStErr();
 }
+trBaseIn.addEventListener('input', paintMemeCaption);
+trModelIn.addEventListener('input', paintMemeCaption);
 trBaseIn.addEventListener('input', () => !trBaseErr.hidden && baseUrlError(trBaseIn.value) === null && paintTrUrlErr(null));
 const setTrResult = (t: string, cls = '') => {
   trResult.textContent = t;
@@ -2036,6 +2660,8 @@ function openTranslateTab(st: Settings) {
   $('#trKeyBtn').textContent = '显示';
   trModelIn.value = st.translateModel;
   trLangIn.value = st.translateLang;
+  // 文案一组的状态读这里刚填好的值（paintProHome 在它之前跑过一次）
+  paintMemeCaption();
   trTouched = false;
   paintTrUrlErr(null);
   setTrResult('');
@@ -2295,7 +2921,7 @@ function openSettings() {
   if (!S.settings.hotkey || dlg.classList.contains('is-shown')) return;
   clearTimeout(closeTimer);
   if (!dlg.open) dlgReturn = document.activeElement as HTMLElement | null;
-  clearNote.textContent = '置顶记录与片段会保留';
+  clearNote.textContent = keptNote(memeOn());
   logNote.textContent = LOG_NOTE;
   snipNote.textContent = SNIP_NOTE;
   const hasSnip = counts(S.records, favMin()).snip > 0;
@@ -2310,6 +2936,66 @@ function openSettings() {
   shotKey.reset(st.shotHotkey);
   recKey.reset(st.recHotkey);
   trKey.reset(st.translateHotkey);
+  lineKey.reset(st.lineHotkey);
+  beltKey.reset(st.beltHotkey);
+  beltBackKey.reset(st.beltBackHotkey);
+  beltOnIn.checked = st.beltEnabled;
+  beltAutoIn.value = st.beltAuto ? 'auto' : 'manual';
+  memeKey.reset(st.memeHotkey);
+  memeOnIn.checked = st.memeEnabled;
+  memeProvider = st.memeImageProvider;
+  memeFormat = st.memeImageFormat;
+  memeUrlIn.value = st.memeImageBaseUrl;
+  memeKeyIn.value = st.memeImageApiKey;
+  memeKeyIn.type = 'password';
+  $('#memeKeyBtn').textContent = '显示';
+  memeModelIn.value = st.memeImageModel;
+  paintMemeUrlErr(null);
+  setMemeResult('');
+  memeTestBtn.disabled = false;
+  paintMemeIface();
+  $('#memeStats').textContent = '';
+  void memeLibraryStats().then(([n, b]) => ($('#memeStats').textContent = memeStatsText(n, b)), (e: AppError) => void info(`读取表情包库统计失败 kind=${e.kind}`));
+  editKey.reset(st.editHotkey);
+  editOnIn.checked = st.editEnabled;
+  draftEditMode = st.editMode;
+  for (const i of editModeEl.querySelectorAll('input')) i.checked = i.value === draftEditMode;
+  paintEditClearErr();
+  mixerKey.reset(st.mixerHotkey);
+  mixerOnIn.checked = st.mixerEnabled;
+  draftRecipes = st.mixerRecipes;
+  recipes.reset();
+  if (S.line.available && !mixerDefs.length)
+    void mixerDefaults().then((d) => {
+      mixerDefs.push(...d);
+      recipes.render();
+    }, (e: AppError) => void info(`读取自带配方失败 kind=${e.kind}`));
+  paintProStatus();
+  draftLineStyle = st.lineStyle;
+  paintLineStyle();
+  draftLineEnabled = st.lineEnabled;
+  paintLineOn();
+  draftLineSide = st.lineSide;
+  linePinIn.checked = draftLinePinned = st.linePinned;
+  draftPace.lineAppear = st.lineAppear;
+  draftPace.lineLeave = st.lineLeave;
+  paintPace();
+  if (S.line.available) paintLineSide();
+  proGo('proHome', null, false);
+  paintProHome();
+  // 试用可能在面板开着时到期（没有广播），打开设置时重新取一次
+  if (S.line.available)
+    void proStatus().then((p) => {
+      S.line.pro = p;
+      paintProStatus();
+      stylePicker?.set(draftLineStyle, lineLocked());
+    }, () => {});
+  // 激活进行中（激活链接拉起时设置可能已经开着）不清输入框
+  if (!proBusy) {
+    proCodeIn.value = '';
+    paintProErr();
+  }
+  paintProOffErr();
   // 启动时被其他应用占用、没注册上的快捷键：只发过系统通知（可能被关掉），这里在录制框下标红、标签上出红点
   void hotkeyStatus().then((h) => {
     const taken = (name: string) => `${name}快捷键被其他应用占用，没有生效，请换一个`;
@@ -2317,6 +3003,11 @@ function openSettings() {
     if (h.shot) shotKey.setHelp(taken('截图'), true);
     if (h.rec && S.platform.os === 'macos') recKey.setHelp(taken('录屏'), true);
     if (h.translate) trKey.setHelp(taken('翻译'), true);
+    if (h.line && S.line.available) lineKey.setHelp(taken('便签'), true);
+    if (h.belt && S.line.available) beltKey.setHelp(taken('传送带'), true);
+    if (h.mixer && S.line.available) mixerKey.setHelp(taken('搅拌机'), true);
+    if (h.meme && S.line.available) memeKey.setHelp(taken('表情包'), true);
+    if (h.edit && S.line.edit) editKey.setHelp(taken('改字'), true);
   }, (e: AppError) => void info(`读取快捷键状态失败 kind=${e.kind}`));
   shotDir.pending = st.shotDir;
   shotDir.paint();
@@ -2402,7 +3093,10 @@ dlg.addEventListener('close', () => {
 });
 dlg.addEventListener('cancel', (e) => {
   e.preventDefault();
-  if (!escClosedList && !justComposed()) closeSettings();
+  if (escClosedList || justComposed()) return;
+  // 在“Pro”的子页里先回概览，再按才关设置
+  if (proPage !== 'proHome' && stPanes[stTab]?.id === 'st-pro') return proGo('proHome');
+  closeSettings();
 });
 // 遮罩点击才关：在输入框里拖选文字、松手落到遮罩上不算（那次 click 的目标也是 dialog）
 let downOnBackdrop = false;
@@ -2438,29 +3132,50 @@ async function submitSettings() {
   // 接口地址不论默认用哪种都校验：“AI 翻译”一组常驻显示（M26 规则 6）
   const urlErr = baseUrlError(trBaseIn.value);
   paintTrUrlErr(urlErr);
+  const memeUrlBad = baseUrlError(memeUrlIn.value);
+  paintMemeUrlErr(memeUrlBad);
   // 切到第一个出错的标签（按标签顺序），聚焦其中出错的控件
-  if (limit === null || frequent === null || urlErr) return showStControl(stPanes.map((p) => p.querySelector<HTMLElement>('[aria-invalid="true"]')).find(Boolean)!);
+  if (limit === null || frequent === null || urlErr || memeUrlBad) return showStControl(stPanes.map((p) => p.querySelector<HTMLElement>('[aria-invalid="true"]')).find(Boolean)!);
   const s = formToSettings(S.settings, {
     hotkey: pendingHotkey, retain: retainIn.value, limit, frequent, ignored: addIgnored(draftIgnored, ignoreIn.value), skipSensitive: sensitiveIn.checked,
     moveToTop: moveTopIn.checked, launchAtLogin: autostartIn.checked, updateCheck: updCheckIn.checked, ocrEnabled: ocrOnIn.checked, ocrBackfill: ocrBackfillIn.checked, searchFileText: fileTextIn.checked,
     shotHotkey: shotKey.pending, shotDir: shotDir.pending, shotSaveCopy: shotSaveCopyIn.checked, longAutoScroll: longAutoIn.checked,
     recHotkey: recKey.pending, recDir: recDir.pending, recSystemAudio: recSystemAudioIn.checked, recMicrophone: recMicIn.checked, recCopy: recCopyIn.checked,
-    recQuality: recQualityIn.value, recFps: recFpsIn.value, panelStyle: draftStyle,
+    recQuality: recQualityIn.value, recFps: recFpsIn.value, panelStyle: draftStyle, lineHotkey: lineKey.pending,
+    beltEnabled: beltOnIn.checked, beltAuto: beltAutoIn.value === 'auto', beltHotkey: beltKey.pending, beltBackHotkey: beltBackKey.pending,
+    mixerEnabled: mixerOnIn.checked, mixerHotkey: mixerKey.pending, mixerRecipes: draftRecipes,
   });
-  // 翻译字段不经 SettingsForm；末尾的 / 由后端去掉。engine 没动过就原样写回（可能是空串）
+  // 翻译字段和晾衣绳的样式、开关、位置不经 SettingsForm；末尾的 / 由后端去掉。engine 没动过就原样写回（可能是空串）
   Object.assign(s, {
     translateEngine: trSave(), translateBaseUrl: trBaseIn.value.trim(), translateApiKey: trKeyIn.value, translateModel: trModelIn.value.trim(), translateLang: trLangIn.value,
-    translateHotkey: trKey.pending,
+    translateHotkey: trKey.pending, lineStyle: draftLineStyle, lineEnabled: draftLineEnabled, lineSide: draftLineSide, linePinned: draftLinePinned,
+    lineAppear: draftPace.lineAppear, lineLeave: draftPace.lineLeave,
+    memeEnabled: memeOnIn.checked, memeHotkey: memeKey.pending, memeImageProvider: memeProvider, memeImageFormat: memeFormat,
+    memeImageBaseUrl: memeUrlIn.value.trim(), memeImageApiKey: memeKeyIn.value, memeImageModel: memeModelIn.value.trim(),
+    editEnabled: editOnIn.checked, editHotkey: editKey.pending, editMode: draftEditMode,
   });
   saving = true;
   try {
+    // 设置开着时试用可能到期：保存前再取一次 Pro 状态，到期了锁住选择器，样式不改，其余照常保存
+    let styleKept = false;
+    if (S.line.available) {
+      S.line.pro = await proStatus().catch(() => S.line.pro);
+      paintProStatus();
+      const old = S.settings.lineStyle;
+      if (lineLocked() && (Object.keys(old) as (keyof LineStyle)[]).some((k) => s.lineStyle[k] !== old[k])) {
+        s.lineStyle = draftLineStyle = S.settings.lineStyle;
+        styleKept = true;
+      }
+      stylePicker?.set(draftLineStyle, lineLocked());
+    }
     // 新的保留时长 / 条数上限会立即清理记录：先告诉用户删几条（设计 §5.5）
     if (s.retentionDays !== S.settings.retentionDays || s.maxRecords !== S.settings.maxRecords) {
       const n = await prunePreview(s.retentionDays, s.maxRecords);
       if (n > 0 && !(await confirm({ title: '保存设置', body: `将删除 ${n} 条记录`, ok: '删除并保存' }))) return;
     }
     await saveSettings(s);
-    const favChanged = s.frequentMinUses !== S.settings.frequentMinUses;
+    // 表情包制作的开关也改分类栏：关掉时“表情包”分类和搜索里的表情包都不出现；改字的开关改行上的按钮
+    const favChanged = s.frequentMinUses !== S.settings.frequentMinUses || s.memeEnabled !== S.settings.memeEnabled || s.editEnabled !== S.settings.editEnabled;
     const styleChanged = s.panelStyle !== S.settings.panelStyle;
     S.settings = s;
     refreshEngines();
@@ -2473,7 +3188,7 @@ async function submitSettings() {
     }
     closeSettings();
     if (styleChanged) applyStyle(s.panelStyle);
-    toast('设置已保存');
+    toast(styleKept ? '设置已保存；试用已结束，晾衣绳样式没有改' : '设置已保存');
   } catch (e) {
     const err = e as AppError;
     // 快捷键被占用或校验不过（与唤起相同等）写在对应录制框下方；先聚焦再写错误：focus 处理器会改帮助文字
@@ -2482,7 +3197,7 @@ async function submitSettings() {
       showStControl(hotkeyIn);
       setHotkeyHelp(err.message, true);
     } else if (at) {
-      const f = { shotHotkey: shotKey, recHotkey: recKey, trHotkey: trKey }[at];
+      const f = { shotHotkey: shotKey, recHotkey: recKey, trHotkey: trKey, lineHotkey: lineKey, beltHotkey: beltKey, beltBackHotkey: beltBackKey, mixerHotkey: mixerKey, memeHotkey: memeKey, editHotkey: editKey }[at];
       showStControl(f.input);
       f.setHelp(err.message, true);
     } else toast(err.message);
@@ -2510,7 +3225,7 @@ function snipErr(el: HTMLInputElement | HTMLTextAreaElement, err: HTMLElement, m
 async function openSnippet(mode: SnipMode, id?: number) {
   if (snipDlg.classList.contains('is-shown')) return;
   const r = id === undefined ? undefined : S.records.get(id);
-  if (mode !== 'new' && (!r || S.removing.has(r.id) || isSnip(r) !== (mode === 'edit'))) return;
+  if (mode !== 'new' && (!r || S.removing.has(r.id) || isMeme(r) || isSnip(r) !== (mode === 'edit'))) return;
   // 文字内容、文件名与尺寸来自详情：没缓存时先取（本地调用，几毫秒），回来时已隐藏或对话框已开就作罢
   let d: RecordDetail | null = null;
   if (r) {
@@ -2767,8 +3482,11 @@ obDlg.addEventListener('click', (e) => {
 });
 
 // —— 面板显隐 ——
+/** 唤起前选中的那一条：从表情包制作窗口返回面板时选回它（唤起会清空搜索、重置选中） */
+let selBeforeShown: number | null = null;
 const shown = (t0: number | null, trigger?: PanelShown['trigger']) => {
   S.shown = true;
+  selBeforeShown = S.sel;
   // 授权可能在隐藏期间变化；bootstrap 之前平台未知，由 bootstrap 后那一次负责
   if (S.platform.os) void paintVerb();
   refreshEngines();
@@ -2794,6 +3512,8 @@ const shown = (t0: number | null, trigger?: PanelShown['trigger']) => {
 // 一次隐藏可能收到两次 panel-hidden，这里只写状态，重复调用无副作用
 const hidden = () => {
   S.shown = false;
+  S.openSet = null;
+  syncTaskTimer();
   // 每次唤起回到 24 小时（设计 §2 非目标）；shown() 的 runSearch('') 会重绘
   spWin = null;
   spectrum.classList.remove('smooth');
@@ -2862,6 +3582,11 @@ document.addEventListener('keydown', (e) => {
       compact: S.settings.panelStyle === 'compact',
       peek: win.dataset.peek === 'true',
       filtered: S.filter !== 'all',
+      meme: memeOn(),
+      inMeme: memeGrid(),
+      selIsMeme: !!selR && isMeme(selR),
+      edit: editOn(),
+      selEditable: !!selR && !isLib(selR) && (selR.kind === 'image' || selR.kind === 'file'),
     },
   );
   if (!a) return;
@@ -2887,7 +3612,7 @@ document.addEventListener('keydown', (e) => {
       return;
     }
     case 'pin': return void (sel !== null && togglePin(sel, false));
-    case 'filter': return setFilter(cycleFilter(S.filter, a.d), true);
+    case 'filter': return setFilter(cycleFilter(S.filter, a.d, memeTab()), true);
     case 'undo': return undo();
     case 'delete': return remove(S.multi.size >= 2 ? [...S.multi] : sel !== null ? [sel] : []);
     case 'clearSearch':
@@ -2898,6 +3623,11 @@ document.addEventListener('keydown', (e) => {
     // 片段（M25 规则 5、6）
     case 'saveSnippet': return void (sel !== null && openSnippet('save', sel));
     case 'editSnippet': return void (sel !== null && openSnippet('edit', sel));
+    case 'makeMeme': return makeMeme(sel);
+    case 'editMeme': return void (sel !== null && editMeme(sel));
+    case 'editText': return void (sel !== null && editText(sel));
+    case 'editNone': return toast('这条改不了字');
+    case 'cell': return memeStep(a.d > 0 ? 'ArrowRight' : 'ArrowLeft');
     case 'newSnippet': return void openSnippet('new');
     case 'translate': return void (sel !== null && doTranslate(sel));
     // 精简模式（M27 规则 7–9）
@@ -2946,11 +3676,90 @@ await onTranslateDelta(({ id, lang, engine, text }) => {
 });
 await onPausedChanged((p) => handlers.paused(p));
 // 录屏遮罩的声音开关写回了设置（M24）：换掉手里的副本，之后保存设置或界面状态才不会把它改回去
-await onSettingsChanged((s) => void (S.settings = s));
+// 搅拌机“存成配方”也走这里：设置开着时把新加的配方接到正在改的列表末尾，别的没保存的改动不动
+await onSettingsChanged((s) => {
+  if (dlg.open) {
+    const had = (r: Recipe) => S.settings.mixerRecipes.some((x) => x.name === r.name) || draftRecipes.some((x) => x.name === r.name);
+    const add = s.mixerRecipes.filter((r) => !had(r));
+    if (add.length) {
+      draftRecipes = [...draftRecipes, ...add];
+      recipes.render();
+      paintMixerSum();
+    }
+  }
+  S.settings = s;
+});
 // 托盘“设置…”：后端已先唤起面板
-await onOpenSettings((tab) => (tab === 'translate' ? openTrSettings() : openSettings()));
+// 晾衣绳“试用已结束”提示条上的“输入授权码”：载荷 pro，切到“Pro”标签
+// 设置已开着也切过去，并聚焦授权码输入框
+// 搅拌机 ⋯ 菜单的“编辑配方…”（mixer）、存成配方后的“改名字”（mixer:<名字>）：进 Pro → 搅拌机页，后者展开那个配方
+await onOpenSettings((tab) => {
+  if (tab === 'translate') return openTrSettings();
+  if (tab?.startsWith('mixer') && S.line.available) {
+    openSettingsAt('st-tab-pro');
+    if (!dlg.open) return;
+    selectStTab(stTabs.findIndex((t) => t.id === 'st-tab-pro'), false);
+    proGo('proMixerPage', tab === 'mixer' ? undefined : null);
+    if (tab !== 'mixer') recipes.edit(tab.slice('mixer:'.length));
+    return;
+  }
+  // 表情包制作、改字窗口里的“生图接口还没配好［去设置］”：打开 Pro → 表情包制作；它关着时直接到生图接口
+  if (tab === 'meme' && S.line.available) {
+    openSettingsAt('st-tab-pro');
+    if (!dlg.open) return;
+    selectStTab(stTabs.findIndex((t) => t.id === 'st-tab-pro'), false);
+    return memeOnIn.checked ? proGo('proMemePage') : goImageApi();
+  }
+  // 托盘“改字设置…”、改字窗口里的“去设置”
+  if (tab === 'edit' && S.line.edit) return goEditSettings();
+  if (tab !== 'pro' || !S.line.available) return openSettings();
+  openSettingsAt('st-tab-pro');
+  showStControl(proActField.hidden ? proOffBtn : proCodeIn);
+});
+// 官网付款成功页用 xpaste://activate?code=… 拉起：后端已唤起面板
+await onProLink(activateFromLink);
 // 设置对话框开着时提示条被它盖住，结果同样写进“历史记录”行内：先切到“记录”标签，
 // 如同点了行内的“清空历史…”（确认框关闭后焦点回到这个按钮）
+// 制作窗口里点了“存进表情包”（M33 规则 10）：后端已关掉窗口、唤起面板；切到“表情包”分类，选中刚存的
+await onMemeReveal((id) => {
+  if (!memeOn()) return;
+  S.memeSrc = 'all';
+  // 防御：存进表情包的成品没有套编号，这里总是收回；万一刚存的在一套里，摊开它才选得中
+  S.openSet = S.records.get(id)?.meme?.set ?? null;
+  setFilter('meme', true);
+  renderList();
+  if (S.records.has(id)) select(id, { scroll: true, instant: true });
+});
+// AI 任务：先订阅后端发来的整份列表，再取一次当前的；事件先到过就丢掉取回的快照（它可能更旧）。
+// Pro 不可用时取不到，不显示任务格（官网演示里没有这个命令，取回空）
+let tasksHeard = false;
+await onMemeTasks((ts) => {
+  tasksHeard = true;
+  setMemeTasks(ts);
+});
+void memeTasks().then((ts) => tasksHeard || setMemeTasks(ts ?? []), () => {});
+// 制作窗口关掉、后端已唤起面板：返回面板时分类不动、选回原来那一条，留了草稿提示一句；
+// 贴过去没成（没有辅助功能权限等）时照面板粘贴的降级提示
+await onMemeBack(({ draft, reason }) => {
+  const id = selBeforeShown;
+  // 原来选中的在收回去的一套里：摊开它才选得回
+  const set = id === null ? null : (S.records.get(id)?.meme?.set ?? null);
+  if (memeGrid() && set !== null && !vis().some((r) => r.id === id)) {
+    S.openSet = set;
+    renderList();
+  }
+  if (id !== null && S.records.has(id) && vis().some((r) => r.id === id)) select(id, { scroll: true, instant: true });
+  if (reason) {
+    const res = { result: 'copiedOnly', reason } as const;
+    toast(copyToast(res, S.platform.os, null)!, {
+      action: needsAccessibility(res)
+        ? { label: '前往授权', run: () => void requestAccessibility().catch((e: AppError) => toast(e.message, { icon: 'copy' })) }
+        : undefined,
+    });
+  } else if (draft) toast('刚才的改动留成了草稿，下次空白打开能接着做');
+});
+// 改字关着时从系统的“打开方式”进来：后端已唤起面板
+await onTeOff(() => toast('改字没有开启', { icon: 'editText', action: { label: '去设置', run: goEditSettings } }));
 await onConfirmClear(() => {
   if (dlg.open) showStControl($('#clearBtn'));
   void confirmClear().then((m) => m && dlg.open && (clearNote.textContent = m));
@@ -2968,25 +3777,64 @@ await onShotNeedPermission(({ pane, mode }) =>
 // 设置对话框打开时按唤起快捷键：面板同样不隐藏；录制框有焦点就当作按下了当前快捷键（网页收不到被全局注册拦下的按键）
 // 截图、录屏、翻译快捷键同理：对话框开着且面板有焦点时后端先发到这里（role = shot / rec / translate），
 // 焦点不在录制框里时截图、录屏照常开始，翻译照常弹卡片（M15 交互规则 4、M26 规则 18；在录制框里时写入，不翻译）
+// 只认面板有焦点时的按键：失焦时后端不发到这里，这里再防一道
+const hkOn = (el: Element) => document.activeElement === el && document.hasFocus();
+const hkOpts = [[shotKey, '截图', 'shot'], [recKey, '录屏', 'rec'], [trKey, '翻译', 'translate'], [lineKey, '便签', 'line'], [beltKey, '传送带', 'belt'],
+  [beltBackKey, '退回', 'beltBack'], [mixerKey, '搅拌机', 'mixer'], [memeKey, '表情包', 'meme'], [editKey, '改字', 'edit']] as const;
 await onHotkeyPressed((role) => {
   // 被自己的全局快捷键拦下的组合也算收到了主键，松开修饰键时不报“没收到组合键”
   hotkeyGot = true;
-  // 只认面板有焦点时的按键：失焦时后端不发到这里，这里再防一道
-  const on = (el: Element) => document.activeElement === el && document.hasFocus();
-  const opts = [[shotKey, '截图', 'shot'], [recKey, '录屏', 'rec'], [trKey, '翻译', 'translate']] as const;
   if (role !== 'panel') {
-    const [self, name] = opts.find((o) => o[2] === role)!;
-    const other = opts.find(([f]) => f !== self && on(f.input));
-    const pressed = { shot: S.settings.shotHotkey, rec: S.settings.recHotkey, translate: S.settings.translateHotkey }[role];
-    if (on(self.input)) self.record(pressed);
-    else if (on(hotkeyIn)) setHotkeyHelp(`不能与${name}快捷键相同`, true);
+    const [self, name] = hkOpts.find((o) => o[2] === role)!;
+    const other = hkOpts.find(([f]) => f !== self && hkOn(f.input));
+    const pressed = { shot: S.settings.shotHotkey, rec: S.settings.recHotkey, translate: S.settings.translateHotkey, meme: S.settings.memeHotkey, edit: S.settings.editHotkey }[role];
+    if (hkOn(self.input)) self.record(pressed);
+    else if (hkOn(hotkeyIn)) setHotkeyHelp(`不能与${name}快捷键相同`, true);
     else if (other) other[0].setHelp(`${other[1]}快捷键不能与${name}快捷键相同`, true);
-    else void (role === 'translate' ? trcardPress() : overlayBegin(role === 'rec')).catch((err: AppError) => toast(err.message));
+    // 表情包：焦点不在任何录制框里时带着选中的（多选按先后）打开制作窗口，同 Mod+E；没有选中、选中的都做不了就空白打开
+    else if (role === 'meme') makeMeme(S.sel, [...S.multi], true);
+    else void (role === 'translate' ? trcardPress() : overlayBegin(role)).catch((err: AppError) => toast(err.message));
     return;
   }
-  if (on(hotkeyIn)) return recordHotkey(S.settings.hotkey);
-  for (const [f, name] of opts) if (on(f.input)) return f.setHelp(`${name}快捷键不能与唤起快捷键相同`, true);
+  if (hkOn(hotkeyIn)) return recordHotkey(S.settings.hotkey);
+  for (const [f, name] of hkOpts) if (hkOn(f.input)) return f.setHelp(`${name}快捷键不能与唤起快捷键相同`, true);
   if (obStep === 'hotkey' && obDlg.open) obSucceed();
+});
+// 面板可见时按了便签快捷键（后端只发给面板）：焦点在便签录制框里就写入，在别的录制框里提示冲突，
+// 否则挂选中的那条（没有选中挂最新一条）
+await onLineHangSelected(() => {
+  // 同 onHotkeyPressed：便签快捷键被自己的全局注册拦下，也算收到了主键
+  hotkeyGot = true;
+  if (hkOn(lineKey.input)) return lineKey.record(S.settings.lineHotkey);
+  if (hkOn(hotkeyIn)) return setHotkeyHelp('不能与便签快捷键相同', true);
+  const other = hkOpts.find(([f]) => f !== lineKey && hkOn(f.input));
+  if (other) return other[0].setHelp(`${other[1]}快捷键不能与便签快捷键相同`, true);
+  hangRecord(S.sel);
+});
+// 面板可见时按了传送带的“放上”快捷键：焦点在传送带快捷键录制框里就写入，否则放选中的（或多选的）
+await onBeltPutSelected(() => {
+  hotkeyGot = true;
+  if (hkOn(beltKey.input)) return beltKey.record(S.settings.beltHotkey);
+  if (hkOn(hotkeyIn)) return setHotkeyHelp('不能与传送带快捷键相同', true);
+  const other = hkOpts.find(([f]) => f !== beltKey && hkOn(f.input));
+  if (other) return other[0].setHelp(`${other[1]}快捷键不能与传送带快捷键相同`, true);
+  putOnBelt(S.sel);
+});
+// 面板可见时按了搅拌机快捷键：同传送带，焦点在它的录制框里就写入，否则放选中的（或多选的）进杯子
+await onMixerPutSelected(() => {
+  hotkeyGot = true;
+  if (hkOn(mixerKey.input)) return mixerKey.record(S.settings.mixerHotkey);
+  if (hkOn(hotkeyIn)) return setHotkeyHelp('不能与搅拌机快捷键相同', true);
+  const other = hkOpts.find(([f]) => f !== mixerKey && hkOn(f.input));
+  if (other) return other[0].setHelp(`${other[1]}快捷键不能与搅拌机快捷键相同`, true);
+  putInMixer(S.sel);
+});
+// 便签或 Pro 状态变了：重画已挂刻线，设置开着时“Pro”状态行跟着变
+await onLineChanged((v) => {
+  S.line = v;
+  paintRows();
+  paintProStatus();
+  stylePicker?.set(draftLineStyle, lineLocked());
 });
 
 // 页面重载时对话框都已关闭：先复位后端标志（重载前若有对话框开着，它会停在 true；读取失败也照样复位）
@@ -2995,6 +3843,8 @@ const b = await bootstrap().catch((e: AppError) => {
   // 之后的每次 renderList 都显示这条，不被空列表文案覆盖
   bootError = e?.message || String(e);
   renderList();
+  // 错误页已经画好：照样放行面板显示，否则快捷键、托盘都唤不出面板，看上去是应用没反应
+  void frontendReady().catch(() => {});
   throw e;
 });
 S.settings = b.settings;
@@ -3002,6 +3852,11 @@ savedAppearance = b.settings.appearance;
 paintSpCollapsed(b.settings.spectrumCollapsed);
 S.platform = b.platform;
 S.paused = b.paused;
+// 订阅后到达的 line-changed 比快照新，快照不覆盖它
+if (!S.line.available) S.line = b.line;
+$('#st-tab-pro').hidden = $('#st-pro').hidden = !S.line.available;
+// 改字还没在这一端发布的正式构建：设置页没有改字一行
+$('#proFeatEdit').hidden = !S.line.edit;
 paintPause();
 // 订阅后到达的事件比快照新，快照不覆盖已有条目
 // ponytail: 快照之后、返回之前被删除的记录会被快照带回，下次 records-removed 或重启时消失
@@ -3119,6 +3974,8 @@ list.addEventListener('click', (e) => {
   const qa = t.closest<HTMLElement>('[data-qa]')?.dataset.qa;
   const mod = S.platform.os === 'macos' ? e.metaKey : e.ctrlKey;
   if (!qa && (mod || e.shiftKey)) return multiTo(id, e.shiftKey);
+  // 点的是多选里某一行的“放上传送带”“放进搅拌机”“做表情包”：整组按选中的先后放进去，退出多选前先记下
+  const group = (qa === 'belt' || qa === 'mixer' || qa === 'meme') && S.multi.has(id) ? [...S.multi] : [];
   // 不带修饰键的单击退出多选（M25 规则 6）
   if (S.multi.size) {
     S.multi.clear();
@@ -3130,6 +3987,11 @@ list.addEventListener('click', (e) => {
   if (qa === 'copy') copyRecord(id);
   if (qa === 'pin') togglePin(id, true);
   if (qa === 'edit') void openSnippet('edit', id);
+  if (qa === 'hang') hangRecord(id);
+  if (qa === 'belt') putOnBelt(id, group);
+  if (qa === 'mixer') putInMixer(id, group);
+  if (qa === 'meme') makeMeme(id, group);
+  if (qa === 'editText') editText(id);
 });
 // 吸顶栏在列表外，上面的列表委托收不到它的点击（空列表里的同名按钮仍走上面）
 $('#newSnipBtn').addEventListener('click', () => openSnippet('new'));
@@ -3148,6 +4010,261 @@ list.addEventListener('contextmenu', (e) => {
   }
   if (!S.multi.size) select(id, { indDur: 180, pan: 'smooth' });
   openMenu(id, e.clientX, e.clientY, false);
+});
+
+// 晾衣绳带在这个构建里、且用户开着：行上才有挂钩按钮、已挂刻线，才能拖行去挂
+function lineOn() {
+  return S.line.available && S.line.on;
+}
+// 传送带在这个构建里、且用户开着：行上才有放上带子的按钮
+function beltOn() {
+  return S.line.available && S.settings.beltEnabled;
+}
+// 放上传送带：有多选放多选（按选中的先后），否则放 id（没有就放当前选中的）；面板不收起
+function putOnBelt(id: number | null, multi = [...S.multi]) {
+  const ids = putOrder(id ?? S.sel, multi);
+  if (ids.length) void beltPut(ids).catch((err: AppError) => toast(err.message));
+}
+// 搅拌机在这个构建里、且用户开着：行上才有放进杯子的按钮
+function mixerOn() {
+  return S.line.available && S.settings.mixerEnabled;
+}
+// 放进搅拌机：同 putOnBelt；放不下的由搅拌机自己提示，搅拌机没开就顺便打开
+function putInMixer(id: number | null, multi = [...S.multi]) {
+  const ids = putOrder(id ?? S.sel, multi);
+  if (ids.length) void mixerPut(ids).catch((err: AppError) => toast(err.message));
+}
+// 表情包制作在这个构建里、且用户开着：图片、图片文件、文字记录上才有笑脸按钮。试用结束照常显示，点了由后端提示过期
+function memeOn() {
+  return S.line.available && S.settings.memeEnabled;
+}
+// 文件记录看有没有图片文件：识别状态不为 0 的文件记录夹着图片（同预览里的“识别文字”）。
+// ponytail: 刚复制、还排着队识别的图片文件记录暂时没有按钮；要准时给摘要加一个“有图片文件”的字段
+const memeable = (r: RecordSummary) =>
+  !isSnip(r) && !r.meme && (r.kind === 'image' || r.kind === 'text' || (r.kind === 'file' && r.ocrState !== 0));
+// 做表情包：有多选带多选（按选中的先后），否则带 id；都没有就空白打开。面板由后端收起。
+// 全都做不了时提示；`blank`（全局快捷键）时改成空白打开
+function makeMeme(id: number | null, multi = [...S.multi], blank = false) {
+  const fail = (err: AppError) => toast(err.message);
+  void memeOpen(putOrder(id, multi)).catch((err: AppError) => (blank ? memeOpen([]).catch(fail) : fail(err)));
+}
+// 改字在这个构建里（还要这一端已经发布）、且用户开着：图片、图片文件记录上才有改字按钮。试用结束照常显示，点了由改字窗口提示
+function editOn() {
+  return S.line.edit && S.settings.editEnabled;
+}
+// 文件记录看有没有图片文件，同 memeable
+function textEditable(r: RecordSummary) {
+  return !isLib(r) && (r.kind === 'image' || (r.kind === 'file' && r.ocrState !== 0));
+}
+// 打开改字窗口，面板由后端收起；改不了的提示原因
+function editText(id: number) {
+  void teOpen(id).catch((err: AppError) => toast(err.message));
+}
+function goEditSettings() {
+  openSettingsAt('st-tab-pro');
+  if (!dlg.open) return;
+  selectStTab(stTabs.findIndex((t) => t.id === 'st-tab-pro'), false);
+  proGo('proEditPage');
+}
+// 接着改：按库里的做法打开制作窗口；试用过期时由制作窗口提示
+function editMeme(id: number) {
+  if (S.records.get(id)?.meme) void memeOpenScene(id).catch((err: AppError) => toast(err.message));
+}
+
+// —— “表情包”分类：列表区换成网格，右边预览照常 ——
+/** 换到 / 离开网格：列表与网格二选一，状态栏换成网格的按键；返回现在是不是网格 */
+function paintMemeMode() {
+  const on = memeGrid();
+  list.hidden = on;
+  memesEl.hidden = !on;
+  statusbar.toggleAttribute('data-meme', on);
+  q.setAttribute('aria-controls', on ? 'memeGrid' : 'list');
+  if (!on) {
+    S.openSet = null;
+    memeTasksEl.innerHTML = '';
+  }
+  syncTaskTimer();
+  return on;
+}
+function renderMemes() {
+  const all = listed(), searching = S.matchIds !== null;
+  // 摊开的那一套删光了（或筛掉了）就不再记着
+  if (S.openSet !== null && !all.some((r) => r.meme?.set === S.openSet)) S.openSet = null;
+  const cells = memeCells(all), v = cells.map((c) => c.item.r);
+  S.count = v.length;
+  // 个数是表情包的总个数，不是格子数
+  setCount(all.length);
+  S.cells = [];
+  S.total = 0;
+  painted.clear();
+  rowsEl.innerHTML = '';
+  ind.style.opacity = '0';
+  indShown = false;
+  S.multi.clear();
+  memeSrcEl.querySelectorAll<HTMLElement>('[data-v]').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.v === S.memeSrc)));
+  $('#memeN').textContent = `${fmtInt(all.length)} 个`;
+  // 有搜索词时不显示“＋ 做一个”和任务格
+  memeAddEl.hidden = searching;
+  paintTaskCells();
+  const hk = S.settings.memeHotkey ? `，或按 ${hotkeyLabel(S.settings.memeHotkey, S.platform.os)} 做一个` : '';
+  memeGridEl.innerHTML = v.length ? cells.map(({ item: { r }, count, folded, inSet }, i) => cellHTML(r, i, false, S.removing.has(r.id), folded ? count : 0, inSet)).join('')
+    : `<p class="mempty">${searching || S.memeSrc !== 'all' ? '没有找到' : `还没有表情包。在图片上点笑脸${hk}`}</p>`;
+  S.sel = ensureSelection(v, S.sel);
+  markMemeSel();
+  renderPreview();
+}
+function markMemeSel() {
+  memeGridEl.querySelector('[aria-selected="true"]')?.setAttribute('aria-selected', 'false');
+  const c = S.sel === null ? null : document.getElementById('mc-' + S.sel);
+  c?.setAttribute('aria-selected', 'true');
+  c?.scrollIntoView({ block: 'nearest' });
+  q.setAttribute('aria-activedescendant', c ? c.id : '');
+}
+// 方向键在网格里移动：↑ / ↓ 按行，← / → 按格；落到“＋ 做一个”或任务格上时停在第一个（它们是按钮，Tab 能到）
+function memeStep(key: Arrow) {
+  const v = vis().filter((r) => !S.removing.has(r.id));
+  if (!v.length) return;
+  const lead = (memeAddEl.hidden ? 0 : 1) + memeTasksEl.childElementCount;
+  const cols = Math.max(1, getComputedStyle(memesEl.querySelector('.mgrid')!).gridTemplateColumns.split(' ').length);
+  const i = gridMove(v.findIndex((r) => r.id === S.sel) + lead, v.length, cols, key, lead);
+  select(v[Math.max(0, i - lead)].id, { pan: 'instant' });
+}
+// —— 任务格：有搜索词时不显示；在画的秒数和尺子由这里每秒走（面板显示着才走），不重画整个网格 ——
+const taskThumb = (t: TaskView) => {
+  const id = t.ids[0] ?? t.irregular;
+  return (id === null || id === undefined ? null : S.records.get(id)?.thumb) ?? null;
+};
+function paintTaskCells() {
+  const on = memeGrid() && S.matchIds === null, now = Date.now();
+  memeTasksEl.innerHTML = on ? S.memeTasks.map((t) => taskCellHTML(t, now, taskThumb(t))).join('') : '';
+  syncTaskTimer();
+}
+let taskTimer = 0;
+function syncTaskTimer() {
+  const want = S.shown && !!memeTasksEl.querySelector('.ruler');
+  if (want === !!taskTimer) return;
+  if (want) taskTimer = window.setInterval(tickTasks, 1000);
+  else {
+    clearInterval(taskTimer);
+    taskTimer = 0;
+  }
+}
+function tickTasks() {
+  const now = Date.now();
+  for (const el of memeTasksEl.querySelectorAll<HTMLElement>('.mcell.gen')) {
+    const t = S.memeTasks.find((x) => x.id === Number(el.dataset.task));
+    const i = el.querySelector<HTMLElement>('.ruler i'), gt = el.querySelector<HTMLElement>('.gt');
+    if (!t || t.state !== 'run' || !i || !gt) continue;
+    const k = taskTick(t, now);
+    gt.innerHTML = k.html;
+    i.style.width = k.width;
+  }
+}
+function setMemeTasks(ts: TaskView[]) {
+  S.memeTasks = ts;
+  if (memeGrid()) paintTaskCells();
+}
+// 点任务格：回到那次（打开制作窗口，画好的随后从列表里拿掉）
+memeTasksEl.addEventListener('click', (e) => {
+  const id = Number((e.target as Element).closest<HTMLElement>('[data-task]')?.dataset.task ?? NaN);
+  if (!Number.isNaN(id)) void memeTaskOpen(id).catch((err: AppError) => toast(err.message));
+});
+memeAddEl.addEventListener('click', () => void memeOpen([]).catch((err: AppError) => toast(err.message)));
+memeSrcEl.addEventListener('click', (e) => {
+  const v = (e.target as Element).closest<HTMLElement>('[data-v]')?.dataset.v as MemeSource | undefined;
+  if (!v || v === S.memeSrc) return;
+  S.memeSrc = v;
+  S.sel = null;
+  renderList();
+});
+const cellOf = (e: Event) => Number((e.target as Element).closest<HTMLElement>('.mcell')?.dataset.id ?? NaN);
+// 点一叠摊开这一套，点套外的格子收回。双击的第一下可能重排了网格，第二下落点下面是别的格子：
+// 第二下不处理，双击贴第一下点到的那张
+let clickedCell: number | null = null;
+memeGridEl.addEventListener('click', (e) => {
+  const id = cellOf(e);
+  if (!S.records.has(id)) return;
+  const c = cellClick({ id, set: S.records.get(id)!.meme?.set ?? null }, S.openSet, e.detail, clickedCell);
+  clickedCell = c.id;
+  if (c.act === 'ignore') return;
+  if (c.act !== 'select') {
+    S.openSet = c.openSet;
+    S.sel = id;
+    renderMemes();
+  }
+  select(id);
+});
+memeGridEl.addEventListener('dblclick', (e) => {
+  if (Number.isNaN(cellOf(e)) || clickedCell === null) return;
+  if (S.records.has(clickedCell)) copyRecord(clickedCell);
+});
+// 预览里的按钮（网格与搜索结果里的表情包行都是这一份）
+pbody.addEventListener('click', (e) => {
+  const a = (e.target as Element).closest<HTMLElement>('[data-mact]')?.dataset.mact, id = S.sel;
+  if (!a || id === null) return;
+  if (a === 'edit') editMeme(id);
+  if (a === 'del') remove([id]);
+  if (a === 'paste') copyRecord(id);
+});
+// 挂到晾衣绳：绳子放下亮一下；没挂成（重复、挂满、试用结束）的提示在晾衣绳上
+function hangRecord(id: number | null) {
+  void lineHangFromPanel(id).catch((err: AppError) => toast(err.message));
+}
+// 把行拖出面板朝绳子那一侧的边（顶部往上，左右两侧往左、往右）：绳子放下，松手挂在落点（落点由晾衣绳页面算）。
+// 移动超过 4 px 才算拖动，此时才在列表上捕获指针（行会随重绘换掉）；不拖时点击、双击、右键照旧。
+// 指针在那条边之外时每帧最多报一次位置。松手时不在边外不挂；绳子已为这次拖动放下过就让它收起
+let lineDrag: { id: number; x: number; y: number; on: boolean; sx: number; sy: number; raf: number; hovered: boolean } | null = null;
+const pastLineEdge = (e: PointerEvent) =>
+  S.line.side === 'left' ? e.clientX < 0 : S.line.side === 'right' ? e.clientX > innerWidth : e.clientY < 0;
+const hoverLine = (d: { id: number; hovered: boolean }, x: number, y: number) => {
+  d.hovered = true;
+  const r = S.records.get(d.id);
+  // 带上记录的样子，晾衣绳上画一张跟手的影子便签；标题只取开头，每帧都发
+  const item = { id: d.id, kind: r?.kind ?? 'text', title: (r?.title ?? '').slice(0, 200), thumbUrl: r?.thumb ?? null };
+  return lineDragHover(x, y, item).catch((err: AppError) => void info(`拖到晾衣绳失败 kind=${err.kind}`));
+};
+list.addEventListener('pointerdown', (e) => {
+  const id = itemOf(e), t = e.target as Element;
+  lineDrag = lineOn() && e.button === 0 && id !== null && t.closest('.row') && !t.closest('[data-qa]')
+    ? { id, x: e.clientX, y: e.clientY, on: false, sx: 0, sy: 0, raf: 0, hovered: false } : null;
+});
+list.addEventListener('pointermove', (e) => {
+  const d = lineDrag;
+  if (!d || !(e.buttons & 1)) return;
+  if (!d.on) {
+    if (Math.hypot(e.clientX - d.x, e.clientY - d.y) <= 4) return;
+    d.on = true;
+    list.setPointerCapture(e.pointerId);
+  }
+  if (!pastLineEdge(e)) return;
+  d.sx = e.screenX;
+  d.sy = e.screenY;
+  d.raf ||= requestAnimationFrame(() => {
+    d.raf = 0;
+    if (lineDrag === d) void hoverLine(d, d.sx, d.sy);
+  });
+});
+// 在文档上收尾：指针在列表外松开（没捕获时）也要清掉。同一帧里刚出边就松手时先补一次位置，绳子才会放下
+function endLineDrag(e: PointerEvent) {
+  const d = lineDrag;
+  lineDrag = null;
+  if (!d) return;
+  cancelAnimationFrame(d.raf);
+  if (e.type === 'pointerup' && d.on && pastLineEdge(e)) {
+    void (d.hovered ? Promise.resolve() : hoverLine(d, e.screenX, e.screenY))
+      .then(() => lineDragDrop(d.id, e.screenX, e.screenY))
+      .catch((err: AppError) => toast(err.message));
+  } else if (d.hovered) void lineHide().catch((err: AppError) => void info(`收起晾衣绳失败 kind=${err.kind}`));
+}
+document.addEventListener('pointerup', endLineDrag);
+document.addEventListener('pointercancel', endLineDrag);
+// 拖到一半面板被收起（Esc、快捷键、失焦）：松手事件不会再送到这里，绳子带着影子便签一直不收。这里按取消收尾
+void onPanelHidden(() => {
+  const d = lineDrag;
+  lineDrag = null;
+  if (!d) return;
+  cancelAnimationFrame(d.raf);
+  if (d.hovered) void lineHide().catch((err: AppError) => void info(`收起晾衣绳失败 kind=${err.kind}`));
 });
 
 pinBtn.addEventListener('click', (e) => S.sel !== null && togglePin(S.sel, e.detail !== 0));
@@ -3178,6 +4295,7 @@ menu.addEventListener('click', (e) => {
   if (m === 'saveSnippet') void openSnippet('save', id);
   if (m === 'editSnippet') void openSnippet('edit', id);
   if (m === 'translate') doTranslate(id);
+  if (m === 'editText') editText(id);
   if (m === 'del') remove(S.multi.size >= 2 && S.multi.has(id) ? [...S.multi] : [id]);
 });
 document.addEventListener('pointerdown', (e) => {
@@ -3343,6 +4461,8 @@ for (const a of document.getAnimations()) if (a instanceof CSSTransition) a.fini
 // 列表已渲染好，后端这时才允许面板上屏：启动后网页就绪前按的快捷键 / 托盘 / 首次启动在这里补显示，
 // 用户看到的第一帧就是完整列表，不会先空白再出现
 void frontendReady().catch((e: AppError) => info(`frontend_ready 失败：${e?.message || e}`));
+// 应用是被激活链接拉起来的：那时面板还没订阅事件，这里补取一次
+activateFromLink();
 void document.fonts?.ready.then(() => {
   renderTabs(true);
   moveInd({ instant: true });

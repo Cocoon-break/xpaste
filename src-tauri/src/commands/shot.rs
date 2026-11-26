@@ -52,15 +52,22 @@ pub fn shot_alive(app: AppHandle, generation: u64) -> bool {
     shot::alive(&app, generation)
 }
 
-/// 设置或确认框开着时按了截图或录屏快捷键、焦点不在快捷键录制框里：面板转回来开始（M15 交互规则 3、4）。
+/// 设置或确认框开着时按了截图、录屏或改字快捷键、焦点不在快捷键录制框里：面板转回来开始（M15 交互规则 3、4）。
 #[tauri::command]
-pub fn overlay_begin(app: AppHandle, rec: bool) {
-    let mode = if rec {
-        shot::Mode::Rec
-    } else {
-        shot::Mode::Shot
-    };
+pub fn overlay_begin(app: AppHandle, mode: shot::Mode) {
     shot::begin(&app, mode);
+}
+
+/// 框选改字的“用刚复制的图”卡片，没有为 `null`。
+#[tauri::command(async)]
+pub fn shot_edit_card(app: AppHandle, generation: u64) -> Option<shot::Clip> {
+    shot::edit_card(&app, generation)
+}
+
+/// 框选改字时的“用刚复制的图”：结束这次截图，带着那条记录的原图打开改字窗口。
+#[tauri::command(async)]
+pub fn shot_edit_clip(app: AppHandle, generation: u64) -> Result<(), AppError> {
+    shot::edit_clip(&app, generation)
 }
 
 /// 退出截图：Esc / 右键，或提示条显示完后。隐藏全部遮罩、释放冻结图、撤销鼠标穿透。
@@ -70,9 +77,9 @@ pub fn shot_cancel(app: AppHandle, generation: u64) {
     shot::end_if_current(&app, generation);
 }
 
-/// 遮罩合成好的 PNG（请求体原始字节）。请求头：`x-action`（copy / save / ocr / pin / translate）、
-/// `x-index`（显示器序号，须与调用方遮罩一致）、`x-rect`（`x,y,w,h`，显示器内逻辑像素，贴图用）。
-/// 成功后遮罩进入提示条模式（鼠标穿透、键盘已还给原应用），前端显示提示条后调 `shot_cancel`。
+/// 遮罩合成好的 PNG（请求体原始字节）。请求头：`x-action`（copy / save / ocr / pin / translate / edit）、
+/// `x-index`（显示器序号，须与调用方遮罩一致）、`x-rect`（`x,y,w,h`，显示器内逻辑像素，贴图、改字用）。
+/// 成功后遮罩进入提示条模式（鼠标穿透、键盘已还给原应用），前端显示提示条后调 `shot_cancel`；改字例外，后端直接结束这次截图。
 #[tauri::command]
 pub async fn shot_finish(
     app: AppHandle,

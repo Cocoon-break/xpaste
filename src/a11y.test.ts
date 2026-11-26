@@ -50,3 +50,20 @@ test('snippet_color_meets_contrast_in_both_themes', () => {
     for (const bg of ['--ink', '--pop-solid'])
       assert.ok(contrast(tok(b, '--c-snip'), tok(b, bg)) >= 4.5, `${theme} --c-snip 对 ${bg} 低于 4.5`);
 });
+
+// 晾衣绳：行上的挂钩按钮与已挂刻线（main.ts 生成），设置里的 Pro 标签
+test('line_hang_button_and_hung_tick_are_named', () => {
+  const main = readFileSync(new URL('./main.ts', import.meta.url), 'utf8');
+  assert.ok(main.includes('data-qa="hang" title="挂到晾衣绳"'), '挂钩按钮缺少 title');
+  assert.ok(main.includes('<span class="hung" role="img" aria-label="已挂在晾衣绳上">'), '已挂刻线缺少 aria-label');
+  assert.match(html, /<button[^>]*role="tab"[^>]*id="st-tab-pro"[^>]*>Pro<\/button>/);
+  for (const id of ['proCode', 'lineHotkey']) assert.match(html, new RegExp(`<label for="${id}">`), `#${id} 缺少 <label for>`);
+});
+
+test('line_switch_and_side_picker_are_labelled', () => {
+  assert.match(html, /<label class="switch"><span><b>晾衣绳便签<\/b><small id="lineOnHelp"><\/small><\/span><input type="checkbox" id="lineOn"><\/label>/);
+  assert.match(html, /<label class="switch"><span><b>一直显示晾衣绳<\/b><small>绳子和便签一直留在屏幕上，空白处可以点穿<\/small><\/span><input type="checkbox" id="linePin"><\/label>/);
+  assert.match(html, /<div class="side-pick" id="lineSide" role="radiogroup" aria-labelledby="lineSideLabel" aria-describedby="lineSideHelp lineSideHint">/);
+  for (const [v, n] of [['top', '顶部'], ['left', '左侧'], ['right', '右侧']])
+    assert.match(html, new RegExp(`<label><input type="radio" name="lineSide" value="${v}">[\\s\\S]*?<span>${n}</span></label>`), `缺少“${n}”`);
+});

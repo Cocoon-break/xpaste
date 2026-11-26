@@ -41,10 +41,10 @@ test('isHttpUrl 区分大小写、拒绝伪协议', () => {
   assert.ok(!isHttpUrl('HTTPS://a.b'));
 });
 
-test('FILTERS 为 全部、常用、片段 加 6 种类型', () =>
+test('FILTERS 为 全部、常用、片段、表情包 加 6 种类型（表情包分类按开关显示）', () =>
   assert.deepEqual(
     FILTERS.map(([k]) => k),
-    ['all', 'fav', 'snip', 'text', 'link', 'code', 'image', 'video', 'file'],
+    ['all', 'fav', 'snip', 'meme', 'text', 'link', 'code', 'image', 'video', 'file'],
   ));
 
 test('videoChips_skips_unknown', () => {

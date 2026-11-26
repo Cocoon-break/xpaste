@@ -121,6 +121,9 @@ impl Coalescer {
     }
 }
 
+/// 接口回了网页而不是数据时的提示（翻译、搅拌机、生图共用）。
+pub const HTML_HINT: &str = "这个地址返回的是网页，不是接口。接口地址是不是少了 /v1？";
+
 /// 失败原因：转成 `AppError` 给前端，`tag` 写日志。
 #[derive(Debug)]
 pub enum Fail {
@@ -130,6 +133,8 @@ pub enum Fail {
     Timeout,
     Connect,
     Bad,
+    /// 状态码成功但回的是网页（多半接口地址少了 /v1）
+    Html,
     /// 系统翻译缺语言包：识别出的源语言代码与目标语言
     Pack {
         source: String,
@@ -152,6 +157,7 @@ impl Fail {
             Fail::Timeout => "timeout".into(),
             Fail::Connect => "connect".into(),
             Fail::Bad => "bad".into(),
+            Fail::Html => "html".into(),
             // 语言代码不是剪切板内容，记下来便于排查“缺语言包 / 语言包不对”
             Fail::Pack { source, target } => format!("pack {source}→{}", target.code()),
             Fail::Os => "os".into(),
@@ -173,6 +179,7 @@ impl From<Fail> for AppError {
             Fail::Timeout => t("翻译超时"),
             Fail::Connect => t("连不上翻译接口，请检查网络或接口地址"),
             Fail::Bad => t("翻译服务返回的内容无法识别"),
+            Fail::Html => t(HTML_HINT),
             Fail::Pack { source, target } => AppError::TranslatePack {
                 msg: format!(
                     "系统翻译还没有{}和{}的语言包",
@@ -328,7 +335,7 @@ async fn system(text: &str, from: Option<Lang>, target: Lang) -> Result<String, 
     })
 }
 
-fn build_client(loopback: bool, t: Timeouts) -> Result<reqwest::Client, Fail> {
+pub(crate) fn build_client(loopback: bool, t: Timeouts) -> Result<reqwest::Client, Fail> {
     let b = reqwest::Client::builder()
         .connect_timeout(t.connect)
         .read_timeout(t.read);
@@ -356,7 +363,7 @@ fn client(loopback: bool) -> Result<reqwest::Client, Fail> {
 
 /// 连接阶段的失败（含 10 秒内连不上的连接超时）算连不上；连上之后的读超时算超时；
 /// 其余（DNS 失败、读到一半连接断开）也算连不上（M26 规则 13）。
-fn net(e: reqwest::Error) -> Fail {
+pub(crate) fn net(e: reqwest::Error) -> Fail {
     if !e.is_connect() && e.is_timeout() {
         Fail::Timeout
     } else {
@@ -371,16 +378,33 @@ async fn openai(
     timeouts: Option<Timeouts>,
     on_delta: &mut (impl FnMut(Lang, &str) -> bool + Send),
 ) -> Result<String, Fail> {
-    let loopback = is_loopback(&cfg.base_url);
+    let body = chat_body(cfg.model.trim(), target, text);
+    chat_stream(
+        &cfg.base_url,
+        &cfg.api_key,
+        &body,
+        timeouts,
+        &mut |d: &str| on_delta(target, d),
+    )
+    .await
+}
+
+/// 向 OpenAI 兼容接口发一个流式请求：请求体由调用方给（翻译、搅拌机各拼各的）。
+/// 增量交给 `on_delta`，它返回 false 时中止（Fail::Aborted）。返回拼好的完整文本（不去空白）。
+pub async fn chat_stream(
+    base_url: &str,
+    api_key: &str,
+    body: &serde_json::Value,
+    timeouts: Option<Timeouts>,
+    on_delta: &mut (impl FnMut(&str) -> bool + Send),
+) -> Result<String, Fail> {
+    let loopback = is_loopback(base_url);
     let client = match timeouts {
         Some(t) => build_client(loopback, t)?,
         None => client(loopback)?,
     };
-    let mut req =
-        client
-            .post(endpoint(&cfg.base_url))
-            .json(&chat_body(cfg.model.trim(), target, text));
-    let key = cfg.api_key.trim();
+    let mut req = client.post(endpoint(base_url)).json(body);
+    let key = api_key.trim();
     if !key.is_empty() {
         req = req.bearer_auth(key);
     }
@@ -389,16 +413,21 @@ async fn openai(
     if !status.is_success() {
         return Err(Fail::Http(status.as_u16()));
     }
-    let sse = resp
+    let ctype = resp
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.contains("text/event-stream"));
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if ctype.contains("text/html") {
+        return Err(Fail::Html);
+    }
+    let sse = ctype.contains("text/event-stream");
     if !sse {
         // 忽略 stream 直接回整段 JSON 的兼容服务：当作一段一次性给出
         let body = resp.bytes().await.map_err(net)?;
         let out = completion_text(&String::from_utf8_lossy(&body)).ok_or(Fail::Bad)?;
-        if !on_delta(target, &out) {
+        if !on_delta(&out) {
             return Err(Fail::Aborted);
         }
         return Ok(out);
@@ -419,7 +448,7 @@ async fn openai(
             match sse_line(String::from_utf8_lossy(&line).trim_end()) {
                 SseLine::Delta(d) => {
                     out.push_str(&d);
-                    if !on_delta(target, &d) {
+                    if !on_delta(&d) {
                         return Err(Fail::Aborted);
                     }
                 }
@@ -524,6 +553,60 @@ pub(crate) mod tests {
 
     fn err_msg(r: Result<(Lang, String), AppError>) -> String {
         r.unwrap_err().to_string()
+    }
+
+    #[test]
+    fn chat_stream_passes_body_through() {
+        let (url, h) = serve(
+            vec![(
+                0,
+                format!("{SSE_HEAD}{}{}data: [DONE]\n\n", delta("ab"), delta("cd")).into_bytes(),
+            )],
+            false,
+        );
+        let body = serde_json::json!({"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}],"x":1});
+        let r =
+            tauri::async_runtime::block_on(chat_stream(&url, "k", &body, Some(FAST), &mut |_| {
+                true
+            }));
+        assert_eq!(r.unwrap(), "abcd");
+        let got: serde_json::Value = serde_json::from_str(&h.join().unwrap()).unwrap();
+        assert_eq!(got, body);
+    }
+
+    #[test]
+    fn chat_stream_html_reply() {
+        let (url, _h) = serve(
+            vec![(
+                0,
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: 15\r\nConnection: close\r\n\r\n<!doctype html>"
+                    .to_vec(),
+            )],
+            false,
+        );
+        let body = serde_json::json!({"model":"m","stream":true});
+        let r =
+            tauri::async_runtime::block_on(chat_stream(&url, "k", &body, Some(FAST), &mut |_| {
+                true
+            }));
+        assert!(matches!(r, Err(Fail::Html)));
+    }
+
+    #[test]
+    fn chat_stream_abort_stops() {
+        let (url, _h) = serve(
+            vec![(
+                0,
+                format!("{SSE_HEAD}{}{}data: [DONE]\n\n", delta("ab"), delta("cd")).into_bytes(),
+            )],
+            false,
+        );
+        let body = serde_json::json!({"model":"m","stream":true});
+        let r =
+            tauri::async_runtime::block_on(chat_stream(&url, "k", &body, Some(FAST), &mut |_| {
+                false
+            }));
+        assert!(matches!(r, Err(Fail::Aborted)));
     }
 
     #[test]

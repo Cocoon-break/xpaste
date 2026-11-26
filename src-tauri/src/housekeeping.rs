@@ -9,7 +9,7 @@ use crate::events::emit_removed;
 use crate::state::AppState;
 
 const PRUNE_EVERY: Duration = Duration::from_secs(3600);
-const UNDO_WINDOW: Duration = Duration::from_secs(5);
+pub(crate) const UNDO_WINDOW: Duration = Duration::from_secs(5);
 
 pub fn start(app: AppHandle) {
     let purged = app.state::<AppState>().store().purge_all_soft_deleted();
@@ -55,8 +55,11 @@ fn prune(app: &AppHandle) {
     }
 }
 
-pub(crate) fn spawn(name: &str, f: impl FnOnce() + Send + 'static) {
-    if let Err(e) = std::thread::Builder::new().name(name.into()).spawn(f) {
+/// 起不来时只记日志，返回起来了没有
+pub(crate) fn spawn(name: &str, f: impl FnOnce() + Send + 'static) -> bool {
+    let r = std::thread::Builder::new().name(name.into()).spawn(f);
+    if let Err(e) = &r {
         log::warn!("线程 {name} 启动失败：{e}");
     }
+    r.is_ok()
 }

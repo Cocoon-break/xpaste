@@ -6,7 +6,7 @@ import type { RecordSummary } from './api/types';
 let n = 0;
 const r = (o: Partial<RecordSummary> = {}): RecordSummary => ({
   id: ++n, kind: 'text', title: '标题', app: null, copiedAt: 1, uses: 0, pinned: false, size: 1, lang: null, thumb: null,
-  durationSec: null, ocrState: 0, snippetBody: null, lines: null, url: null, fileCount: null, ...o,
+  durationSec: null, ocrState: 0, snippetBody: null, lines: null, url: null, fileCount: null, meme: null, ...o,
 });
 
 test('多行文本补充“N 行”，一行不补', () => {
@@ -87,4 +87,14 @@ test('分组：没有置顶与片段时只有一组、没有分隔', () => {
   const fav = compactGroups([r({ pinned: true, uses: 9 }), r({ uses: 5 })], 'fav');
   assert.deepEqual(fav.map((g) => g.name), ['按使用次数排序']);
   assert.equal(compactHeadH(fav, 0), 0);
+});
+
+test('分组：搜索命中表情包时自成一组、排在片段后面，补充写来源', () => {
+  const m = r({ kind: 'image', title: '无语', meme: { source: 'ai', name: '无语', style: '黏土', gif: false, set: null } });
+  const gs = compactGroups([r({ snippetBody: 'x' }), m, r()], 'all');
+  assert.deepEqual(gs.map((g) => g.name), ['片段', '表情包', '记录']);
+  assert.deepEqual(gs.map((_, i) => compactHeadH(gs, i)), [24, 24, 24]);
+  assert.equal(compactHeadH(compactGroups([m, r()], 'all'), 0), 24);
+  assert.equal(rowParts(m, { q: '' }).extra, 'AI 出的');
+  assert.equal(rowParts({ ...m, meme: { source: 'final', name: '无语', style: null, gif: true, set: null } }, { q: '' }).extra, '做好的');
 });

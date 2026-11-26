@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension, Row, ToSql, params};
 use serde_json::Value;
 
 use crate::{
-    AppSummary, CoreError, FileEntry, Flavor, ImageInfo, Kind, NewRecord, RecordDetail,
+    AppSummary, CoreError, FileEntry, Flavor, ImageInfo, Kind, NewMeme, NewRecord, RecordDetail,
     RecordSummary, SearchHit, Settings, Snapshot, VideoInfo, capture, detect, ocr_state, pinyin,
     snippet_name, text_flavor,
 };
@@ -76,9 +76,11 @@ INSERT INTO fts_py(fts_py) VALUES ('rebuild');
     "ALTER TABLE records ADD COLUMN translation TEXT;\nALTER TABLE records ADD COLUMN translation_lang TEXT;",
     // 阶段 15.1 译文标注翻译方式（`system` / `openai:{模型}`），M26 规则 12、16
     "ALTER TABLE records ADD COLUMN translation_engine TEXT;",
+    // 表情包库：meme 不为 NULL 即表情包（JSON：info 与做法 scene），库里按置顶存、豁免所有清理
+    "ALTER TABLE records ADD COLUMN meme TEXT;",
 ];
 
-const SUBDIRS: [&str; 4] = ["blobs", "images", "thumbs", "icons"];
+const SUBDIRS: [&str; 5] = ["blobs", "images", "thumbs", "icons", "memes"];
 
 /// 超过此大小的 flavor 数据写到 `blobs/<id>/<n>`。
 const INLINE_MAX: usize = 1_048_576;
@@ -88,8 +90,9 @@ const DAY_MS: i64 = 86_400_000;
 
 /// 片段在两层上豁免所有清理（M25 规则 10）：库里按置顶存（`pinned = 1`），
 /// 这里再显式排除 `snippet_body IS NOT NULL`。后者是纵深防御：用户降级后在旧版本里
-/// 取消“置顶历史行”，再升级回来，片段也绝不能被清掉。
-const LIVE_UNPINNED: &str = "pinned = 0 AND snippet_body IS NULL AND deleted_at IS NULL";
+/// 取消“置顶历史行”，再升级回来，片段也绝不能被清掉。表情包同理（`meme IS NULL`）。
+const LIVE_UNPINNED: &str =
+    "pinned = 0 AND snippet_body IS NULL AND meme IS NULL AND deleted_at IS NULL";
 
 /// `save_snippet` 的结果：后两项告诉调用方要不要给新 id 补投后台任务。
 pub struct SavedSnippet {
@@ -103,7 +106,8 @@ const SUMMARY_SQL: &str = "SELECT r.id, r.kind, r.title, a.name, a.icon_path, r.
   CASE WHEN r.kind IN ('text', 'code') THEN length(rtrim(r.text, char(9, 10, 13, 32)))
     - length(replace(rtrim(r.text, char(9, 10, 13, 32)), char(10), '')) + 1 END,
   CASE WHEN r.kind = 'link' THEN substr(r.text, 1, 2048) END,
-  CASE WHEN r.kind = 'file' AND json_valid(r.paths) THEN json_array_length(r.paths) END
+  CASE WHEN r.kind = 'file' AND json_valid(r.paths) THEN json_array_length(r.paths) END,
+  r.meme
   FROM records r LEFT JOIN apps a ON a.id = r.app_id";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -386,9 +390,20 @@ impl Store {
             }
             t => (t, false),
         };
-        let paths: Vec<String> = match paths {
-            Some(p) => serde_json::from_str(&p)?,
-            None => Vec::new(),
+        let paths: Vec<String> = if summary.meme.is_some() {
+            // 表情包按当前数据目录找文件，不认存下的路径
+            let meme: Option<String> =
+                self.conn
+                    .query_row("SELECT meme FROM records WHERE id = ?1", [id], |r| r.get(0))?;
+            meme.and_then(|m| meme_path(&self.dir, &m, paths.as_deref()))
+                .map(|p| p.display().to_string())
+                .into_iter()
+                .collect()
+        } else {
+            match paths {
+                Some(p) => serde_json::from_str(&p)?,
+                None => Vec::new(),
+            }
         };
         let files: Vec<FileEntry> = paths
             .into_iter()
@@ -697,6 +712,19 @@ impl Store {
         )?)
     }
 
+    /// 最近复制的那条记录：没有软删除、不是片段、不是表情包；没有时为 None。
+    pub fn latest_live_id(&self) -> Result<Option<i64>, CoreError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id FROM records WHERE deleted_at IS NULL AND snippet_body IS NULL AND meme IS NULL
+                 ORDER BY copied_at DESC, id DESC LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
     pub fn is_snippet(&self, id: i64) -> Result<bool, CoreError> {
         Ok(self
             .conn
@@ -777,7 +805,7 @@ impl Store {
             .query_row(
                 &format!(
                     "SELECT kind, ocr_state, {} FROM records
-                     WHERE id = ?1 AND snippet_body IS NULL AND deleted_at IS NULL",
+                     WHERE id = ?1 AND snippet_body IS NULL AND meme IS NULL AND deleted_at IS NULL",
                     ocr_eligible_sql()
                 ),
                 [src],
@@ -919,11 +947,11 @@ impl Store {
         Ok(())
     }
 
-    /// 粘贴后计数；`move_to_top` 时非置顶记录移到最前；片段总是更新 `copied_at`（“上次使用”，M25 规则 10）。
+    /// 粘贴后计数；`move_to_top` 时非置顶记录移到最前；片段和表情包总是更新 `copied_at`（“上次使用”，M25 规则 10）。
     pub fn bump_use(&self, id: i64, move_to_top: bool, now_ms: i64) -> Result<(), CoreError> {
         self.conn.execute(
             "UPDATE records SET uses = uses + 1,
-               copied_at = CASE WHEN snippet_body IS NOT NULL OR (?1 AND pinned = 0) THEN ?2 ELSE copied_at END WHERE id = ?3",
+               copied_at = CASE WHEN snippet_body IS NOT NULL OR meme IS NOT NULL OR (?1 AND pinned = 0) THEN ?2 ELSE copied_at END WHERE id = ?3",
             params![move_to_top, now_ms, id],
         )?;
         Ok(())
@@ -960,12 +988,14 @@ impl Store {
 
     /// 仅当记录仍是那次软删除（`deleted_at` 相同）时彻底删除。
     pub fn purge_if_deleted_at(&mut self, id: i64, deleted_at: i64) -> Result<bool, CoreError> {
+        let files = meme_files(&self.conn, &self.dir, &[id])?;
         let n = self.conn.execute(
             "DELETE FROM records WHERE id = ?1 AND deleted_at = ?2",
             [id, deleted_at],
         )?;
         if n > 0 {
             self.delete_files(id);
+            remove_meme_files(&files);
         }
         Ok(n > 0)
     }
@@ -1066,6 +1096,7 @@ impl Store {
             .get::<_, Option<String>>(3)?
             .map(|name| AppSummary { name, icon });
         let meta = parse_meta(row.get(10)?);
+        let is_meme = row.get::<_, Option<String>>(16)?.is_some();
         let snippet_body = row.get::<_, Option<String>>(12)?.map(|b| {
             // 图片片段存空串，尺寸由 meta 现拼：缩略图任务晚于存片段时也能显示对
             if kind != Kind::Image || !b.is_empty() {
@@ -1085,7 +1116,7 @@ impl Store {
             copied_at: row.get(5)?,
             uses: row.get(6)?,
             // 片段库里按置顶存，对外不报置顶（M25 规则 10）
-            pinned: row.get::<_, bool>(7)? && snippet_body.is_none(),
+            pinned: row.get::<_, bool>(7)? && snippet_body.is_none() && !is_meme,
             size: row.get::<_, i64>(8)? as u64,
             lang: row.get(9)?,
             thumb: existing(self.dir.join("thumbs").join(format!("{id}.png"))),
@@ -1099,6 +1130,10 @@ impl Store {
             lines: row.get(13)?,
             url: row.get(14)?,
             file_count: row.get(15)?,
+            meme: row
+                .get::<_, Option<String>>(16)?
+                .and_then(|j| serde_json::from_str::<Value>(&j).ok())
+                .and_then(|v| serde_json::from_value(v.get("info")?.clone()).ok()),
         })
     }
 
@@ -1106,12 +1141,69 @@ impl Store {
     fn delete_where(&mut self, cond: &str, args: &[&dyn ToSql]) -> Result<Vec<i64>, CoreError> {
         let tx = self.conn.transaction()?;
         let ids = ids_in(&tx, &format!("SELECT id FROM records WHERE {cond}"), args)?;
+        let files = meme_files(&tx, &self.dir, &ids)?;
         delete_rows(&tx, &ids)?;
         tx.commit()?;
         for &id in &ids {
             self.delete_files(id);
         }
+        remove_meme_files(&files);
         Ok(ids)
+    }
+
+    /// 存一个表情包（库里按置顶存、豁免所有清理）：文件已由调用方写到 `memes/` 下。
+    /// 只记文件名（在 meme JSON 的 `file` 里），不存路径和剪切板格式：粘贴时按当前数据目录现拼。
+    /// 插入失败时 `memes/` 里的文件由调用方清理。
+    pub fn add_meme(&mut self, m: NewMeme, now_ms: i64) -> Result<i64, CoreError> {
+        let meme =
+            serde_json::json!({ "info": m.info, "scene": m.scene, "file": m.file }).to_string();
+        let meta = serde_json::json!({ "w": m.width, "h": m.height }).to_string();
+        self.conn.execute(
+            "INSERT INTO records(hash, kind, title, size, meta, search_text, py_text, copied_at,
+               pinned, ocr_state, meme)
+             VALUES (randomblob(16), 'image', ?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?8)",
+            params![
+                m.info.name,
+                m.bytes as i64,
+                meta,
+                m.search.to_lowercase(),
+                pinyin::index_text(&m.search),
+                now_ms,
+                ocr_state::SKIPPED,
+                meme
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// 表情包的做法 JSON（原样，公开侧不解析）；不是表情包时为 None。
+    pub fn meme_scene(&self, id: i64) -> Result<Option<String>, CoreError> {
+        let j: Option<String> = self
+            .conn
+            .query_row("SELECT meme FROM records WHERE id = ?1", [id], |r| r.get(0))
+            .optional()?
+            .flatten();
+        Ok(j.and_then(|j| serde_json::from_str::<Value>(&j).ok())
+            .and_then(|v| v.get("scene")?.as_str().map(str::to_owned)))
+    }
+
+    /// 每个表情包（含撤销期内已删的）指向的文件与做法，原样拼成一段文字：启动时据此找出 `memes/` 下没人指向的文件。
+    pub fn meme_refs(&self) -> Result<Vec<String>, CoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT COALESCE(paths, '') || meme FROM records WHERE meme IS NOT NULL")?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// 未删除的表情包个数与文件字节数。
+    pub fn meme_bytes(&self) -> Result<(u64, u64), CoreError> {
+        let (n, b): (i64, i64) = self.conn.query_row(
+            "SELECT count(*), COALESCE(sum(size), 0) FROM records WHERE meme IS NOT NULL AND deleted_at IS NULL",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        Ok((n as u64, b as u64))
     }
 
     fn delete_files(&self, id: i64) {
@@ -1165,7 +1257,8 @@ fn ocr_eligible_sql() -> String {
         .map(|e| format!("lower(paths) LIKE '%.{e}\"%'"))
         .collect::<Vec<_>>()
         .join(" OR ");
-    format!("(kind = 'image' OR (kind = 'file' AND ({exts})))")
+    // 表情包是自己做的图，不识别文字（搜索只认名字、文字、情绪和风格）
+    format!("meme IS NULL AND (kind = 'image' OR (kind = 'file' AND ({exts})))")
 }
 
 /// 关键词（已小写）在 `text` 中首次出现处前后各取 12 个字符，保留原文大小写；被截断的一侧加 `…`。
@@ -1316,6 +1409,46 @@ fn reindex_snippet(tx: &Connection, id: i64) -> Result<(), CoreError> {
     Ok(())
 }
 
+/// 表情包文件在当前数据目录下的路径：meme JSON 里的 `file`；早先写的行没有它，取 `paths` 里那个路径的文件名。
+/// 只认 `memes/` 下的一个文件名（挡掉 `..` 和带目录的），其余为 None。
+fn meme_path(dir: &Path, meme: &str, paths: Option<&str>) -> Option<PathBuf> {
+    let file = serde_json::from_str::<Value>(meme)
+        .ok()
+        .and_then(|v| v.get("file")?.as_str().map(str::to_owned))
+        .or_else(|| {
+            let list: Vec<String> = serde_json::from_str(paths?).ok()?;
+            let p = Path::new(list.first()?);
+            Some(p.file_name()?.to_str()?.to_owned())
+        })?;
+    // memes/ 由应用自己维护，不解析符号链接
+    let plain = Path::new(&file).file_name().and_then(|n| n.to_str()) == Some(file.as_str());
+    plain.then(|| dir.join("memes").join(file))
+}
+
+/// 这些记录里表情包指向的文件（按当前数据目录拼出）。
+fn meme_files(conn: &Connection, dir: &Path, ids: &[i64]) -> Result<Vec<PathBuf>, CoreError> {
+    let mut out = Vec::new();
+    let mut stmt =
+        conn.prepare("SELECT meme, paths FROM records WHERE id = ?1 AND meme IS NOT NULL")?;
+    for &id in ids {
+        let row: Option<(String, Option<String>)> = stmt
+            .query_row([id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()?;
+        out.extend(row.and_then(|(m, p)| meme_path(dir, &m, p.as_deref())));
+    }
+    Ok(out)
+}
+
+fn remove_meme_files(files: &[PathBuf]) {
+    for f in files {
+        if let Err(e) = std::fs::remove_file(f)
+            && e.kind() != ErrorKind::NotFound
+        {
+            log::debug!("删除表情包文件失败：{e}");
+        }
+    }
+}
+
 fn existing(p: PathBuf) -> Option<String> {
     p.exists().then(|| p.display().to_string())
 }
@@ -1375,6 +1508,7 @@ fn backfill_pinyin(conn: &Connection) -> Result<usize, CoreError> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::MemeInfo;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU32, Ordering::SeqCst};
 
@@ -1392,7 +1526,7 @@ pub(crate) mod tests {
     fn open_creates_schema_and_dirs() {
         let dir = tmp();
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 9);
+        assert_eq!(s.schema_version().unwrap(), 10);
         for sub in ["blobs", "images", "thumbs", "icons"] {
             assert!(dir.join(sub).is_dir());
         }
@@ -1434,7 +1568,7 @@ pub(crate) mod tests {
         .unwrap();
         drop(old);
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 9);
+        assert_eq!(s.schema_version().unwrap(), 10);
         let row: (String, String) = s
             .conn
             .query_row("SELECT kind, title FROM records", [], |r| {
@@ -1459,7 +1593,7 @@ pub(crate) mod tests {
         .unwrap();
         drop(old);
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 9);
+        assert_eq!(s.schema_version().unwrap(), 10);
         let l = s.list_summaries().unwrap();
         assert_eq!(
             (l[0].kind, l[0].ocr_state),
@@ -1523,7 +1657,7 @@ pub(crate) mod tests {
         let dir = tmp();
         drop(Store::open(&dir).unwrap());
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 9);
+        assert_eq!(s.schema_version().unwrap(), 10);
     }
 
     #[test]
@@ -1632,7 +1766,7 @@ pub(crate) mod tests {
     fn backfill_is_part_of_migration() {
         let dir = v5_db_with_old_record();
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 9);
+        assert_eq!(s.schema_version().unwrap(), 10);
         let nulls: i64 = s
             .conn
             .query_row(
@@ -2019,6 +2153,22 @@ pub(crate) mod tests {
         assert_eq!(removed.len(), 1);
         assert_eq!(s.list_summaries().unwrap().len(), 3);
         assert!(s.list_summaries().unwrap().iter().any(|r| r.id == first));
+    }
+    #[test]
+    fn latest_live_id_skips_deleted_and_snippets() {
+        let mut s = mem();
+        assert_eq!(s.latest_live_id().unwrap(), None);
+        let (Upsert::Added(a), _) = s.insert_or_merge(&rec("a"), 1, 500).unwrap() else {
+            panic!()
+        };
+        let (Upsert::Added(b), _) = s.insert_or_merge(&rec("b"), 2, 500).unwrap() else {
+            panic!()
+        };
+        // 片段的 copied_at 最新，也不算
+        s.create_snippet("n", "片段", 3).unwrap();
+        assert_eq!(s.latest_live_id().unwrap(), Some(b));
+        s.soft_delete(&[b], 4).unwrap();
+        assert_eq!(s.latest_live_id().unwrap(), Some(a));
     }
     #[test]
     fn live_summary_hides_soft_deleted() {
@@ -2608,7 +2758,7 @@ pub(crate) mod tests {
         .unwrap();
         drop(old);
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 9);
+        assert_eq!(s.schema_version().unwrap(), 10);
         let id = s.list_summaries().unwrap()[0].id;
         let nulls: i64 = s
             .conn
@@ -2639,10 +2789,196 @@ pub(crate) mod tests {
         .unwrap();
         drop(old);
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 9);
+        assert_eq!(s.schema_version().unwrap(), 10);
         let id = s.list_summaries().unwrap()[0].id;
         let d = s.detail(id).unwrap().unwrap();
         assert_eq!((d.translation, d.translation_lang), (None, None));
+    }
+
+    fn new_meme(name: &str, search: &str) -> NewMeme {
+        NewMeme {
+            file: "1.gif".into(),
+            info: MemeInfo {
+                source: "ai".into(),
+                name: name.into(),
+                style: Some("q".into()),
+                gif: true,
+                set: None,
+            },
+            search: search.into(),
+            scene: r#"{"k":1}"#.into(),
+            width: 10,
+            height: 20,
+            bytes: 7,
+        }
+    }
+
+    #[test]
+    fn migrate_adds_meme_column() {
+        let dir = tmp();
+        make_dirs(&dir).unwrap();
+        let old = Connection::open(dir.join("xpaste.db")).unwrap();
+        for m in &MIGRATIONS[..9] {
+            old.execute_batch(m).unwrap();
+        }
+        old.pragma_update(None, "user_version", 9).unwrap();
+        old.execute(
+            "INSERT INTO records (hash, kind, title, text, copied_at, size, search_text, py_text) VALUES
+               (x'09', 'text', '旧记录', 'x', 1, 1, '旧记录', '')",
+            [],
+        )
+        .unwrap();
+        drop(old);
+        let s = Store::open(&dir).unwrap();
+        assert_eq!(s.schema_version().unwrap(), 10);
+        let id = s.list_summaries().unwrap()[0].id;
+        assert_eq!(s.summary(id).unwrap().unwrap().meme, None);
+        assert_eq!(s.meme_scene(id).unwrap(), None);
+    }
+
+    #[test]
+    fn memes_survive_cleanup() {
+        let mut s = mem();
+        let a = s.add_meme(new_meme("甲", "甲"), 0).unwrap();
+        let b = s.add_meme(new_meme("乙", "乙"), 0).unwrap();
+        added(&mut s, &rec("h"), 1);
+        assert_eq!(s.count_unpinned().unwrap(), 1);
+        assert_eq!(s.prune_preview(Some(1), 1, 10 * DAY_MS).unwrap(), 1);
+        assert!(
+            s.prune_retention(Some(1), 10 * DAY_MS)
+                .unwrap()
+                .iter()
+                .all(|&i| i != a && i != b)
+        );
+        assert!(
+            s.prune_capacity(0)
+                .unwrap()
+                .iter()
+                .all(|&i| i != a && i != b)
+        );
+        s.clear_unpinned().unwrap();
+        assert!(s.live_summary(a).unwrap().is_some() && s.live_summary(b).unwrap().is_some());
+        assert_eq!(s.meme_bytes().unwrap(), (2, 14));
+    }
+
+    #[test]
+    fn meme_search_by_name_and_pinyin() {
+        let mut s = mem();
+        let id = s
+            .add_meme(new_meme("无语", "无语 我谢谢你 Q 版贴纸"), 0)
+            .unwrap();
+        added(&mut s, &rec("other"), 1);
+        for q in ["wy", "谢谢"] {
+            let hits: Vec<i64> = s.search_hits(q).unwrap().iter().map(|h| h.id).collect();
+            assert_eq!(hits, vec![id], "{q}");
+        }
+    }
+
+    #[test]
+    fn purge_meme_deletes_its_file() {
+        let mut s = mem();
+        let dir = s.dir.clone();
+        std::fs::create_dir_all(dir.join("memes")).unwrap();
+        let inside = dir.join("memes").join("1.gif");
+        std::fs::write(&inside, b"g").unwrap();
+        let outside = dir.join("images").join("keep.gif");
+        std::fs::write(&outside, b"g").unwrap();
+        let a = s.add_meme(new_meme("甲", "甲"), 0).unwrap();
+        let mut m = new_meme("乙", "乙");
+        m.file = "../images/keep.gif".into();
+        let b = s.add_meme(m, 0).unwrap();
+        s.soft_delete(&[a, b], 5).unwrap();
+        assert!(s.purge_if_deleted_at(a, 5).unwrap());
+        assert!(!inside.exists());
+        s.purge_all_soft_deleted().unwrap();
+        assert!(outside.exists());
+    }
+
+    /// 数据目录换了（整个搬走）：表情包照样能预览、能删掉文件；早先存了绝对路径、没存文件名的行也一样
+    #[test]
+    fn meme_file_follows_data_dir() {
+        let a = tmp();
+        let mut s = Store::open(&a).unwrap();
+        let id = s.add_meme(new_meme("甲", "甲"), 0).unwrap();
+        // 早先的写法：paths 里是旧数据目录下的绝对路径，meme JSON 里没有 file
+        let old_abs =
+            serde_json::to_string(&[a.join("memes").join("2.png").display().to_string()]).unwrap();
+        s.conn
+            .execute(
+                "INSERT INTO records(hash, kind, title, paths, size, search_text, copied_at, pinned, meme)
+                 VALUES (x'02', 'image', '乙', ?1, 1, '', 0, 1, '{\"info\":{\"source\":\"final\",\"name\":\"乙\",\"style\":null},\"scene\":\"\"}')",
+                [old_abs],
+            )
+            .unwrap();
+        let old = s.conn.last_insert_rowid();
+        drop(s);
+        let b = tmp();
+        std::fs::rename(&a, &b).unwrap();
+        for f in ["1.gif", "2.png"] {
+            std::fs::write(b.join("memes").join(f), b"g").unwrap();
+        }
+        let mut s = Store::open(&b).unwrap();
+        for (id, f) in [(id, "1.gif"), (old, "2.png")] {
+            let d = s.detail(id).unwrap().unwrap();
+            assert_eq!(d.files.len(), 1);
+            assert_eq!(
+                d.files[0].path,
+                b.join("memes").join(f).display().to_string()
+            );
+            assert!(d.files[0].exists);
+        }
+        // 不再存剪切板格式：粘贴时现拼
+        assert!(s.flavors(id).unwrap().is_empty());
+        s.soft_delete(&[id, old], 5).unwrap();
+        s.purge_all_soft_deleted().unwrap();
+        assert!(!b.join("memes").join("1.gif").exists());
+        assert!(!b.join("memes").join("2.png").exists());
+    }
+
+    #[test]
+    fn summary_carries_meme_info() {
+        let mut s = mem();
+        let id = s.add_meme(new_meme("无语", "无语"), 0).unwrap();
+        let sum = &s.list_summaries().unwrap()[0];
+        assert_eq!(
+            sum.meme,
+            Some(MemeInfo {
+                source: "ai".into(),
+                name: "无语".into(),
+                style: Some("q".into()),
+                gif: true,
+                set: None
+            })
+        );
+        assert!(!sum.pinned);
+        assert_eq!(s.meme_scene(id).unwrap().as_deref(), Some(r#"{"k":1}"#));
+    }
+
+    #[test]
+    fn ocr_skips_memes() {
+        let mut s = mem();
+        s.add_meme(new_meme("甲", "甲"), 0).unwrap();
+        let states = [ocr_state::PENDING, ocr_state::SKIPPED];
+        assert!(s.ocr_pending_ids(&states, 10).unwrap().is_empty());
+        assert_eq!(s.ocr_progress().unwrap(), (0, 0));
+    }
+
+    #[test]
+    fn latest_live_id_skips_memes() {
+        let mut s = mem();
+        let a = added(&mut s, &rec("h"), 1);
+        let m = s.add_meme(new_meme("甲", "甲"), 99).unwrap();
+        assert_eq!(s.latest_live_id().unwrap(), Some(a));
+        assert!(s.save_snippet(m, "n", 100).is_err());
+    }
+
+    #[test]
+    fn bump_use_updates_meme_last_used() {
+        let mut s = mem();
+        let id = s.add_meme(new_meme("甲", "甲"), 100).unwrap();
+        s.bump_use(id, false, 900).unwrap();
+        let sum = s.summary(id).unwrap().unwrap();
+        assert_eq!((sum.uses, sum.copied_at), (1, 900));
     }
 
     #[test]
@@ -2662,7 +2998,7 @@ pub(crate) mod tests {
         .unwrap();
         drop(old);
         let s = Store::open(&dir).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 9);
+        assert_eq!(s.schema_version().unwrap(), 10);
         let id = s.list_summaries().unwrap()[0].id;
         assert_eq!(s.detail(id).unwrap().unwrap().translation_engine, None);
     }

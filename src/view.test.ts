@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import type { RecordSummary } from './api/types.ts';
 import { rel, type Filter } from './format.ts';
 import {
-  armUndo, canUndo, counts, cycleFilter, ensureSelection, groupOf, groups, inFilter, isStale, isTextKind, extendRange, mergeable, nextSelection, pruneMulti, rangeIds, snippetTextChange, visible,
+  armUndo, canUndo, counts, cycleFilter, ensureSelection, groupOf, groups, inFilter, isStale, isTextKind, extendRange, memeCategory, mergeable, nextSelection, pruneMulti, putOrder, rangeIds, snippetTextChange, tabFilters, visible,
 } from './view.ts';
 
 const mk = (id: number, over: Partial<RecordSummary>): RecordSummary => ({
   id, kind: 'text', title: '', app: null, copiedAt: 0, uses: 0, pinned: false,
-  size: 0, lang: null, thumb: null, durationSec: null, ocrState: 0, snippetBody: null, lines: null, url: null, fileCount: null, ...over,
+  size: 0, lang: null, thumb: null, durationSec: null, ocrState: 0, snippetBody: null, lines: null, url: null, fileCount: null, meme: null, ...over,
 });
 
 test('visible：分类 ∩ 搜索 → 置顶优先、时间倒序', () => {
@@ -58,7 +58,7 @@ test('groups 按 groupOf 切成连续分组', () => {
 
 test('counts 不受搜索影响且常用按阈值', () => {
   const m = new Map([mk(1, { uses: 3 }), mk(2, { kind: 'code' })].map((r) => [r.id, r]));
-  assert.deepEqual(counts(m, 3), { all: 2, fav: 1, snip: 0, text: 1, link: 0, code: 1, image: 0, video: 0, file: 0 });
+  assert.deepEqual(counts(m, 3), { all: 2, fav: 1, snip: 0, meme: 0, text: 1, link: 0, code: 1, image: 0, video: 0, file: 0 });
 });
 
 test('nextSelection 下一条、否则上一条、否则 null', () => {
@@ -74,13 +74,13 @@ test('ensureSelection 选中项被过滤掉时回到第一条', () => {
   assert.equal(ensureSelection([], 5), null);
 });
 
-test('cycleFilter 循环 9 个分类', () => {
+test('cycleFilter 循环 9 个分类（没有表情包分类时）', () => {
   let f: Filter = 'all';
-  for (let i = 0; i < 8; i++) f = cycleFilter(f, 1);
+  for (let i = 0; i < 8; i++) f = cycleFilter(f, 1, false);
   assert.equal(f, 'file');
-  assert.equal(cycleFilter('code', 1), 'image');
-  assert.equal(cycleFilter('file', 1), 'all');
-  assert.equal(cycleFilter('all', -1), 'file');
+  assert.equal(cycleFilter('code', 1, false), 'image');
+  assert.equal(cycleFilter('file', 1, false), 'all');
+  assert.equal(cycleFilter('all', -1, false), 'file');
 });
 
 test('isStale', () => {
@@ -153,4 +153,51 @@ test('extendRange：Shift 连选从锚点到当前行，往回按会收回（M25
 
 test('isTextKind：文本、代码、链接', () => {
   assert.deepEqual((['text', 'code', 'link', 'image', 'video', 'file'] as const).map(isTextKind), [true, true, true, false, false, false]);
+});
+
+test('putOrder：有多选按选中的先后，否则只放当前选中的', () => {
+  assert.deepEqual(putOrder(5, [9, 3, 5]), [9, 3, 5]);
+  assert.deepEqual(putOrder(5, []), [5]);
+  assert.deepEqual(putOrder(null, []), []);
+});
+
+const meme = (id: number, over: Partial<RecordSummary> = {}) =>
+  mk(id, { kind: 'image', meme: { source: 'final', name: '无语', style: null, gif: true, set: null }, ...over });
+
+test('meme filter and search group', () => {
+  const now = new Date(2026, 10, 21, 12).getTime();
+  const m = new Map([mk(1, { snippetBody: 'x', title: '无语' }), meme(2, { copiedAt: now, uses: 9 }), mk(3, { kind: 'image', copiedAt: now, uses: 9 })].map((r) => [r.id, r]));
+  // 不搜索：“全部”和“图片”“常用”都不含表情包，“表情包”只含表情包
+  assert.deepEqual(visible(m, 'all', null, 3).map((r) => r.id), [3]);
+  assert.deepEqual(visible(m, 'image', null, 3).map((r) => r.id), [3]);
+  assert.deepEqual(visible(m, 'fav', null, 3).map((r) => r.id), [3]);
+  assert.deepEqual(visible(m, 'meme', null, 3).map((r) => r.id), [2]);
+  assert.equal(inFilter(meme(9), 'meme', 3, true), true);
+  assert.equal(inFilter(mk(9, {}), 'meme', 3, true), false);
+  const c = counts(m, 3);
+  assert.deepEqual([c.all, c.image, c.fav, c.snip, c.meme], [1, 1, 1, 1, 1]);
+  // 搜“无语”：片段一组、表情包一组排在片段后面，再是历史
+  const v = visible(m, 'all', new Set([1, 2, 3]), 3);
+  assert.deepEqual(v.map((r) => r.id), [1, 2, 3]);
+  assert.deepEqual(groups(v, 'all', now).map((g) => g.name), ['片段', '表情包', '今天']);
+});
+
+test('表情包分类按用过次数、再按上次使用排', () => {
+  const m = new Map([meme(1, { uses: 1, copiedAt: 9 }), meme(2, { uses: 3, copiedAt: 1 }), meme(3, { uses: 1, copiedAt: 20 })].map((r) => [r.id, r]));
+  assert.deepEqual(visible(m, 'meme', null, 3).map((r) => r.id), [2, 3, 1]);
+});
+
+test('meme category hidden when off', () => {
+  // 试用过期不是这里的输入：只看 Pro 在不在这个构建里、开关、精简模式
+  assert.equal(memeCategory(true, true, false), true);
+  assert.equal(memeCategory(true, false, false), false);
+  assert.equal(memeCategory(false, true, false), false);
+  assert.equal(memeCategory(true, true, true), false);
+  assert.deepEqual(tabFilters(true).slice(0, 5), ['all', 'fav', 'snip', 'meme', 'text']);
+  assert.equal(tabFilters(true).length, 10);
+  assert.ok(!tabFilters(false).includes('meme'));
+  assert.equal(cycleFilter('snip', 1, true), 'meme');
+  assert.equal(cycleFilter('text', -1, true), 'meme');
+  assert.equal(cycleFilter('snip', 1, false), 'text');
+  assert.equal(cycleFilter('text', -1, false), 'snip');
 });

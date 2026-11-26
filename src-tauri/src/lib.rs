@@ -1,19 +1,47 @@
 mod assets;
+mod belt;
+mod belt_window;
 mod clipboard;
 mod clock;
+mod collect;
 mod commands;
 mod diag;
 mod enrich;
 pub mod error;
 mod events;
+mod float_drag;
+mod float_hide;
+#[cfg(debug_assertions)]
+mod focus_check;
+mod gen_slots;
 mod hotkey;
 mod housekeeping;
+mod imagegen;
+mod img_meta;
+mod license;
+mod line;
 mod longshot;
+mod meme;
+mod meme_gen;
+mod meme_gif;
+mod meme_store;
+mod meme_tasks;
+mod meme_window;
+mod mixer;
+mod mixer_window;
 mod ocr;
 mod panel;
 mod rec;
+mod record_image;
+mod remind;
 mod shot;
 pub mod state;
+mod textedit;
+mod textedit_finish;
+mod textedit_job;
+mod textedit_store;
+mod textedit_tasks;
+mod textedit_window;
 mod translate;
 mod tray;
 mod trcard;
@@ -30,6 +58,8 @@ use xpaste_core::Store;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     log_panics();
+    gen_slots::on_free(meme_tasks::pump);
+    gen_slots::on_free(textedit_tasks::pump);
     let override_ = data_dir_override(std::env::var_os("XPASTE_DATA_DIR"));
     let timing = timing_enabled(std::env::var_os("XPASTE_TIMING"));
     let builder = tauri::Builder::default();
@@ -38,7 +68,17 @@ pub fn run() {
     let builder = if override_.is_some() {
         builder
     } else {
-        builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+        builder.plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            // 第二个进程是被 xpaste:// 链接拉起的（Windows）：链接已转给 deep-link 插件处理，这里不再切换面板
+            if argv.iter().any(|a| a.starts_with("xpaste://")) {
+                return;
+            }
+            // 第二个进程是用“打开方式”打开图片拉起的（Windows）
+            let files = textedit::argv_files(&argv);
+            let files = files.iter().map(|p| std::path::Path::new(&cwd).join(p));
+            if textedit::opened(app, files.collect()) {
+                return;
+            }
             panel::toggle(app, None, panel::Trigger::Relaunch)
         }))
     };
@@ -81,10 +121,11 @@ pub fn run() {
             if let Err(e) = shot::clear_pins(&data_dir.join("pins")) {
                 log::warn!("清空贴图目录失败：{e}");
             }
+            textedit_store::clean(&data_dir.join("textedit"));
             if isolated {
                 log::info!("数据目录已由 XPASTE_DATA_DIR 覆盖，不启用单实例");
                 // tauri.conf.json 的 assetProtocol.scope 只覆盖默认数据目录
-                for sub in ["images", "thumbs", "icons", "pins"] {
+                for sub in ["images", "thumbs", "icons", "pins", "line", "memes"] {
                     if let Err(e) = app
                         .asset_protocol_scope()
                         .allow_directory(data_dir.join(sub), true)
@@ -98,14 +139,40 @@ pub fn run() {
             let store =
                 Store::open(&data_dir).inspect_err(|e| log::error!("打开数据库失败：{e}"))?;
             let first_run = matches!(store.kv_get("onboarded"), Ok(None));
-            let settings = store.load_settings();
-            let (hotkey, shot_hotkey, rec_hotkey, tr_hotkey, appearance) = (
+            let mut settings = store.load_settings();
+            mixer::normalize_settings(&mut settings);
+            meme::normalize_settings(&mut settings);
+            let (
+                hotkey,
+                shot_hotkey,
+                rec_hotkey,
+                tr_hotkey,
+                line_hotkey,
+                belt_hotkey,
+                mixer_hotkey,
+                meme_hotkey,
+                edit_hotkey,
+                appearance,
+            ) = (
                 settings.hotkey.clone(),
                 settings.shot_hotkey.clone(),
                 settings.rec_hotkey.clone(),
                 settings.translate_hotkey.clone(),
+                settings.effective_line_hotkey().to_owned(),
+                settings.effective_belt_hotkey().to_owned(),
+                settings.effective_mixer_hotkey().to_owned(),
+                settings.effective_meme_hotkey().to_owned(),
+                settings.effective_edit_hotkey().to_owned(),
                 settings.appearance,
             );
+            line::configure(
+                settings.line_enabled,
+                settings.line_side,
+                settings.line_pinned,
+            );
+            line::set_pace(settings.line_appear, settings.line_leave);
+            let (belt_on, belt_auto) = (settings.belt_enabled, settings.belt_auto);
+            let mixer_on = settings.mixer_enabled;
             let enrich = enrich::start(app.handle().clone());
             let ocr = ocr::start(app.handle().clone());
             app.manage(AppState::new(
@@ -118,6 +185,7 @@ pub fn run() {
             ocr.schedule_backfill(app.handle(), ocr::BACKFILL_DELAY);
             housekeeping::start(app.handle().clone());
             update::start(app.handle().clone());
+            license::start(app.handle().clone());
             #[cfg(target_os = "macos")]
             panel::setup_macos(app).inspect_err(|e| log::error!("面板初始化失败：{e}"))?;
             #[cfg(windows)]
@@ -126,26 +194,102 @@ pub fn run() {
             if let Err(e) = tray::setup(app) {
                 log::warn!("托盘图标创建失败：{e}");
             }
-            if let Err(e) =
-                hotkey::register(app.handle(), &hotkey, &shot_hotkey, &rec_hotkey, &tr_hotkey)
-            {
+            if let Err(e) = hotkey::register(
+                app.handle(),
+                &hotkey::Keys {
+                    panel: &hotkey,
+                    shot: &shot_hotkey,
+                    rec: &rec_hotkey,
+                    translate: &tr_hotkey,
+                    line: &line_hotkey,
+                    belt: &belt_hotkey,
+                    mixer: &mixer_hotkey,
+                    meme: &meme_hotkey,
+                    edit: &edit_hotkey,
+                },
+            ) {
                 log::warn!("快捷键注册失败：{e}");
-                // register 只报第一个失败，截图、录屏、翻译是否注册上另查；它们失败只提示，不标记托盘
+                // register 只报第一个失败，截图、录屏、翻译、便签、传送带、搅拌机是否注册上另查；它们失败只提示，不标记托盘
                 let panel_failed = matches!(e, error::AppError::HotkeyTaken);
-                let (shot_failed, rec_failed, tr_failed) =
-                    hotkey::unregistered(app.handle(), &shot_hotkey, &rec_hotkey, &tr_hotkey);
-                if let Some(body) =
-                    hotkey::failure_notice(panel_failed, shot_failed, rec_failed, tr_failed)
-                {
+                let (
+                    shot_failed,
+                    rec_failed,
+                    tr_failed,
+                    line_failed,
+                    belt_failed,
+                    mixer_failed,
+                    meme_failed,
+                    edit_failed,
+                ) = hotkey::unregistered(
+                    app.handle(),
+                    &shot_hotkey,
+                    &rec_hotkey,
+                    &tr_hotkey,
+                    &line_hotkey,
+                    &belt_hotkey,
+                    &mixer_hotkey,
+                    &meme_hotkey,
+                    &edit_hotkey,
+                );
+                if let Some(body) = hotkey::failure_notice(
+                    panel_failed,
+                    shot_failed,
+                    rec_failed,
+                    tr_failed,
+                    line_failed,
+                    belt_failed,
+                    mixer_failed,
+                    meme_failed,
+                    edit_failed,
+                ) {
                     notify(app.handle(), &body);
                 }
                 if panel_failed {
                     tray::mark_hotkey_failed();
                 }
             }
+            textedit_tasks::remember(app.handle());
             clipboard::start(app.handle().clone());
             shot::prewarm(app.handle());
             trcard::prewarm(app.handle());
+            belt::configure(app.handle(), belt_on, belt_auto);
+            if crate::belt::enabled() {
+                belt::start(app.handle());
+            }
+            mixer::configure(app.handle(), mixer_on);
+            if mixer::enabled() {
+                mixer::start(app.handle());
+            }
+            if meme::enabled() {
+                meme_window::prewarm(app.handle());
+            }
+            if hotkey::edit_enabled() {
+                textedit_window::prewarm(app.handle());
+            }
+            // 表情包：删掉没有记录、也没有草稿指向的文件（不占启动时间）
+            {
+                let h = app.handle().clone();
+                std::thread::spawn(move || meme_store::clean_orphans(&h.state::<AppState>()));
+            }
+            if crate::line::enabled() {
+                line::start(app.handle());
+                #[cfg(debug_assertions)]
+                focus_check::start(app.handle());
+            }
+            // xpaste://activate?code=…（官网付款成功页拉起）。应用已在运行时：macOS 由系统把链接交过来，
+            // Windows 靠单实例插件把第二个进程的参数转过来。Windows 上被链接冷启动时链接在命令行参数里，
+            // 插件初始化时已经读过，这里补取一次。开发版没有安装，系统里注册不上这个协议
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let handle = app.handle().clone();
+                app.deep_link()
+                    .on_open_url(move |event| license::opened(&handle, &event.urls()));
+                if let Ok(Some(urls)) = app.deep_link().get_current() {
+                    license::opened(app.handle(), &urls);
+                }
+            }
+            // 被图片文件拉起的（“打开方式”）
+            textedit::start(app.handle());
             // 首次启动直接显示面板与引导（AC-M18-01）
             if first_run {
                 app.state::<AppState>()
@@ -156,6 +300,7 @@ pub fn run() {
             Ok(())
         })
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_notification::init())
         // 设置里选截图文件夹
         .plugin(tauri_plugin_dialog::init())
@@ -173,7 +318,11 @@ pub fn run() {
                     if longshot::key(shortcut) {
                         return;
                     }
-                    let (p, s, r, t) = {
+                    // 传送带开着或刚贴完时临时注册的退回快捷键
+                    if belt::back_pressed(app, shortcut) {
+                        return;
+                    }
+                    let (p, s, r, t, l, b, m, e, g) = {
                         let st = app.state::<AppState>();
                         let s = st.settings();
                         (
@@ -181,15 +330,25 @@ pub fn run() {
                             s.shot_hotkey.clone(),
                             s.rec_hotkey.clone(),
                             s.translate_hotkey.clone(),
+                            s.effective_line_hotkey().to_owned(),
+                            s.effective_belt_hotkey().to_owned(),
+                            s.effective_mixer_hotkey().to_owned(),
+                            s.effective_meme_hotkey().to_owned(),
+                            s.effective_edit_hotkey().to_owned(),
                         )
                     };
-                    match hotkey::role_of(shortcut, &p, &s, &r, &t) {
+                    match hotkey::role_of(shortcut, &p, &s, &r, &t, &l, &b, &m, &e, &g) {
                         Some(hotkey::Role::Panel) => {
                             panel::toggle(app, timing.then(now_unix_ms), panel::Trigger::Hotkey)
                         }
                         Some(hotkey::Role::Shot) => hotkey::shot_pressed(app),
                         Some(hotkey::Role::Rec) => hotkey::rec_pressed(app),
                         Some(hotkey::Role::Translate) => hotkey::translate_pressed(app),
+                        Some(hotkey::Role::Line) => line::hotkey_pressed(app),
+                        Some(hotkey::Role::Belt) => belt::hotkey_pressed(app),
+                        Some(hotkey::Role::Mixer) => mixer::hotkey_pressed(app),
+                        Some(hotkey::Role::Meme) => meme::hotkey_pressed(app),
+                        Some(hotkey::Role::Edit) => hotkey::edit_pressed(app),
                         None => {}
                     }
                 })
@@ -211,6 +370,66 @@ pub fn run() {
                 let app = window.app_handle();
                 trcard::close(app, trcard::current(app));
             }
+            // 表情包制作窗口同理，Alt+F4 当作 Esc：关掉，窗口留着下次用
+            if window.label() == meme::LABEL
+                && let WindowEvent::CloseRequested { api, .. } = event
+            {
+                api.prevent_close();
+                meme::close(window.app_handle());
+            }
+            // 改字窗口同理
+            if window.label() == textedit::LABEL
+                && let WindowEvent::CloseRequested { api, .. } = event
+            {
+                api.prevent_close();
+                textedit::close(window.app_handle());
+            }
+            // 晾衣绳同理，Alt+F4 当作 Esc：收起；一直显示时不收，只交还键盘
+            if window.label() == line::LABEL
+                && let WindowEvent::CloseRequested { api, .. } = event
+            {
+                api.prevent_close();
+                if line::pinned() {
+                    line::keyboard(window.app_handle(), false);
+                } else {
+                    line::hide(window.app_handle());
+                }
+            }
+            // 排查“面板挂完便签后点外面、按 Esc 都不收起”：记下面板与晾衣绳的焦点变化（只有窗口名）
+            if (window.label() == "panel"
+                || window.label() == line::LABEL
+                || window.label() == mixer::LABEL)
+                && let WindowEvent::Focused(f) = event
+            {
+                log::info!(
+                    "焦点 {} {}",
+                    window.label(),
+                    if *f { "获得" } else { "失去" }
+                );
+            }
+            // 面板开着时点到晾衣绳：macOS 有时不给面板发失焦（两块 NSPanel 之间切换键盘时），面板就一直挂着、
+            // 键盘也不在它身上，点外面、按 Esc 都收不掉。晾衣绳拿到键盘时按面板失焦的规则替它收起
+            if window.label() == line::LABEL && matches!(event, WindowEvent::Focused(true)) {
+                // 页面没申请键盘时（点按钮、拖木珠）也记下，交还时切回原来的窗口
+                line::focused();
+            }
+            // 划词卡片、贴图同理（遮罩除外：遮罩期间面板按规则留着，结束后把键盘还给它）
+            if window.label() != "panel"
+                && shot::overlay_index(window.label()).is_none()
+                && matches!(event, WindowEvent::Focused(true))
+            {
+                panel::other_took_key(window.app_handle());
+            }
+            // 晾衣绳失焦（点了别的应用）：收起时不再把键盘切回拿键盘前的窗口
+            if window.label() == line::LABEL && matches!(event, WindowEvent::Focused(false)) {
+                line::blur();
+            }
+            // 搅拌机失焦（点了别的应用、本应用别的窗口拿走了键盘）：补一句收起时不再把键盘切回拿键盘前的窗口；
+            // 页面把展开着的补一句收起，写了一半的字留着
+            if window.label() == mixer::LABEL && matches!(event, WindowEvent::Focused(false)) {
+                mixer_window::blur();
+                events::emit_to(window.app_handle(), mixer::LABEL, events::MIXER_BLUR, ());
+            }
             // 截图遮罩（shot-*）与贴图（pin-*）失焦不处理
             if window.label() != "panel" {
                 return;
@@ -219,7 +438,9 @@ pub fn run() {
                 // 失焦即隐藏，设置、确认框开着也一样；例外见 panel::blur_hides（M04 规则 3）
                 WindowEvent::Focused(false) => {
                     let app = window.app_handle();
-                    if panel::blur_hides(app) {
+                    let hides = panel::blur_hides(app);
+                    log::info!("面板失焦，按规则{}", if hides { "隐藏" } else { "保留" });
+                    if hides {
                         panel::hide(app);
                     }
                 }
@@ -272,6 +493,8 @@ pub fn run() {
             commands::shot::shot_typing,
             commands::shot::shot_cancel,
             commands::shot::overlay_begin,
+            commands::shot::shot_edit_card,
+            commands::shot::shot_edit_clip,
             commands::shot::shot_finish,
             commands::shot::shot_copy_text,
             commands::shot::shot_translate_again,
@@ -296,7 +519,151 @@ pub fn run() {
             commands::translate::trcard_close,
             commands::translate::trcard_blur,
             commands::translate::trcard_focus,
-            commands::translate::trcard_resize
+            commands::translate::trcard_resize,
+            commands::line::line_view,
+            commands::line::line_hang_record,
+            commands::line::line_hang_from_panel,
+            commands::line::line_drag_hover,
+            commands::line::line_drag_drop,
+            commands::line::line_hang_paths,
+            commands::line::line_add,
+            commands::line::line_edit,
+            commands::line::line_paste_image,
+            commands::line::line_reorder,
+            commands::line::line_place,
+            commands::line::line_hook,
+            commands::line::line_remind,
+            commands::line::line_remove,
+            commands::line::line_restore,
+            commands::line::line_copy,
+            commands::line::line_open,
+            commands::line::line_preview_src,
+            commands::line::line_ready,
+            commands::line::line_resize,
+            commands::line::line_side_hint,
+            commands::line::line_hit_rects,
+            commands::line::line_hide,
+            commands::line::line_hidden,
+            commands::line::line_keyboard,
+            commands::line::pro_status,
+            commands::line::pro_activate,
+            commands::line::pro_unbind,
+            commands::line::pro_deactivate,
+            commands::line::pro_buy,
+            commands::line::pro_take_link,
+            commands::belt::belt_state,
+            commands::belt::belt_ready,
+            commands::belt::belt_hits,
+            commands::belt::belt_drag,
+            commands::belt::belt_front,
+            commands::belt::belt_resize,
+            commands::belt::belt_put,
+            commands::belt::belt_pick,
+            commands::belt::belt_reorder,
+            commands::belt::belt_remove,
+            commands::belt::belt_undo_remove,
+            commands::belt::belt_split,
+            commands::belt::belt_back,
+            commands::belt::belt_close,
+            commands::belt::belt_mini,
+            commands::belt::belt_undo_clear,
+            commands::belt::belt_start,
+            commands::belt::belt_release,
+            commands::mixer::mixer_state,
+            commands::mixer::mixer_ready,
+            commands::mixer::mixer_hits,
+            commands::mixer::mixer_put,
+            commands::mixer::mixer_drop,
+            commands::mixer::mixer_recent,
+            commands::mixer::mixer_remove,
+            commands::mixer::mixer_undo_remove,
+            commands::mixer::mixer_close,
+            commands::mixer::mixer_mini,
+            commands::mixer::mixer_undo_clear,
+            commands::mixer::mixer_release,
+            commands::mixer::mixer_keyboard,
+            commands::mixer::mixer_drag,
+            commands::mixer::mixer_front,
+            commands::mixer::mixer_defaults,
+            commands::mixer::mixer_blend,
+            commands::mixer::mixer_stop,
+            commands::mixer::mixer_reblend,
+            commands::mixer::mixer_retry,
+            commands::mixer::mixer_dump,
+            commands::mixer::mixer_put_back,
+            commands::mixer::mixer_again,
+            commands::mixer::mixer_save_recipe,
+            commands::mixer::mixer_settings,
+            commands::meme::meme_open,
+            commands::meme::meme_close,
+            commands::meme::meme_back,
+            commands::meme::meme_set_refs,
+            commands::meme::meme_ref_image,
+            commands::meme::meme_styles,
+            commands::meme::meme_styles_touch,
+            commands::meme::meme_prefs_set,
+            commands::meme::meme_base_emotion,
+            commands::meme::meme_recent_images,
+            commands::meme::meme_paste_image,
+            commands::meme::meme_add_files,
+            commands::meme::meme_test_image,
+            commands::meme::meme_library_stats,
+            commands::meme::meme_captions,
+            commands::meme::meme_task_start,
+            commands::meme::meme_task_cancel,
+            commands::meme::meme_task_retry,
+            commands::meme::meme_task_drop,
+            commands::meme::meme_task_open,
+            commands::meme::meme_tasks,
+            commands::meme::meme_target,
+            commands::meme::meme_task_reserve,
+            commands::meme::meme_refs_alive,
+            commands::meme::meme_ready,
+            commands::meme::meme_gen_info,
+            commands::meme::meme_cutout,
+            commands::meme::meme_save_sketch,
+            commands::meme::meme_frame,
+            commands::meme::meme_names,
+            commands::meme::meme_encode,
+            commands::meme::meme_store,
+            commands::meme::meme_copy,
+            commands::meme::meme_open_scene,
+            commands::meme::meme_draft_set,
+            commands::meme::meme_sketch_image,
+            commands::textedit::te_open,
+            commands::textedit::te_open_record,
+            commands::textedit::te_open_pin,
+            commands::textedit::te_open_files,
+            commands::textedit::te_on,
+            commands::textedit::te_open_recent,
+            commands::textedit::te_ready,
+            commands::textedit::te_close,
+            commands::textedit::te_back,
+            commands::textedit::te_target,
+            commands::textedit::te_config,
+            commands::textedit::te_image,
+            commands::textedit::te_render,
+            commands::textedit::te_cand,
+            commands::textedit::te_job,
+            commands::textedit::te_lines,
+            commands::textedit::te_ranges,
+            commands::textedit::te_strip,
+            commands::textedit::te_plan,
+            commands::textedit::te_run,
+            commands::textedit::te_local_patch,
+            commands::textedit::te_pick,
+            commands::textedit::te_undo,
+            commands::textedit::te_tasks,
+            commands::textedit::te_cancel,
+            commands::textedit::te_retry,
+            commands::textedit::te_drop,
+            commands::textedit::te_finish,
+            commands::textedit::te_recent,
+            commands::textedit::te_thumb,
+            commands::textedit::te_recent_remove,
+            commands::textedit::te_recent_restore,
+            commands::textedit::te_recent_stats,
+            commands::textedit::te_recent_clear
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
@@ -304,6 +671,13 @@ pub fn run() {
             // macOS 重开已运行的 .app（Finder / Spotlight）不起第二个进程，而是发 Reopen
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => panel::toggle(app, None, panel::Trigger::Relaunch),
+            // 访达的“打开方式”；xpaste:// 链接也从这里来，由 deep-link 插件处理
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Opened { urls } => {
+                let files = urls.iter().filter(|u| u.scheme() == "file");
+                let files = files.filter_map(|u| u.to_file_path().ok());
+                textedit::opened(app, files.collect());
+            }
             // 录制、开始或停止进行中时拦下这次退出（托盘“退出”也走这里）：rec 先停止、把文件写完再退出，
             // 不然 mp4 打不开（M24 规则 8）。守卫里的 hold_exit 每次都会执行
             tauri::RunEvent::ExitRequested { api, .. } if rec::hold_exit(app) => api.prevent_exit(),

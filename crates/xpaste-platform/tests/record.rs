@@ -22,7 +22,7 @@ fn options(name: &str, quality: RecQuality, fps: u32) -> (RecordOptions, f64) {
         fps,
         system_audio: false,
         microphone: false,
-        exclude_window: None,
+        exclude_windows: Vec::new(),
         path,
     };
     (opts, main.scale)

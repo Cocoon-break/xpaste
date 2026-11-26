@@ -1,0 +1,14 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "fileAssociations": [
+      {
+        "name": "图片",
+        "ext": ["png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "gif"],
+        "contentTypes": ["public.png", "public.jpeg", "org.webmproject.webp", "com.microsoft.bmp", "public.tiff", "com.compuserve.gif"],
+        "role": "Editor",
+        "rank": "Alternate"
+      }
+    ]
+  }
+}

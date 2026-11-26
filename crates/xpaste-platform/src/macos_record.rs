@@ -401,10 +401,10 @@ pub fn start_recording(opts: RecordOptions) -> Result<Recorder, PlatformError> {
     autoreleasepool(|_| start(opts))
 }
 
-/// 显示器 `display` 的内容过滤器，排除 `exclude` 这个窗口（找不到就不排除）。录屏与长截图画面流共用。
+/// 显示器 `display` 的内容过滤器，排除 `exclude` 里的窗口（找不到的不排除）。录屏与长截图画面流共用。
 pub(super) fn content_filter(
     display: u32,
-    exclude: Option<u32>,
+    exclude: &[u32],
 ) -> Result<Retained<SCContentFilter>, PlatformError> {
     let content = shareable_content()?;
     // SAFETY: 以下都是只读属性与普通构造
@@ -414,9 +414,10 @@ pub(super) fn content_filter(
             .iter()
             .find(|d| d.displayID() == display)
             .ok_or_else(|| record_err("找不到显示器"))?;
-        let exclude: Vec<_> = exclude
-            .and_then(|id| content.windows().iter().find(|w| w.windowID() == id))
-            .into_iter()
+        let exclude: Vec<_> = content
+            .windows()
+            .iter()
+            .filter(|w| exclude.contains(&w.windowID()))
             .collect();
         Ok(SCContentFilter::initWithDisplay_excludingWindows(
             SCContentFilter::alloc(),
@@ -427,7 +428,7 @@ pub(super) fn content_filter(
 }
 
 fn start(opts: RecordOptions) -> Result<Recorder, PlatformError> {
-    let filter = content_filter(opts.display, opts.exclude_window)?;
+    let filter = content_filter(opts.display, &opts.exclude_windows)?;
     let (x, y, w, h) = opts.rect;
     // 清晰度与帧率（M24 规则 6）：只有小文件指定码率，其余用编码器默认
     let (pw, ph) = output_size(w, h, output_scale(opts.quality, opts.scale));

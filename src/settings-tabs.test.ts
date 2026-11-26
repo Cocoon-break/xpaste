@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { errorControl, revealsFocus, shownTabTarget, tabKeyTarget } from './settings-tabs.ts';
 
 test('←/→ 切到相邻标签，首尾循环', () => {
@@ -55,9 +56,63 @@ test('保存失败的快捷键错误落到对应录制框（出错标签跟着�
   assert.equal(errorControl('invalidSettings', '录屏快捷键不能与截图快捷键相同'), 'recHotkey');
   assert.equal(errorControl('invalidSettings', '录屏快捷键至少需要包含 Mod 或 Alt'), 'recHotkey');
   assert.equal(errorControl('translateHotkeyTaken', '翻译快捷键已被其他应用占用，请换一个'), 'trHotkey');
+  assert.equal(errorControl('mixerHotkeyTaken', '搅拌机快捷键已被其他应用占用，请换一个'), 'mixerHotkey');
+  assert.equal(errorControl('invalidSettings', '搅拌机快捷键不能与传送带快捷键相同'), 'mixerHotkey');
   assert.equal(errorControl('invalidSettings', '翻译快捷键不能与录屏快捷键相同'), 'trHotkey');
   assert.equal(errorControl('invalidSettings', '翻译快捷键至少需要包含 Mod 或 Alt'), 'trHotkey');
+  assert.equal(errorControl('lineHotkeyTaken', '便签快捷键已被其他应用占用，请换一个'), 'lineHotkey');
+  assert.equal(errorControl('invalidSettings', '便签快捷键不能与唤起快捷键相同'), 'lineHotkey');
   // 其余错误走提示条
   assert.equal(errorControl('invalidSettings', '请输入 2 到 99 之间的整数'), null);
   assert.equal(errorControl('internal', '录屏快捷键'), null);
+});
+
+test('errorControl：传送带快捷键冲突', () => {
+  assert.equal(errorControl('beltHotkeyTaken', '传送带快捷键已被其他应用占用，请换一个'), 'beltHotkey');
+  assert.equal(errorControl('invalidSettings', '退回快捷键至少需要包含 Mod 或 Alt'), 'beltBackHotkey');
+  assert.equal(errorControl('invalidSettings', '退回快捷键不能与传送带快捷键相同'), 'beltBackHotkey');
+});
+
+test('errorControl：改字快捷键冲突', () => {
+  assert.equal(errorControl('editHotkeyTaken', '改字快捷键已被其他应用占用，请换一个'), 'editHotkey');
+  assert.equal(errorControl('invalidSettings', '改字快捷键不能与表情包快捷键相同'), 'editHotkey');
+  assert.equal(errorControl('invalidSettings', '改字快捷键至少需要包含 Mod 或 Alt'), 'editHotkey');
+  assert.equal(errorControl('invalidSettings', '改字方式只能是先在本机改或直接用 AI'), null);
+});
+
+// —— 设置 → Pro → 改字 ——（只读 index.html、main.ts 的文本，同 a11y.test.ts）
+const read = (f: string) => readFileSync(new URL(f, import.meta.url), 'utf8');
+const html = read('../index.html'), main = read('./main.ts');
+const proPanel = /<section[^>]*id="st-pro"[\s\S]*?<\/section>/.exec(html)![0];
+
+test('改字只在“Pro”标签里：概览一行加一个子页，没有 Pro 时整个标签不出现', () => {
+  for (const id of ['proFeatEdit', 'proEditPage', 'editOn', 'editHotkey', 'editMode', 'editApi', 'editRecent']) {
+    assert.ok(proPanel.includes(`id="${id}"`), `“Pro”标签里缺少 #${id}`);
+    assert.equal(html.split(`id="${id}"`).length, 2, `#${id} 不止一个`);
+  }
+  assert.match(proPanel, /data-pro-go="proEditPage"[^>]*>[\s\S]*?<b>改字<\/b>/);
+  assert.match(html, /id="st-tab-pro"[^>]* hidden>/);
+  assert.match(proPanel, /^<section[^>]* hidden>/);
+  assert.ok(main.includes("$('#st-tab-pro').hidden = $('#st-pro').hidden = !S.line.available;"));
+});
+
+test('“怎么改”是同一组单选：方向键由浏览器切换', () => {
+  const group = /<div class="tr-pick" id="editMode" role="radiogroup" aria-labelledby="editModeLabel">[\s\S]*?<\/div>/.exec(proPanel)![0];
+  assert.deepEqual([...group.matchAll(/<input type="radio" name="editMode" value="(\w+)">/g)].map((m) => m[1]), ['local', 'ai']);
+  assert.ok(!/tabindex|preventDefault/.test(group));
+});
+
+test('功能关着时录制框那一项只变淡、还能操作：快捷键冲突照样写在它下面', () => {
+  assert.ok(main.includes(`el.inert = off && !el.querySelector('[id$="Hotkey"]');`));
+  assert.equal(main.match(/\bel\.inert = /g)!.length, 1, '三个子页都走同一处');
+});
+
+test('“清空…”读得到占用和没清成的原因', () => {
+  assert.match(proPanel, /id="editClear" aria-describedby="editRecent editClearErr"/);
+  assert.match(proPanel, /<p class="err" id="editClearErr" role="alert" hidden><\/p>/);
+});
+
+test('清空“最近改过”之前先确认', () => {
+  assert.equal(main.split('teRecentClear()').length, 2, '只有一处会清空');
+  assert.match(main, /!\(await confirm\(editClearAsk\(n\)\)\)\) return;[\s\S]{0,200}teRecentClear\(\)/);
 });

@@ -1,4 +1,5 @@
 @import './tokens.css';
+@import './ui.css';
 
 [data-type="text"]  { --tc: var(--c-text); --tg: var(--g-text); }
 [data-type="link"]  { --tc: var(--c-link); --tg: var(--g-link); }
@@ -8,6 +9,7 @@
 [data-type="file"]  { --tc: var(--c-file); --tg: var(--g-file); }
 [data-type="fav"]   { --tc: var(--c-fav); }
 [data-type="snip"]  { --tc: var(--c-snip); }
+[data-type="meme"]  { --tc: var(--c-snip); --tg: var(--c-snip); }
 [data-type="all"]   { --tc: var(--beam); }
 
 /* 主题切换期间关闭所有过渡，避免每个属性各自渐变 */
@@ -298,10 +300,12 @@ kbd {
   box-shadow: 0 0 0 1px rgb(0 0 0 / .2);
 }
 .tail { position: relative; min-width: 62px; display: flex; align-items: center; justify-content: flex-end; gap: 6px; color: var(--tc); }
-.idx, .pin-mark { transition: opacity 120ms ease-out; display: inline-flex; }
+.idx, .pin-mark, .hung { transition: opacity 120ms ease-out; display: inline-flex; }
 .idx { background: transparent; color: var(--faint); }
 .idx kbd, .tail kbd { border-color: transparent; background: none; }
 .pin-mark { color: var(--faint); }
+/* 已挂在晾衣绳上：一根类型色刻线（片段没有图形色，用片段色） */
+.hung { width: 3px; height: 12px; background: var(--tg, var(--tc)); border-radius: 1px; }
 .row[aria-selected="true"] .idx { color: var(--fg); }
 /* 选中行的副信息落在 --sel 上，--faint 不足 4.5:1，改 --muted（M21 无障碍） */
 .row[aria-selected="true"] .meta { color: var(--muted); }
@@ -319,10 +323,10 @@ kbd {
 .qa button:active { transform: scale(.9); }
 /* 多选时复制、编辑不可用（M25 规则 6）：快捷按钮不出现，悬停时序号与图钉照常显示 */
 .list.multi .qa { display: none; }
-.list.multi .row:hover .idx, .list.multi .row:hover .pin-mark { opacity: 1; }
+.list.multi .row:hover .idx, .list.multi .row:hover .pin-mark, .list.multi .row:hover .hung { opacity: 1; }
 @media (hover: hover) and (pointer: fine) {
   .row:hover .qa { opacity: 1; transform: translate(0, -50%); pointer-events: auto; }
-  .row:hover .idx, .row:hover .pin-mark { opacity: 0; }
+  .row:hover .idx, .row:hover .pin-mark, .row:hover .hung { opacity: 0; }
 }
 mark { background: var(--mark-bg); color: var(--mark-fg); border-radius: 3px; padding: 0 1px; box-shadow: 0 0 0 1px var(--mark-ring); }
 
@@ -354,6 +358,53 @@ mark { background: var(--mark-bg); color: var(--mark-fg); border-radius: 3px; pa
 .empty { display: grid; justify-items: center; gap: 12px; padding: 56px 16px; text-align: center; color: var(--muted); }
 .empty .ring { width: 56px; height: 56px; border-radius: 16px; display: grid; place-items: center; color: var(--faint); border: 1px dashed var(--line-2); }
 .empty p { margin: 0; max-width: 30ch; text-wrap: balance; overflow-wrap: anywhere; }
+
+/* —— “表情包”分类：列表区换成 72 × 72 的网格，透明处画棋盘格；格子只放静态缩略图，动图只在右边预览里播 —— */
+.memes { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 10px 14px 14px; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+.mhead { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.seg.sm { padding: 2px; border-radius: 8px; }
+.seg.sm button { height: 22px; padding: 0 10px; font-size: 12px; border-radius: 6px; }
+.mgrid { display: grid; grid-template-columns: repeat(auto-fill, 72px); gap: 8px; margin-top: 10px; }
+#memeGrid { display: contents; }
+.mcell, .mbig { background: repeating-conic-gradient(var(--glass-3) 0 25%, transparent 0 50%) 0 0 / 10px 10px; }
+.mcell {
+  position: relative; width: 72px; height: 72px; padding: 0; border-radius: 8px; border: 1px solid var(--line); overflow: hidden; cursor: default; user-select: none;
+  transition: border-color 130ms ease, opacity 240ms ease;
+}
+.mcell img { width: 100%; height: 100%; object-fit: contain; display: block; pointer-events: none; }
+@media (hover: hover) and (pointer: fine) { .mcell:hover { border-color: var(--tick-base); } }
+.mcell[aria-selected="true"] { border-color: var(--beam); box-shadow: inset 0 0 0 1px var(--beam); }
+.mcell.is-removing { opacity: 0; }
+.mcell .no { position: absolute; left: 3px; top: 3px; min-width: 15px; height: 15px; padding: 0 3px; border-radius: 3px; background: rgb(0 0 0 / .5); color: #FFFFFF; font: 500 10px/15px var(--font-ui); text-align: center; font-variant-numeric: tabular-nums; }
+.mcell .tag { position: absolute; right: 3px; top: 3px; height: 15px; padding: 0 4px; border-radius: 3px; background: rgb(0 0 0 / .55); color: #FFFFFF; font: 600 9.5px/15px var(--font-ui); }
+.mcell .cp { position: absolute; left: 0; right: 0; bottom: 4px; text-align: center; font: 800 11px/1.1 var(--font-ui); color: #FFFFFF; -webkit-text-stroke: 3px #111111; paint-order: stroke fill; white-space: nowrap; overflow: hidden; }
+.mcell.add { display: grid; place-items: center; border-style: dashed; border-color: var(--line-2); background: none; color: var(--muted); font-size: 12px; line-height: 1.3; cursor: pointer; }
+@media (hover: hover) and (pointer: fine) { .mcell.add:hover { background: var(--hover); color: var(--fg); } }
+/* 一套 16 张收成一格：叠起来的边；摊开的一套带一圈浅色边 */
+.mcell.stack { box-shadow: 3px 3px 0 -1px var(--sheet), 3px 3px 0 0 var(--line-2), 6px 6px 0 -1px var(--sheet), 6px 6px 0 0 var(--line-2); }
+.mcell.stack[aria-selected="true"] { box-shadow: inset 0 0 0 1px var(--beam), 3px 3px 0 -1px var(--sheet), 3px 3px 0 0 var(--line-2), 6px 6px 0 -1px var(--sheet), 6px 6px 0 0 var(--line-2); }
+.mcell.inset:not([aria-selected="true"]) { border-color: color-mix(in srgb, var(--beam) 50%, transparent); }
+/* AI 任务格：在画是一把小尺子加秒数（尺子 2 秒跳一格，不过渡宽度），排队写前面几个，画好是结果缩略图加“新”，没画出来标红 */
+.mcell.gen { display: grid; place-items: center; align-content: center; gap: 4px; border: 1px dashed var(--beam); background: color-mix(in srgb, var(--beam) 8%, transparent); color: var(--muted); font: inherit; font-size: 11px; line-height: 1.3; text-align: center; font-variant-numeric: tabular-nums; cursor: pointer; }
+.mcell.gen.done { display: block; border-style: solid; background: repeating-conic-gradient(var(--glass-3) 0 25%, transparent 0 50%) 0 0 / 10px 10px; }
+.mcell.gen.fail { border-color: var(--danger); color: var(--danger); background: none; }
+.mcell.gen .ruler { position: relative; width: 48px; height: 8px; border-bottom: 1px solid var(--tick-base); background: repeating-linear-gradient(90deg, var(--line-2) 0 1px, transparent 1px 8px) left bottom / 100% 5px no-repeat; }
+.mcell.gen .ruler i { position: absolute; left: 0; bottom: -1px; height: 100%; background: repeating-linear-gradient(90deg, var(--cursor) 0 2px, transparent 2px 8px) left bottom / 100% 9px no-repeat; }
+.mcell.gen .ok { position: absolute; inset: 0; margin: auto; width: 26px; height: 26px; fill: none; stroke: var(--beam); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.mcell .tag.new { background: var(--beam); }
+#memeTasks { display: contents; }
+.mempty { grid-column: 1 / -1; margin: 0; padding: 40px 16px; text-align: center; color: var(--faint); font-size: 12.5px; line-height: 1.7; text-wrap: balance; }
+/* 表情包的预览：大图、名字、元信息，按钮压在底部 */
+.pbody:has(.mpv) { display: flex; flex-direction: column; }
+.mpv { flex: 1 0 auto; display: flex; flex-direction: column; gap: 8px; }
+.mbig { flex: none; width: 160px; height: 160px; margin: 4px auto 6px; border-radius: 10px; overflow: hidden; background-size: 14px 14px; }
+.mbig img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.mnm { margin: 0; font: 600 13px var(--font-ui); color: var(--fg); overflow-wrap: anywhere; }
+.mmt { margin: 0; font-size: 11.5px; color: var(--faint); line-height: 1.6; }
+.macts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; }
+/* 状态栏：网格里换成网格的按键 */
+.statusbar:not([data-meme]) .k.mk, .statusbar[data-meme] .k.hk { display: none; }
+.statusbar[data-meme] { justify-content: flex-end; }
 
 /* —— 预览 —— */
 .preview { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-height: 0; background: var(--preview-bg); }
@@ -644,9 +695,95 @@ dialog > form { display: contents; }
 .tr-pick b { display: block; font-weight: 500; font-size: 13px; }
 .tr-pick small { display: block; font-size: 12px; color: var(--faint); }
 @media (hover: hover) and (pointer: fine) { .tr-pick label:not(:has(:checked)):hover { border-color: var(--muted); } }
+/* Pro 标签的晾衣绳位置：三个带小示意图的单选格子（原生单选框藏起来，方向键照常切换）；总开关关着时这一项和样式选择器变淡，仍可改 */
+.side-pick { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.side-pick label {
+  position: relative; display: grid; justify-items: center; gap: 5px; padding: 8px 4px 6px; border-radius: 8px; cursor: pointer;
+  background: var(--glass-2); color: var(--muted); font-size: 11.5px; box-shadow: inset 0 0 0 1px var(--line); transition: background-color .13s, color .13s, box-shadow .13s;
+}
+.side-pick label:has(:checked) { background: var(--sel); color: var(--fg); box-shadow: inset 0 0 0 1.5px var(--beam); }
+.side-pick label:has(:focus-visible) { outline: 2px solid var(--beam); outline-offset: 1px; }
+@media (hover: hover) and (pointer: fine) { .side-pick label:not(:has(:checked)):hover { background: var(--hover); color: var(--fg); } }
+.field .side-pick input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.side-pick svg { width: 64px; height: 40px; fill: none; stroke: currentColor; stroke-width: 2; }
+.side-pick svg .scr { stroke: var(--line-2); stroke-width: 1.5; }
+.side-pick svg rect:not(.scr) { fill: currentColor; stroke: none; opacity: .55; }
+.side-pick label:has(:checked) svg path { stroke: var(--beam); }
+.line-off { opacity: .4; }
+/* 关着时快捷键冲突也写在这一项下面：要看得清 */
+.line-off:has([aria-invalid="true"]) { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .side-pick label { transition: none; } }
 /* 设置里带小标题的一组（“截图”标签的截图 / 长截图，“翻译”标签的两种方式）：上面一道分隔线；标签内第一组不画，免得和标签栏的分隔线叠成两道 */
 .st-group { display: grid; gap: 12px; padding-top: 16px; border-top: 1px solid var(--line); }
 .st-panes .dlg-body > .st-group:first-child { padding-top: 0; border-top: 0; }
+/* 设置“Pro”：概览（授权卡片 + 功能清单）和各功能的子页；进子页从右边滑进，返回从左边滑进，减少动态效果时只淡入 */
+.pro-page { display: grid; gap: 16px; align-content: start; min-width: 0; }
+.pro-page[hidden] { display: none; }
+/* 从“改字”跳来看生图接口时，服务商上面留一点：标题不贴着标签栏 */
+.pro-page > [data-iface] { scroll-margin-top: 24px; }
+.pro-page.in-r { animation: proInR 260ms var(--ease-enter) both; }
+.pro-page.in-l { animation: proInL 260ms var(--ease-enter) both; }
+@keyframes proInR { from { opacity: 0; transform: translateX(16px); } }
+@keyframes proInL { from { opacity: 0; transform: translateX(-16px); } }
+@media (prefers-reduced-motion: reduce) { .pro-page.in-r, .pro-page.in-l { animation: proFade 160ms ease-out both; } }
+@keyframes proFade { from { opacity: 0; } }
+.pro-lic { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 10px; background: var(--glass-2); border: 1px solid var(--line); }
+.pro-lic .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--c-code); }
+.pro-lic[data-tone="trial"] .dot { background: var(--c-image); }
+.pro-lic[data-tone="off"] .dot { background: var(--c-video); }
+.pro-lic .txt { flex: 1; min-width: 0; }
+.pro-lic b { display: block; font-weight: 500; font-size: 13px; }
+.pro-lic small { display: block; font-size: 12px; color: var(--faint); overflow-wrap: anywhere; }
+.pro-lic .btns { display: flex; gap: 6px; flex: none; }
+.pro-h { margin: 4px 0 -8px; font-size: 12px; color: var(--faint); }
+.pro-feats { display: grid; border-top: 1px solid var(--line); }
+.pro-feat { display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--line); }
+.pro-feat > button { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 11px 4px 11px 0; border: 0; border-radius: 8px; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.pro-feat > button:focus-visible { outline: 2px solid var(--beam); outline-offset: -2px; }
+.pro-feat .ic2 { width: 30px; height: 30px; flex: none; display: grid; place-items: center; border-radius: 8px; background: var(--glass-3); color: var(--muted); }
+.pro-feat svg { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.pro-feat .ic2 svg { width: 18px; height: 18px; }
+.pro-feat .t { flex: 1; min-width: 0; }
+.pro-feat .t b { display: block; font-weight: 500; font-size: 13px; }
+.pro-feat .t small { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--faint); white-space: nowrap; overflow: hidden; }
+.pro-feat.off .t small { opacity: .7; }
+.pro-feat .chev { width: 14px; height: 14px; flex: none; color: var(--faint); stroke-width: 1.6; transition: transform 140ms var(--ease-enter), color 140ms; }
+@media (hover: hover) and (pointer: fine) { .pro-feat > button:hover .chev { color: var(--fg); transform: translateX(2px); } }
+.pro-feat .switch { padding: 0; border: 0; flex: none; }
+.pro-back { display: inline-flex; align-items: center; gap: 2px; justify-self: start; height: 26px; margin: -6px 0 -4px -6px; padding: 0 8px 0 4px; border: 0; border-radius: 7px; background: none; color: var(--muted); font: 12.5px var(--font-ui); cursor: pointer; }
+.pro-back svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.pro-back:focus-visible { outline: 2px solid var(--beam); }
+@media (hover: hover) and (pointer: fine) { .pro-back:hover { background: var(--glass-3); color: var(--fg); } }
+/* 搅拌机的配方列表：把手、名字与提示词、显示开关、编辑、恢复默认或删除；拖动时别的行用 transform 让位 */
+.recipes { display: grid; gap: 7px; min-width: 0; }
+.recipes > .lbl { font-size: 13px; font-weight: 500; }
+.rl { margin-top: 3px; border-top: 1px solid var(--line); }
+.rr { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto auto auto; gap: 8px; align-items: center; padding: 8px 4px 8px 0; border-bottom: 1px solid var(--line); position: relative; transition: transform 160ms var(--ease-enter); }
+.rr.lift { z-index: 2; transition: none; background: var(--pop-solid); border-radius: 8px; box-shadow: var(--shadow-pop); }
+.rr .grip { width: 22px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--faint); display: grid; place-items: center; cursor: grab; touch-action: none; }
+.rr .grip:disabled { visibility: hidden; }
+.rr.lift .grip { cursor: grabbing; }
+.rr .nm { min-width: 0; }
+.rr .nm b { font-weight: 500; font-size: 13px; }
+.rr .nm small { display: block; font-size: 12px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rr.off .nm { opacity: .5; }
+.rr .tag { font-size: 11px; color: var(--faint); border: 1px solid var(--line-2); border-radius: 4px; padding: 0 4px; margin-left: 6px; }
+.rr .tag.key { color: var(--cursor); border-color: currentColor; }
+.rr .switch { padding: 0; border: 0; }
+.rr .ib { width: 28px; height: 28px; padding: 0; border: 0; border-radius: 7px; background: none; color: var(--muted); display: grid; place-items: center; cursor: pointer; }
+.rr .ib.ph { visibility: hidden; }
+.rr .ic { width: 16px; height: 16px; }
+@media (hover: hover) and (pointer: fine) { .rr .grip:hover, .rr .ib:hover { background: var(--hover); color: var(--fg); } }
+.ed { grid-column: 2 / -1; display: grid; gap: 8px; padding: 4px 0; }
+.ed input, .ed textarea { font: 12.5px var(--font-ui); color: var(--fg); background: var(--well); border: 1px solid var(--line-2); border-radius: 7px; padding: 6px 8px; resize: none; min-width: 0; transition: border-color 160ms ease, box-shadow 160ms ease; }
+.ed textarea { min-height: 72px; line-height: 1.55; }
+.ed input:focus-visible, .ed textarea:focus-visible { outline: none; border-color: var(--beam); box-shadow: 0 0 0 3px color-mix(in srgb, var(--beam) 18%, transparent); }
+.ed .acts { display: flex; gap: 8px; align-items: center; }
+.ed .sp { flex: 1; }
+.ed .err { font-size: 12px; color: var(--danger); }
+.rl-foot { display: flex; align-items: center; gap: 12px; margin-top: 3px; }
+.rl-log { min-height: 18px; display: flex; gap: 10px; align-items: center; font-size: 12px; color: var(--faint); }
+.rl-log button { font: inherit; color: var(--cursor); background: none; border: 0; padding: 0; cursor: pointer; }
 .st-group h3 { margin: 0; font-size: 13px; font-weight: 600; }
 .st-group > .help { margin: -6px 0 0; }
 /* 组里的开关列表：紧跟小标题时不画顶线；在组末尾时去掉最后一个显示着的行的底线（Windows 上权限行隐藏），由下一组的分隔线隔开，不叠成两道 */
@@ -750,7 +887,7 @@ dialog > form { display: contents; }
 :root[data-style="compact"] .tail .ic { width: 13px; height: 13px; }
 :root[data-style="compact"] .idx { padding: 0 2px; font-variant-numeric: tabular-nums; }
 /* 没有悬停按钮，序号与图钉悬停时也留着 */
-:root[data-style="compact"] .row:hover .idx, :root[data-style="compact"] .row:hover .pin-mark { opacity: 1; }
+:root[data-style="compact"] .row:hover .idx, :root[data-style="compact"] .row:hover .pin-mark, :root[data-style="compact"] .row:hover .hung { opacity: 1; }
 /* 分组：片段组时的小标题，置顶之后的细线（M27 规则 6） */
 :root[data-style="compact"] .glabel { height: 24px; box-sizing: border-box; display: flex; align-items: center; gap: 8px; padding: 4px 12px 0; font-size: 11px; color: var(--faint); }
 :root[data-style="compact"] .glabel::after, :root[data-style="compact"] .rule::before { content: ""; flex: 1; height: 1px; background: var(--line); }

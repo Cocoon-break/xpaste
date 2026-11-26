@@ -306,7 +306,7 @@ fn merged_text(state: &AppState, ids: &[i64]) -> Result<String, AppError> {
 }
 
 /// 写入剪切板、给 `ids` 各记一次使用，再按 `paste` 决定只复制还是隐藏面板去粘贴。
-async fn write_then_paste(
+pub(crate) async fn write_then_paste(
     app: &AppHandle,
     state: &AppState,
     flavors: &[Flavor],
@@ -319,9 +319,13 @@ async fn write_then_paste(
     } else {
         format!("n={}", ids.len())
     };
-    write_marked(state, || xpaste_platform::write(flavors)).inspect_err(|_| {
+    let seq = write_marked(state, || xpaste_platform::write(flavors)).inspect_err(|_| {
         log::warn!("写入剪切板失败 {label} bytes={bytes}");
     })?;
+    // 采集管道跳过自身写入：剪切板里此刻是这一条，替它记上（表情包制作窗口里按 ⌘V 认它）
+    if let [id] = ids {
+        crate::clipboard::seen(seq, Some(*id));
+    }
     let move_to_top = state.settings().move_to_top;
     for &id in ids {
         state.store().bump_use(id, move_to_top, now_ms())?;
@@ -331,27 +335,52 @@ async fn write_then_paste(
         return Ok(CopyResult::Copied);
     }
     let target = Some(state.previous_window.load(Ordering::Relaxed)).filter(|&h| h != 0);
-    match plan_paste(xpaste_platform::can_paste(target), target, cfg!(windows)) {
+    let (a, label) = (app.clone(), format!("{label} bytes={bytes}"));
+    tauri::async_runtime::spawn_blocking(move || {
+        paste_or_degrade(
+            xpaste_platform::can_paste(target),
+            target,
+            &label,
+            || crate::panel::hide(&a),
+            || paste_blocking(&a, target),
+            || crate::panel::reshow(&a),
+        )
+    })
+    .await
+    .map_err(|e| AppError::Invalid(format!("阻塞任务失败：{e}")))
+}
+
+/// 剪切板写好之后去粘贴（面板的 Enter、表情包制作窗口的“贴到…”共用）：做不了模拟粘贴时直接退成只复制（不收起窗口）；
+/// 能做就先 `hide` 收起窗口，再 `paste`（阻塞：等焦点回到目标、在主线程按键），失败时 `reshow` 让用户看到降级提示。
+pub(crate) fn paste_or_degrade(
+    block: PasteBlock,
+    target: Option<isize>,
+    label: &str,
+    hide: impl FnOnce(),
+    paste: impl FnOnce() -> Result<(), String>,
+    reshow: impl FnOnce(),
+) -> CopyResult {
+    match plan_paste(block, target, cfg!(windows)) {
         PastePlan::CopyOnly(reason) => {
             if reason == REASON_PASTE_FAILED {
                 // 从托盘打开后按 Enter 是正常路径，不算警告
                 log::info!("模拟粘贴跳过：没有记录到目标窗口");
             }
-            Ok(CopyResult::CopiedOnly { reason })
+            CopyResult::CopiedOnly { reason }
         }
         PastePlan::Paste => {
-            crate::panel::hide(app);
-            match paste_on_main(app, target).await {
+            hide();
+            match paste() {
                 Ok(()) => {
-                    log::info!("已模拟粘贴 {label} bytes={bytes}");
-                    Ok(CopyResult::Pasted)
+                    log::info!("已模拟粘贴 {label}");
+                    CopyResult::Pasted
                 }
                 Err(e) => {
                     log::warn!("模拟粘贴失败 {label}：{e}");
-                    crate::panel::reshow(app);
-                    Ok(CopyResult::CopiedOnly {
+                    reshow();
+                    CopyResult::CopiedOnly {
                         reason: REASON_PASTE_FAILED,
-                    })
+                    }
                 }
             }
         }
@@ -369,11 +398,11 @@ fn plain_flavors(kind: Kind, text: Option<String>) -> Option<Vec<Flavor>> {
 /// 预览“复制文字”：只写一份纯文本，标记为自身写入（不入库、不计使用次数）。
 #[tauri::command(async)]
 pub fn copy_text_plain(state: State<'_, AppState>, text: String) -> Result<(), AppError> {
-    write_text_plain(&state, &text)
+    write_text_plain(&state, &text).map(drop)
 }
 
-/// 写一份纯文本并标记为自身写入；截图的识别文字也走这里。
-fn write_text_plain(state: &AppState, text: &str) -> Result<(), AppError> {
+/// 写一份纯文本并标记为自身写入；截图的识别文字也走这里。返回写入后的剪切板序号（同 `write_marked`）。
+pub(crate) fn write_text_plain(state: &AppState, text: &str) -> Result<u64, AppError> {
     write_text_plain_via(state, text, xpaste_platform::write)
 }
 
@@ -381,12 +410,12 @@ fn write_text_plain_via(
     state: &AppState,
     text: &str,
     write: impl FnOnce(&[Flavor]) -> Result<u64, PlatformError>,
-) -> Result<(), AppError> {
+) -> Result<u64, AppError> {
     write_marked(state, || write(&[text_flavor(text)]))
 }
 
 /// 设计 8.5 第 1–2 步：记录存在、文件都在、有可写回的 flavor。任何一步不满足都不碰剪切板。
-fn precheck(state: &AppState, id: i64) -> Result<Vec<Flavor>, AppError> {
+pub(crate) fn precheck(state: &AppState, id: i64) -> Result<Vec<Flavor>, AppError> {
     let store = state.store();
     let detail = store
         .detail(id)?
@@ -394,7 +423,13 @@ fn precheck(state: &AppState, id: i64) -> Result<Vec<Flavor>, AppError> {
     if detail.files.iter().any(|f| !f.exists) {
         return Err(AppError::FileMissing);
     }
-    let flavors = store.flavors(id)?;
+    // 表情包不存剪切板格式：按文件现拼（数据目录换了也对）
+    let flavors = match detail.files.first() {
+        Some(f) if detail.summary.meme.is_some() => {
+            crate::meme_store::flavors(std::path::Path::new(&f.path))
+        }
+        _ => store.flavors(id)?,
+    };
     if flavors.is_empty() {
         return Err(AppError::ClipboardWrite);
     }
@@ -402,17 +437,18 @@ fn precheck(state: &AppState, id: i64) -> Result<Vec<Flavor>, AppError> {
 }
 
 /// 写剪切板期间置 `writing`，成功后记下序号，让监听线程跳过这次自身写入。
-fn write_marked(
+/// 返回这次写入的序号：调用方要认自己的写入时用它，别再读 `last_write_seq`（别的线程可能已经又写了一次）。
+pub(crate) fn write_marked(
     state: &AppState,
     f: impl FnOnce() -> Result<u64, PlatformError>,
-) -> Result<(), AppError> {
+) -> Result<u64, AppError> {
     state.writing.store(true, Ordering::SeqCst);
     let written = f();
     if let Ok(seq) = written {
         state.last_write_seq.store(seq, Ordering::SeqCst);
     }
     state.writing.store(false, Ordering::SeqCst);
-    written.map(drop).map_err(|e| {
+    written.map_err(|e| {
         log::warn!("写剪切板出错：{e}");
         AppError::ClipboardWrite
     })
@@ -437,22 +473,17 @@ fn plan_paste(block: PasteBlock, target: Option<isize>, windows: bool) -> PasteP
     }
 }
 
-/// 等面板消失、焦点回到上一个应用后在主线程粘贴。sleep 与等待主线程都是阻塞调用，放到阻塞线程池。
-async fn paste_on_main(app: &AppHandle, target: Option<isize>) -> Result<(), String> {
-    let a = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        std::thread::sleep(Duration::from_millis(50));
-        let (tx, rx) = mpsc::channel();
-        a.run_on_main_thread(move || {
-            let _ = tx.send(xpaste_platform::paste(target));
-        })
-        .map_err(|e| format!("切换到主线程失败：{e}"))?;
-        rx.recv()
-            .map_err(|_| "主线程未返回结果".to_string())?
-            .map_err(|e| e.to_string())
+/// 等窗口消失、焦点回到上一个应用后在主线程粘贴。sleep 与等待主线程都是阻塞调用，不要在异步任务里直接调。
+pub(crate) fn paste_blocking(app: &AppHandle, target: Option<isize>) -> Result<(), String> {
+    std::thread::sleep(Duration::from_millis(50));
+    let (tx, rx) = mpsc::channel();
+    app.run_on_main_thread(move || {
+        let _ = tx.send(xpaste_platform::paste(target));
     })
-    .await
-    .map_err(|e| format!("阻塞任务失败：{e}"))?
+    .map_err(|e| format!("切换到主线程失败：{e}"))?;
+    rx.recv()
+        .map_err(|_| "主线程未返回结果".to_string())?
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -602,7 +633,7 @@ mod tests {
         assert!(matches!(r, Err(AppError::ClipboardWrite)));
         assert!(!state.writing.load(Ordering::SeqCst));
         assert_eq!(state.last_write_seq.load(Ordering::SeqCst), u64::MAX);
-        write_marked(&state, || Ok(7)).unwrap();
+        assert_eq!(write_marked(&state, || Ok(7)).unwrap(), 7);
         assert_eq!(state.last_write_seq.load(Ordering::SeqCst), 7);
     }
 
@@ -650,6 +681,40 @@ mod tests {
             PastePlan::Paste
         );
         assert_eq!(plan_paste(PasteBlock::None, None, false), PastePlan::Paste);
+    }
+
+    /// 模拟粘贴失败：已收起的窗口重新显示，退成只复制；做不了模拟粘贴时窗口不动、不按键
+    #[test]
+    fn paste_failure_degrades_and_reshows() {
+        let (mut hid, mut back) = (false, false);
+        let r = paste_or_degrade(
+            PasteBlock::None,
+            Some(1),
+            "id=1",
+            || hid = true,
+            || Err("目标窗口没了".into()),
+            || back = true,
+        );
+        assert!(matches!(r, CopyResult::CopiedOnly { reason } if reason == REASON_PASTE_FAILED));
+        assert!(hid && back);
+        let r = paste_or_degrade(
+            PasteBlock::NeedAccessibility,
+            Some(1),
+            "id=1",
+            || panic!("不该收起"),
+            || panic!("不该粘贴"),
+            || panic!("不该重新显示"),
+        );
+        assert!(matches!(r, CopyResult::CopiedOnly { reason } if reason == "needAccessibility"));
+        let r = paste_or_degrade(
+            PasteBlock::None,
+            Some(1),
+            "id=1",
+            || {},
+            || Ok(()),
+            || panic!("粘贴成功不重新显示"),
+        );
+        assert!(matches!(r, CopyResult::Pasted));
     }
 
     #[test]

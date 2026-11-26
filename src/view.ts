@@ -1,12 +1,21 @@
 // 视图状态：过滤、排序、分组、选中、撤销。纯函数，不碰 DOM。
 import type { RecordSummary } from './api/types';
-import { FILTERS, isFav, isSnip, type Filter } from './format.ts';
+import { FILTERS, isFav, isMeme, isSnip, type Filter } from './format.ts';
+import { memeOrder } from './meme-grid.ts';
 
-/** `min`：进入“常用”的使用次数（设置 frequentMinUses）。`searching`：有搜索词时“全部”才包含片段（M25 规则 2）。 */
+const isHist = (r: RecordSummary) => !isSnip(r) && !isMeme(r);
+
+/** `min`：进入“常用”的使用次数（设置 frequentMinUses）。`searching`：有搜索词时“全部”才包含片段和表情包（M25 规则 2）。 */
 export const inFilter = (r: RecordSummary, f: Filter, min: number, searching: boolean): boolean =>
-  f === 'snip' ? isSnip(r) : f === 'all' ? !isSnip(r) || searching : f === 'fav' ? isFav(r, min) : !isSnip(r) && r.kind === f;
+  f === 'snip' ? isSnip(r) : f === 'meme' ? isMeme(r) : f === 'all' ? isHist(r) || searching : f === 'fav' ? isFav(r, min) : isHist(r) && r.kind === f;
 
-/** 分类 ∩ 搜索结果（`null` 表示无搜索），常用按次数排，其余置顶优先再按时间、id 倒序。 */
+/** 表情包分类只在 Pro 在这个构建里、开着表情包制作、不是精简模式时出现；试用过期照常出现（库是用户自己的数据） */
+export const memeCategory = (available: boolean, enabled: boolean, compact: boolean): boolean => available && enabled && !compact;
+
+/** 分类栏上的分类：全部、常用、片段、表情包 ｜ 文本……；没有表情包分类时去掉它 */
+export const tabFilters = (meme: boolean): Filter[] => FILTERS.map(([k]) => k).filter((k) => meme || k !== 'meme');
+
+/** 分类 ∩ 搜索结果（`null` 表示无搜索），常用按次数排，表情包按用过次数、上次使用排，其余片段、表情包在前，置顶优先再按时间、id 倒序。 */
 export const visible = (
   records: Map<number, RecordSummary>,
   f: Filter,
@@ -18,13 +27,16 @@ export const visible = (
     .sort(
       f === 'fav'
         ? (a, b) => b.uses - a.uses || b.copiedAt - a.copiedAt
-        : (a, b) => Number(isSnip(b)) - Number(isSnip(a)) || Number(b.pinned) - Number(a.pinned) || b.copiedAt - a.copiedAt || b.id - a.id,
+        : f === 'meme' ? memeOrder
+        : (a, b) => Number(isSnip(b)) - Number(isSnip(a)) || Number(isMeme(b)) - Number(isMeme(a)) || (isMeme(a) && isMeme(b) ? memeOrder(a, b) : 0)
+          || Number(b.pinned) - Number(a.pinned) || b.copiedAt - a.copiedAt || b.id - a.id,
     );
 
 const sameDay = (a: Date, b: Date) => a.toDateString() === b.toDateString();
 
 export const groupOf = (r: RecordSummary, f: Filter, now = Date.now()): string => {
   if (isSnip(r)) return '片段';
+  if (isMeme(r)) return '表情包';
   if (f === 'fav') return '按使用次数排序';
   if (r.pinned) return '置顶';
   const t = new Date(r.copiedAt), d = new Date(now);
@@ -48,8 +60,8 @@ export const groups = (vis: RecordSummary[], f: Filter, now = Date.now()): { nam
 export const counts = (records: Map<number, RecordSummary>, min: number): Record<Filter, number> => {
   const c = Object.fromEntries(FILTERS.map(([f]) => [f, 0])) as Record<Filter, number>;
   for (const r of records.values()) {
-    if (isSnip(r)) {
-      c.snip++;
+    if (isSnip(r) || isMeme(r)) {
+      c[isSnip(r) ? 'snip' : 'meme']++;
       continue;
     }
     c.all++;
@@ -69,9 +81,10 @@ export const nextSelection = (vis: RecordSummary[], removedId: number): number |
 export const ensureSelection = (vis: RecordSummary[], sel: number | null): number | null =>
   vis.some((r) => r.id === sel) ? sel : (vis[0]?.id ?? null);
 
-export const cycleFilter = (f: Filter, dir: 1 | -1): Filter => {
-  const i = FILTERS.findIndex(([k]) => k === f);
-  return FILTERS[(i + dir + FILTERS.length) % FILTERS.length][0];
+/** Mod+←/→ 循环切换；`meme` 为假时跳过表情包分类 */
+export const cycleFilter = (f: Filter, dir: 1 | -1, meme: boolean): Filter => {
+  const fs = tabFilters(meme), i = fs.indexOf(f);
+  return fs[(i + dir + fs.length) % fs.length];
 };
 
 /** 异步结果的序号早于最新请求时丢弃。 */
@@ -94,6 +107,10 @@ export const pruneMulti = (multi: Set<number>, records: Map<number, RecordSummar
   const kept = new Set([...multi].filter((id) => records.has(id)));
   return kept.size < 2 ? new Set() : kept;
 };
+
+/** 放上传送带的顺序：有多选按选中的先后，否则只放当前选中的；都没有返回空。 */
+export const putOrder = (sel: number | null, multi: number[]): number[] =>
+  multi.length ? multi : sel === null ? [] : [sel];
 
 /** Shift 点击连选：`from`、`to` 在 `vis` 中的闭区间，与方向无关；找不到端点时返回空。 */
 export const rangeIds = (vis: RecordSummary[], from: number, to: number): number[] => {

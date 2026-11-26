@@ -10,7 +10,7 @@ pub const PANEL_HIDDEN: &str = "panel-hidden";
 /// 快捷键 / 托盘要隐藏面板：前端播完淡出后调 `hide_panel`，400 ms 内没隐藏则后端兜底。
 pub const PANEL_HIDE_REQUESTED: &str = "panel-hide-requested";
 /// 引导或对话框打开时按下快捷键，面板保持显示：载荷 `"panel"`（唤起，前端据此推进引导、写入录制框）
-/// 或 `"shot"` / `"rec"`（截图、录屏，见 `hotkey::overlay_pressed`）、`"translate"`（翻译，见 `hotkey::translate_pressed`）。
+/// 或 `"shot"` / `"rec"` / `"edit"`（截图、录屏、改字，见 `hotkey::overlay_pressed`）、`"translate"`（翻译，见 `hotkey::translate_pressed`）。
 pub const HOTKEY_PRESSED: &str = "hotkey-pressed";
 pub const RECORD_ADDED: &str = "record-added";
 pub const RECORD_UPDATED: &str = "record-updated";
@@ -20,8 +20,89 @@ pub const PAUSED_CHANGED: &str = "paused-changed";
 pub const SETTINGS_CHANGED: &str = "settings-changed";
 /// 托盘“设置…”、划词卡片“去设置”：面板显示后打开设置弹窗。载荷为要切到的标签（`translate`），null 时停在上次的标签。
 pub const OPEN_SETTINGS: &str = "open-settings";
+/// 收到 `xpaste://activate?code=…`：面板显示后用 `pro_take_link` 取走授权码，打开设置的“Pro”标签并激活。
+/// 载荷为空：授权码不走事件，面板还没订阅时（冷启动）也不会丢。
+pub const PRO_LINK: &str = "pro-link";
 /// 托盘“清空历史…”：面板显示后打开清空确认。
 pub const CONFIRM_CLEAR: &str = "confirm-clear";
+
+/// 晾衣绳的便签或 Pro 状态变了，载荷是完整的 `commands::line::LineView`；面板据此更新已挂的刻线。
+pub const LINE_CHANGED: &str = "line-changed";
+/// 便签快捷键按下时面板可见：只发给 `panel`，面板把选中的那条记录挂上绳子（没有选中就挂最新一条）。
+pub const LINE_HANG_SELECTED: &str = "line-hang-selected";
+/// 快捷键没挂成时的提示，只发给 `line`：`{ text, action?, id? }`，见 `line::Toast`。
+/// `action` 为 `"pro"` 时提示条带“输入授权码”按钮；`id` 是已挂着的那张便签，页面让它轻摆一下。
+pub const LINE_TOAST: &str = "line-toast";
+/// 晾衣绳窗口放下，只发给 `line`：`{ how, id }`，见 `line::How`（`peek` 只露绳子；peek 之后再放下只换 `how`，窗口不挪）。
+/// `id` 不为 null 时是要选中的便签：快捷键挂的内容已经挂着、绳子又放下着，键盘落在那张上。
+pub const LINE_SHOW: &str = "line-show";
+/// 晾衣绳要收起，只发给 `line`：页面播完收起后调 `line_hidden`，窗口才真正隐藏。
+pub const LINE_HIDE: &str = "line-hide";
+/// 面板里把行拖出顶边，只发给 `line`：`{ x, y }`，光标的屏幕逻辑坐标，页面据 x 空出落点。
+pub const LINE_DRAG: &str = "line-drag";
+/// 面板里拖着行又拖回面板松手、绳子一直显示着（不收起），只发给 `line`：无载荷，页面拿掉跟手的影子便签和让出的空位。
+pub const LINE_DRAG_CANCEL: &str = "line-drag-cancel";
+/// 面板里拖着行在顶端松手，只发给 `line`：`{ id, x }`，页面按 x 算出位置后调 `line_hang_record`。
+pub const LINE_DROP: &str = "line-drop";
+/// 绳子放下期间光标进出便签区域，只发给 `line`：`{ inside }`，变了才发。区域是晾衣绳窗口往上延到屏幕顶端（含菜单栏那一条），
+/// 页面据此在离开 350 ms 后收起。一直显示时窗口刚从接收点击换成穿透，另带 `pass: true`，页面去掉悬停的样子。
+pub const LINE_POINTER: &str = "line-pointer";
+/// 晾衣绳空白处点穿期间光标在窗口里的位置（逻辑像素）：页面收不到穿透过去的移动，靠它接着算悬停和摆动
+pub const LINE_MOVE: &str = "line-move";
+/// 便签的提醒到了，只发给 `line`：`{ id }`，每张到期的发一次，同时放下绳子（`line-show { how: "remind" }`，经主线程发出，通常比它晚到，先后不保证，页面不依赖顺序）；页面让那张高亮。
+pub const LINE_REMIND: &str = "line-remind";
+
+/// 传送带的状态变了，载荷是完整的 `belt::BeltState`（`cause` 说明是哪种变化，页面据此挑动效）。只发给 `belt`：载荷里有授权状态，面板不订阅。
+pub const BELT_CHANGED: &str = "belt-changed";
+/// 传送带的提示条，载荷 `belt::Toast`：`{ text, actions, id? }`。只发给 `belt`。带子收着时后端先显示窗口，提示消失后页面放手再藏。
+pub const BELT_TOAST: &str = "belt-toast";
+/// 传送带快捷键按下时面板在屏上且拿着键盘：只发给 `panel`，面板把选中的记录放上带子。
+pub const BELT_PUT_SELECTED: &str = "belt-put-selected";
+/// 传送带窗口刚显示出来，只发给 `belt`：无载荷。藏起时点击区域清掉了，页面据此重报。
+pub const BELT_SHOWN: &str = "belt-shown";
+
+/// 搅拌机的状态变了，载荷是完整的 `mixer::MixerState`（`cause` 说明是哪种变化）。只发给 `mixer`。
+pub const MIXER_CHANGED: &str = "mixer-changed";
+/// 搅拌中的增量（约 50 ms 一段），载荷 `{ gen, text }`：gen 和 `MixerState.gen` 不同的丢掉。只发给 `mixer`。
+pub const MIXER_DELTA: &str = "mixer-delta";
+/// 搅拌机的提示条，载荷 `mixer::Toast`：`{ text, actions, name? }`。只发给 `mixer`。
+pub const MIXER_TOAST: &str = "mixer-toast";
+/// 搅拌机快捷键按下时面板在屏上且拿着键盘：只发给 `panel`，面板把选中的记录放进杯子。
+pub const MIXER_PUT_SELECTED: &str = "mixer-put-selected";
+/// 搅拌机窗口刚显示出来，只发给 `mixer`：无载荷。藏起时点击区域清掉了，页面据此重报。
+pub const MIXER_SHOWN: &str = "mixer-shown";
+/// 搅拌机窗口失去键盘，只发给 `mixer`：无载荷。展开着的补一句收起，字留着。
+pub const MIXER_BLUR: &str = "mixer-blur";
+
+/// 打开或追加到制作窗口，载荷 `meme::OpenPayload`。只发给 `meme`。
+pub const MEME_OPEN: &str = "meme-open";
+/// 制作窗口的提示条，载荷是文案。只发给 `meme`。
+pub const MEME_TOAST: &str = "meme-toast";
+/// 制作窗口关掉了（Esc、关闭按钮、总开关关掉），无载荷。只发给 `meme`：页面清空。
+pub const MEME_CLOSED: &str = "meme-closed";
+/// 制作窗口里点了“存进表情包”，后端已关掉窗口、唤起面板。载荷是表情包的记录 id。只发给 `panel`：切到“表情包”分类选中它。
+pub const MEME_REVEAL: &str = "meme-reveal";
+/// 制作窗口关掉、唤起了面板，面板不切分类、不改选中，只给提示：返回面板（`draft` 为留了草稿），
+/// 或贴过去没成（`reason` 同 `CopyResult.reason`，退成只复制）。载荷 `{ draft, reason }`。只发给 `panel`。
+pub const MEME_BACK: &str = "meme-back";
+/// AI 任务列表变了，载荷是整份 `Vec<meme_tasks::TaskView>`（新的在前）。发给 `meme` 和 `panel`。
+pub const MEME_TASKS: &str = "meme-tasks";
+
+/// 改字窗口打开或换了一张图，载荷 `textedit::OpenPayload`。只发给 `textedit`；读字的结果另由 `te_lines` 给。
+pub const TE_OPEN: &str = "te-open";
+/// 改字窗口关掉了，无载荷。只发给 `textedit`：页面清空。
+pub const TE_CLOSED: &str = "te-closed";
+/// 改字的 AI 任务或任务所在的图变了，载荷是整份 `Vec<textedit_tasks::TaskView>`。只发给 `textedit`：里面有原文和新文。
+pub const TE_TASKS: &str = "te-tasks";
+/// 改字窗口的提示条，载荷是文案。只发给 `textedit`。
+pub const TE_TOAST: &str = "te-toast";
+/// 打开时识别出错、没读成的图，要改之前再读时读成了，载荷是图的 id。只发给 `textedit`：页面重新取 `te_lines`。
+pub const TE_LINES: &str = "te-lines";
+/// 改字关着时从系统的“打开方式”进来，后端已唤起面板。无载荷，只发给 `panel`：提示“改字没有开启”，带“去设置”。
+pub const TE_OFF: &str = "te-off";
+
+/// 贴图的图片换了（改字的“换掉贴图”），无载荷，只发给那张 `pin-<n>`：重新取图。
+pub const PIN_REPLACED: &str = "pin-replaced";
 
 /// 冻结完成，发给每块屏的遮罩 `shot-<i>`（载荷见 `shot::BeginPayload`）。
 pub const SHOT_BEGIN: &str = "shot-begin";

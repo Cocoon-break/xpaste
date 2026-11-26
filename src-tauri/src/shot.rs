@@ -16,8 +16,9 @@ use xpaste_platform::{Frame, WinRect};
 
 use crate::error::AppError;
 use crate::events;
-use crate::panel::on_main;
+use crate::panel::{Rect, on_main};
 use crate::state::AppState;
+use crate::textedit::Source;
 use crate::translate::{self, Delta, Fail};
 
 const LABEL_PREFIX: &str = "shot-";
@@ -119,6 +120,8 @@ pub struct Session {
     alive: Option<Instant>,
     /// 截图翻译识别出的原文，换用另一种翻译方式时重翻，不再识别（M26 规则 16）；截图结束或复制译文后清掉
     tr_text: Option<String>,
+    /// 框选改字时“用刚复制的图”是哪条记录
+    clip: Option<i64>,
     /// 这次截图里第几次翻译：翻译中“换用…”加一，旧请求见它变了就中止、不再发增量（M26 规则 16）
     tr_seq: u64,
 }
@@ -326,7 +329,7 @@ pub struct BeginPayload {
     scale: f64,
     /// 设置“保存截图时同时复制”，工具栏提示用
     save_copy: bool,
-    /// `"shot"` 截图 / `"rec"` 录屏（M24）
+    /// `"shot"` 截图 / `"rec"` 录屏（M24）/ `"edit"` 框选改字
     mode: &'static str,
     /// 设置“录制系统声音”，录屏工具栏开关的初值
     system_audio: bool,
@@ -336,13 +339,27 @@ pub struct BeginPayload {
     rec_scale: f64,
     /// 设置“录屏帧率”，尺寸标签后缀用
     rec_fps: u32,
+    /// 改字可用：工具条有“改字”，按 E 也行
+    edit: bool,
+    /// 改字快捷键的显示（框选改字的提示用；没设为空）
+    edit_key: String,
 }
 
-/// 遮罩用途：截图（M23）或选录屏区域（M24）。
-#[derive(Clone, Copy, PartialEq, Debug)]
+/// 框选改字的“用刚复制的图”卡片：缩略图（asset URL）和原图尺寸。是哪条记录只记在会话里
+#[derive(Serialize, Clone, PartialEq, Debug)]
+pub struct Clip {
+    thumb: Option<String>,
+    w: u32,
+    h: u32,
+}
+
+/// 遮罩用途：截图（M23）、选录屏区域（M24）或框选改字（主按钮是“改字”，其余同截图）。
+#[derive(Clone, Copy, PartialEq, Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Mode {
     Shot,
     Rec,
+    Edit,
 }
 
 impl Mode {
@@ -350,6 +367,7 @@ impl Mode {
         match self {
             Mode::Shot => "shot",
             Mode::Rec => "rec",
+            Mode::Edit => "edit",
         }
     }
 }
@@ -407,8 +425,17 @@ pub fn begin(app: &AppHandle, mode: Mode) {
     let panel_shown = app
         .get_webview_window("panel")
         .is_some_and(|w| w.is_visible().unwrap_or(false));
-    // 设置或确认框开着：面板不隐藏，跟屏上其他内容一样截进去，截完回到对话框（M15 交互规则 4）
-    let hide_panel = panel_shown && !keeps_panel(app);
+    // 截图时面板不隐藏，跟屏上其他内容一样截进去，截完键盘回到面板（M23 规则 1）；
+    // 录屏照旧先藏起面板，设置或确认框开着时除外（M15 交互规则 4）
+    let hide_panel = panel_shown && mode == Mode::Rec && !keeps_panel(app);
+    // 截完只在开始时键盘就在面板上才还给面板：对话框开着、用户已切到别的应用时不把键盘抢回来
+    PANEL_HAD_KEY.store(
+        panel_shown
+            && app
+                .get_webview_window("panel")
+                .is_some_and(|w| w.is_focused().unwrap_or(false)),
+        Ordering::SeqCst,
+    );
     // 已全部上屏的遮罩被关掉或隐藏了（Windows 上 Alt+F4 已拦下，这里兜底）：会话不会再结束，重新开始
     let shown = session(app).shown_overlays();
     let lost = (0..shown).any(|i| {
@@ -439,6 +466,11 @@ pub fn begin(app: &AppHandle, mode: Mode) {
             drop(s);
             if was_active {
                 hide_overlays(app);
+            }
+            // 改字还能拖图、粘贴、挑最近的图：直接开空白窗口
+            if mode == Mode::Edit {
+                log::info!("edit 缺少屏幕录制权限，打开空白窗口");
+                return crate::textedit::open_bg(app, Source::Blank);
             }
             log::info!("{} 缺少屏幕录制权限，提示授权", mode.as_str());
             crate::panel::show(app, None, crate::panel::Trigger::Hotkey);
@@ -478,9 +510,10 @@ pub fn begin(app: &AppHandle, mode: Mode) {
         crate::panel::hide(app);
     }
     // 录屏用不到识别，不在开始采集时抢 CPU 加载模型
-    if mode == Mode::Shot {
+    if mode != Mode::Rec {
         warm_ocr();
     }
+    // 晾衣绳、传送带、搅拌机照常截进去：屏幕上看到什么就截到什么（同系统截图）
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         freeze(&app, generation, hide_panel || stale, mode)
@@ -559,6 +592,12 @@ fn freeze(app: &AppHandle, generation: u64, settle: bool, mode: Mode) {
             s.rec_fps,
         )
     };
+    let edit = crate::textedit::on(app);
+    let edit_key = if mode == Mode::Edit {
+        crate::hotkey::label(&app.state::<AppState>().settings().edit_hotkey)
+    } else {
+        String::new()
+    };
     let payloads: Vec<BeginPayload> = frames
         .iter()
         .enumerate()
@@ -577,6 +616,8 @@ fn freeze(app: &AppHandle, generation: u64, settle: bool, mode: Mode) {
             microphone,
             rec_scale: xpaste_platform::record::output_scale(rec_quality, f.scale),
             rec_fps,
+            edit,
+            edit_key: edit_key.clone(),
         })
         .collect();
     // 显示器比遮罩多（启动后接了新屏）：补建，等页面加载完。新遮罩仍可能赶不上下面推送的事件
@@ -609,6 +650,31 @@ fn freeze(app: &AppHandle, generation: u64, settle: bool, mode: Mode) {
     for p in payloads {
         events::emit_to(app, &label(p.index), events::SHOT_BEGIN, p);
     }
+}
+
+/// 框选改字的“用刚复制的图”卡片，遮罩上屏后才来取（读文件头可能慢）；顺便在会话里记下是哪条记录。
+/// 剪切板里不是图片、采集管道没收下、读不出尺寸的没有卡片。
+pub fn edit_card(app: &AppHandle, generation: u64) -> Option<Clip> {
+    if !session(app).is_current(generation) || !crate::textedit::on(app) {
+        return None;
+    }
+    let key = crate::meme::clip_image(app)?;
+    let state = app.state::<AppState>();
+    let path = crate::record_image::path_of(&state, key.id, key.file)?;
+    let (w, h) = crate::textedit::dims(&path)?;
+    let thumb = clip_thumb(key.file, state.store().live_summary(key.id).ok()??.thumb);
+    let mut s = session(app);
+    if !s.is_current(generation) {
+        return None;
+    }
+    s.clip = Some(key.id);
+    Some(Clip { thumb, w, h })
+}
+
+/// 记录的缩略图是它的第一个文件的：要打开的是后面的文件（第一个不是图片）时不用它。
+fn clip_thumb(file: Option<u32>, thumb: Option<String>) -> Option<String> {
+    let thumb = thumb.filter(|_| file.unwrap_or(0) == 0)?;
+    Some(crate::assets::asset_url(Path::new(&thumb)))
 }
 
 /// 只结束 `generation` 这一次截图（`shot_cancel`、冻结失败）：上一次截图迟到的退出（提示条、淡出计时）
@@ -913,6 +979,15 @@ pub fn end(app: &AppHandle) {
 #[cfg(target_os = "macos")]
 pub fn overlay_crashed(w: &tauri::Webview) {
     let Some(i) = overlay_index(w.label()) else {
+        // 注册了这个回调后 tauri 不再替别的窗口重新加载：面板、划词卡片、晾衣绳、贴图也在这里重载。
+        // 晾衣绳只有页面会要求收起，页面没了就先收起，免得透明窗口一直挡在屏幕边上
+        log::warn!("{} 页面进程退出，重新加载", w.label());
+        if w.label() == crate::line::LABEL {
+            crate::line::hidden(w.app_handle());
+        }
+        if let Err(e) = w.reload() {
+            log::warn!("重新加载 {} 失败：{e}", w.label());
+        }
         return;
     };
     log::warn!("遮罩 {i} 页面进程退出，结束截图并重新加载");
@@ -922,15 +997,14 @@ pub fn overlay_crashed(w: &tauri::Webview) {
     }
 }
 
+/// 这次截图开始时键盘在面板上
+static PANEL_HAD_KEY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// `generation`：刚结束的那一次截图，在结束它的同一次加锁里取，不会误报给之后开始的新一次。
 fn after_end(app: &AppHandle, generation: u64, previous: Option<isize>) {
     hide_overlays(app);
-    let panel_kept = keeps_panel(app)
-        && app
-            .get_webview_window("panel")
-            .is_some_and(|w| w.is_visible().unwrap_or(false));
-    if panel_kept {
-        // 截图时没隐藏的面板（开着对话框）：键盘回到对话框，不还给原来的应用
+    if panel_takes_key(app) {
+        // 截图时没隐藏的面板：键盘回到面板（开着对话框就回到对话框），不还给原来的应用
         crate::panel::refocus(app);
     } else if let Some(h) = previous {
         // 排在 hide_overlays 之后：遮罩还拿着前台，本进程此刻是前台进程，系统允许切
@@ -950,7 +1024,27 @@ pub fn active(app: &AppHandle) -> bool {
     session(app).is_active()
 }
 
-/// 面板上开着设置或确认框：截图不隐藏面板。
+/// 截完键盘回到面板：面板还在屏上，截图开始时键盘就在面板上
+fn panel_takes_key(app: &AppHandle) -> bool {
+    PANEL_HAD_KEY.load(Ordering::SeqCst)
+        && app
+            .get_webview_window("panel")
+            .is_some_and(|w| w.is_visible().unwrap_or(false))
+}
+
+/// 从截图遮罩进长截图：面板（没开对话框时）收起，不拼进长图、不挡自动滚动，结束后键盘还给原应用（长截图全局占着回车、Esc、空格，
+/// 留在屏上的面板也操作不了）
+pub fn release_panel(app: &AppHandle) {
+    if keeps_panel(app) {
+        return;
+    }
+    PANEL_HAD_KEY.store(false, Ordering::SeqCst);
+    if crate::panel::visible(app) {
+        crate::panel::hide(app);
+    }
+}
+
+/// 面板上开着设置或确认框：录屏也不隐藏面板。
 fn keeps_panel(app: &AppHandle) -> bool {
     app.state::<AppState>().dialog_open.load(Ordering::SeqCst)
 }
@@ -972,7 +1066,7 @@ fn hide_overlays(app: &AppHandle) {
     });
 }
 
-/// 遮罩的输出（M23 规则 7）；翻译见 M26 规则 5。
+/// 遮罩的输出（M23 规则 7）；翻译见 M26 规则 5；改字撤掉遮罩、带着图打开改字窗口。
 #[derive(Debug, Clone, Copy)]
 pub enum Action {
     Copy,
@@ -980,6 +1074,7 @@ pub enum Action {
     Ocr,
     Pin,
     Translate,
+    Edit,
 }
 
 pub fn parse_action(h: &str) -> Option<Action> {
@@ -989,6 +1084,7 @@ pub fn parse_action(h: &str) -> Option<Action> {
         "ocr" => Action::Ocr,
         "pin" => Action::Pin,
         "translate" => Action::Translate,
+        "edit" => Action::Edit,
         _ => return None,
     })
 }
@@ -1043,28 +1139,43 @@ pub fn resolve_dir(
     base.map_or_else(|| data_dir.join(fallback), |b| b.join("xPaste"))
 }
 
-/// 在 `dir` 里新建不重名的截图文件并写入，返回文件名。用 `create_new`，
-/// 检查与写入之间有别人建了同名文件时换下一个序号，不会覆盖。
+/// 在 `dir` 里新建不重名的截图文件并写入，返回文件名。
 pub fn write_unique(dir: &Path, stamp: &str, png: &[u8]) -> std::io::Result<String> {
     use std::io::Write;
+    let path = write_new(
+        || {
+            // symlink_metadata：失效的符号链接也算占用，否则 create_new 会一直撞上它
+            dir.join(unique_file_name("截图", stamp, "png", |n| {
+                dir.join(n).symlink_metadata().is_ok()
+            }))
+        },
+        |f| f.write_all(png),
+    )?;
+    Ok(path
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned()))
+}
+
+/// 新建 `next` 给的文件并写入，返回路径。用 `create_new`，挑名字与写入之间有别人建了同名文件时再要一个，
+/// 不会覆盖；写失败时不留下写了一半的文件。
+pub fn write_new(
+    next: impl Fn() -> PathBuf,
+    write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+) -> std::io::Result<PathBuf> {
     let mut tries = 0;
     loop {
-        // symlink_metadata：失效的符号链接也算占用，否则 create_new 会一直撞上它
-        let name = unique_file_name("截图", stamp, "png", |n| {
-            dir.join(n).symlink_metadata().is_ok()
-        });
+        let path = next();
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(dir.join(&name))
+            .open(&path)
         {
             Ok(mut f) => {
-                return match f.write_all(png) {
-                    Ok(()) => Ok(name),
+                return match write(&mut f) {
+                    Ok(()) => Ok(path),
                     Err(e) => {
-                        // 不留下写了一半的文件
                         drop(f);
-                        let _ = std::fs::remove_file(dir.join(&name));
+                        let _ = std::fs::remove_file(&path);
                         Err(e)
                     }
                 };
@@ -1147,6 +1258,7 @@ pub fn finish(
     log::info!("shot 输出 {action:?} 屏 {i} {} 字节", png.len());
     let r = match action {
         Action::Translate => run_translate(app, generation, label, &png),
+        Action::Edit => run_edit(app, generation, origin, scale, rect, png),
         _ => run_action(app, generation, action, origin, scale, rect, png)
             .inspect(|_| enter_toast(app, generation)),
     };
@@ -1172,7 +1284,7 @@ fn run_action(
 ) -> Result<ShotOutcome, AppError> {
     Ok(match action {
         Action::Copy => {
-            copy_png(png)?;
+            copy_png(app, png)?;
             ShotOutcome {
                 action: "copy",
                 chars: None,
@@ -1184,8 +1296,8 @@ fn run_action(
         }
         Action::Save => save(app, png)?,
         Action::Ocr => ocr(app, generation, png)?,
-        // 翻译在 finish 里单独处理，走不到这里
-        Action::Translate => return Err(AppError::Invalid("截图处理中断".into())),
+        // 翻译、改字在 finish 里单独处理，走不到这里
+        Action::Translate | Action::Edit => return Err(AppError::Invalid("截图处理中断".into())),
         Action::Pin => {
             let r = rect.ok_or_else(|| AppError::Invalid("贴图缺少选区".into()))?;
             open_pin(app, origin, scale, r, &png)?;
@@ -1201,19 +1313,61 @@ fn run_action(
     })
 }
 
-/// 写 PNG 到剪切板，不标记为自身写入：监听器照常把它作为图片记录入库（M23 规则 7、M01 规则 5）。
-pub(crate) fn copy_png(png: Vec<u8>) -> Result<(), AppError> {
-    let bytes = png.len();
-    xpaste_platform::write(&xpaste_platform::png_flavors(png))
-        .map(drop)
-        .map_err(|e| {
-            log::warn!("截图写剪切板失败 {bytes} 字节：{e}");
-            AppError::ClipboardWrite
-        })
+/// 改字：那块图直接交给改字窗口，不写剪切板、不进历史。位置留给“钉回原处”。
+fn run_edit(
+    app: &AppHandle,
+    generation: u64,
+    origin: (f64, f64),
+    scale: f64,
+    rect: Option<LRect>,
+    png: Vec<u8>,
+) -> Result<ShotOutcome, AppError> {
+    let r = rect.ok_or_else(|| AppError::Invalid("改字缺少选区".into()))?;
+    let ((x, y), (w, h)) = pin_bounds(origin, scale, r, POINTS);
+    let rect = Rect { x, y, w, h };
+    to_edit(app, generation, Source::Shot { rect, png })?;
+    Ok(ShotOutcome {
+        action: "edit",
+        chars: None,
+        file: None,
+        copied: false,
+        text: None,
+        engine: None,
+    })
 }
 
-/// 保存到截图文件夹；“保存截图时同时复制”开着时也写剪切板。截图与贴图共用。
-fn save(app: &AppHandle, png: Vec<u8>) -> Result<ShotOutcome, AppError> {
+/// 框选改字时“用刚复制的图”。
+pub fn edit_clip(app: &AppHandle, generation: u64) -> Result<(), AppError> {
+    let record = {
+        let s = session(app);
+        s.clip.filter(|_| s.is_current(generation) && !s.finishing)
+    };
+    let record = record.ok_or_else(|| AppError::Invalid("截图已结束".into()))?;
+    to_edit(app, generation, Source::Clip { record })
+}
+
+/// 结束这次截图、撤掉遮罩，再打开改字窗口；打不开的先报出来，遮罩留着。键盘不还给原来的应用，也不还给截图时开着的面板：
+/// 改字窗口接着就要拿（面板由打开改字窗口收起）。截图前的前台窗口交给改字窗口：撤了遮罩再问就不是它了。
+fn to_edit(app: &AppHandle, generation: u64, src: Source) -> Result<(), AppError> {
+    crate::textedit::check(app, &src)?;
+    let previous = session(app)
+        .end_if_current(generation)
+        .map_err(|()| AppError::Invalid("截图已结束".into()))?;
+    let front = crate::meme::foreground_of(previous);
+    PANEL_HAD_KEY.store(false, Ordering::SeqCst);
+    after_end(app, generation, None);
+    crate::textedit::open_bg_from(app, src, front);
+    Ok(())
+}
+
+/// 写 PNG 到剪切板，不标记为自身写入：监听器照常把它作为图片记录入库（M23 规则 7、M01 规则 5）。
+pub(crate) fn copy_png(app: &AppHandle, png: Vec<u8>) -> Result<(), AppError> {
+    let state = app.state::<AppState>();
+    crate::clipboard::write_own(&state, &xpaste_platform::png_flavors(png), "截图").map(drop)
+}
+
+/// 保存到截图文件夹；“保存截图时同时复制”开着时也写剪切板。截图、贴图、改字共用。
+pub(crate) fn save(app: &AppHandle, png: Vec<u8>) -> Result<ShotOutcome, AppError> {
     let state = app.state::<AppState>();
     let (dir, also_copy) = {
         let s = state.settings();
@@ -1230,7 +1384,7 @@ fn save(app: &AppHandle, png: Vec<u8>) -> Result<ShotOutcome, AppError> {
     let stamp = xpaste_core::capture::local_stamp(crate::clock::now_ms());
     let name = write_unique(&dir, &stamp, &png)?;
     // 文件已存好，复制失败不算整次失败（已记日志），提示条按“已保存”显示
-    let copied = also_copy && copy_png(png).is_ok();
+    let copied = also_copy && copy_png(app, png).is_ok();
     Ok(ShotOutcome {
         action: "save",
         chars: None,
@@ -1275,7 +1429,7 @@ fn ocr(app: &AppHandle, generation: u64, png: Vec<u8>) -> Result<ShotOutcome, Ap
     }
     if let Some(text) = &text {
         // 不经过 write_marked：同“复制截图”，要进历史
-        crate::clipboard::write_text(text, "识别文字")?;
+        crate::clipboard::write_text(&app.state::<AppState>(), text, "识别文字")?;
     }
     Ok(ShotOutcome {
         action: "ocr",
@@ -1388,13 +1542,14 @@ pub fn copy_text(app: &AppHandle, generation: u64, text: &str) -> Result<(), App
     if !session(app).is_current(generation) {
         return Err(AppError::Invalid("截图已结束".into()));
     }
-    crate::clipboard::write_text(text, "译文")?;
+    crate::clipboard::write_text(&app.state::<AppState>(), text, "译文")?;
     log::info!("shot 复制译文 {} 字", text.chars().count());
     enter_toast(app, generation);
     Ok(())
 }
 
 /// 提示条模式：遮罩鼠标穿透、交出键盘焦点，提示条照常显示；`shot_cancel` 时撤销。
+/// 截图时开着、拿着键盘的面板（M23 规则 1）：键盘直接回到面板，不先还给原应用再被 `after_end` 抢回来
 fn enter_toast(app: &AppHandle, generation: u64) {
     let previous = {
         let mut s = session(app);
@@ -1403,6 +1558,18 @@ fn enter_toast(app: &AppHandle, generation: u64) {
         }
         s.finish(Instant::now())
     };
+    if panel_takes_key(app) {
+        on_main(app, |app| {
+            for (l, w) in app.webview_windows() {
+                if overlay_index(&l).is_some()
+                    && let Err(e) = w.set_ignore_cursor_events(true)
+                {
+                    log::warn!("遮罩鼠标穿透失败：{e}");
+                }
+            }
+        });
+        return crate::panel::refocus(app);
+    }
     on_main(app, move |app| {
         for (l, w) in app.webview_windows() {
             if overlay_index(&l).is_none() {
@@ -1438,6 +1605,55 @@ fn open_pin(
     r: LRect,
     png: &[u8],
 ) -> Result<u64, AppError> {
+    let ((x, y), (w, h)) = pin_bounds(origin, scale, r, POINTS);
+    new_pin(
+        app,
+        Rect { x, y, w, h },
+        native_per_logical(scale, POINTS),
+        png,
+    )
+}
+
+/// 在屏幕上的 `rect`（原生单位，同 `Source::Shot` 记下的）放一张贴图，返回它的号；那块屏不在了挪到还在的屏上。
+pub fn pin_at(app: &AppHandle, rect: Rect, png: &[u8]) -> Result<u64, AppError> {
+    let screens: Vec<_> = app
+        .available_monitors()?
+        .iter()
+        .map(|m| {
+            // 显示器是物理像素；macOS 的原生单位是点
+            let k = if POINTS { m.scale_factor() } else { 1.0 };
+            let (p, s) = (m.position(), m.size());
+            let r = Rect {
+                x: f64::from(p.x) / k,
+                y: f64::from(p.y) / k,
+                w: f64::from(s.width) / k,
+                h: f64::from(s.height) / k,
+            };
+            (r, native_per_logical(m.scale_factor(), POINTS))
+        })
+        .collect();
+    let (rect, k) = on_screen(rect, &screens);
+    new_pin(app, rect, k, png)
+}
+
+/// `rect` 的中心落在哪块屏就用哪块屏的换算系数；都不在时挪到第一块屏的左上。
+fn on_screen(rect: Rect, screens: &[(Rect, f64)]) -> (Rect, f64) {
+    let (cx, cy) = (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
+    let has = |s: &Rect| cx >= s.x && cx < s.x + s.w && cy >= s.y && cy < s.y + s.h;
+    if let Some((_, k)) = screens.iter().find(|(s, _)| has(s)) {
+        return (rect, *k);
+    }
+    match screens.first() {
+        Some((s, k)) => {
+            let (x, y) = (s.x + 40.0 * k, s.y + 40.0 * k);
+            (Rect { x, y, ..rect }, *k)
+        }
+        None => (rect, 1.0),
+    }
+}
+
+/// `k`：逻辑像素换成原生单位的倍数。
+fn new_pin(app: &AppHandle, rect: Rect, k: f64, png: &[u8]) -> Result<u64, AppError> {
     let n = PIN_SEQ.fetch_add(1, Ordering::Relaxed);
     let path = pin_path(app, n);
     if let Some(dir) = path.parent() {
@@ -1447,12 +1663,10 @@ fn open_pin(
     // src：图片的 asset URL，前端（URLSearchParams）解码后直接给 <img>
     let url = format!(
         "pin.html?n={n}&w={}&h={}&src={}",
-        r.w,
-        r.h,
+        rect.w / k,
+        rect.h / k,
         crate::assets::encode_component(&crate::assets::asset_url(&path))
     );
-    let (o, size) = pin_bounds(origin, scale, r, POINTS);
-    let k = native_per_logical(scale, POINTS);
     let w = WebviewWindowBuilder::new(app, format!("{PIN_PREFIX}{n}"), WebviewUrl::App(url.into()))
         // 平台层 window_rects 只保留本进程里标题以此开头的窗口：再次截图时贴图可被吸附
         .title("xpaste-pin")
@@ -1461,8 +1675,8 @@ fn open_pin(
         // 用 SW_SHOWNOACTIVATE，之后的 show() 一律 SW_SHOW 会激活贴图、抢走原应用的键盘；
         // 先按选区的逻辑坐标大致摆好，下面 place 再按物理像素校正
         .visible(cfg!(windows))
-        .position(o.0 / k, o.1 / k)
-        .inner_size(r.w, r.h)
+        .position(rect.x / k, rect.y / k)
+        .inner_size(rect.w / k, rect.h / k)
         .focused(false)
         .transparent(true)
         .decorations(false)
@@ -1472,7 +1686,7 @@ fn open_pin(
         .accept_first_mouse(true)
         .build()
         .inspect_err(|_| drop(std::fs::remove_file(&path)))?;
-    if let Err(e) = place(&w, o, size) {
+    if let Err(e) = place(&w, (rect.x, rect.y), (rect.w, rect.h)) {
         let _ = w.destroy();
         let _ = std::fs::remove_file(&path);
         return Err(e.into());
@@ -1480,6 +1694,39 @@ fn open_pin(
     on_main(app, move |_| show_pin(&w));
     log::info!("shot 贴图 {n}");
     Ok(n)
+}
+
+/// 换掉贴图 `n` 的图片，窗口的位置和缩放不动；贴图已经关了返回 false。
+pub fn pin_replace(app: &AppHandle, n: u64, png: &[u8]) -> Result<bool, AppError> {
+    let label = format!("{PIN_PREFIX}{n}");
+    if app.get_webview_window(&label).is_none() || !replace_png(&pin_path(app, n), png)? {
+        return Ok(false);
+    }
+    log::info!("shot 换掉贴图 {n}");
+    events::emit_to(app, &label, events::PIN_REPLACED, ());
+    Ok(true)
+}
+
+/// 换掉 `path` 的 PNG：原来那张没了返回 false；尺寸不同的不换（窗口的缩放按原来的尺寸算）。
+fn replace_png(path: &Path, png: &[u8]) -> Result<bool, AppError> {
+    let size = |b: &[u8]| {
+        image::ImageReader::with_format(std::io::Cursor::new(b), image::ImageFormat::Png)
+            .into_dimensions()
+            .ok()
+    };
+    let old = match std::fs::read(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        r => r?,
+    };
+    if size(png).is_none() || size(png) != size(&old) {
+        return Err(AppError::Invalid("和贴图的尺寸不同".into()));
+    }
+    // 先写好再换上，页面不会读到一半
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, png)
+        .and_then(|()| std::fs::rename(&tmp, path))
+        .inspect_err(|_| drop(std::fs::remove_file(&tmp)))?;
+    Ok(true)
 }
 
 /// 贴图换成 NSPanel 前的类，按序号记下。建窗口时 WKWebView 已在窗口上挂了 KVO（类是 `NSKVONotifying_` 派生类），
@@ -1525,7 +1772,7 @@ fn show_pin(w: &WebviewWindow) {
 #[cfg(not(target_os = "macos"))]
 fn show_pin(_w: &WebviewWindow) {}
 
-fn pin_n(w: &WebviewWindow) -> Result<u64, AppError> {
+pub fn pin_n(w: &WebviewWindow) -> Result<u64, AppError> {
     pin_index(w.label()).ok_or_else(|| AppError::Invalid("不是贴图窗口".into()))
 }
 
@@ -1609,7 +1856,7 @@ fn pin_shrink(side: f64, scale: f64) -> f64 {
 
 /// 贴图右键“复制”：原图写剪切板，进入历史（同截图的复制）。
 pub fn pin_copy(app: &AppHandle, w: &WebviewWindow) -> Result<ShotOutcome, AppError> {
-    copy_png(std::fs::read(pin_path(app, pin_n(w)?))?)?;
+    copy_png(app, std::fs::read(pin_path(app, pin_n(w)?))?)?;
     Ok(ShotOutcome {
         action: "copy",
         chars: None,
@@ -1652,6 +1899,106 @@ mod tests {
     fn mode_serializes_for_front_end() {
         assert_eq!(Mode::Shot.as_str(), "shot");
         assert_eq!(Mode::Rec.as_str(), "rec");
+    }
+
+    #[test]
+    fn parse_action_edit() {
+        assert!(matches!(parse_action("edit"), Some(Action::Edit)));
+        assert!(parse_action("Edit").is_none());
+    }
+
+    /// 框选改字：遮罩收到的模式、卡片；面板转回来的模式按同一个名字认
+    #[test]
+    fn edit_mode_serializes() {
+        assert_eq!(Mode::Edit.as_str(), "edit");
+        for m in [Mode::Shot, Mode::Rec, Mode::Edit] {
+            let back: Mode = serde_json::from_value(m.as_str().into()).unwrap();
+            assert_eq!(back, m);
+        }
+        let p = BeginPayload {
+            index: 0,
+            generation: 1,
+            rects: vec![],
+            cursor: None,
+            scale: 2.0,
+            save_copy: false,
+            mode: Mode::Edit.as_str(),
+            system_audio: false,
+            microphone: None,
+            rec_scale: 1.0,
+            rec_fps: 30,
+            edit: true,
+            edit_key: "⌥ + Shift + G".into(),
+        };
+        let v = serde_json::to_value(&p).unwrap();
+        assert_eq!(v["mode"], "edit");
+        assert_eq!(v["edit"], true);
+        assert_eq!(v["editKey"], "⌥ + Shift + G");
+        let (thumb, w, h) = (None, 640, 480);
+        assert_eq!(
+            serde_json::to_value(Clip { thumb, w, h }).unwrap(),
+            serde_json::json!({ "thumb": null, "w": 640, "h": 480 })
+        );
+    }
+
+    /// 卡片上的缩略图就是要打开的那张
+    #[test]
+    fn clip_thumb_is_the_one_opened() {
+        let t = |file| clip_thumb(file, Some("/t/1.png".into()));
+        let url = crate::assets::asset_url(Path::new("/t/1.png"));
+        assert_eq!(t(None), Some(url.clone()));
+        assert_eq!(t(Some(0)), Some(url));
+        assert_eq!(t(Some(1)), None);
+        assert_eq!(clip_thumb(None, None), None);
+    }
+
+    /// 换掉贴图：只换文件，尺寸不同的不换（窗口的位置和缩放都不动）；贴图已经关了的不写回来
+    #[test]
+    fn pin_replace_keeps_bounds() {
+        let dir = std::env::temp_dir().join(format!("xpaste-pin-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let png = |w: u32, c: u8| {
+            crate::img_meta::encode_png(w, 2, &vec![c; (w * 8) as usize], None).unwrap()
+        };
+        let path = dir.join("1.png");
+        assert!(!replace_png(&path, &png(4, 9)).unwrap(), "贴图已经关了");
+        assert!(!path.exists());
+        std::fs::write(&path, png(4, 1)).unwrap();
+        assert!(replace_png(&path, &png(4, 9)).unwrap());
+        assert_eq!(std::fs::read(&path).unwrap(), png(4, 9));
+        assert!(replace_png(&path, &png(5, 9)).is_err(), "尺寸不同");
+        assert!(replace_png(&path, b"x").is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), png(4, 9));
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "没有残留");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// 钉回原处：那块屏还在就原样，不在了挪到第一块屏上
+    #[test]
+    fn pin_back_on_screen() {
+        let r = |x, y, w, h| crate::panel::Rect { x, y, w, h };
+        let screens = [
+            (r(0.0, 0.0, 1000.0, 800.0), 1.0),
+            (r(1000.0, 0.0, 1000.0, 800.0), 2.0),
+        ];
+        let at = |q: crate::panel::Rect| {
+            let (p, k) = on_screen(q, &screens);
+            (p.x, p.y, p.w, p.h, k)
+        };
+        assert_eq!(
+            at(r(1100.0, 50.0, 300.0, 200.0)),
+            (1100.0, 50.0, 300.0, 200.0, 2.0)
+        );
+        assert_eq!(
+            at(r(10.0, 20.0, 300.0, 200.0)),
+            (10.0, 20.0, 300.0, 200.0, 1.0)
+        );
+        assert_eq!(
+            at(r(2500.0, 50.0, 300.0, 200.0)),
+            (40.0, 40.0, 300.0, 200.0, 1.0)
+        );
+        let (p, k) = on_screen(r(5.0, 6.0, 7.0, 8.0), &[]);
+        assert_eq!((p.x, p.y, k), (5.0, 6.0, 1.0));
     }
 
     fn frame(origin: (f64, f64), size: (f64, f64), scale: f64) -> Frame {
@@ -1939,6 +2286,8 @@ mod tests {
             microphone: None,
             rec_scale: 1.0,
             rec_fps: 60,
+            edit: false,
+            edit_key: String::new(),
         };
         s.set_payloads(vec![p(0, 1.0), p(1, 2.0)]);
         assert_eq!(s.payload(1), Some(p(1, 2.0)));
@@ -2183,6 +2532,30 @@ mod tests {
         assert_eq!(write_unique(&dir, "s", b"new").unwrap(), "截图 s 2.png");
         assert_eq!(std::fs::read(dir.join("截图 s.png")).unwrap(), b"old");
         assert_eq!(std::fs::read(dir.join("截图 s 2.png")).unwrap(), b"new");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// 写到一半失败（磁盘满）：不留半截文件，别的文件不动
+    #[test]
+    fn write_new_removes_half_file() {
+        use std::io::{Error, ErrorKind, Write};
+        let dir = std::env::temp_dir().join(format!("xpaste-shot-half-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let r = write_new(
+            || dir.join("a.png"),
+            |f| {
+                f.write_all(b"half")?;
+                Err(Error::from(ErrorKind::StorageFull))
+            },
+        );
+        assert_eq!(r.unwrap_err().kind(), ErrorKind::StorageFull);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        // 一直撞名：报错，不动占着名字的那个
+        std::fs::write(dir.join("a.png"), b"mine").unwrap();
+        let r = write_new(|| dir.join("a.png"), |f| f.write_all(b"x"));
+        assert_eq!(r.unwrap_err().kind(), ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(dir.join("a.png")).unwrap(), b"mine");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

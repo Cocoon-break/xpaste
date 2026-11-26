@@ -1,6 +1,11 @@
+pub mod belt;
+pub mod line;
+pub mod meme;
+pub mod mixer;
 pub mod panel;
 pub mod records;
 pub mod settings;
 pub mod shot;
 pub mod snippets;
+pub mod textedit;
 pub mod translate;

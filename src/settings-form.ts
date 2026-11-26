@@ -1,5 +1,6 @@
 // 设置表单 ⇄ Settings：校验与解析。纯函数。
-import type { PanelStyle, RecQuality, Settings } from './api/types';
+import type { PanelStyle, Recipe, RecQuality, Settings } from './api/types';
+import { fmtBytes } from './format.ts';
 
 /** 原型 submit 的校验：非空、50–5000、50 的整数倍。 */
 export function parseLimit(s: string): number | null {
@@ -65,6 +66,14 @@ export type SettingsForm = {
   recQuality: string;
   recFps: string;
   panelStyle: PanelStyle;
+  lineHotkey: string;
+  beltEnabled: boolean;
+  beltAuto: boolean;
+  beltHotkey: string;
+  beltBackHotkey: string;
+  mixerEnabled: boolean;
+  mixerHotkey: string;
+  mixerRecipes: Recipe[];
 };
 
 export const formToSettings = (base: Settings, f: SettingsForm): Settings => ({
@@ -93,6 +102,14 @@ export const formToSettings = (base: Settings, f: SettingsForm): Settings => ({
   recQuality: f.recQuality as RecQuality,
   recFps: Number(f.recFps),
   panelStyle: f.panelStyle,
+  lineHotkey: f.lineHotkey,
+  beltEnabled: f.beltEnabled,
+  beltAuto: f.beltAuto,
+  beltHotkey: f.beltHotkey,
+  beltBackHotkey: f.beltBackHotkey,
+  mixerEnabled: f.mixerEnabled,
+  mixerHotkey: f.mixerHotkey,
+  mixerRecipes: f.mixerRecipes,
 });
 
 /** 翻译接口地址（M26 规则 6）：空视为未填；否则必须以 http:// 或 https:// 开头。 */
@@ -100,3 +117,57 @@ export const baseUrlError = (v: string): string | null => {
   const t = v.trim();
   return t === '' || /^https?:\/\//i.test(t) ? null : '请输入 http:// 或 https:// 开头的地址';
 };
+
+export type MemeFormat = 'openai' | 'ark' | 'gemini';
+export interface MemePreset { key: string; label: string; format: MemeFormat; baseUrl: string; model: string }
+
+// 预设待按官方文档核实：地址、模型 ID 和接口形态取自第三方资料，核不实的先去掉
+export const MEME_PRESETS: MemePreset[] = [
+  { key: 'openai', label: 'OpenAI', format: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-image-2' },
+  { key: 'gemini', label: 'Gemini', format: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-3-pro-image-preview' },
+  { key: 'ark', label: '豆包（火山方舟）', format: 'ark', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-seedream-4-0-250828' },
+  { key: 'qwen', label: '通义（阿里云百炼）', format: 'openai', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-image' },
+];
+export const memePreset = (key: string): MemePreset | undefined => MEME_PRESETS.find((p) => p.key === key);
+
+export type MemeField = 'format' | 'baseUrl' | 'model' | 'apiKey';
+/** 改了格式、地址或模型 ID 以后，服务商变成“自定义”；只改 Key 不变。 */
+export const providerAfterEdit = (prev: string, field: MemeField): string => (field === 'apiKey' ? prev : 'custom');
+
+/** 设置页底部一行：表情包库的个数与占用。 */
+export const memeStatsText = (count: number, bytes: number): string =>
+  `表情包库：${count} 个，占 ${(bytes / 1048576).toFixed(1)} MB`;
+
+/** “文案”一组的状态：翻译的接口地址和模型 ID 都填了才算配好（取表单里未保存的值）。 */
+export const memeCaptionState = (baseUrl: string, model: string): string =>
+  baseUrl.trim() && model.trim() ? `已配置：${model.trim()}` : '还没配好';
+
+/** 服务商自己的地址（OpenAI、Google、火山方舟、阿里云）没有 Key 一定被拒 */
+const OFFICIAL_HOSTS = ['openai.com', 'googleapis.com', 'volces.com', 'aliyuncs.com'];
+const needsKey = (baseUrl: string): boolean => {
+  const rest = baseUrl.trim().toLowerCase().replace(/^[a-z]+:\/\//, '');
+  const host = rest.split(/[/:?#]/)[0];
+  return OFFICIAL_HOSTS.some((d) => host === d || host.endsWith(`.${d}`));
+};
+
+/** 生图接口配好没有，口径同后端 `imagegen::unconfigured`：地址、模型 ID 都要填；服务商自己的地址还要有 Key（自建、中转的可以不填）。 */
+export const imageApiReady = (baseUrl: string, model: string, apiKey: string): boolean =>
+  !!baseUrl.trim() && !!model.trim() && (!!apiKey.trim() || !needsKey(baseUrl));
+
+/** 改字的“生图接口”一行：和表情包制作共用（取表单里未保存的值）；没配好时按“怎么改”写后果。 */
+export function editApiState(mode: Settings['editMode'], baseUrl: string, model: string, apiKey: string): { text: string; go: string } {
+  if (imageApiReady(baseUrl, model, apiKey)) return { text: '已配好 · 和“表情包制作”共用', go: '去设置' };
+  return { text: mode === 'ai' ? '还没配接口：要用 AI 的改不了；本机做得了的，写字时选“这次用本机改”' : '还没配好，只能改本机做得了的', go: '现在配' };
+}
+
+/** 改字的“最近改过”一行。坏了的不算张数、算字节：可能 0 张但占地方，也能清空。 */
+export const editRecentText = (count: number, bytes: number): string =>
+  bytes > 0 ? `${count} 张，占 ${fmtBytes(bytes)}` : '还没有改过的图';
+
+/** 清空“最近改过”的确认框 */
+export const editClearAsk = (count: number) => ({
+  title: '清空“最近改过”',
+  body: `将删除${count ? ` ${count} 张改过的图，连同每处改动和 AI 出的候选` : '里面剩下的文件'}，不能撤销；还在排队的不再改，在改的会继续，改好了还会列进来。原来的图片文件和历史记录不受影响`,
+  ok: count ? `删除 ${count} 张` : '删除',
+  danger: true,
+});

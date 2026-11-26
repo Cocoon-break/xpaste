@@ -15,6 +15,16 @@ MAC_X64 := x86_64-apple-darwin
 HAS_MAC_X64 := $(shell test "$$(uname -sm)" = "Darwin arm64" && rustup target list --installed 2>/dev/null | grep -c $(MAC_X64) || echo 0)
 HAS_XWIN := $(shell command -v cargo-xwin >/dev/null 2>&1 && command -v makensis >/dev/null 2>&1 && test -x $(LLVM_BIN)/clang-cl && command -v lld-link >/dev/null 2>&1 && echo 1 || echo 0)
 
+# 带 Pro 的安装包在系统的“打开方式”里登记 xPaste（改字，备选，不抢默认应用）；没有 pro/ 时不登记。
+# macOS 靠这份配置，Windows 由安装程序按 XPASTE_PRO 写注册表（src-tauri/windows/hooks.nsh）
+ifneq ($(wildcard pro/rust/mod.rs),)
+export XPASTE_PRO := 1
+MAC_PRO_CONF := --config src-tauri/tauri.macos.pro.conf.json
+ifeq ($(shell uname -s),Darwin)
+PRO_CONF := $(MAC_PRO_CONF)
+endif
+endif
+
 .PHONY: site-demo help install dev dev-isolated fmt lint test-rust test-web test check build build-check release release-win release-x64 release-app release-report measure icons clean
 
 help: ## 列出可用目标
@@ -31,6 +41,9 @@ dev-isolated: ## 启动开发版，数据目录隔离在 .xpaste-dev/（自动�
 
 fmt: ## 格式化 Rust 代码
 	cargo fmt --all
+ifneq ($(wildcard pro/Makefile),)
+	$(MAKE) -C pro fmt
+endif
 
 lint: ## 格式检查 + clippy（含 Windows 交叉检查，若已安装 target）+ 版本号一致性
 	cargo fmt --all --check
@@ -40,12 +53,19 @@ ifneq ($(HAS_WIN_TARGET),0)
 	cargo clippy -p xpaste-platform --all-targets --target $(WIN_TARGET) -- -D warnings
 endif
 	pnpm check:version
+ifneq ($(wildcard pro/Makefile),)
+	$(MAKE) -C pro fmt-check
+endif
 
 test-rust: ## Rust 单元测试（三个 crate）
 	cargo test --workspace
 
-test-web: ## 前端单元测试（自动发现 src/**/*.test.ts）
+test-web: ## 前端单元测试（自动发现 src/**/*.test.ts；官网购买流程的纯函数；带 pro/web 时再跑它的测试）
 	pnpm test
+	node --test 'scripts/site/*.test.js'
+ifneq ($(wildcard pro/web),)
+	node --test 'pro/web/**/*.test.ts'
+endif
 
 test: test-rust test-web ## 全部单元测试
 
@@ -61,9 +81,9 @@ build-check: ## 按发布配置编译应用但不打安装包
 # 窗口布局（阶段 1 在这里超时 -1712），无界面环境也能完成；代价是 dmg 打开后没有图标摆位，
 # “应用程序”快捷方式仍在。
 release: ## 打发布包（设了 APPLE_* 环境变量时签名并公证 macOS 包，见 CONTRIBUTING）：macOS 产出 .dmg（Apple 芯片装了 x86_64 target 时再打 Intel 包，装了交叉工具时再打 Windows 安装程序），Windows 产出 NSIS 安装程序
-	CI=true pnpm tauri build
+	CI=true pnpm tauri build $(PRO_CONF)
 ifeq ($(HAS_MAC_X64),1)
-	CI=true pnpm tauri build --target $(MAC_X64)
+	CI=true pnpm tauri build $(MAC_PRO_CONF) --target $(MAC_X64)
 endif
 ifeq ($(HAS_XWIN),1)
 	PATH="$(LLVM_BIN):$$PATH" CI=true pnpm tauri build --runner cargo-xwin --target $(WIN_TARGET)
@@ -71,7 +91,7 @@ endif
 	@$(MAKE) --no-print-directory release-report
 
 release-x64: ## 在 Apple 芯片 Mac 上打 Intel 版 .dmg（需 rustup target add x86_64-apple-darwin）
-	CI=true pnpm tauri build --target $(MAC_X64)
+	CI=true pnpm tauri build $(MAC_PRO_CONF) --target $(MAC_X64)
 	@$(MAKE) --no-print-directory release-report
 
 release-win: ## 在 macOS 上交叉打 Windows NSIS 安装程序（需 brew install nsis llvm lld 与 cargo install cargo-xwin；首次会下载约 1.5 GB 的 Windows SDK 到 ~/.cache/cargo-xwin）
@@ -79,7 +99,7 @@ release-win: ## 在 macOS 上交叉打 Windows NSIS 安装程序（需 brew inst
 	@$(MAKE) --no-print-directory release-report
 
 release-app: ## 只打 .app（macOS，测量用，比 release 快）
-	pnpm tauri build --bundles app
+	pnpm tauri build $(PRO_CONF) --bundles app
 	@$(MAKE) --no-print-directory release-report
 
 INSTALLERS := target/installers
@@ -94,6 +114,8 @@ release-report: ## 把各目标的安装包收拢到 target/installers/ 并列�
 site-demo: ## 重新生成官网上可操作的演示面板（website/demo/）：改了 src/ 的界面或 scripts/site-demo/ 之后跑，产物一起提交
 	rm -rf website/demo
 	for e in index card shot; do SITE_DEMO_ENTRY=$$e pnpm exec vite build --config scripts/site-demo/vite.config.mjs || exit 1; done
+	@# 私有组件不能进官网：产物里出现样式选择器的类名或文案就失败（公开代码里也有 mountStylePicker 这个名字，不能拿它判断）
+	@! grep -lE 'lsp-|激活 Pro 后可换样式' website/demo/*.html || { echo "website/demo 里混进了私有组件"; exit 1; }
 
 measure: ## macOS 性能与可靠性测量（先 make release-app；离开电脑时运行，约 15 分钟；终端要有辅助功能权限）
 	bash scripts/measure.sh all

@@ -4,8 +4,8 @@ import './shot.css';
 // 拼音原样上屏去掉分隔空格（文字标注、卡片原文框，见 ime.ts）
 import '../ime';
 import {
-  onShotBegin, onShotClaim, onShotEnd, onShotTranslateDelta, recStart, shotAlive, shotCancel, shotClaim, shotCopyText, shotEngines,
-  shotFinish, shotFrame, shotLongStart, shotReady, shotTranslateAgain, shotTyping, type BeginPayload, type ShotAction, type ShotOutcome,
+  onShotBegin, onShotClaim, onShotEnd, onShotTranslateDelta, recStart, shotAlive, shotCancel, shotClaim, shotCopyText, shotEditCard, shotEditClip, shotEngines,
+  shotFinish, shotFrame, shotLongStart, shotReady, shotTranslateAgain, shotTyping, type BeginPayload, type ShotAction, type ShotClip, type ShotOutcome,
 } from '../api/shot';
 import { error as logError, info } from '../api/log';
 import type { AppError, Engines } from '../api/types';
@@ -13,6 +13,7 @@ import { cardInner, type CardState } from '../card/view';
 import { otherEngine, staleDelta, type Engine } from '../translate';
 import { badgePos, hit, loupePos, norm, outputSize, placeBar, placeCard, resize, type Handle, type Rect } from './geom';
 import { COLORS, drawObj, FONT, nextStep, type Obj, type Tool } from './ink';
+import { shotKey } from './keys';
 
 // 遮罩页出错时整个截图会静默失败：报错写进日志（只记消息，不含截图内容）
 addEventListener('error', (e) => void logError(`遮罩页错误：${e.message}`));
@@ -29,6 +30,8 @@ const ICON = {
   undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
   redo: '<path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/>',
   translate: '<path d="M3.6 6h8.4M7.8 4.2V6M10.4 6c-.8 3.6-3 6.2-6.2 7.8M6.2 9.1c1.1 2 2.8 3.5 4.8 4.3"/><path d="m12.6 19.8 3.6-9 3.6 9M13.9 16.8h4.6"/>',
+  // 改字：T 和一支笔（24 视框，同原型的 20 视框放大）
+  edit: '<path d="M4.8 6.6V4.8h10.8v1.8M10.2 4.8v10.8M7.8 15.6h4.8"/><path d="m14.6 19.1 5.6-5.6 1.8 1.8-5.6 5.6-2.4.6z"/>',
   long: '<rect x="6" y="3.5" width="12" height="17" rx="2"/><path d="M12 7.5v9M9.6 9.9 12 7.5l2.4 2.4M9.6 14.1 12 16.5l2.4-2.4"/>',
   ocr: '<path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16"/><path d="M8 9h8M8 12h8M8 15h5"/>',
   save: '<path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/>',
@@ -84,8 +87,12 @@ const S = {
   saveCopy: true,
   /** 另一块屏正在识别文字：这块屏不能再框选 */
   locked: false,
-  /** 截图（M23）或选录屏区域（M24） */
-  mode: 'shot' as 'shot' | 'rec',
+  /** 截图（M23）、选录屏区域（M24）或框选改字（主按钮是“改字”，其余同截图） */
+  mode: 'shot' as BeginPayload['mode'],
+  /** 改字可用：有“改字”按钮和 E */
+  edit: false,
+  /** 框选改字时的“用刚复制的图” */
+  clip: null as ShotClip | null,
   /** 本次录屏的系统声音、麦克风开关；麦克风为 null 表示本机不支持（macOS 15 以下） */
   sys: false, mic: null as boolean | null,
   /** 录屏输出缩放与帧率（设置“录屏清晰度”“录屏帧率”），尺寸标签显示输出像素（M24 规则 3） */
@@ -131,7 +138,7 @@ async function begin(p: BeginPayload) {
     void info(`shot 屏 ${p.index} 缩放不一致：载荷 ${p.scale}，帧 ${f.w}×${f.h} / 窗口 ${W}×${H}`);
   }
   Object.assign(S, {
-    index: p.index, scale, saveCopy: p.saveCopy, mode: p.mode, sys: p.systemAudio, mic: p.microphone, recScale: p.recScale, fps: p.recFps, locked: false, rects: p.rects, phase: 'idle', here: !!p.cursor, sel: null, drag: null,
+    index: p.index, scale, saveCopy: p.saveCopy, mode: p.mode, edit: p.edit, clip: null, sys: p.systemAudio, mic: p.microphone, recScale: p.recScale, fps: p.recFps, locked: false, rects: p.rects, phase: 'idle', here: !!p.cursor, sel: null, drag: null,
     tool: null, color: 0, size: 1, objs: [], redo: [], cur: null, editing: null,
     mx: p.cursor?.[0] ?? 0, my: p.cursor?.[1] ?? 0,
   });
@@ -150,8 +157,7 @@ async function begin(p: BeginPayload) {
   ov.classList.remove('out');
   tc = getComputedStyle(ov).getPropertyValue('--tc').trim() || tc;
   buildBar();
-  hint.innerHTML = (p.mode === 'rec' ? '<span><b>选择录制区域</b></span>' : '')
-    + '<span><b>单击</b>选中窗口</span><span><b>拖动</b>框选</span><span><kbd>F</kbd>全屏</span><span><kbd>Esc</kbd>退出</span>';
+  paintHint('');
   restart(hint, 'hintbar');
   setCursor();
   update();
@@ -159,6 +165,19 @@ async function begin(p: BeginPayload) {
   setTimeout(() => ov.classList.remove('in'), 120);
   readyGen = gen;
   await shotReady(gen);
+  // 卡片要读文件头，上屏之后再取，不拖慢上屏
+  if (p.mode !== 'edit') return;
+  const clip = await shotEditCard(gen).catch(() => null);
+  if (!live(gen)) return;
+  S.clip = clip;
+  if (clip) buildClip(clip);
+  else paintHint(`<span>先复制图片再按 ${p.editKey.split(' + ').filter(Boolean).map((k) => `<kbd>${k}</kbd>`).join('') || '快捷键'} 能改原图</span>`);
+  update();
+}
+/** 左下角的操作提示 */
+function paintHint(more: string) {
+  hint.innerHTML = (S.mode === 'rec' ? '<span><b>选择录制区域</b></span>' : S.mode === 'edit' ? '<span><b>框住要改的图</b></span>' : '')
+    + '<span><b>单击</b>选中窗口</span><span><b>拖动</b>框选</span><span><kbd>F</kbd>全屏</span><span><kbd>Esc</kbd>退出</span>' + more;
 }
 
 /** 退出截图：遮罩淡出后后端隐藏全部遮罩。 */
@@ -181,6 +200,8 @@ function release() {
   count.hidden = true;
   for (const c of [frozen, ink]) { c.width = 0; c.height = 0; }
   pix = null;
+  S.clip = null;
+  clipEl.replaceChildren();
   lc.clearRect(0, 0, 122, 122);
   if (thumbUrl) URL.revokeObjectURL(thumbUrl);
   thumbUrl = '';
@@ -214,6 +235,9 @@ function update() {
   if (showLoupe) drawLoupe(dragging ? rect : null);
 
   hint.hidden = S.phase !== 'idle' || !live;
+  clipEl.hidden = hint.hidden || !S.clip;
+  // 提示条可能折行：卡片贴在它上面
+  if (!clipEl.hidden) clipEl.style.bottom = hint.offsetHeight + 26 + 'px';
   const above = place();
 
   // 尺寸标签：截图为物理像素，录屏为按清晰度换算的输出像素
@@ -243,6 +267,42 @@ function drawLoupe(rect: Rect | null) {
   Object.assign(loupe.style, { left: p.x + 'px', top: p.y + 'px' });
 }
 
+/* —— 框选改字：“用刚复制的图”，点它或按空格直接用原图 —— */
+const clipEl = document.createElement('button');
+clipEl.type = 'button';
+clipEl.className = 'just';
+clipEl.hidden = true;
+ov.appendChild(clipEl);
+function buildClip(c: ShotClip) {
+  clipEl.innerHTML = `<span class="j-th">${svg('edit')}</span><span class="j-tx"><b>用刚复制的图<kbd>空格</kbd></b><small>原图 ${c.w} × ${c.h}</small></span>`;
+  if (!c.thumb) return;
+  const img = new Image();
+  img.alt = '';
+  // 缩略图没了：留着图标
+  img.addEventListener('load', () => { if (S.clip === c) clipEl.querySelector('.j-th')?.replaceChildren(img); });
+  img.src = c.thumb;
+}
+clipEl.addEventListener('click', () => void useClip());
+async function useClip() {
+  if (S.phase !== 'idle' || S.locked || !S.clip) return;
+  const gen = S.gen;
+  S.phase = 'done';
+  ov.classList.add('out');
+  void shotClaim({ generation: gen, index: S.index, state: 'done' });
+  try {
+    await shotEditClip(gen);
+  } catch (e) {
+    if (!live(gen)) return;
+    ov.classList.remove('out');
+    S.phase = 'idle';
+    update();
+    toast((e as AppError)?.message || '改字没有打开', { icon: 'close', danger: true });
+    toastT = window.setTimeout(() => (toastEl.dataset.open = 'false'), 2800);
+    return;
+  }
+  if (live(gen)) release();
+}
+
 /* —— 工具栏 —— */
 function buildBar() {
   tb.setAttribute('aria-label', S.mode === 'rec' ? '录屏选项' : '截图工具');
@@ -264,10 +324,11 @@ function buildBar() {
     + `<button type="button" data-act="long" aria-label="长截图" data-tip="长截图  L">${svg('long')}</button>`
     + `<button type="button" data-act="ocr" aria-label="识别文字并复制" data-tip="识别文字并复制  O">${svg('ocr')}</button>`
     + `<button type="button" data-act="translate" aria-label="识别文字并翻译" data-tip="识别文字并翻译  T">${svg('translate')}</button>`
+    + (S.edit ? `<button type="button" class="lab" data-act="edit" data-tip="改图上的字  E">${svg('edit')}改字</button>` : '')
     + `<button type="button" data-act="pin" aria-label="钉在屏幕上" data-tip="钉在屏幕上  P">${svg('pin')}</button>`
     + `<button type="button" data-act="save" aria-label="保存" data-tip="保存${S.saveCopy ? '并复制' : ''}  ${MODK} S">${svg('save')}</button>`
     + `<button type="button" data-act="close" aria-label="退出" data-tip="退出  Esc">${svg('close')}</button>`
-    + '<button type="button" class="go" data-act="copy">复制<kbd>↩</kbd></button>';
+    + `<button type="button" class="go" data-act="${S.mode === 'edit' ? 'edit' : 'copy'}">${S.mode === 'edit' ? '改字' : '复制'}<kbd>↩</kbd></button>`;
   syncBar();
 }
 
@@ -360,7 +421,7 @@ function toggleTool(t: Tool, animate: boolean) {
 /* —— 指针 —— */
 ov.addEventListener('pointerdown', (e) => {
   if (e.button !== 0) return;
-  if ((e.target as Element).closest('.bar, .txt, .card')) return;
+  if ((e.target as Element).closest('.bar, .txt, .card, .just')) return;
   const x = e.clientX, y = e.clientY;
   if (S.editing) { commitText(); if (S.tool === 'text') return; }
   if (S.phase === 'idle') {
@@ -428,7 +489,7 @@ document.documentElement.addEventListener('pointerleave', () => {
 ov.addEventListener('dblclick', (e) => {
   if (S.phase !== 'selected' || S.tool || !inside(e.clientX, e.clientY, S.sel) || (e.target as Element).closest('.bar')) return;
   if (S.mode === 'rec') startCountdown();
-  else void act('copy');
+  else void act(S.mode === 'edit' ? 'edit' : 'copy');
 });
 ov.addEventListener('contextmenu', (e) => { e.preventDefault(); escape(); });
 
@@ -559,7 +620,7 @@ async function exportPng(sel: Rect): Promise<Blob> {
 /** 等待期间没有退出、也没有开始新的一次截图 */
 const live = (gen: number) => gen === S.gen && S.phase !== 'off';
 
-/** 复制 / 保存 / 识别文字 / 贴图 / 翻译。一次截图只做一个动作；识别文字、翻译期间显示进行中提示。 */
+/** 复制 / 保存 / 识别文字 / 贴图 / 翻译 / 改字。一次截图只做一个动作；识别文字、翻译期间显示进行中提示。 */
 async function act(a: ShotAction) {
   if (S.phase !== 'selected' || !S.sel) return;
   commitText();
@@ -601,6 +662,8 @@ async function act(a: ShotAction) {
     return;
   }
   if (!live(gen)) return;
+  // 后端已结束这次截图、去开改字窗口，没有提示条
+  if (a === 'edit') return release();
   if (a === 'translate') {
     // 收完：以完整译文为准（最后一段增量可能晚于返回值到达）；后端不进提示条模式，复制时才进
     if (tr && tr.seq === seq0) doneTr(tr, out);
@@ -770,7 +833,7 @@ async function startRecording() {
 
 /* —— 长截图（M23 规则 13）：遮罩撤下，后端在选区四角显示边框、不停截这块区域并拼接，用户自己滚动 —— */
 async function startLong() {
-  if (S.phase !== 'selected' || !S.sel || S.mode !== 'shot' || S.objs.length) return;
+  if (S.phase !== 'selected' || !S.sel || S.mode === 'rec' || S.objs.length) return;
   commitText();
   if (S.objs.length) return;
   const gen = S.gen, sel = { ...S.sel };
@@ -815,43 +878,32 @@ function escape() {
   if (S.phase === 'idle' || S.phase === 'busy' || S.phase === 'countdown' || S.phase === 'card') closeOverlay();
 }
 
-/* —— 键盘（键位对照原型） —— */
+/* —— 键盘（键位见 keys.ts） —— */
 addEventListener('keydown', (e) => {
-  if (S.phase === 'off' || S.phase === 'done') return;
-  // 文字输入框获得焦点时按键由它自己处理；点了颜色粗细后焦点不在框里，Esc 仍提交文字
-  if (S.editing) { if (e.key === 'Escape') { e.preventDefault(); commitText(); } return; }
-  const mod = isMac ? e.metaKey : e.ctrlKey;
-  // Esc 直接退出，有选区也不先取消（M23 规则 8；取消选区用右键）
-  if (e.key === 'Escape') { e.preventDefault(); closeOverlay(); return; }
-  // 译文卡片：只有回车复制、Esc 关闭；卡片里选中文字后的 Mod + C 照常。焦点在卡片按钮（如“关闭”）上时回车交给按钮
-  if (S.phase === 'card') {
-    if (e.key === 'Enter' && !(e.target instanceof Element && e.target.closest('button'))) { e.preventDefault(); void copyTranslation(); }
-    return;
-  }
-  if (S.phase !== 'idle' && S.phase !== 'selected') return;
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    if (S.phase === 'selected') { if (S.mode === 'rec') startCountdown(); else void act('copy'); }
-    return;
-  }
-  if (e.code === 'KeyF' && !mod) { e.preventDefault(); selectAll(); return; }
-  if (S.phase !== 'selected') return;
-  // 录屏没有标注与截图动作，只有方向键微调选区
-  if (S.mode === 'rec' && !e.key.startsWith('Arrow')) return;
-  if (mod && e.code === 'KeyZ') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return; }
-  if (mod && e.code === 'KeyS') { e.preventDefault(); void act('save'); return; }
-  if (!mod && e.code === 'KeyO') { e.preventDefault(); void act('ocr'); return; }
-  if (!mod && e.code === 'KeyT') { e.preventDefault(); void act('translate'); return; }
-  if (!mod && e.code === 'KeyP') { e.preventDefault(); void act('pin'); return; }
-  if (!mod && e.code === 'KeyL') { e.preventDefault(); void startLong(); return; }
-  const m = /^Digit([1-7])$/.exec(e.code);
-  if (!mod && m) { e.preventDefault(); toggleTool(TOOLS[+m[1] - 1][0], false); return; }
-  const dir = ({ ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] } as Record<string, number[]>)[e.key];
-  if (dir && S.sel) {
-    e.preventDefault();
-    const s = S.sel;
-    S.sel = e.shiftKey ? resize(s, 'se', dir[0], dir[1], W, H) : { ...s, x: clamp(s.x + dir[0], 0, W - s.w), y: clamp(s.y + dir[1], 0, H - s.h) };
-    renderInk(); update();
+  const k = shotKey(
+    { key: e.key, code: e.code, mod: isMac ? e.metaKey : e.ctrlKey, shift: e.shiftKey },
+    { phase: S.phase, mode: S.mode, typing: !!S.editing, edit: S.edit, clip: !!S.clip, onButton: e.target instanceof Element && !!e.target.closest('button') },
+  );
+  if (!k) return;
+  e.preventDefault();
+  switch (k.t) {
+    case 'commit': return commitText();
+    case 'close': return closeOverlay();
+    case 'copyTranslation': return void copyTranslation();
+    case 'act': return void act(k.a);
+    case 'start': return startCountdown();
+    case 'all': return selectAll();
+    case 'clip': return void useClip();
+    case 'undo': return undo();
+    case 'redo': return redo();
+    case 'long': return void startLong();
+    case 'tool': return toggleTool(TOOLS[k.i][0], false);
+    case 'nudge': {
+      const s = S.sel;
+      if (!s) return;
+      S.sel = k.resize ? resize(s, 'se', k.dx, k.dy, W, H) : { ...s, x: clamp(s.x + k.dx, 0, W - s.w), y: clamp(s.y + k.dy, 0, H - s.h) };
+      renderInk(); update();
+    }
   }
 });
 

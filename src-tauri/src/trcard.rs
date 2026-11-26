@@ -453,11 +453,12 @@ fn apply(w: &WebviewWindow, p: &Placement) -> tauri::Result<()> {
 }
 
 /// 上屏，`focus` 时拿键盘；macOS 上不激活应用，前台应用保持不变（同 `shot::show_overlay`）。主线程调用。
-fn front(app: &AppHandle, w: &WebviewWindow, focus: bool) -> tauri::Result<()> {
+/// 晾衣绳窗口也用它（`w` 须已转成 NSPanel）。
+pub(crate) fn front(app: &AppHandle, w: &WebviewWindow, focus: bool) -> tauri::Result<()> {
     #[cfg(target_os = "macos")]
     {
         use tauri_nspanel::ManagerExt;
-        match app.get_webview_panel(LABEL) {
+        match app.get_webview_panel(w.label()) {
             // orderFrontRegardless + makeKeyWindow
             Ok(p) if focus => p.show(),
             Ok(p) => p.order_front_regardless(),
@@ -711,8 +712,8 @@ pub fn set_downloading(app: &AppHandle, on: bool) {
 }
 
 /// 复制译文：按普通写入写纯文本，进历史（同截图卡片，M26 规则 19）。
-pub fn copy(text: &str) -> Result<(), AppError> {
-    crate::clipboard::write_text(text, "trcard 译文")?;
+pub fn copy(state: &AppState, text: &str) -> Result<(), AppError> {
+    crate::clipboard::write_text(state, text, "trcard 译文")?;
     log::info!("trcard 复制译文 {} 字", text.chars().count());
     Ok(())
 }

@@ -171,7 +171,10 @@ fn start(
     latest: Arc<Latest>,
 ) -> Result<Box<dyn FnOnce() + Send>, PlatformError> {
     let err = |what: String| PlatformError::Capture(what);
-    let filter = content_filter(opts.display, opts.exclude_window)?;
+    let filter = content_filter(
+        opts.display,
+        &[opts.exclude_window.as_slice(), &opts.also_exclude].concat(),
+    )?;
     let (x, y, w, h) = opts.rect;
     // 与 capture_rect 同尺寸，否则拼接把帧当成尺寸变了而跳过
     let (pw, ph) = ((w * opts.scale).round(), (h * opts.scale).round());
